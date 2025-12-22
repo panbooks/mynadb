@@ -6,3 +6,8 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 axum = "0.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+arrow = "53"
+parquet = { version = "53", features = ["arrow"] }
+chrono = "0.4"
