@@ -3,19 +3,60 @@
 A simple time series database built from scratch in Rust that:
 1. Receives data via HTTP in InfluxDB line protocol format
 2. Parses the line protocol
-3. Stores data in Parquet format using Apache Arrow
+3. **Buffers data in memory (Arrow format)**
+4. **Flushes to disk every 30 seconds** in Parquet format
 
 ## Architecture
 
 ```
-HTTP Request → Line Protocol Parser → Parquet Writer → Disk Storage
+┌─────────────────────────────────────────────────┐
+│              HTTP Requests (Write)               │
+└────────────────────┬────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────┐
+│          Line Protocol Parser                    │
+└────────────────────┬────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────┐
+│    In-Memory Cache (Arrow format)                │
+│    - Auto-flush every 30 seconds                 │
+└────────────────────┬────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────┐
+│         Parquet Files (Columnar Storage)         │
+└────────────────────┬────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────┐
+│    DataFusion Query Engine (SQL)                 │
+│    - Read Parquet files                          │
+│    - Execute SQL queries                         │
+│    - Return JSON results                         │
+└─────────────────────────────────────────────────┘
 ```
 
 ### Components
 
-1. **HTTP Server** - Built with Axum, handles write requests
+1. **HTTP Server** - Built with Axum, handles write and query requests
 2. **Line Protocol Parser** - Parses InfluxDB line protocol format
-3. **Parquet Writer** - Stores data in columnar Parquet format using Arrow
+3. **In-Memory Cache** - Buffers data in Arrow format with automatic flushing
+4. **Parquet Writer** - Stores data in columnar Parquet format using Arrow
+5. **DataFusion Query Engine** - SQL query engine for reading and analyzing data
+
+### Key Improvement: Caching Layer
+
+Instead of writing a new Parquet file for every request, data is:
+- ✅ Stored in memory using Arrow format
+- ✅ Automatically flushed to disk every **30 seconds**
+- ✅ Grouped by database and measurement
+- ✅ Reduces number of small files significantly
+
+This means:
+- **Before**: 100 requests = 100 Parquet files
+- **After**: 100 requests over 30 seconds = 1 Parquet file per measurement
 
 ## Line Protocol Format
 
@@ -69,7 +110,7 @@ Server starts on `http://0.0.0.0:3000`
 POST /write/:db
 ```
 
-Write time series data to a database.
+Write time series data to a database. Data is buffered in memory and flushed to disk every 30 seconds.
 
 **Example:**
 
@@ -78,18 +119,82 @@ curl -X POST http://localhost:3000/write/mydb \
   -d 'cpu,host=server01,region=us-west usage=23.5,temp=45i'
 ```
 
-**Multiple points:**
+### Query Data (SQL)
+
+```
+GET /query/:db?sql=<query>
+POST /query/:db (SQL in body)
+```
+
+Query data using SQL powered by DataFusion.
+
+**Examples:**
 
 ```bash
-curl -X POST http://localhost:3000/write/mydb -d '
-cpu,host=server01 usage=23.5,cores=8i
-cpu,host=server02 usage=45.2,cores=16i
-memory,host=server01 used=8.5,total=32.0
-disk,host=server01,mount=/data used=120.5,total=500.0
-'
+# Simple query
+curl 'http://localhost:3000/query/mydb?sql=SELECT * FROM mydb_cpu LIMIT 10'
+
+# Aggregation
+curl 'http://localhost:3000/query/mydb?sql=SELECT host, AVG(usage) FROM mydb_cpu GROUP BY host'
+
+# Complex query (POST)
+curl -X POST http://localhost:3000/query/mydb \
+  -d "SELECT * FROM mydb_cpu WHERE usage > 50 ORDER BY timestamp DESC"
+```
+
+### List Tables
+
+```
+GET /tables/:db
+```
+
+List all available tables (measurements) in a database.
+
+```bash
+curl http://localhost:3000/tables/mydb
+```
+
+### Get Schema
+
+```
+GET /schema/:db/:table
+```
+
+Get the schema for a specific table.
+
+```bash
+curl http://localhost:3000/schema/mydb/cpu
+```
+
+### Cache Statistics
+
+```
+GET /stats
+```
+
+Get current cache statistics (points in memory, number of measurements).
+
+```bash
+curl http://localhost:3000/stats
+```
+
+### Manual Flush
+
+```
+POST /flush
+```
+
+Manually trigger a flush of cached data to disk (in addition to automatic 30-second flushes).
+
+```bash
+curl -X POST http://localhost:3000/flush
 ```
 
 ### Health Check
+
+```
+GET /health
+```
 
 ```bash
 curl http://localhost:3000/health
@@ -215,6 +320,7 @@ stats/
 - **axum** - Web framework
 - **arrow** - Columnar data format
 - **parquet** - Parquet file format
+- **datafusion** - SQL query engine
 - **chrono** - Date/time handling
 - **serde** - Serialization
 
@@ -225,9 +331,17 @@ stats/
 ✅ Support for tags and multiple fields  
 ✅ Multiple data types (float, integer, string, boolean)  
 ✅ Automatic timestamp generation  
+✅ **In-memory caching with Arrow format**  
+✅ **Automatic background flushing every 30 seconds**  
+✅ **Manual flush endpoint for immediate writes**  
 ✅ Columnar storage in Parquet format  
 ✅ Organized by database and measurement  
-✅ Schema inference from data
+✅ Schema inference from data  
+✅ Cache statistics endpoint  
+✅ **SQL query engine powered by Apache DataFusion**  
+✅ **Complex queries: aggregations, joins, window functions**  
+✅ **Table discovery and schema inspection**  
+✅ **JSON query results**
 
 ## Next Steps
 
