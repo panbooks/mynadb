@@ -5,7 +5,9 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
+use std::collections::HashMap;
 use std::fs::{create_dir_all, File};
+use std::path::Path;
 use std::sync::Arc;
 
 pub struct ParquetWriter {
@@ -17,6 +19,51 @@ impl ParquetWriter {
         ParquetWriter {
             data_dir: data_dir.to_string(),
         }
+    }
+
+    pub fn write_batches(
+        &self,
+        db_name: &str,
+        measurement: &str,
+        batches: Vec<RecordBatch>,
+    ) -> Result<String, String> {
+        if batches.is_empty() {
+            return Err("No batches to write".to_string());
+        }
+
+        // Create directory structure
+        let db_path = format!("{}/{}", self.data_dir, db_name);
+        create_dir_all(&db_path).map_err(|e| format!("Failed to create directory: {}", e))?;
+
+        // Generate filename with timestamp
+        let filename = format!(
+            "{}/{}_{}.parquet",
+            db_path,
+            measurement,
+            chrono::Utc::now().timestamp_millis()
+        );
+
+        // Get schema from first batch
+        let schema = batches[0].schema();
+
+        // Write to Parquet
+        let file = File::create(&filename).map_err(|e| format!("Failed to create file: {}", e))?;
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
+            .map_err(|e| format!("Failed to create writer: {}", e))?;
+
+        // Write all batches
+        for batch in batches {
+            writer
+                .write(&batch)
+                .map_err(|e| format!("Failed to write batch: {}", e))?;
+        }
+
+        writer
+            .close()
+            .map_err(|e| format!("Failed to close writer: {}", e))?;
+
+        Ok(filename)
     }
 
     pub fn write_points(

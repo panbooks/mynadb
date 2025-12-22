@@ -9,7 +9,7 @@ cargo run
 
 You should see:
 ```
-🚀 Time Series Database Server running on http://0.0.0.0:3000
+🚀 Time Series Database Server running on http://0.0.0.0:7000
 📊 Data directory: ./data
 ⏱️  Flush interval: 30 seconds
 🔄 Background flush started: every 30 seconds
@@ -21,7 +21,7 @@ Open a new terminal and run:
 
 ```bash
 # Simple write
-curl -X POST http://localhost:3000/write/mydb \
+curl -X POST http://localhost:7000/write/mydb \
   -d 'cpu,host=server01 usage=75.5'
 ```
 
@@ -30,7 +30,7 @@ curl -X POST http://localhost:3000/write/mydb \
 ## Step 3: Check Cache Statistics
 
 ```bash
-curl http://localhost:3000/stats
+curl http://localhost:7000/stats
 ```
 
 Output:
@@ -43,7 +43,7 @@ Cache Statistics:
 ## Step 4: Write More Data
 
 ```bash
-curl -X POST http://localhost:3000/write/mydb -d '
+curl -X POST http://localhost:7000/write/mydb -d '
 cpu,host=server01 usage=80.5
 cpu,host=server02 usage=45.2
 memory,host=server01 used=16.5,total=32.0
@@ -52,7 +52,7 @@ memory,host=server01 used=16.5,total=32.0
 
 Check stats again:
 ```bash
-curl http://localhost:3000/stats
+curl http://localhost:7000/stats
 ```
 
 ## Step 5: Manual Flush (Optional)
@@ -60,7 +60,7 @@ curl http://localhost:3000/stats
 To immediately write data to disk instead of waiting 30 seconds:
 
 ```bash
-curl -X POST http://localhost:3000/flush
+curl -X POST http://localhost:7000/flush
 ```
 
 Output:
@@ -82,22 +82,22 @@ Now that data is flushed to disk, you can query it with SQL!
 
 ### List available tables
 ```bash
-curl http://localhost:3000/tables/mydb
+curl http://localhost:7000/tables/mydb
 ```
 
 ### Simple query
 ```bash
-curl 'http://localhost:3000/query/mydb?sql=SELECT * FROM mydb_cpu LIMIT 5'
+curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM mydb_cpu LIMIT 5'
 ```
 
 ### Aggregate query
 ```bash
-curl 'http://localhost:3000/query/mydb?sql=SELECT host, AVG(usage) as avg_usage FROM mydb_cpu GROUP BY host'
+curl 'http://localhost:7000/query/mydb?sql=SELECT host, AVG(usage) as avg_usage FROM mydb_cpu GROUP BY host'
 ```
 
 ### Complex query (using POST)
 ```bash
-curl -X POST http://localhost:3000/query/mydb \
+curl -X POST http://localhost:7000/query/mydb \
   -d "SELECT * FROM mydb_cpu WHERE usage > 50 ORDER BY timestamp DESC"
 ```
 
@@ -154,7 +154,7 @@ measurement[,tag=value...] field=value[,field=value...] [timestamp]
 
 Example:
 ```bash
-curl -X POST http://localhost:3000/write/metrics -d '
+curl -X POST http://localhost:7000/write/metrics -d '
 requests,service=api,method=GET count=100i,latency=45.2
 requests,service=api,method=POST count=50i,latency=128.7
 database,type=postgres queries=1000i,avg_time=23.5

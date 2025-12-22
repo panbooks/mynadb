@@ -100,7 +100,7 @@ cargo build
 cargo run
 ```
 
-Server starts on `http://0.0.0.0:3000`
+Server starts on `http://0.0.0.0:7000`
 
 ## API Endpoints
 
@@ -115,7 +115,7 @@ Write time series data to a database. Data is buffered in memory and flushed to 
 **Example:**
 
 ```bash
-curl -X POST http://localhost:3000/write/mydb \
+curl -X POST http://localhost:7000/write/mydb \
   -d 'cpu,host=server01,region=us-west usage=23.5,temp=45i'
 ```
 
@@ -132,13 +132,13 @@ Query data using SQL powered by DataFusion.
 
 ```bash
 # Simple query
-curl 'http://localhost:3000/query/mydb?sql=SELECT * FROM mydb_cpu LIMIT 10'
+curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM mydb_cpu LIMIT 10'
 
 # Aggregation
-curl 'http://localhost:3000/query/mydb?sql=SELECT host, AVG(usage) FROM mydb_cpu GROUP BY host'
+curl 'http://localhost:7000/query/mydb?sql=SELECT host, AVG(usage) FROM mydb_cpu GROUP BY host'
 
 # Complex query (POST)
-curl -X POST http://localhost:3000/query/mydb \
+curl -X POST http://localhost:7000/query/mydb \
   -d "SELECT * FROM mydb_cpu WHERE usage > 50 ORDER BY timestamp DESC"
 ```
 
@@ -151,7 +151,7 @@ GET /tables/:db
 List all available tables (measurements) in a database.
 
 ```bash
-curl http://localhost:3000/tables/mydb
+curl http://localhost:7000/tables/mydb
 ```
 
 ### Get Schema
@@ -163,7 +163,7 @@ GET /schema/:db/:table
 Get the schema for a specific table.
 
 ```bash
-curl http://localhost:3000/schema/mydb/cpu
+curl http://localhost:7000/schema/mydb/cpu
 ```
 
 ### Cache Statistics
@@ -175,7 +175,7 @@ GET /stats
 Get current cache statistics (points in memory, number of measurements).
 
 ```bash
-curl http://localhost:3000/stats
+curl http://localhost:7000/stats
 ```
 
 ### Manual Flush
@@ -187,7 +187,7 @@ POST /flush
 Manually trigger a flush of cached data to disk (in addition to automatic 30-second flushes).
 
 ```bash
-curl -X POST http://localhost:3000/flush
+curl -X POST http://localhost:7000/flush
 ```
 
 ### Health Check
@@ -197,7 +197,7 @@ GET /health
 ```
 
 ```bash
-curl http://localhost:3000/health
+curl http://localhost:7000/health
 ```
 
 ## Data Storage
@@ -242,22 +242,22 @@ temp: Int64
 
 ```bash
 # Simple write
-curl -X POST http://localhost:3000/write/testdb \
+curl -X POST http://localhost:7000/write/testdb \
   -d 'cpu usage=50.0'
 
 # With tags
-curl -X POST http://localhost:3000/write/testdb \
+curl -X POST http://localhost:7000/write/testdb \
   -d 'cpu,host=server01,dc=us-east usage=75.5,cores=8i'
 
 # Multiple measurements
-curl -X POST http://localhost:3000/write/testdb -d '
+curl -X POST http://localhost:7000/write/testdb -d '
 cpu,host=server01 usage=50.0,temp=45i
 memory,host=server01 used=16.5,total=32.0
 network,host=server01,interface=eth0 rx_bytes=1024000i,tx_bytes=2048000i
 '
 
 # Different data types
-curl -X POST http://localhost:3000/write/testdb -d '
+curl -X POST http://localhost:7000/write/testdb -d '
 sensor,device=temp01 temperature=72.5,humidity=55i,active=true,status="normal"
 '
 ```

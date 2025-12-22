@@ -1,10 +1,14 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::prelude::*;
+use std::collections::HashSet;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub struct QueryEngine {
     ctx: SessionContext,
     data_dir: String,
+    // Cache of registered table names
+    registered_tables: Arc<Mutex<HashSet<String>>>,
 }
 
 impl QueryEngine {
@@ -13,11 +17,12 @@ impl QueryEngine {
         QueryEngine {
             ctx,
             data_dir: data_dir.to_string(),
+            registered_tables: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
-    /// Register all Parquet files in a database as tables
-    pub async fn register_database(&self, db_name: &str) -> Result<Vec<String>, String> {
+    /// Auto-register database tables (simplified - no manual registration needed)
+    pub async fn ensure_database_registered(&self, db_name: &str) -> Result<(), String> {
         let db_path = format!("{}/{}", self.data_dir, db_name);
 
         // Check if database directory exists
@@ -25,39 +30,56 @@ impl QueryEngine {
             return Err(format!("Database '{}' not found", db_name));
         }
 
-        let mut registered_tables = Vec::new();
-
         // Read directory and find all parquet files
         let entries = std::fs::read_dir(&db_path)
             .map_err(|e| format!("Failed to read directory: {}", e))?;
+
+        let mut registered_count = 0;
+        let mut registered_tables = self.registered_tables.lock().await;
 
         for entry in entries {
             let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
             let path = entry.path();
 
             if path.extension().and_then(|s| s.to_str()) == Some("parquet") {
-                // Extract measurement name from filename
-                // Format: measurement_timestamp.parquet
                 if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
-                    let measurement = filename
-                        .rsplitn(2, '_')
-                        .nth(1)
-                        .unwrap_or(filename);
-
-                    // Register as table (use measurement name)
+                    // Extract measurement name from filename (format: measurement_timestamp)
+                    let measurement = filename.rsplitn(2, '_').nth(1).unwrap_or(filename);
                     let table_name = format!("{}_{}", db_name, measurement);
 
-                    self.ctx
-                        .register_parquet(&table_name, path.to_str().unwrap(), ParquetReadOptions::default())
-                        .await
-                        .map_err(|e| format!("Failed to register table: {}", e))?;
+                    // Only register if not already registered
+                    if !registered_tables.contains(&table_name) {
+                        self.ctx
+                            .register_parquet(&table_name, path.to_str().unwrap(), ParquetReadOptions::default())
+                            .await
+                            .map_err(|e| format!("Failed to register table: {}", e))?;
 
-                    registered_tables.push(table_name);
+                        registered_tables.insert(table_name);
+                        registered_count += 1;
+                    }
                 }
             }
         }
 
-        Ok(registered_tables)
+        if registered_count > 0 {
+            println!("📋 Registered {} new table(s) in database '{}'", registered_count, db_name);
+        }
+
+        Ok(())
+    }
+
+    /// Register all Parquet files in a database as tables (legacy method for compatibility)
+    pub async fn register_database(&self, db_name: &str) -> Result<Vec<String>, String> {
+        self.ensure_database_registered(db_name).await?;
+
+        let registered = self.registered_tables.lock().await;
+        let tables: Vec<String> = registered
+            .iter()
+            .filter(|t| t.starts_with(&format!("{}_", db_name)))
+            .cloned()
+            .collect();
+
+        Ok(tables)
     }
 
     /// Execute a SQL query
@@ -141,6 +163,14 @@ impl QueryEngine {
                 let arr = array.as_any().downcast_ref::<StringArray>().unwrap();
                 Ok(serde_json::json!(arr.value(index)))
             }
+            DataType::Utf8View => {
+                let arr = array.as_any().downcast_ref::<StringViewArray>().unwrap();
+                Ok(serde_json::json!(arr.value(index)))
+            }
+            DataType::LargeUtf8 => {
+                let arr = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
+                Ok(serde_json::json!(arr.value(index)))
+            }
             DataType::Boolean => {
                 let arr = array.as_any().downcast_ref::<BooleanArray>().unwrap();
                 Ok(serde_json::json!(arr.value(index)))
@@ -157,13 +187,11 @@ impl QueryEngine {
     }
 
     /// List all registered tables
-    pub fn list_tables(&self) -> Vec<String> {
-        self.ctx
-            .catalog("datafusion")
-            .unwrap()
-            .schema("public")
-            .unwrap()
-            .table_names()
+    pub async fn list_tables(&self) -> Vec<String> {
+        let registered = self.registered_tables.lock().await;
+        let mut tables: Vec<_> = registered.iter().cloned().collect();
+        tables.sort();
+        tables
     }
 
     /// Get schema for a table
@@ -176,6 +204,13 @@ impl QueryEngine {
 
         let schema = table.schema();
         Ok(format!("{:#?}", schema))
+    }
+
+    /// Clear registration cache (useful after flush)
+    pub async fn clear_cache(&self) {
+        let mut registered = self.registered_tables.lock().await;
+        registered.clear();
+        println!("🔄 Query engine cache cleared");
     }
 }
 
