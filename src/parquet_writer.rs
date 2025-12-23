@@ -31,15 +31,15 @@ impl ParquetWriter {
             return Err("No batches to write".to_string());
         }
 
-        // Create directory structure
-        let db_path = format!("{}/{}", self.data_dir, db_name);
-        create_dir_all(&db_path).map_err(|e| format!("Failed to create directory: {}", e))?;
+        // Create directory structure: data/db/measurement/
+        let measurement_path = format!("{}/{}/{}", self.data_dir, db_name, measurement);
+        create_dir_all(&measurement_path)
+            .map_err(|e| format!("Failed to create measurement directory: {}", e))?;
 
-        // Generate filename with timestamp
+        // Generate filename with timestamp (just timestamp, no measurement prefix)
         let filename = format!(
-            "{}/{}_{}.parquet",
-            db_path,
-            measurement,
+            "{}/{}.parquet",
+            measurement_path,
             chrono::Utc::now().timestamp_millis()
         );
 
@@ -76,15 +76,15 @@ impl ParquetWriter {
             return Err("No points to write".to_string());
         }
 
-        // Create directory structure
-        let db_path = format!("{}/{}", self.data_dir, db_name);
-        create_dir_all(&db_path).map_err(|e| format!("Failed to create directory: {}", e))?;
+        // Create directory structure: data/db/measurement/
+        let measurement_path = format!("{}/{}/{}", self.data_dir, db_name, measurement);
+        create_dir_all(&measurement_path)
+            .map_err(|e| format!("Failed to create measurement directory: {}", e))?;
 
         // Generate filename with timestamp
         let filename = format!(
-            "{}/{}_{}.parquet",
-            db_path,
-            measurement,
+            "{}/{}.parquet",
+            measurement_path,
             chrono::Utc::now().timestamp_millis()
         );
 

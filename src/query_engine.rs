@@ -30,7 +30,7 @@ impl QueryEngine {
             return Err(format!("Database '{}' not found", db_name));
         }
 
-        // Read directory and find all parquet files
+        // Read database directory to find measurement directories
         let entries = std::fs::read_dir(&db_path)
             .map_err(|e| format!("Failed to read directory: {}", e))?;
 
@@ -41,20 +41,27 @@ impl QueryEngine {
             let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
             let path = entry.path();
 
-            if path.extension().and_then(|s| s.to_str()) == Some("parquet") {
-                if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
-                    // Extract measurement name from filename (format: measurement_timestamp)
-                    let measurement = filename.rsplitn(2, '_').nth(1).unwrap_or(filename);
+            // Check if it's a directory (measurement directory)
+            if path.is_dir() {
+                if let Some(measurement) = path.file_name().and_then(|s| s.to_str()) {
+                    // Skip hidden directories and special files
+                    if measurement.starts_with('.') {
+                        continue;
+                    }
+
                     let table_name = format!("{}_{}", db_name, measurement);
 
                     // Only register if not already registered
                     if !registered_tables.contains(&table_name) {
-                        self.ctx
-                            .register_parquet(&table_name, path.to_str().unwrap(), ParquetReadOptions::default())
-                            .await
-                            .map_err(|e| format!("Failed to register table: {}", e))?;
+                        // Register the entire measurement directory as a table
+                        let measurement_path = path.to_str().unwrap();
 
-                        registered_tables.insert(table_name);
+                        self.ctx
+                            .register_parquet(&table_name, measurement_path, ParquetReadOptions::default())
+                            .await
+                            .map_err(|e| format!("Failed to register table '{}': {}", table_name, e))?;
+
+                        registered_tables.insert(table_name.clone());
                         registered_count += 1;
                     }
                 }
