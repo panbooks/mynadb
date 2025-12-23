@@ -31,6 +31,11 @@ struct QueryParams {
     sql: String,
 }
 
+#[derive(Deserialize)]
+struct WriteQueryParams {
+    db: String,
+}
+
 #[derive(Deserialize, Serialize)]
 struct CreateDatabaseRequest {
     name: String,
@@ -66,6 +71,7 @@ async fn main() {
         .route("/health", get(health))
         // Write endpoints
         .route("/write/:db", post(write_handler))
+        .route("/write", post(write_handler_query_param))  // InfluxDB-compatible
         // Cache management
         .route("/stats", get(stats_handler))
         .route("/flush", post(flush_handler))
@@ -96,8 +102,10 @@ async fn main() {
     println!("\n📝 Quick start:");
     println!("   # Create database");
     println!("   curl -X POST http://localhost:7000/databases -H 'Content-Type: application/json' -d '{{\"name\":\"mydb\"}}'");
-    println!("\n   # Write data");
+    println!("\n   # Write data (path-based)");
     println!("   curl -X POST http://localhost:7000/write/mydb -d 'cpu,host=server01 usage=23.5'");
+    println!("\n   # Write data (InfluxDB-compatible)");
+    println!("   curl -X POST 'http://localhost:7000/write?db=mydb' -d 'cpu,host=server01 usage=23.5'");
     println!("\n   # Query data");
     println!("   curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM mydb_cpu LIMIT 10'");
 
@@ -116,6 +124,7 @@ async fn home() -> &'static str {
        DELETE /databases/:db/tables/:table - Delete table\n\n\
      Data Operations:\n\
        POST   /write/:db              - Write data (line protocol)\n\
+       POST   /write?db=:db           - Write data (InfluxDB-compatible)\n\
        GET    /query/:db?sql=<query>  - Query data (GET)\n\
        POST   /query/:db              - Query data (POST body)\n\
        GET    /schema/:db/:table      - Get table schema\n\n\
@@ -403,10 +412,46 @@ async fn write_handler(
         }
     };
 
+    process_write_data(&db, &data, state).await
+}
+
+async fn write_handler_query_param(
+    AxumQuery(params): AxumQuery<WriteQueryParams>,
+    State(state): State<AppState>,
+    req: Request,
+) -> impl IntoResponse {
+    println!("\n=== Write Request (InfluxDB-compatible) ===");
+    println!("Database: {}", params.db);
+
+    // Read body
+    let body = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Error reading body: {}", e);
+            return (StatusCode::BAD_REQUEST, format!("Error reading body: {}", e));
+        }
+    };
+
+    let data = match String::from_utf8(body.to_vec()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Invalid UTF-8: {}", e);
+            return (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e));
+        }
+    };
+
+    process_write_data(&params.db, &data, state).await
+}
+
+async fn process_write_data(
+    db: &str,
+    data: &str,
+    state: AppState,
+) -> (StatusCode, String) {
     println!("Raw data:\n{}", data);
 
     // Parse line protocol
-    let points = parse_multiple_lines(&data);
+    let points = parse_multiple_lines(data);
     println!("Parsed {} points", points.len());
 
     if points.is_empty() {
@@ -425,7 +470,7 @@ async fn write_handler(
     // Add to cache
     for (measurement, points) in grouped {
         println!("Adding {} points for measurement '{}' to cache", points.len(), measurement);
-        state.cache.add_points(&db, &measurement, points).await;
+        state.cache.add_points(db, &measurement, points).await;
     }
 
     println!("==================\n");
