@@ -100,16 +100,63 @@ impl SeriesTracker {
 
         let file_path = format!("{}/{}.parquet", stats_dir, db);
         
-        // Create record batch with single row
         let schema = Arc::new(Schema::new(vec![
             Field::new("service", DataType::Utf8, false),
             Field::new("metric", DataType::Utf8, false),
             Field::new("hash", DataType::Int64, false),
         ]));
 
-        let service_array = StringArray::from(vec![service]);
-        let metric_array = StringArray::from(vec![metric]);
-        let hash_array = Int64Array::from(vec![hash]);
+        // Collect existing data if file exists
+        let mut services = Vec::new();
+        let mut metrics = Vec::new();
+        let mut hashes = Vec::new();
+
+        if Path::new(&file_path).exists() {
+            use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+            
+            let read_file = File::open(&file_path)
+                .map_err(|e| format!("Failed to open existing file: {}", e))?;
+
+            let builder = ParquetRecordBatchReaderBuilder::try_new(read_file)
+                .map_err(|e| format!("Failed to create reader: {}", e))?;
+            
+            let mut reader = builder.build()
+                .map_err(|e| format!("Failed to build reader: {}", e))?;
+
+            while let Some(Ok(batch)) = reader.next() {
+                let service_col = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let metric_col = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let hash_col = batch
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+
+                for i in 0..batch.num_rows() {
+                    services.push(service_col.value(i).to_string());
+                    metrics.push(metric_col.value(i).to_string());
+                    hashes.push(hash_col.value(i));
+                }
+            }
+        }
+
+        // Add new record
+        services.push(service.to_string());
+        metrics.push(metric.to_string());
+        hashes.push(hash);
+
+        // Create arrays from all data
+        let service_array = StringArray::from(services);
+        let metric_array = StringArray::from(metrics);
+        let hash_array = Int64Array::from(hashes);
 
         let batch = RecordBatch::try_new(
             schema.clone(),
@@ -121,19 +168,9 @@ impl SeriesTracker {
         )
         .map_err(|e| format!("Failed to create record batch: {}", e))?;
 
-        // Append to file (or create if doesn't exist)
-        let file_exists = Path::new(&file_path).exists();
-        
-        let file = if file_exists {
-            OpenOptions::new()
-                .write(true)
-                .append(true)
-                .open(&file_path)
-                .map_err(|e| format!("Failed to open file: {}", e))?
-        } else {
-            File::create(&file_path)
-                .map_err(|e| format!("Failed to create file: {}", e))?
-        };
+        // Write all data (overwrites file)
+        let file = File::create(&file_path)
+            .map_err(|e| format!("Failed to create file: {}", e))?;
 
         let props = WriterProperties::builder().build();
         let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
