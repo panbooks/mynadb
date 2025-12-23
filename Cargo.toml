@@ -12,3 +12,7 @@ arrow = "53"
 parquet = { version = "53", features = ["arrow"] }
 chrono = "0.4"
 datafusion = "43"
+arrow-flight = "53"
+tonic = "0.12"
+futures = "0.3"
+tokio-stream = "0.1"

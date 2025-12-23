@@ -1,6 +1,7 @@
 mod cache;
 mod compactor;
 mod database_manager;
+mod flight_service;
 mod line_protocol;
 mod parquet_writer;
 mod query_engine;
@@ -16,12 +17,14 @@ use axum::{
 use cache::DataCache;
 use compactor::{Compactor, CompactionConfig};
 use database_manager::DatabaseManager;
+use flight_service::StatsFlightService;
 use line_protocol::parse_multiple_lines;
 use query_engine::QueryEngine;
 use series_tracker::SeriesTracker;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tonic::transport::Server;
 
 #[derive(Clone)]
 struct AppState {
@@ -115,17 +118,20 @@ async fn main() {
         // Series cardinality tracking
         .route("/series_stats/:db", get(series_stats_handler))
         .fallback(log_request)
-        .with_state(state);
+        .with_state(state.clone());
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:7000")
+    // Start HTTP server
+    let http_listener = tokio::net::TcpListener::bind("0.0.0.0:7000")
         .await
         .unwrap();
 
-    println!("🚀 Time Series Database Server running on http://0.0.0.0:7000");
+    println!("🚀 Time Series Database Server");
     println!("📊 Data directory: ./data");
     println!("⏱️  Cache flush interval: 30 seconds");
     println!("⏱️  Series tracker flush interval: 60 seconds");
     println!("🔍 Query engine: DataFusion SQL (auto-registration)");
+    println!("\n🌐 HTTP REST API: http://0.0.0.0:7000");
+    println!("✈️  Arrow Flight API: grpc://0.0.0.0:7001");
     println!("\n📝 Quick start:");
     println!("   # Create database");
     println!("   curl -X POST http://localhost:7000/databases -H 'Content-Type: application/json' -d '{{\"name\":\"mydb\"}}'");
@@ -133,12 +139,39 @@ async fn main() {
     println!("   curl -X POST http://localhost:7000/write/mydb -d 'cpu,host=server01 usage=23.5'");
     println!("\n   # Write data (InfluxDB-compatible)");
     println!("   curl -X POST 'http://localhost:7000/write?db=mydb' -d 'cpu,host=server01 usage=23.5'");
-    println!("\n   # Query data");
+    println!("\n   # Query data (HTTP)");
     println!("   curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'");
+    println!("\n   # Query data (Flight CLI)");
+    println!("   datafusion-cli --host localhost --port 7001");
+    println!("   > USE mydb;");
+    println!("   > SELECT * FROM cpu LIMIT 10;");
     println!("\n   # Series cardinality stats");
     println!("   curl http://localhost:7000/series_stats/mydb");
 
-    axum::serve(listener, app).await.unwrap();
+    // Start Arrow Flight server
+    let flight_service = StatsFlightService::new(state.query_engine.clone());
+    let flight_addr = "0.0.0.0:7001".parse().unwrap();
+    
+    let flight_server = tokio::spawn(async move {
+        println!("\n✈️  Arrow Flight server starting on {}", flight_addr);
+        Server::builder()
+            .add_service(flight_service.into_server())
+            .serve(flight_addr)
+            .await
+            .expect("Flight server failed");
+    });
+
+    // Start HTTP server
+    let http_server = tokio::spawn(async move {
+        println!("🌐 HTTP server starting on 0.0.0.0:7000\n");
+        axum::serve(http_listener, app).await.unwrap();
+    });
+
+    // Wait for both servers
+    tokio::select! {
+        _ = flight_server => println!("Flight server stopped"),
+        _ = http_server => println!("HTTP server stopped"),
+    }
 }
 
 async fn home() -> &'static str {
