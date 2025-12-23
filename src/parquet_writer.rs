@@ -7,8 +7,13 @@ use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use std::collections::HashMap;
 use std::fs::{create_dir_all, File};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+// File naming constants
+const PARQUET_FILE_EXT: &str = "parquet";
+const LEVEL_PREFIX: &str = "L";
+const RAW_FILE_LEVEL: u32 = 0;
 
 pub struct ParquetWriter {
     data_dir: String,
@@ -19,6 +24,16 @@ impl ParquetWriter {
         ParquetWriter {
             data_dir: data_dir.to_string(),
         }
+    }
+
+    /// Get measurement directory path
+    fn get_measurement_path(&self, db_name: &str, measurement: &str) -> PathBuf {
+        Path::new(&self.data_dir).join(db_name).join(measurement)
+    }
+
+    /// Generate a leveled parquet filename
+    fn generate_filename(level: u32, timestamp: i64) -> String {
+        format!("{}{}_{}.{}", LEVEL_PREFIX, level, timestamp, PARQUET_FILE_EXT)
     }
 
     pub fn write_batches(
@@ -32,16 +47,13 @@ impl ParquetWriter {
         }
 
         // Create directory structure: data/db/measurement/
-        let measurement_path = format!("{}/{}/{}", self.data_dir, db_name, measurement);
+        let measurement_path = self.get_measurement_path(db_name, measurement);
         create_dir_all(&measurement_path)
             .map_err(|e| format!("Failed to create measurement directory: {}", e))?;
 
         // Generate filename with L0 prefix (Level 0 - raw files)
-        let filename = format!(
-            "{}/L0_{}.parquet",
-            measurement_path,
-            chrono::Utc::now().timestamp_millis()
-        );
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let filename = measurement_path.join(Self::generate_filename(RAW_FILE_LEVEL, timestamp));
 
         // Get schema from first batch
         let schema = batches[0].schema();
@@ -63,7 +75,7 @@ impl ParquetWriter {
             .close()
             .map_err(|e| format!("Failed to close writer: {}", e))?;
 
-        Ok(filename)
+        Ok(filename.to_string_lossy().to_string())
     }
 
     pub fn write_points(
@@ -77,16 +89,13 @@ impl ParquetWriter {
         }
 
         // Create directory structure: data/db/measurement/
-        let measurement_path = format!("{}/{}/{}", self.data_dir, db_name, measurement);
+        let measurement_path = self.get_measurement_path(db_name, measurement);
         create_dir_all(&measurement_path)
             .map_err(|e| format!("Failed to create measurement directory: {}", e))?;
 
         // Generate filename with L0 prefix (Level 0 - raw files)
-        let filename = format!(
-            "{}/L0_{}.parquet",
-            measurement_path,
-            chrono::Utc::now().timestamp_millis()
-        );
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let filename = measurement_path.join(Self::generate_filename(RAW_FILE_LEVEL, timestamp));
 
         // Build schema dynamically from first point
         let schema = self.build_schema(&points[0])?;
@@ -108,7 +117,7 @@ impl ParquetWriter {
             .close()
             .map_err(|e| format!("Failed to close writer: {}", e))?;
 
-        Ok(filename)
+        Ok(filename.to_string_lossy().to_string())
     }
 
     fn build_schema(&self, point: &Point) -> Result<Schema, String> {

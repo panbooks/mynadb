@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::fs::{create_dir_all, read_to_string, write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+// Database configuration constants
+const DB_CONFIG_FILENAME: &str = "config.json";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DatabaseConfig {
@@ -25,12 +28,22 @@ impl DatabaseManager {
         }
     }
 
+    /// Get the database directory path
+    fn get_database_path(&self, db_name: &str) -> PathBuf {
+        Path::new(&self.data_dir).join(db_name)
+    }
+
+    /// Get the config file path for a database
+    fn get_config_path(&self, db_name: &str) -> PathBuf {
+        self.get_database_path(db_name).join(DB_CONFIG_FILENAME)
+    }
+
     /// Create a new database
     pub fn create_database(&self, db_name: &str) -> Result<String, String> {
-        let db_path = format!("{}/{}", self.data_dir, db_name);
+        let db_path = self.get_database_path(db_name);
 
         // Check if database already exists
-        if Path::new(&db_path).exists() {
+        if db_path.exists() {
             return Err(format!("Database '{}' already exists", db_name));
         }
 
@@ -46,7 +59,11 @@ impl DatabaseManager {
 
         self.save_config(&config)?;
 
-        Ok(format!("Database '{}' created at {}", db_name, db_path))
+        Ok(format!(
+            "Database '{}' created at {}",
+            db_name,
+            db_path.display()
+        ))
     }
 
     /// Create a table with optional partitioning
@@ -56,10 +73,10 @@ impl DatabaseManager {
         table_name: &str,
         partition_cols: Vec<String>,
     ) -> Result<String, String> {
-        let db_path = format!("{}/{}", self.data_dir, db_name);
+        let db_path = self.get_database_path(db_name);
 
         // Check if database exists
-        if !Path::new(&db_path).exists() {
+        if !db_path.exists() {
             return Err(format!("Database '{}' does not exist", db_name));
         }
 
@@ -135,9 +152,9 @@ impl DatabaseManager {
 
     /// Delete a database
     pub fn delete_database(&self, db_name: &str) -> Result<String, String> {
-        let db_path = format!("{}/{}", self.data_dir, db_name);
+        let db_path = self.get_database_path(db_name);
 
-        if !Path::new(&db_path).exists() {
+        if !db_path.exists() {
             return Err(format!("Database '{}' does not exist", db_name));
         }
 
@@ -165,9 +182,9 @@ impl DatabaseManager {
 
     /// Load database config
     fn load_config(&self, db_name: &str) -> Result<DatabaseConfig, String> {
-        let config_path = format!("{}/{}/config.json", self.data_dir, db_name);
+        let config_path = self.get_config_path(db_name);
 
-        if !Path::new(&config_path).exists() {
+        if !config_path.exists() {
             return Err(format!("Database config not found for '{}'", db_name));
         }
 
@@ -179,7 +196,7 @@ impl DatabaseManager {
 
     /// Save database config
     fn save_config(&self, config: &DatabaseConfig) -> Result<(), String> {
-        let config_path = format!("{}/{}/config.json", self.data_dir, config.name);
+        let config_path = self.get_config_path(&config.name);
 
         let content = serde_json::to_string_pretty(config)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;

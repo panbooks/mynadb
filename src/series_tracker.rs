@@ -6,9 +6,16 @@ use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+// System directory and file constants
+const SYSTEM_DIR: &str = "_system";
+const SERIES_STATS_DIR: &str = "series_stats";
+const SERIES_STATS_FILE_EXT: &str = "parquet";
+const MONITOR_SERVICE_TAG: &str = "MONITOR.service";
+const DEFAULT_SERVICE_NAME: &str = "unknown";
 
 /// Series tracker for monitoring metric cardinality
 /// Tracks unique series by service, metric, and tag combination hash
@@ -16,6 +23,21 @@ pub struct SeriesTracker {
     data_dir: String,
     /// In-memory cache: (service, metric, hash) -> exists
     cache: Arc<RwLock<HashSet<(String, String, i64)>>>,
+}
+
+impl SeriesTracker {
+    /// Get the series stats directory path
+    fn get_stats_dir(&self) -> PathBuf {
+        Path::new(&self.data_dir)
+            .join(SYSTEM_DIR)
+            .join(SERIES_STATS_DIR)
+    }
+
+    /// Get the series stats file path for a database
+    fn get_stats_file_path(&self, db: &str) -> PathBuf {
+        self.get_stats_dir()
+            .join(format!("{}.{}", db, SERIES_STATS_FILE_EXT))
+    }
 }
 
 impl SeriesTracker {
@@ -32,9 +54,9 @@ impl SeriesTracker {
         let service = point
             .tags
             .iter()
-            .find(|(k, _)| *k == "MONITOR.service")
+            .find(|(k, _)| *k == MONITOR_SERVICE_TAG)
             .map(|(_, v)| v.clone())
-            .unwrap_or_else(|| "unknown".to_string());
+            .unwrap_or_else(|| DEFAULT_SERVICE_NAME.to_string());
 
         // Calculate hash of non-MONITOR.service tags
         let hash = self.calculate_tag_hash(&point.tags);
@@ -70,7 +92,7 @@ impl SeriesTracker {
         // Filter out MONITOR.service and sort the rest
         let mut filtered_tags: Vec<(&str, &str)> = tags
             .iter()
-            .filter(|(k, _)| *k != "MONITOR.service")
+            .filter(|(k, _)| *k != MONITOR_SERVICE_TAG)
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         
@@ -94,11 +116,11 @@ impl SeriesTracker {
         metric: &str,
         hash: i64,
     ) -> Result<(), String> {
-        let stats_dir = format!("{}/_system/series_stats", self.data_dir);
+        let stats_dir = self.get_stats_dir();
         std::fs::create_dir_all(&stats_dir)
             .map_err(|e| format!("Failed to create stats directory: {}", e))?;
 
-        let file_path = format!("{}/{}.parquet", stats_dir, db);
+        let file_path = self.get_stats_file_path(db);
         
         let schema = Arc::new(Schema::new(vec![
             Field::new("service", DataType::Utf8, false),
@@ -111,7 +133,7 @@ impl SeriesTracker {
         let mut metrics = Vec::new();
         let mut hashes = Vec::new();
 
-        if Path::new(&file_path).exists() {
+        if file_path.exists() {
             use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
             
             let read_file = File::open(&file_path)
@@ -189,10 +211,9 @@ impl SeriesTracker {
 
     /// Get series count statistics grouped by service
     pub async fn get_series_stats(&self, db: &str) -> Result<HashMap<String, SeriesStats>, String> {
-        let stats_dir = format!("{}/_system/series_stats", self.data_dir);
-        let file_path = format!("{}/{}.parquet", stats_dir, db);
+        let file_path = self.get_stats_file_path(db);
 
-        if !Path::new(&file_path).exists() {
+        if !file_path.exists() {
             return Ok(HashMap::new());
         }
 
@@ -270,10 +291,9 @@ impl SeriesTracker {
 
     /// Load existing stats into cache on startup
     pub async fn load_cache(&self, db: &str) -> Result<(), String> {
-        let stats_dir = format!("{}/_system/series_stats", self.data_dir);
-        let file_path = format!("{}/{}.parquet", stats_dir, db);
+        let file_path = self.get_stats_file_path(db);
 
-        if !Path::new(&file_path).exists() {
+        if !file_path.exists() {
             return Ok(());
         }
 
@@ -340,11 +360,11 @@ mod tests {
         let mut tags1 = HashMap::new();
         tags1.insert("host".to_string(), "server1".to_string());
         tags1.insert("type".to_string(), "http".to_string());
-        tags1.insert("MONITOR.service".to_string(), "api".to_string());
+        tags1.insert(MONITOR_SERVICE_TAG.to_string(), "api".to_string());
         
         let mut tags2 = HashMap::new();
         tags2.insert("type".to_string(), "http".to_string());
-        tags2.insert("MONITOR.service".to_string(), "api".to_string());
+        tags2.insert(MONITOR_SERVICE_TAG.to_string(), "api".to_string());
         tags2.insert("host".to_string(), "server1".to_string());
         
         let hash1 = tracker.calculate_tag_hash(&tags1);
@@ -360,11 +380,11 @@ mod tests {
         // Different MONITOR.service should produce same hash if other tags are same
         let mut tags1 = HashMap::new();
         tags1.insert("host".to_string(), "server1".to_string());
-        tags1.insert("MONITOR.service".to_string(), "api".to_string());
+        tags1.insert(MONITOR_SERVICE_TAG.to_string(), "api".to_string());
         
         let mut tags2 = HashMap::new();
         tags2.insert("host".to_string(), "server1".to_string());
-        tags2.insert("MONITOR.service".to_string(), "web".to_string());
+        tags2.insert(MONITOR_SERVICE_TAG.to_string(), "web".to_string());
         
         let hash1 = tracker.calculate_tag_hash(&tags1);
         let hash2 = tracker.calculate_tag_hash(&tags2);

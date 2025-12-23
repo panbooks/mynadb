@@ -7,6 +7,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+// Compaction constants
+const LEVEL_PREFIX: char = 'L';
+const LEVEL_SEPARATOR: char = '_';
+const PARQUET_EXT: &str = ".parquet";
+const CONFIG_FILENAME: &str = "config.json";
+
+// Default compaction thresholds
+const DEFAULT_MIN_FILES: usize = 5;
+const DEFAULT_MAX_FILE_SIZE_MB: u64 = 100;
+const DEFAULT_TARGET_FILE_SIZE_MB: u64 = 500;
+const DEFAULT_MAX_LEVEL: u32 = 5;
+const MB_TO_BYTES: u64 = 1024 * 1024;
+
 /// Compactor is responsible for merging small Parquet files into larger ones
 /// using a leveled compaction strategy (similar to LSM-tree)
 pub struct Compactor {
@@ -31,10 +44,10 @@ pub struct CompactionConfig {
 impl Default for CompactionConfig {
     fn default() -> Self {
         CompactionConfig {
-            min_files: 5,
-            max_file_size: 100 * 1024 * 1024,      // 100MB
-            target_file_size: 500 * 1024 * 1024,   // 500MB
-            max_level: 5,
+            min_files: DEFAULT_MIN_FILES,
+            max_file_size: DEFAULT_MAX_FILE_SIZE_MB * MB_TO_BYTES,
+            target_file_size: DEFAULT_TARGET_FILE_SIZE_MB * MB_TO_BYTES,
+            max_level: DEFAULT_MAX_LEVEL,
         }
     }
 }
@@ -72,14 +85,14 @@ impl ParquetFileInfo {
             .and_then(|n| n.to_str())
             .ok_or("Invalid filename")?;
         
-        let (level, timestamp) = if filename.starts_with('L') {
+        let (level, timestamp) = if filename.starts_with(LEVEL_PREFIX) {
             // New format: L0_1703251234567.parquet
-            let parts: Vec<&str> = filename.split('_').collect();
+            let parts: Vec<&str> = filename.split(LEVEL_SEPARATOR).collect();
             if parts.len() >= 2 {
-                let level = parts[0].trim_start_matches('L')
+                let level = parts[0].trim_start_matches(LEVEL_PREFIX)
                     .parse::<u32>()
                     .unwrap_or(0);
-                let timestamp = parts[1].trim_end_matches(".parquet")
+                let timestamp = parts[1].trim_end_matches(PARQUET_EXT)
                     .parse::<i64>()
                     .unwrap_or(0);
                 (level, timestamp)
@@ -88,7 +101,7 @@ impl ParquetFileInfo {
             }
         } else {
             // Legacy format: 1703251234567.parquet (treat as L0)
-            let timestamp = filename.trim_end_matches(".parquet")
+            let timestamp = filename.trim_end_matches(PARQUET_EXT)
                 .parse::<i64>()
                 .unwrap_or(0);
             (0, timestamp)
@@ -238,11 +251,15 @@ impl Compactor {
                 
                 // Determine next level (L0 → L1)
                 let next_level = 1;
+                let timestamp = chrono::Utc::now().timestamp_millis();
                 let compacted_filename = format!(
-                    "{}/L{}_{}.parquet",
+                    "{}/{}{}{}{}{}",
                     measurement_path,
+                    LEVEL_PREFIX,
                     next_level,
-                    chrono::Utc::now().timestamp_millis()
+                    LEVEL_SEPARATOR,
+                    timestamp,
+                    PARQUET_EXT
                 );
                 
                 self.write_compacted_file(&compacted_filename, batches)?;
@@ -287,11 +304,15 @@ impl Compactor {
                     
                     // Determine next level
                     let next_level = level + 1;
+                    let timestamp = chrono::Utc::now().timestamp_millis();
                     let compacted_filename = format!(
-                        "{}/L{}_{}.parquet",
+                        "{}/{}{}{}{}{}",
                         measurement_path,
+                        LEVEL_PREFIX,
                         next_level,
-                        chrono::Utc::now().timestamp_millis()
+                        LEVEL_SEPARATOR,
+                        timestamp,
+                        PARQUET_EXT
                     );
                     
                     self.write_compacted_file(&compacted_filename, batches)?;
