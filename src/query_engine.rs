@@ -145,6 +145,23 @@ impl QueryEngine {
         Ok(batches)
     }
 
+    /// Get the schema for a SQL query without executing it
+    pub async fn get_query_schema(&self, db_name: &str, sql: &str) -> Result<Arc<datafusion::arrow::datatypes::Schema>, String> {
+        // Ensure database is registered
+        self.ensure_database_registered(db_name).await?;
+        
+        // Prefix table names
+        let prefixed_sql = self.prefix_table_names(sql, db_name);
+        
+        let df = self
+            .ctx
+            .sql(&prefixed_sql)
+            .await
+            .map_err(|e| format!("SQL error: {}", e))?;
+
+        Ok(df.schema().inner().clone())
+    }
+
     /// Prefix unqualified table names with database name
     /// Example: "SELECT * FROM cpu" -> "SELECT * FROM mydb_cpu"
     fn prefix_table_names(&self, sql: &str, db_name: &str) -> String {
