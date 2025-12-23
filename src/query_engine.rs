@@ -1,5 +1,5 @@
 use datafusion::arrow::array::RecordBatch;
-use datafusion::catalog::{CatalogProvider, SchemaProvider};
+use datafusion::catalog::CatalogProvider;
 use datafusion::datasource::TableProvider;
 use datafusion::prelude::*;
 use std::collections::HashMap;

@@ -72,7 +72,12 @@ async fn main() {
     let query_engine = Arc::new(QueryEngine::new("./data"));
     let db_manager = Arc::new(DatabaseManager::new("./data"));
     let compactor = Arc::new(Compactor::new("./data"));
+    
     let series_tracker = Arc::new(SeriesTracker::new("./data"));
+    // Load existing series stats into cache on startup
+    // (Note: we'll load on-demand per database)
+    // Start background flush for series tracker (every 60 seconds)
+    Arc::clone(&series_tracker).start_background_flush(60);
 
     let state = AppState {
         cache,
@@ -118,7 +123,8 @@ async fn main() {
 
     println!("🚀 Time Series Database Server running on http://0.0.0.0:7000");
     println!("📊 Data directory: ./data");
-    println!("⏱️  Flush interval: 30 seconds");
+    println!("⏱️  Cache flush interval: 30 seconds");
+    println!("⏱️  Series tracker flush interval: 60 seconds");
     println!("🔍 Query engine: DataFusion SQL (auto-registration)");
     println!("\n📝 Quick start:");
     println!("   # Create database");
@@ -484,15 +490,8 @@ async fn process_write_data(
         return (StatusCode::BAD_REQUEST, "No valid points to write".to_string());
     }
 
-    // Track series cardinality (async, non-blocking)
-    for point in &points {
-        let tracker = state.series_tracker.clone();
-        let db_name = db.to_string();
-        let point_clone = point.clone();
-        tokio::spawn(async move {
-            tracker.track_point(&db_name, &point_clone).await;
-        });
-    }
+    // Track series cardinality (batch operation, in-memory cache only)
+    state.series_tracker.track_points(&db, &points).await;
 
     // Group points by measurement
     let mut grouped: HashMap<String, Vec<_>> = HashMap::new();
