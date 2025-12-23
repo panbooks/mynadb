@@ -190,6 +190,27 @@ Manually trigger a flush of cached data to disk (in addition to automatic 30-sec
 curl -X POST http://localhost:7000/flush
 ```
 
+### Compaction
+
+```
+POST /compact/:db
+POST /compact/:db/:measurement
+```
+
+Compact (merge) multiple small Parquet files into larger files to improve query performance and reduce file count.
+
+**Compact entire database:**
+```bash
+curl -X POST http://localhost:7000/compact/mydb
+```
+
+**Compact specific measurement:**
+```bash
+curl -X POST http://localhost:7000/compact/mydb/cpu
+```
+
+See [COMPACTION.md](./COMPACTION.md) for detailed documentation.
+
 ### Health Check
 
 ```
@@ -341,18 +362,24 @@ stats/
 ✅ **SQL query engine powered by Apache DataFusion**  
 ✅ **Complex queries: aggregations, joins, window functions**  
 ✅ **Table discovery and schema inspection**  
-✅ **JSON query results**
+✅ **JSON query results**  
+✅ **Compaction to merge small files and improve performance**  
+✅ **Concurrent operation safety with locking mechanism**
 
 ## Next Steps
 
 Potential enhancements:
-- [ ] Query API to read data back
-- [ ] Data compression and compaction
+- [x] Query API to read data back
+- [x] DataFusion SQL query engine
+- [x] In-memory caching with auto-flush
+- [x] Compaction to reduce small file problem
+- [ ] Data compression and compaction optimization
 - [ ] WAL (Write-Ahead Log) for durability
 - [ ] Indexing for faster queries
 - [ ] Retention policies
 - [ ] Authentication and authorization
 - [ ] Clustering and replication
+- [ ] Background automatic compaction
 
 ## License
 

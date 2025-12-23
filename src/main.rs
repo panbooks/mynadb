@@ -1,4 +1,5 @@
 mod cache;
+mod compactor;
 mod database_manager;
 mod line_protocol;
 mod parquet_writer;
@@ -12,6 +13,7 @@ use axum::{
     Json, Router,
 };
 use cache::DataCache;
+use compactor::{Compactor, CompactionConfig};
 use database_manager::DatabaseManager;
 use line_protocol::parse_multiple_lines;
 use query_engine::QueryEngine;
@@ -24,6 +26,7 @@ struct AppState {
     cache: DataCache,
     query_engine: Arc<QueryEngine>,
     db_manager: Arc<DatabaseManager>,
+    compactor: Arc<Compactor>,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +51,12 @@ struct CreateTableRequest {
     partition_by: Vec<String>,
 }
 
+#[derive(Deserialize)]
+struct CompactRequest {
+    #[serde(default)]
+    measurement: Option<String>,
+}
+
 #[tokio::main]
 async fn main() {
     // Create data directory
@@ -59,11 +68,13 @@ async fn main() {
 
     let query_engine = Arc::new(QueryEngine::new("./data"));
     let db_manager = Arc::new(DatabaseManager::new("./data"));
+    let compactor = Arc::new(Compactor::new("./data"));
 
     let state = AppState {
         cache,
         query_engine,
         db_manager,
+        compactor,
     };
 
     let app = Router::new()
@@ -88,6 +99,9 @@ async fn main() {
         .route("/databases/:db/tables", get(list_tables_handler))
         .route("/databases/:db/tables/:table", delete(delete_table_handler))
         .route("/schema/:db/:table", get(schema_handler))
+        // Compaction endpoints
+        .route("/compact/:db", post(compact_handler))
+        .route("/compact/:db/:measurement", post(compact_measurement_handler))
         .fallback(log_request)
         .with_state(state);
 
@@ -131,7 +145,10 @@ async fn home() -> &'static str {
      Cache Management:\n\
        GET    /stats                  - Cache statistics\n\
        POST   /flush                  - Flush cache to disk\n\
-       GET    /health                 - Health check\n"
+       GET    /health                 - Health check\n\n\
+     Compaction:\n\
+       POST   /compact/:db            - Compact all measurements in database\n\
+       POST   /compact/:db/:measurement - Compact specific measurement\n"
 }
 
 // ===== Database Management Handlers =====
@@ -491,4 +508,97 @@ async fn log_request(req: Request) -> impl IntoResponse {
         StatusCode::NOT_FOUND,
         format!("Endpoint not found: {} {}", method, uri),
     )
+}
+
+// ===== Compaction Handlers =====
+
+async fn compact_handler(
+    Path(db): Path<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    println!("\n=== Compact Database Request ===");
+    println!("Database: {}", db);
+
+    let config = CompactionConfig::default();
+
+    match state.compactor.compact_database(&db, &config).await {
+        Ok(results) => {
+            if results.is_empty() {
+                (StatusCode::OK, "No compaction needed (minimum file threshold not met)".to_string())
+            } else {
+                let summary = results
+                    .iter()
+                    .map(|r| {
+                        format!(
+                            "{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
+                            r.measurement,
+                            r.l0_files_before,
+                            r.l0_files_after,
+                            r.files_before,
+                            r.files_after,
+                            r.bytes_before as f64 / 1024.0 / 1024.0,
+                            r.bytes_after as f64 / 1024.0 / 1024.0,
+                            r.rows_compacted
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                (
+                    StatusCode::OK,
+                    format!(
+                        "Compacted {} measurement(s) in database '{}'\n\n{}",
+                        results.len(),
+                        db,
+                        summary
+                    ),
+                )
+            }
+        }
+        Err(e) => {
+            eprintln!("❌ Compaction error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Compaction error: {}", e))
+        }
+    }
+}
+
+async fn compact_measurement_handler(
+    Path((db, measurement)): Path<(String, String)>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    println!("\n=== Compact Measurement Request ===");
+    println!("Database: {}, Measurement: {}", db, measurement);
+
+    let config = CompactionConfig::default();
+
+    match state.compactor.compact_measurement(&db, &measurement, &config).await {
+        Ok(Some(result)) => {
+            let message = format!(
+                "Compacted {}/{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
+                result.db,
+                result.measurement,
+                result.l0_files_before,
+                result.l0_files_after,
+                result.files_before,
+                result.files_after,
+                result.bytes_before as f64 / 1024.0 / 1024.0,
+                result.bytes_after as f64 / 1024.0 / 1024.0,
+                result.rows_compacted
+            );
+            println!("✅ {}", message);
+            (StatusCode::OK, message)
+        }
+        Ok(None) => {
+            let message = format!(
+                "No compaction needed for {}/{} (minimum file threshold not met)",
+                db, measurement
+            );
+            println!("ℹ️  {}", message);
+            (StatusCode::OK, message)
+        }
+        Err(e) => {
+            eprintln!("❌ Compaction error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Compaction error: {}", e))
+        }
+    }
 }

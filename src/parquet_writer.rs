@@ -36,9 +36,9 @@ impl ParquetWriter {
         create_dir_all(&measurement_path)
             .map_err(|e| format!("Failed to create measurement directory: {}", e))?;
 
-        // Generate filename with timestamp (just timestamp, no measurement prefix)
+        // Generate filename with L0 prefix (Level 0 - raw files)
         let filename = format!(
-            "{}/{}.parquet",
+            "{}/L0_{}.parquet",
             measurement_path,
             chrono::Utc::now().timestamp_millis()
         );
@@ -81,9 +81,9 @@ impl ParquetWriter {
         create_dir_all(&measurement_path)
             .map_err(|e| format!("Failed to create measurement directory: {}", e))?;
 
-        // Generate filename with timestamp
+        // Generate filename with L0 prefix (Level 0 - raw files)
         let filename = format!(
-            "{}/{}.parquet",
+            "{}/L0_{}.parquet",
             measurement_path,
             chrono::Utc::now().timestamp_millis()
         );
