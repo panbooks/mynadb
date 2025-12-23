@@ -4,6 +4,7 @@ mod database_manager;
 mod line_protocol;
 mod parquet_writer;
 mod query_engine;
+mod series_tracker;
 
 use axum::{
     extract::{Path, Query as AxumQuery, Request, State},
@@ -17,6 +18,7 @@ use compactor::{Compactor, CompactionConfig};
 use database_manager::DatabaseManager;
 use line_protocol::parse_multiple_lines;
 use query_engine::QueryEngine;
+use series_tracker::SeriesTracker;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,6 +29,7 @@ struct AppState {
     query_engine: Arc<QueryEngine>,
     db_manager: Arc<DatabaseManager>,
     compactor: Arc<Compactor>,
+    series_tracker: Arc<SeriesTracker>,
 }
 
 #[derive(Deserialize)]
@@ -69,12 +72,14 @@ async fn main() {
     let query_engine = Arc::new(QueryEngine::new("./data"));
     let db_manager = Arc::new(DatabaseManager::new("./data"));
     let compactor = Arc::new(Compactor::new("./data"));
+    let series_tracker = Arc::new(SeriesTracker::new("./data"));
 
     let state = AppState {
         cache,
         query_engine,
         db_manager,
         compactor,
+        series_tracker,
     };
 
     let app = Router::new()
@@ -102,6 +107,8 @@ async fn main() {
         // Compaction endpoints
         .route("/compact/:db", post(compact_handler))
         .route("/compact/:db/:measurement", post(compact_measurement_handler))
+        // Series cardinality tracking
+        .route("/series_stats/:db", get(series_stats_handler))
         .fallback(log_request)
         .with_state(state);
 
@@ -122,6 +129,8 @@ async fn main() {
     println!("   curl -X POST 'http://localhost:7000/write?db=mydb' -d 'cpu,host=server01 usage=23.5'");
     println!("\n   # Query data");
     println!("   curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'");
+    println!("\n   # Series cardinality stats");
+    println!("   curl http://localhost:7000/series_stats/mydb");
 
     axum::serve(listener, app).await.unwrap();
 }
@@ -475,6 +484,16 @@ async fn process_write_data(
         return (StatusCode::BAD_REQUEST, "No valid points to write".to_string());
     }
 
+    // Track series cardinality (async, non-blocking)
+    for point in &points {
+        let tracker = state.series_tracker.clone();
+        let db_name = db.to_string();
+        let point_clone = point.clone();
+        tokio::spawn(async move {
+            tracker.track_point(&db_name, &point_clone).await;
+        });
+    }
+
     // Group points by measurement
     let mut grouped: HashMap<String, Vec<_>> = HashMap::new();
     for point in points {
@@ -562,6 +581,7 @@ async fn compact_handler(
     }
 }
 
+
 async fn compact_measurement_handler(
     Path((db, measurement)): Path<(String, String)>,
     State(state): State<AppState>,
@@ -599,6 +619,60 @@ async fn compact_measurement_handler(
         Err(e) => {
             eprintln!("❌ Compaction error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Compaction error: {}", e))
+        }
+    }
+}
+
+// ===== Series Cardinality Handler =====
+
+async fn series_stats_handler(
+    Path(db): Path<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    println!("\n=== Series Stats Request ===");
+    println!("Database: {}", db);
+
+    match state.series_tracker.get_series_stats(&db).await {
+        Ok(stats) => {
+            if stats.is_empty() {
+                return (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "database": db,
+                        "services": {},
+                        "total_series": 0,
+                        "message": "No series data available"
+                    }))
+                    .to_string(),
+                );
+            }
+
+            // Calculate total series across all services
+            let total_series: usize = stats.values().map(|s| s.total_series).sum();
+
+            // Format response
+            let response = serde_json::json!({
+                "database": db,
+                "total_series": total_series,
+                "service_count": stats.len(),
+                "services": stats.iter().map(|(service, stats)| {
+                    serde_json::json!({
+                        "service": service,
+                        "total_series": stats.total_series,
+                        "metrics": stats.metrics
+                    })
+                }).collect::<Vec<_>>()
+            });
+
+            println!("✅ Returned stats for {} services, {} total series", stats.len(), total_series);
+            (StatusCode::OK, serde_json::to_string_pretty(&response).unwrap())
+        }
+        Err(e) => {
+            eprintln!("❌ Error getting series stats: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error getting series stats: {}", e),
+            )
         }
     }
 }
