@@ -2,6 +2,53 @@
 
 ## Latest Updates
 
+### Feature: Automatic SQL Table Name Rewriting
+
+Added automatic table name prefixing in SQL queries, allowing you to use short table names instead of the full `database_table` format.
+
+**New Capability:**
+```sql
+-- Now you can write (recommended):
+SELECT * FROM cpu WHERE usage > 50
+
+-- Instead of (still works):
+SELECT * FROM mydb_cpu WHERE usage > 50
+```
+
+**How It Works:**
+- Query engine automatically adds database prefix from URL path
+- Works with: FROM, JOIN, INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN
+- Backward compatible: full table names still work
+
+**Examples:**
+```bash
+# Short form (NEW)
+curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu'
+
+# JOINs (NEW)
+curl -X POST http://localhost:7000/query/mydb \
+  -d "SELECT c.*, m.used FROM cpu c JOIN memory m ON c.host = m.host"
+
+# Full form (still works)
+curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM mydb_cpu'
+```
+
+**Benefits:**
+- ✅ Simpler, more natural SQL queries
+- ✅ Less typing, fewer typos
+- ✅ Database-agnostic queries (same SQL works across databases)
+- ✅ Better developer experience
+
+**Modified Files:**
+- `src/query_engine.rs` - Added `execute_query_with_db()` and `rewrite_sql_with_db_prefix()`
+- `src/main.rs` - Updated to use new query method with DB context
+- `README.md` - Updated examples
+- `SQL_TABLE_NAME_REWRITING.md` - Detailed documentation
+
+See [SQL_TABLE_NAME_REWRITING.md](./SQL_TABLE_NAME_REWRITING.md) for full documentation.
+
+---
+
 ### Feature: Leveled Parquet File Compaction
 
 Added leveled compaction functionality to merge small Parquet files into larger ones using an LSM-tree inspired strategy, solving the "small file problem".

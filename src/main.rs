@@ -121,7 +121,7 @@ async fn main() {
     println!("\n   # Write data (InfluxDB-compatible)");
     println!("   curl -X POST 'http://localhost:7000/write?db=mydb' -d 'cpu,host=server01 usage=23.5'");
     println!("\n   # Query data");
-    println!("   curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM mydb_cpu LIMIT 10'");
+    println!("   curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'");
 
     axum::serve(listener, app).await.unwrap();
 }
@@ -339,8 +339,8 @@ async fn execute_query(
         );
     }
 
-    // Execute query
-    match state.query_engine.execute_query_json(&sql).await {
+    // Execute query with database context (auto-prefix table names)
+    match state.query_engine.execute_query_json_with_db(&sql, &db).await {
         Ok(json) => {
             println!("✅ Query executed successfully");
             println!("==================\n");

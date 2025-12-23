@@ -128,18 +128,29 @@ POST /query/:db (SQL in body)
 
 Query data using SQL powered by DataFusion.
 
+**Important**: Table names are automatically prefixed with the database name. You can use either:
+- Short form: `SELECT * FROM cpu` (recommended)
+- Full form: `SELECT * FROM mydb_cpu` (also works)
+
 **Examples:**
 
 ```bash
-# Simple query
+# Simple query (short form - recommended)
+curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'
+
+# Full form also works
 curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM mydb_cpu LIMIT 10'
 
 # Aggregation
-curl 'http://localhost:7000/query/mydb?sql=SELECT host, AVG(usage) FROM mydb_cpu GROUP BY host'
+curl 'http://localhost:7000/query/mydb?sql=SELECT host, AVG(usage) FROM cpu GROUP BY host'
 
 # Complex query (POST)
 curl -X POST http://localhost:7000/query/mydb \
-  -d "SELECT * FROM mydb_cpu WHERE usage > 50 ORDER BY timestamp DESC"
+  -d "SELECT * FROM cpu WHERE usage > 50 ORDER BY timestamp DESC"
+
+# Join multiple measurements
+curl -X POST http://localhost:7000/query/mydb \
+  -d "SELECT c.*, m.used FROM cpu c JOIN memory m ON c.host = m.host"
 ```
 
 ### List Tables
