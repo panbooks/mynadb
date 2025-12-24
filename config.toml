@@ -1,0 +1,44 @@
+# Stats Service Configuration File
+
+[server]
+# HTTP REST API configuration
+http_host = "0.0.0.0"
+http_port = 7000
+
+# Arrow Flight gRPC configuration
+flight_host = "0.0.0.0"
+flight_port = 7001
+
+[storage]
+# Data directory path (use absolute path in production)
+data_dir = "./data"
+
+# System directory name for metadata
+system_dir = "_system"
+
+[cache]
+# Background flush interval in seconds
+flush_interval_secs = 30
+
+# Maximum cache size in MB before forcing flush
+max_size_mb = 1024
+
+[compaction]
+# Minimum number of files to trigger compaction
+min_files = 5
+
+# Maximum file size in MB before compaction
+max_file_size_mb = 100
+
+# Target file size in MB after compaction
+target_file_size_mb = 500
+
+# Maximum compaction level
+max_level = 5
+
+[series_tracker]
+# Background flush interval in seconds
+flush_interval_secs = 60
+
+# Series stats directory name
+stats_dir = "series_stats"
