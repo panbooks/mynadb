@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
+use tracing::{info, warn, error, debug};
 
 const DEFAULT_SCHEMA: &str = "default";
 
@@ -54,10 +55,10 @@ impl DataCache {
                     .map(|batches| batches.iter().map(|b| b.num_rows()).sum::<usize>())
                     .sum();
 
-                println!("📦 Cache: {} rows across {} table(s)", total_rows, cache.len());
+                debug!("Cache: {} rows across {} table(s)", total_rows, cache.len());
             }
             Err(e) => {
-                eprintln!("❌ Failed to convert points to RecordBatch: {}", e);
+                error!("Failed to convert points to RecordBatch: {}", e);
             }
         }
     }
@@ -195,25 +196,25 @@ impl DataCache {
         let mut cache = self.cache.lock().await;
 
         if cache.is_empty() {
-            println!("💾 Flush: Cache is empty, nothing to write");
+            debug!("Flush: Cache is empty, nothing to write");
             return Ok(0);
         }
 
-        println!("💾 Flushing cache to disk...");
+        info!("Flushing cache to disk...");
         let mut files_written = 0;
         let mut errors = Vec::new();
 
         for ((catalog, schema, table), batches) in cache.drain() {
             let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-            println!("  Writing {} rows for {}.{}.{}", total_rows, catalog, schema, table);
+            debug!("Writing {} rows for {}.{}.{}", total_rows, catalog, schema, table);
 
             match self.writer.write_batches(&catalog, &schema, &table, batches) {
                 Ok(filename) => {
-                    println!("  ✅ Written to: {}", filename);
+                    info!("Written to: {}", filename);
                     files_written += 1;
                 }
                 Err(e) => {
-                    eprintln!("  ❌ Error writing {}.{}.{}: {}", catalog, schema, table, e);
+                    error!("Error writing {}.{}.{}: {}", catalog, schema, table, e);
                     errors.push(format!("{}.{}.{}: {}", catalog, schema, table, e));
                 }
             }
@@ -223,7 +224,7 @@ impl DataCache {
             return Err(format!("Flush completed with {} error(s)", errors.len()));
         }
 
-        println!("💾 Flush complete: {} file(s) written", files_written);
+        info!("Flush complete: {} file(s) written", files_written);
         Ok(files_written)
     }
 
@@ -262,10 +263,7 @@ impl DataCache {
         tokio::spawn(async move {
             let mut ticker = interval(Duration::from_secs(flush_interval_secs));
 
-            println!(
-                "🔄 Background flush started: every {} seconds",
-                flush_interval_secs
-            );
+            info!("Background flush started: every {} seconds", flush_interval_secs);
 
             loop {
                 ticker.tick().await;
@@ -273,11 +271,11 @@ impl DataCache {
                 match self.flush().await {
                     Ok(count) => {
                         if count > 0 {
-                            println!("🔄 Background flush: {} file(s) written", count);
+                            info!("Background flush: {} file(s) written", count);
                         }
                     }
                     Err(e) => {
-                        eprintln!("🔄 Background flush error: {}", e);
+                        error!("Background flush error: {}", e);
                     }
                 }
             }

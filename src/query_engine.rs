@@ -8,6 +8,7 @@ use datafusion::sql::TableReference;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::{info, warn, debug};
 
 const DEFAULT_SCHEMA: &str = "default";
 
@@ -33,7 +34,7 @@ impl QueryEngine {
         if self.ctx.catalog(catalog_name).is_none() {
             let catalog = Arc::new(MemoryCatalogProvider::new());
             self.ctx.register_catalog(catalog_name, catalog);
-            println!("📁 Created catalog: {}", catalog_name);
+            info!("Created catalog: {}", catalog_name);
         }
         Ok(())
     }
@@ -41,15 +42,15 @@ impl QueryEngine {
     /// Ensure schema exists in catalog, create if needed
     async fn ensure_schema_in_catalog(&self, catalog_name: &str, schema_name: &str) -> Result<(), String> {
         self.ensure_catalog(catalog_name).await?;
-
+        
         let catalog = self.ctx.catalog(catalog_name)
             .ok_or_else(|| format!("Catalog '{}' not found", catalog_name))?;
-
+        
         if catalog.schema(schema_name).is_none() {
             let schema = Arc::new(MemorySchemaProvider::new());
             catalog.register_schema(schema_name, schema)
                 .map_err(|e| format!("Failed to register schema: {}", e))?;
-            println!("📂 Created schema: {}.{}", catalog_name, schema_name);
+            info!("Created schema: {}.{}", catalog_name, schema_name);
         }
         Ok(())
     }
@@ -95,7 +96,7 @@ impl QueryEngine {
             .or_insert_with(HashSet::new)
             .insert(schema_name.to_string());
 
-        println!("📊 Registered table: {}.{}.{}", catalog_name, schema_name, table_name);
+        debug!("Registered table: {}.{}.{}", catalog_name, schema_name, table_name);
         Ok(())
     }
 
@@ -119,7 +120,7 @@ impl QueryEngine {
                 if let Some(table_name) = path.file_name().and_then(|s| s.to_str()) {
                     if !table_name.starts_with('.') {
                         if let Err(e) = self.register_table(catalog_name, schema_name, table_name).await {
-                            eprintln!("⚠️  Failed to register {}.{}.{}: {}", catalog_name, schema_name, table_name, e);
+                            warn!("Failed to register {}.{}.{}: {}", catalog_name, schema_name, table_name, e);
                         } else {
                             count += 1;
                         }
@@ -152,7 +153,7 @@ impl QueryEngine {
                     if !schema_name.starts_with('.') {
                         match self.discover_and_register(catalog_name, schema_name).await {
                             Ok(count) => total_tables += count,
-                            Err(e) => eprintln!("⚠️  Failed to discover schema {}.{}: {}", catalog_name, schema_name, e),
+                            Err(e) => warn!("Failed to discover schema {}.{}: {}", catalog_name, schema_name, e),
                         }
                     }
                 }
@@ -176,7 +177,7 @@ impl QueryEngine {
     pub async fn ensure_database_registered(&self, db_name: &str) -> Result<(), String> {
         let count = self.discover_catalog(db_name).await?;
         if count > 0 {
-            println!("📋 Auto-registered {} table(s) in catalog '{}'", count, db_name);
+            info!("Auto-registered {} table(s) in catalog '{}'", count, db_name);
         }
         Ok(())
     }
@@ -205,9 +206,9 @@ impl QueryEngine {
         // Qualify unqualified table names with catalog.schema
         let qualified_sql = self.qualify_table_names(sql, db_name);
 
-        println!("📝 SQL: {}", sql);
+        debug!("SQL: {}", sql);
         if qualified_sql != sql {
-            println!("📝 Qualified: {}", qualified_sql);
+            debug!("Qualified: {}", qualified_sql);
         }
 
         let df = self
@@ -516,7 +517,7 @@ impl QueryEngine {
     pub async fn clear_cache(&self) {
         let mut catalogs = self.registered_catalogs.write().await;
         catalogs.clear();
-        println!("🔄 Query engine cache cleared");
+        info!("Query engine cache cleared");
     }
 
     /// Get the session context (for Flight service)

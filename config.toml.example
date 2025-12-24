@@ -1,0 +1,63 @@
+# Stats Service Configuration Example
+
+[server]
+# HTTP REST API host and port
+http_host = "0.0.0.0"
+http_port = 7000
+
+# Arrow Flight gRPC host and port
+flight_host = "0.0.0.0"
+flight_port = 7001
+
+[storage]
+# Data directory for storing Parquet files
+data_dir = "./data"
+
+# System directory name (for metadata and series stats)
+system_dir = "_system"
+
+[cache]
+# Background flush interval in seconds
+flush_interval_secs = 30
+
+# Maximum cache size in MB before forcing flush
+max_size_mb = 1024
+
+[compaction]
+# Minimum number of files to trigger compaction
+min_files = 5
+
+# Maximum file size in MB before compaction
+max_file_size_mb = 100
+
+# Target file size in MB after compaction
+target_file_size_mb = 500
+
+# Maximum compaction level
+max_level = 5
+
+[series_tracker]
+# Background flush interval for series tracking (seconds)
+flush_interval_secs = 60
+
+# Series stats directory name
+stats_dir = "series_stats"
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+# Log directory path
+log_dir = "./logs"
+
+# Log file name prefix
+file_prefix = "stats-service"
+
+# Log file rotation: daily, hourly, never
+rotation = "daily"
+
+# Maximum number of log files to keep
+max_files = 30
+
+# Enable JSON formatted logs (default: false for human-readable format)
+json_format = false
