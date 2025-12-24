@@ -12,7 +12,6 @@ use tracing::{info, warn, error, debug};
 const LEVEL_PREFIX: char = 'L';
 const LEVEL_SEPARATOR: char = '_';
 const PARQUET_EXT: &str = ".parquet";
-const CONFIG_FILENAME: &str = "config.json";
 
 // Default compaction thresholds
 const DEFAULT_MIN_FILES: usize = 5;
@@ -26,8 +25,8 @@ const MB_TO_BYTES: u64 = 1024 * 1024;
 pub struct Compactor {
     data_dir: String,
     /// Lock to prevent concurrent compaction and read/write operations
-    /// Key: (catalog, schema, table)
-    locks: Arc<RwLock<std::collections::HashMap<(String, String, String), Arc<tokio::sync::Mutex<()>>>>>,
+    /// Key: (catalog, schema, table, date_partition)
+    locks: Arc<RwLock<std::collections::HashMap<(String, String, String, String), Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +57,7 @@ pub struct CompactionResult {
     pub catalog: String,
     pub schema: String,
     pub table: String,
+    pub date_partition: String,
     pub l0_files_before: usize,
     pub l0_files_after: usize,
     pub files_before: usize,
@@ -126,9 +126,9 @@ impl Compactor {
         }
     }
 
-    /// Get or create a lock for a specific catalog/schema/table tuple
-    async fn get_lock(&self, catalog: &str, schema: &str, table: &str) -> Arc<tokio::sync::Mutex<()>> {
-        let key = (catalog.to_string(), schema.to_string(), table.to_string());
+    /// Get or create a lock for a specific catalog/schema/table/partition tuple
+    async fn get_lock(&self, catalog: &str, schema: &str, table: &str, date_partition: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let key = (catalog.to_string(), schema.to_string(), table.to_string(), date_partition.to_string());
         let mut locks = self.locks.write().await;
         locks
             .entry(key)
@@ -193,11 +193,8 @@ impl Compactor {
                 }
 
                 if let Some(table_name) = table_path.file_name().and_then(|n| n.to_str()) {
-                    match self.compact_table(catalog, schema_name, table_name, config).await {
-                        Ok(Some(result)) => results.push(result),
-                        Ok(None) => {
-                            // No compaction needed
-                        }
+                    match self.compact_table_all_partitions(catalog, schema_name, table_name, config).await {
+                        Ok(table_results) => results.extend(table_results),
                         Err(e) => {
                             warn!("Failed to compact {}/{}/{}: {}", catalog, schema_name, table_name, e);
                         }
@@ -209,26 +206,73 @@ impl Compactor {
         Ok(results)
     }
 
-    /// Compact a specific table using leveled strategy
-    pub async fn compact_table(
+    /// Compact all partitions in a table
+    pub async fn compact_table_all_partitions(
         &self,
         catalog: &str,
         schema: &str,
         table: &str,
         config: &CompactionConfig,
-    ) -> Result<Option<CompactionResult>, String> {
-        // Acquire lock to prevent concurrent operations
-        let lock = self.get_lock(catalog, schema, table).await;
-        let _guard = lock.lock().await;
-
+    ) -> Result<Vec<CompactionResult>, String> {
         let table_path = format!("{}/{}/{}/{}", self.data_dir, catalog, schema, table);
 
         if !Path::new(&table_path).exists() {
-            return Err(format!("Table '{}.{}.{}' does not exist", catalog, schema, table));
+            return Ok(Vec::new());
         }
 
-        // List and parse all parquet files
-        let mut file_infos = self.list_parquet_file_infos(&table_path)?;
+        let mut results = Vec::new();
+
+        // List all partitions (date=YYYY-MM-DD directories)
+        let entries = fs::read_dir(&table_path)
+            .map_err(|e| format!("Failed to read table directory: {}", e))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                if let Some(dir_name) = path.file_name().and_then(|s| s.to_str()) {
+                    // Check for Hive-style partition format: date=YYYY-MM-DD
+                    if dir_name.starts_with("date=") {
+                        match self.compact_table_partition(catalog, schema, table, dir_name, config).await {
+                            Ok(Some(result)) => results.push(result),
+                            Ok(None) => {
+                                // No compaction needed for this partition
+                            }
+                            Err(e) => {
+                                warn!("Failed to compact partition {}/{}/{}/{}: {}", 
+                                    catalog, schema, table, dir_name, e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Compact a specific partition within a table
+    pub async fn compact_table_partition(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date_partition: &str,
+        config: &CompactionConfig,
+    ) -> Result<Option<CompactionResult>, String> {
+        // Acquire lock to prevent concurrent operations on this partition
+        let lock = self.get_lock(catalog, schema, table, date_partition).await;
+        let _guard = lock.lock().await;
+
+        let partition_path = format!("{}/{}/{}/{}/{}", self.data_dir, catalog, schema, table, date_partition);
+
+        if !Path::new(&partition_path).exists() {
+            return Err(format!("Partition '{}.{}.{}/{}' does not exist", catalog, schema, table, date_partition));
+        }
+
+        // List and parse all parquet files in this partition
+        let mut file_infos = self.list_parquet_file_infos(&partition_path)?;
 
         if file_infos.is_empty() {
             return Ok(None);
@@ -251,8 +295,8 @@ impl Compactor {
         // Calculate total size
         let total_bytes_before: u64 = file_infos.iter().map(|f| f.size).sum();
 
-        info!("Compacting {}.{}.{}: {} files ({} L0), {:.2} MB",
-                 catalog, schema, table, total_files_before, l0_files_before,
+        info!("Compacting {}.{}.{}/{}: {} files ({} L0), {:.2} MB",
+                 catalog, schema, table, date_partition, total_files_before, l0_files_before,
                  total_bytes_before as f64 / 1024.0 / 1024.0);
 
         // Perform leveled compaction (prioritize L0 files)
@@ -287,7 +331,7 @@ impl Compactor {
                 let timestamp = chrono::Utc::now().timestamp_millis();
                 let compacted_filename = format!(
                     "{}/{}{}{}{}{}",
-                    table_path,
+                    partition_path,
                     LEVEL_PREFIX,
                     next_level,
                     LEVEL_SEPARATOR,
@@ -311,76 +355,23 @@ impl Compactor {
             }
         }
 
-        // Step 2: Compact files within each higher level if needed
-        for level in 1..config.max_level {
-            let level_files: Vec<_> = file_infos.iter()
-                .filter(|f| f.level == level)
-                .cloned()
-                .collect();
+        // Recalculate files after compaction
+        let file_infos_after = self.list_parquet_file_infos(&partition_path)?;
+        let total_files_after = file_infos_after.len();
+        let l0_files_after = file_infos_after.iter().filter(|f| f.level == 0).count();
+        let total_bytes_after: u64 = file_infos_after.iter().map(|f| f.size).sum();
 
-            if level_files.len() >= config.min_files {
-                info!("Compacting {} L{} files", level_files.len(), level);
-
-                let file_groups = self.group_files_by_size(&level_files, config)?;
-
-                for (group_idx, group) in file_groups.iter().enumerate() {
-                    if group.len() < 2 {
-                        continue;
-                    }
-
-                    debug!("Group {}: {} files", group_idx + 1, group.len());
-
-                    let paths: Vec<PathBuf> = group.iter().map(|f| f.path.clone()).collect();
-                    let batches = self.read_parquet_files(&paths)?;
-                    let rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
-                    total_rows += rows;
-
-                    // Determine next level
-                    let next_level = level + 1;
-                    let timestamp = chrono::Utc::now().timestamp_millis();
-                    let compacted_filename = format!(
-                        "{}/{}{}{}{}{}",
-                        table_path,
-                        LEVEL_PREFIX,
-                        next_level,
-                        LEVEL_SEPARATOR,
-                        timestamp,
-                        PARQUET_EXT
-                    );
-
-                    self.write_compacted_file(&compacted_filename, batches)?;
-                    compacted_file_paths.push(compacted_filename.clone());
-
-                    info!("Created: {} ({} rows)", compacted_filename, rows);
-
-                    // Delete old files
-                    for file in &paths {
-                        if let Err(e) = fs::remove_file(file) {
-                            warn!("Failed to delete {}: {}", file.display(), e);
-                        } else {
-                            debug!("Deleted: {}", file.display());
-                        }
-                    }
-                }
-            }
-        }
-
-        // Calculate new stats
-        let new_file_infos = self.list_parquet_file_infos(&table_path)?;
-        let total_files_after = new_file_infos.len();
-        let l0_files_after = new_file_infos.iter().filter(|f| f.level == 0).count();
-        let total_bytes_after: u64 = new_file_infos.iter().map(|f| f.size).sum();
-
-        info!("Compaction complete: L0 {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB)",
-                 l0_files_before, l0_files_after,
-                 total_files_before, total_files_after,
-                 total_bytes_before as f64 / 1024.0 / 1024.0,
-                 total_bytes_after as f64 / 1024.0 / 1024.0);
+        info!("Compaction complete: {}.{}.{}/{}: {} -> {} files, {:.2} MB -> {:.2} MB",
+            catalog, schema, table, date_partition,
+            total_files_before, total_files_after,
+            total_bytes_before as f64 / 1024.0 / 1024.0,
+            total_bytes_after as f64 / 1024.0 / 1024.0);
 
         Ok(Some(CompactionResult {
             catalog: catalog.to_string(),
             schema: schema.to_string(),
             table: table.to_string(),
+            date_partition: date_partition.to_string(),
             l0_files_before,
             l0_files_after,
             files_before: total_files_before,
@@ -389,6 +380,19 @@ impl Compactor {
             bytes_after: total_bytes_after,
             rows_compacted: total_rows,
         }))
+    }
+
+    /// Compact a specific table (legacy method - now compacts first non-partitioned files or first partition)
+    pub async fn compact_table(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        config: &CompactionConfig,
+    ) -> Result<Option<CompactionResult>, String> {
+        // For backward compatibility, compact all partitions
+        let results = self.compact_table_all_partitions(catalog, schema, table, config).await?;
+        Ok(results.into_iter().next())
     }
 
     /// List all parquet files with level information
@@ -529,12 +533,12 @@ impl Compactor {
                                 match self.compact_catalog(catalog_name, &config).await {
                                     Ok(results) => {
                                         if !results.is_empty() {
-                                            info!("Background compaction [{}]: {} table(s) compacted",
+                                            info!("Background compaction [{}]: {} partition(s) compacted",
                                                 catalog_name, results.len());
                                             for result in results {
                                                 info!(
-                                                    "{}.{}.{}: L0 {} -> {}, Total {} -> {} files",
-                                                    result.catalog, result.schema, result.table,
+                                                    "{}.{}.{}/{}: L0 {} -> {}, Total {} -> {} files",
+                                                    result.catalog, result.schema, result.table, result.date_partition,
                                                     result.l0_files_before, result.l0_files_after,
                                                     result.files_before, result.files_after
                                                 );

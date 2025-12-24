@@ -1,6 +1,6 @@
-use crate::line_protocol::{FieldValue, Point};
+use crate::line_protocol::{FieldValue, Point, format_date32_as_partition};
 use arrow::array::{
-    ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+    ArrayRef, Date32Array, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
 };
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use parquet::arrow::ArrowWriter;
@@ -30,11 +30,75 @@ impl ParquetWriter {
         Path::new(&self.data_dir).join(catalog).join(schema).join(table)
     }
 
+    /// Get partition directory path: data_dir/catalog/schema/table/date=YYYY-MM-DD/
+    fn get_partition_path(&self, catalog: &str, schema: &str, table: &str, date: i32) -> PathBuf {
+        self.get_table_path(catalog, schema, table)
+            .join(format_date32_as_partition(date))
+    }
+
     /// Generate a leveled parquet filename
     fn generate_filename(level: u32, timestamp: i64) -> String {
         format!("{}{}_{}.{}", LEVEL_PREFIX, level, timestamp, PARQUET_FILE_EXT)
     }
 
+    /// Write batches to a partitioned directory structure
+    /// Directory: data_dir/catalog/schema/table/date=YYYY-MM-DD/
+    pub fn write_batches_partitioned(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date: i32,
+        batches: Vec<RecordBatch>,
+    ) -> Result<String, String> {
+        if batches.is_empty() {
+            return Err("No batches to write".to_string());
+        }
+
+        // Create directory structure: data/catalog/schema/table/date=YYYY-MM-DD/
+        let partition_path = self.get_partition_path(catalog, schema, table, date);
+        create_dir_all(&partition_path)
+            .map_err(|e| format!("Failed to create partition directory: {}", e))?;
+
+        // Generate filename with L0 prefix (Level 0 - raw files)
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let filename = partition_path.join(Self::generate_filename(RAW_FILE_LEVEL, timestamp));
+
+        // Merge schemas from all batches to create unified schema
+        let merged_schema = Self::merge_schemas(&batches)?;
+        let schema_ref = Arc::new(merged_schema);
+
+        // Write to Parquet
+        let file = File::create(&filename).map_err(|e| format!("Failed to create file: {}", e))?;
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, schema_ref.clone(), Some(props))
+            .map_err(|e| format!("Failed to create writer: {}", e))?;
+
+        // Write all batches (may need to be adapted to merged schema)
+        for batch in batches {
+            // If batch schema matches merged schema, write directly
+            if batch.schema() == schema_ref {
+                writer
+                    .write(&batch)
+                    .map_err(|e| format!("Failed to write batch: {}", e))?;
+            } else {
+                // Adapt batch to merged schema
+                let adapted = Self::adapt_batch_to_schema(&batch, &schema_ref)?;
+                writer
+                    .write(&adapted)
+                    .map_err(|e| format!("Failed to write adapted batch: {}", e))?;
+            }
+        }
+
+        writer
+            .close()
+            .map_err(|e| format!("Failed to close writer: {}", e))?;
+
+        Ok(filename.to_string_lossy().to_string())
+    }
+
+    /// Legacy method: write batches without date partitioning (for backward compatibility)
+    #[allow(dead_code)]
     pub fn write_batches(
         &self,
         catalog: &str,
@@ -113,11 +177,14 @@ impl ParquetWriter {
             }
         }
 
-        // Maintain field order: timestamp, measurement, tags (sorted), fields (sorted)
+        // Maintain field order: timestamp, date, measurement, tags (sorted), fields (sorted)
         let mut fields = Vec::new();
 
         // Add in priority order
         if let Some(f) = field_map.remove("timestamp") {
+            fields.push(f);
+        }
+        if let Some(f) = field_map.remove("date") {
             fields.push(f);
         }
         if let Some(f) = field_map.remove("measurement") {
@@ -160,49 +227,6 @@ impl ParquetWriter {
             .map_err(|e| format!("Failed to create adapted batch: {}", e))
     }
 
-    pub fn write_points(
-        &self,
-        catalog: &str,
-        schema: &str,
-        table: &str,
-        points: Vec<Point>,
-    ) -> Result<String, String> {
-        if points.is_empty() {
-            return Err("No points to write".to_string());
-        }
-
-        // Create directory structure: data/catalog/schema/table/
-        let table_path = self.get_table_path(catalog, schema, table);
-        create_dir_all(&table_path)
-            .map_err(|e| format!("Failed to create table directory: {}", e))?;
-
-        // Generate filename with L0 prefix (Level 0 - raw files)
-        let timestamp = chrono::Utc::now().timestamp_millis();
-        let filename = table_path.join(Self::generate_filename(RAW_FILE_LEVEL, timestamp));
-
-        // Build schema dynamically from first point
-        let arrow_schema = self.build_schema(&points[0])?;
-        let schema_ref = Arc::new(arrow_schema);
-
-        // Create RecordBatch
-        let batch = self.points_to_record_batch(&points, schema_ref.clone())?;
-
-        // Write to Parquet
-        let file = File::create(&filename).map_err(|e| format!("Failed to create file: {}", e))?;
-        let props = WriterProperties::builder().build();
-        let mut writer = ArrowWriter::try_new(file, schema_ref, Some(props))
-            .map_err(|e| format!("Failed to create writer: {}", e))?;
-
-        writer
-            .write(&batch)
-            .map_err(|e| format!("Failed to write batch: {}", e))?;
-        writer
-            .close()
-            .map_err(|e| format!("Failed to close writer: {}", e))?;
-
-        Ok(filename.to_string_lossy().to_string())
-    }
-
     fn build_schema(&self, point: &Point) -> Result<Schema, String> {
         let mut fields = Vec::new();
 
@@ -212,6 +236,9 @@ impl ParquetWriter {
             DataType::Timestamp(TimeUnit::Nanosecond, None),
             false,
         ));
+
+        // Date field (Date32)
+        fields.push(Field::new("date", DataType::Date32, false));
 
         // Measurement field
         fields.push(Field::new("measurement", DataType::Utf8, false));
@@ -256,6 +283,10 @@ impl ParquetWriter {
             })
             .collect();
         arrays.push(Arc::new(TimestampNanosecondArray::from(timestamps)));
+
+        // Build date array (Date32)
+        let dates: Vec<i32> = points.iter().map(|p| p.date).collect();
+        arrays.push(Arc::new(Date32Array::from(dates)));
 
         // Build measurement array
         let measurements: Vec<&str> = points.iter().map(|p| p.measurement.as_str()).collect();

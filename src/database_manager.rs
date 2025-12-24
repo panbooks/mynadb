@@ -210,4 +210,175 @@ impl DatabaseManager {
     pub fn get_database_info(&self, db_name: &str) -> Result<DatabaseConfig, String> {
         self.load_config(db_name)
     }
+
+    /// Discover all date partitions for a table across all schemas
+    pub fn discover_table_partitions(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+    ) -> Result<Vec<PartitionInfo>, String> {
+        let table_path = self.get_database_path(catalog_name)
+            .join(schema_name)
+            .join(table_name);
+
+        if !table_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut partitions = Vec::new();
+
+        let entries = std::fs::read_dir(&table_path)
+            .map_err(|e| format!("Failed to read table directory: {}", e))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                if let Some(dir_name) = path.file_name().and_then(|s| s.to_str()) {
+                    // Check for Hive-style partition format: date=YYYY-MM-DD
+                    if dir_name.starts_with("date=") {
+                        let date_str = dir_name.strip_prefix("date=").unwrap_or(dir_name);
+
+                        // Count files and calculate size
+                        let (file_count, total_size) = self.count_partition_files(&path)?;
+
+                        partitions.push(PartitionInfo {
+                            catalog: catalog_name.to_string(),
+                            schema: schema_name.to_string(),
+                            table: table_name.to_string(),
+                            partition: dir_name.to_string(),
+                            date: date_str.to_string(),
+                            file_count,
+                            total_size_bytes: total_size,
+                        });
+                    }
+                }
+            }
+        }
+
+        partitions.sort_by(|a, b| b.date.cmp(&a.date)); // Sort by date, newest first
+        Ok(partitions)
+    }
+
+    /// Count files and calculate total size in a partition directory
+    fn count_partition_files(&self, partition_path: &Path) -> Result<(usize, u64), String> {
+        let entries = std::fs::read_dir(partition_path)
+            .map_err(|e| format!("Failed to read partition directory: {}", e))?;
+
+        let mut file_count = 0;
+        let mut total_size = 0u64;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+
+            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("parquet") {
+                file_count += 1;
+                if let Ok(metadata) = std::fs::metadata(&path) {
+                    total_size += metadata.len();
+                }
+            }
+        }
+
+        Ok((file_count, total_size))
+    }
+
+    /// Delete a specific partition (date directory)
+    pub fn delete_partition(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+        partition: &str,
+    ) -> Result<String, String> {
+        // Ensure partition format: date=YYYY-MM-DD
+        let partition_dir = if partition.starts_with("date=") {
+            partition.to_string()
+        } else {
+            format!("date={}", partition)
+        };
+
+        let partition_path = self.get_database_path(catalog_name)
+            .join(schema_name)
+            .join(table_name)
+            .join(&partition_dir);
+
+        if !partition_path.exists() {
+            return Err(format!(
+                "Partition '{}' not found in {}.{}.{}",
+                partition_dir, catalog_name, schema_name, table_name
+            ));
+        }
+
+        // Get size before deletion
+        let (file_count, total_size) = self.count_partition_files(&partition_path)?;
+
+        std::fs::remove_dir_all(&partition_path)
+            .map_err(|e| format!("Failed to delete partition: {}", e))?;
+
+        Ok(format!(
+            "Deleted partition {}.{}.{}/{} ({} files, {:.2} MB)",
+            catalog_name,
+            schema_name,
+            table_name,
+            partition_dir,
+            file_count,
+            total_size as f64 / 1024.0 / 1024.0
+        ))
+    }
+
+    /// Delete partitions older than specified date
+    pub fn delete_partitions_before(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+        before_date: &str, // Format: YYYY-MM-DD
+    ) -> Result<Vec<String>, String> {
+        let partitions = self.discover_table_partitions(catalog_name, schema_name, table_name)?;
+
+        let mut deleted = Vec::new();
+
+        for partition in partitions {
+            if partition.date.as_str() < before_date {
+                match self.delete_partition(catalog_name, schema_name, table_name, &partition.date) {
+                    Ok(msg) => deleted.push(msg),
+                    Err(e) => {
+                        return Err(format!("Failed to delete partition {}: {}", partition.date, e));
+                    }
+                }
+            }
+        }
+
+        Ok(deleted)
+    }
+
+    /// Delete partitions older than N days
+    pub fn delete_partitions_older_than_days(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+        days: u32,
+    ) -> Result<Vec<String>, String> {
+        use chrono::{Duration, Utc};
+
+        let cutoff_date = Utc::now() - Duration::days(days as i64);
+        let cutoff_str = cutoff_date.format("%Y-%m-%d").to_string();
+
+        self.delete_partitions_before(catalog_name, schema_name, table_name, &cutoff_str)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PartitionInfo {
+    pub catalog: String,
+    pub schema: String,
+    pub table: String,
+    pub partition: String,
+    pub date: String,
+    pub file_count: usize,
+    pub total_size_bytes: u64,
 }

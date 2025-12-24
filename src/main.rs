@@ -80,6 +80,16 @@ struct CompactRequest {
     measurement: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct RetentionRequest {
+    /// Delete partitions before this date (YYYY-MM-DD)
+    #[serde(default)]
+    before_date: Option<String>,
+    /// Delete partitions older than N days
+    #[serde(default)]
+    older_than_days: Option<u32>,
+}
+
 #[tokio::main]
 async fn main() {
     // Parse command line arguments
@@ -183,6 +193,11 @@ async fn main() {
         // Compaction endpoints
         .route("/compact/:catalog", post(compact_handler))
         .route("/compact/:catalog/:schema/:table", post(compact_table_handler))
+        .route("/compact/:catalog/:schema/:table/:date", post(compact_partition_handler))
+        // Partition management endpoints
+        .route("/partitions/:catalog/:schema/:table", get(list_partitions_handler))
+        .route("/partitions/:catalog/:schema/:table/:date", delete(delete_partition_handler))
+        .route("/retention/:catalog/:schema/:table", post(delete_old_partitions_handler))
         // Series cardinality tracking
         .route("/series_stats/:db", get(series_stats_handler))
         .fallback(log_request)
@@ -263,8 +278,13 @@ async fn home() -> &'static str {
        POST   /flush                  - Flush cache to disk\n\
        GET    /health                 - Health check\n\n\
      Compaction:\n\
-       POST   /compact/:db            - Compact all measurements in database\n\
-       POST   /compact/:db/:measurement - Compact specific measurement\n"
+       POST   /compact/:catalog       - Compact all tables in catalog\n\
+       POST   /compact/:catalog/:schema/:table - Compact all partitions in table\n\
+       POST   /compact/:catalog/:schema/:table/:date - Compact specific partition\n\n\
+     Partition Management:\n\
+       GET    /partitions/:catalog/:schema/:table - List all partitions\n\
+       DELETE /partitions/:catalog/:schema/:table/:date - Delete specific partition\n\
+       POST   /retention/:catalog/:schema/:table - Delete old partitions (body: {older_than_days: N} or {before_date: \"YYYY-MM-DD\"})\n"
 }
 
 // ===== Database Management Handlers =====
@@ -641,10 +661,11 @@ async fn compact_handler(
                     .iter()
                     .map(|r| {
                         format!(
-                            "{}.{}.{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
+                            "{}.{}.{}/{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
                             r.catalog,
                             r.schema,
                             r.table,
+                            r.date_partition,
                             r.l0_files_before,
                             r.l0_files_after,
                             r.files_before,
@@ -660,7 +681,7 @@ async fn compact_handler(
                 (
                     StatusCode::OK,
                     format!(
-                        "Compacted {} table(s) in catalog '{}'\n\n{}",
+                        "Compacted {} partition(s) in catalog '{}'\n\n{}",
                         results.len(),
                         catalog,
                         summary
@@ -690,13 +711,80 @@ async fn compact_table_handler(
         max_level: state.config.compaction.max_level,
     };
 
-    match state.compactor.compact_table(&catalog, &schema, &table, &config).await {
+    match state.compactor.compact_table_all_partitions(&catalog, &schema, &table, &config).await {
+        Ok(results) => {
+            if results.is_empty() {
+                (StatusCode::OK, format!(
+                    "No compaction needed for {}.{}.{} (minimum file threshold not met)",
+                    catalog, schema, table
+                ))
+            } else {
+                let summary = results
+                    .iter()
+                    .map(|r| {
+                        format!(
+                            "{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
+                            r.date_partition,
+                            r.l0_files_before,
+                            r.l0_files_after,
+                            r.files_before,
+                            r.files_after,
+                            r.bytes_before as f64 / 1024.0 / 1024.0,
+                            r.bytes_after as f64 / 1024.0 / 1024.0,
+                            r.rows_compacted
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                (
+                    StatusCode::OK,
+                    format!(
+                        "Compacted {} partition(s) in {}.{}.{}\n\n{}",
+                        results.len(),
+                        catalog, schema, table,
+                        summary
+                    ),
+                )
+            }
+        }
+        Err(e) => {
+            error!("Compaction error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Compaction error: {}", e))
+        }
+    }
+}
+
+async fn compact_partition_handler(
+    Path((catalog, schema, table, date)): Path<(String, String, String, String)>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    info!("Compact Partition Request: catalog={}, schema={}, table={}, date={}", 
+        catalog, schema, table, date);
+
+    // Format as date partition (date=YYYY-MM-DD)
+    let date_partition = if date.starts_with("date=") {
+        date.clone()
+    } else {
+        format!("date={}", date)
+    };
+
+    // Convert config to compactor's CompactionConfig
+    let config = compactor::CompactionConfig {
+        min_files: state.config.compaction.min_files,
+        max_file_size: state.config.compaction.max_file_size_mb * 1024 * 1024,
+        target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
+        max_level: state.config.compaction.max_level,
+    };
+
+    match state.compactor.compact_table_partition(&catalog, &schema, &table, &date_partition, &config).await {
         Ok(Some(result)) => {
             let message = format!(
-                "Compacted {}.{}.{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
+                "Compacted {}.{}.{}/{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
                 result.catalog,
                 result.schema,
                 result.table,
+                result.date_partition,
                 result.l0_files_before,
                 result.l0_files_after,
                 result.files_before,
@@ -710,8 +798,8 @@ async fn compact_table_handler(
         }
         Ok(None) => {
             let message = format!(
-                "No compaction needed for {}.{}.{} (minimum file threshold not met)",
-                catalog, schema, table
+                "No compaction needed for {}.{}.{}/{} (minimum file threshold not met)",
+                catalog, schema, table, date_partition
             );
             info!("{}", message);
             (StatusCode::OK, message)
@@ -820,6 +908,101 @@ async fn list_schema_tables_handler(
         }
         Err(e) => {
             error!("List schema tables error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
+        }
+    }
+}
+
+// ===== Partition Management Handlers =====
+
+async fn list_partitions_handler(
+    Path((catalog, schema, table)): Path<(String, String, String)>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    debug!("List Partitions Request: catalog={}, schema={}, table={}", catalog, schema, table);
+
+    match state.db_manager.discover_table_partitions(&catalog, &schema, &table) {
+        Ok(partitions) => {
+            let response = serde_json::json!({
+                "catalog": catalog,
+                "schema": schema,
+                "table": table,
+                "partitions": partitions.iter().map(|p| {
+                    serde_json::json!({
+                        "partition": p.partition,
+                        "date": p.date,
+                        "file_count": p.file_count,
+                        "size_mb": p.total_size_bytes as f64 / 1024.0 / 1024.0
+                    })
+                }).collect::<Vec<_>>(),
+                "count": partitions.len(),
+                "total_size_mb": partitions.iter().map(|p| p.total_size_bytes).sum::<u64>() as f64 / 1024.0 / 1024.0
+            });
+            info!("Found {} partition(s)", partitions.len());
+            (StatusCode::OK, serde_json::to_string_pretty(&response).unwrap())
+        }
+        Err(e) => {
+            error!("List partitions error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
+        }
+    }
+}
+
+async fn delete_partition_handler(
+    Path((catalog, schema, table, date)): Path<(String, String, String, String)>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    info!("Delete Partition Request: catalog={}, schema={}, table={}, date={}", 
+        catalog, schema, table, date);
+
+    match state.db_manager.delete_partition(&catalog, &schema, &table, &date) {
+        Ok(msg) => {
+            info!("{}", msg);
+            (StatusCode::OK, msg)
+        }
+        Err(e) => {
+            error!("Delete partition error: {}", e);
+            (StatusCode::NOT_FOUND, format!("Error: {}", e))
+        }
+    }
+}
+
+async fn delete_old_partitions_handler(
+    Path((catalog, schema, table)): Path<(String, String, String)>,
+    State(state): State<AppState>,
+    Json(req): Json<RetentionRequest>,
+) -> impl IntoResponse {
+    info!("Delete Old Partitions Request: catalog={}, schema={}, table={}", catalog, schema, table);
+
+    let deleted = if let Some(days) = req.older_than_days {
+        info!("Deleting partitions older than {} days", days);
+        state.db_manager.delete_partitions_older_than_days(&catalog, &schema, &table, days)
+    } else if let Some(before_date) = req.before_date {
+        info!("Deleting partitions before {}", before_date);
+        state.db_manager.delete_partitions_before(&catalog, &schema, &table, &before_date)
+    } else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Must specify either 'older_than_days' or 'before_date'".to_string()
+        );
+    };
+
+    match deleted {
+        Ok(messages) => {
+            if messages.is_empty() {
+                (StatusCode::OK, "No partitions to delete".to_string())
+            } else {
+                let summary = format!(
+                    "Deleted {} partition(s):\n{}",
+                    messages.len(),
+                    messages.join("\n")
+                );
+                info!("{}", summary);
+                (StatusCode::OK, summary)
+            }
+        }
+        Err(e) => {
+            error!("Delete partitions error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
         }
     }

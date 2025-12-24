@@ -9,16 +9,6 @@ pub fn init_logging(config: &LoggingConfig) -> Result<(), String> {
     fs::create_dir_all(&config.log_dir)
         .map_err(|e| format!("Failed to create log directory: {}", e))?;
 
-    // Parse log level
-    let level = match config.level.to_lowercase().as_str() {
-        "trace" => Level::TRACE,
-        "debug" => Level::DEBUG,
-        "info" => Level::INFO,
-        "warn" => Level::WARN,
-        "error" => Level::ERROR,
-        _ => Level::INFO,
-    };
-
     // Create file appender based on rotation config
     let file_appender = match config.rotation.to_lowercase().as_str() {
         "daily" => tracing_appender::rolling::daily(&config.log_dir, &config.file_prefix),
