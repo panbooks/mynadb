@@ -4,6 +4,7 @@ mod config;
 mod database_manager;
 mod flight_service;
 mod line_protocol;
+mod logger;
 mod parquet_writer;
 mod query_engine;
 mod series_tracker;
@@ -27,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::transport::Server;
+use tracing::{info, warn, error, debug};
 
 #[derive(Clone)]
 struct AppState {
@@ -72,18 +74,46 @@ async fn main() {
     let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| "config.toml".to_string());
     let config = Arc::new(Config::load_or_default(&config_path));
     
+    // Initialize logging
+    if let Err(e) = logger::init_logging(&config.logging) {
+        eprintln!("Failed to initialize logging: {}", e);
+        std::process::exit(1);
+    }
+    
+    // Welcome messages (only these go to stdout)
+    welcome!("═══════════════════════════════════════════════════════");
+    welcome!("  📊 Stats Service - Time Series Stats Database");
+    welcome!("═══════════════════════════════════════════════════════");
+    welcome!("");
+    welcome!("🚀 Starting server...");
+    welcome!("   HTTP API: http://{}", config.http_addr());
+    welcome!("   Flight API: {}", config.flight_addr());
+    welcome!("   Data Directory: {}", config.storage.data_dir);
+    welcome!("   Log Directory: {}", config.logging.log_dir);
+    welcome!("   Log Level: {}", config.logging.level);
+    welcome!("");
+    
+    info!("Stats Service starting with config: {:?}", *config);
+    
     // Create data directory
     std::fs::create_dir_all(&config.storage.data_dir)
         .expect("Failed to create data directory");
 
     // Initialize components
+    info!("Initializing data cache");
     let cache = DataCache::new(&config.storage.data_dir);
     cache.clone().start_background_flush(config.cache.flush_interval_secs);
 
+    info!("Initializing query engine");
     let query_engine = Arc::new(QueryEngine::new(&config.storage.data_dir));
+    
+    info!("Initializing database manager");
     let db_manager = Arc::new(DatabaseManager::new(&config.storage.data_dir));
+    
+    info!("Initializing compactor");
     let compactor = Arc::new(Compactor::new(&config.storage.data_dir));
     
+    info!("Initializing series tracker");
     let series_tracker = Arc::new(SeriesTracker::new(&config.storage.data_dir));
     Arc::clone(&series_tracker).start_background_flush(config.series_tracker.flush_interval_secs);
 
@@ -135,35 +165,18 @@ async fn main() {
         .await
         .unwrap();
 
-    println!("🚀 Time Series Database Server");
-    println!("📊 Data directory: {}", config.storage.data_dir);
-    println!("⏱️  Cache flush interval: {} seconds", config.cache.flush_interval_secs);
-    println!("⏱️  Series tracker flush interval: {} seconds", config.series_tracker.flush_interval_secs);
-    println!("🔍 Query engine: DataFusion SQL (auto-registration)");
-    println!("\n🌐 HTTP REST API: http://{}", http_addr);
-    println!("✈️  Arrow Flight API: grpc://{}", config.flight_addr());
-    println!("\n📝 Quick start:");
-    println!("   # Create database");
-    println!("   curl -X POST http://localhost:{}/databases -H 'Content-Type: application/json' -d '{{\"name\":\"mydb\"}}'", config.server.http_port);
-    println!("\n   # Write data (path-based)");
-    println!("   curl -X POST http://localhost:{}/write/mydb -d 'cpu,host=server01 usage=23.5'", config.server.http_port);
-    println!("\n   # Write data (InfluxDB-compatible)");
-    println!("   curl -X POST 'http://localhost:{}/write?db=mydb' -d 'cpu,host=server01 usage=23.5'", config.server.http_port);
-    println!("\n   # Query data (HTTP)");
-    println!("   curl 'http://localhost:{}/query/mydb?sql=SELECT * FROM cpu LIMIT 10'", config.server.http_port);
-    println!("\n   # Query data (Flight CLI)");
-    println!("   datafusion-cli --host localhost --port {}", config.server.flight_port);
-    println!("   > USE mydb;");
-    println!("   > SELECT * FROM cpu LIMIT 10;");
-    println!("\n   # Series cardinality stats");
-    println!("   curl http://localhost:{}/series_stats/mydb", config.server.http_port);
+    info!("HTTP REST API bound to: {}", http_addr);
+    info!("Arrow Flight API will bind to: {}", config.flight_addr());
+    info!("Data directory: {}", config.storage.data_dir);
+    info!("Cache flush interval: {} seconds", config.cache.flush_interval_secs);
+    info!("Series tracker flush interval: {} seconds", config.series_tracker.flush_interval_secs);
 
     // Start Arrow Flight server
     let flight_service = StatsFlightService::new(state.query_engine.clone());
     let flight_addr = config.flight_addr().parse().unwrap();
     
     let flight_server = tokio::spawn(async move {
-        println!("\n✈️  Arrow Flight server starting on {}", flight_addr);
+        info!("Arrow Flight server starting on {}", flight_addr);
         Server::builder()
             .add_service(flight_service.into_server())
             .serve(flight_addr)
@@ -174,14 +187,22 @@ async fn main() {
     // Start HTTP server
     let http_addr_display = http_addr.clone();
     let http_server = tokio::spawn(async move {
-        println!("🌐 HTTP server starting on {}\n", http_addr_display);
+        info!("HTTP server starting on {}", http_addr_display);
+        welcome!("✅ Server started successfully!");
+        welcome!("═══════════════════════════════════════════════════════");
         axum::serve(http_listener, app).await.unwrap();
     });
 
     // Wait for both servers
     tokio::select! {
-        _ = flight_server => println!("Flight server stopped"),
-        _ = http_server => println!("HTTP server stopped"),
+        _ = flight_server => {
+            error!("Flight server stopped unexpectedly");
+            welcome!("❌ Flight server stopped");
+        },
+        _ = http_server => {
+            error!("HTTP server stopped unexpectedly");
+            welcome!("❌ HTTP server stopped");
+        },
     }
 }
 
@@ -215,7 +236,7 @@ async fn home() -> &'static str {
 // ===== Database Management Handlers =====
 
 async fn list_databases_handler(State(state): State<AppState>) -> impl IntoResponse {
-    println!("\n=== List Databases Request ===");
+    debug!("List Databases Request");
 
     match state.db_manager.list_databases() {
         Ok(databases) => {
@@ -226,7 +247,7 @@ async fn list_databases_handler(State(state): State<AppState>) -> impl IntoRespo
             (StatusCode::OK, Json(response).to_string())
         }
         Err(e) => {
-            eprintln!("Error: {}", e);
+            error!("List databases error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
         }
     }
@@ -236,16 +257,15 @@ async fn create_database_handler(
     State(state): State<AppState>,
     Json(req): Json<CreateDatabaseRequest>,
 ) -> impl IntoResponse {
-    println!("\n=== Create Database Request ===");
-    println!("Database: {}", req.name);
+    info!("Create Database Request: {}", req.name);
 
     match state.db_manager.create_database(&req.name) {
         Ok(msg) => {
-            println!("✅ {}", msg);
+            info!("Database created: {}", msg);
             (StatusCode::CREATED, msg)
         }
         Err(e) => {
-            eprintln!("❌ Error: {}", e);
+            error!("Create database error: {}", e);
             (StatusCode::BAD_REQUEST, format!("Error: {}", e))
         }
     }
@@ -255,16 +275,15 @@ async fn delete_database_handler(
     Path(db): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    println!("\n=== Delete Database Request ===");
-    println!("Database: {}", db);
+    info!("Delete Database Request: {}", db);
 
     match state.db_manager.delete_database(&db) {
         Ok(msg) => {
-            println!("✅ {}", msg);
+            info!("Database deleted: {}", msg);
             (StatusCode::OK, msg)
         }
         Err(e) => {
-            eprintln!("❌ Error: {}", e);
+            error!("Delete database error: {}", e);
             (StatusCode::NOT_FOUND, format!("Error: {}", e))
         }
     }
@@ -274,8 +293,7 @@ async fn get_database_info_handler(
     Path(db): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    println!("\n=== Get Database Info Request ===");
-    println!("Database: {}", db);
+    debug!("Get Database Info Request: {}", db);
 
     match state.db_manager.get_database_info(&db) {
         Ok(info) => {
@@ -283,7 +301,7 @@ async fn get_database_info_handler(
             (StatusCode::OK, json)
         }
         Err(e) => {
-            eprintln!("❌ Error: {}", e);
+            error!("Get database info error: {}", e);
             (StatusCode::NOT_FOUND, format!("Error: {}", e))
         }
     }
@@ -294,17 +312,15 @@ async fn create_table_handler(
     State(state): State<AppState>,
     Json(req): Json<CreateTableRequest>,
 ) -> impl IntoResponse {
-    println!("\n=== Create Table Request ===");
-    println!("Database: {}, Table: {}", db, req.name);
-    println!("Partition by: {:?}", req.partition_by);
+    info!("Create Table Request: db={}, table={}, partition_by={:?}", db, req.name, req.partition_by);
 
     match state.db_manager.create_table(&db, &req.name, req.partition_by) {
         Ok(msg) => {
-            println!("✅ {}", msg);
+            info!("Table created: {}", msg);
             (StatusCode::CREATED, msg)
         }
         Err(e) => {
-            eprintln!("❌ Error: {}", e);
+            error!("Create table error: {}", e);
             (StatusCode::BAD_REQUEST, format!("Error: {}", e))
         }
     }
@@ -314,16 +330,15 @@ async fn delete_table_handler(
     Path((db, table)): Path<(String, String)>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    println!("\n=== Delete Table Request ===");
-    println!("Database: {}, Table: {}", db, table);
+    info!("Delete Table Request: db={}, table={}", db, table);
 
     match state.db_manager.delete_table(&db, &table) {
         Ok(msg) => {
-            println!("✅ {}", msg);
+            info!("Table deleted: {}", msg);
             (StatusCode::OK, msg)
         }
         Err(e) => {
-            eprintln!("❌ Error: {}", e);
+            error!("Delete table error: {}", e);
             (StatusCode::NOT_FOUND, format!("Error: {}", e))
         }
     }
@@ -345,18 +360,18 @@ async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn flush_handler(State(state): State<AppState>) -> impl IntoResponse {
-    println!("\n=== Manual Flush Request ===");
+    info!("Manual Flush Request");
 
     match state.cache.flush().await {
         Ok(count) => {
-            println!("Manual flush completed successfully");
+            info!("Manual flush completed: {} files", count);
             (
                 StatusCode::OK,
                 format!("Flushed {} file(s) to disk", count),
             )
         }
         Err(e) => {
-            eprintln!("Manual flush error: {}", e);
+            error!("Manual flush error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Flush error: {}", e))
         }
     }
@@ -367,9 +382,7 @@ async fn query_handler(
     AxumQuery(params): AxumQuery<QueryParams>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    println!("\n=== Query Request (GET) ===");
-    println!("Database: {}", db);
-    println!("SQL: {}", params.sql);
+    debug!("Query Request (GET): db={}, sql={}", db, params.sql);
 
     execute_query(db, params.sql, state).await
 }
@@ -379,9 +392,7 @@ async fn query_handler_post(
     State(state): State<AppState>,
     body: String,
 ) -> impl IntoResponse {
-    println!("\n=== Query Request (POST) ===");
-    println!("Database: {}", db);
-    println!("SQL: {}", body);
+    debug!("Query Request (POST): db={}, sql={}", db, body);
 
     execute_query(db, body, state).await
 }
@@ -393,7 +404,7 @@ async fn execute_query(
 ) -> impl IntoResponse {
     // Auto-register database tables (simplified!)
     if let Err(e) = state.query_engine.ensure_database_registered(&db).await {
-        eprintln!("❌ Error auto-registering database: {}", e);
+        error!("Error auto-registering database: {}", e);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Error: {}", e),
@@ -403,13 +414,11 @@ async fn execute_query(
     // Execute query with database context (auto-prefix table names)
     match state.query_engine.execute_query_json_with_db(&sql, &db).await {
         Ok(json) => {
-            println!("✅ Query executed successfully");
-            println!("==================\n");
+            info!("Query executed successfully");
             (StatusCode::OK, json)
         }
         Err(e) => {
-            eprintln!("❌ Query error: {}", e);
-            println!("==================\n");
+            error!("Query error: {}", e);
             (StatusCode::BAD_REQUEST, format!("Query error: {}", e))
         }
     }
@@ -419,12 +428,11 @@ async fn list_tables_handler(
     Path(db): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    println!("\n=== List Tables Request ===");
-    println!("Database: {}", db);
+    debug!("List Tables Request: db={}", db);
 
     // Auto-register database
     if let Err(e) = state.query_engine.ensure_database_registered(&db).await {
-        eprintln!("Error: {}", e);
+        error!("Error registering database: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e));
     }
 
@@ -446,12 +454,11 @@ async fn schema_handler(
     Path((db, table)): Path<(String, String)>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    println!("\n=== Schema Request ===");
-    println!("Database: {}, Table: {}", db, table);
+    debug!("Schema Request: db={}, table={}", db, table);
 
     // Auto-register database
     if let Err(e) = state.query_engine.ensure_database_registered(&db).await {
-        eprintln!("Error: {}", e);
+        error!("Error registering database: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e));
     }
 
@@ -459,7 +466,7 @@ async fn schema_handler(
     match state.query_engine.get_table_schema(&full_table_name).await {
         Ok(schema) => (StatusCode::OK, schema),
         Err(e) => {
-            eprintln!("Error: {}", e);
+            error!("Get schema error: {}", e);
             (StatusCode::NOT_FOUND, format!("Error: {}", e))
         }
     }
@@ -470,14 +477,13 @@ async fn write_handler(
     State(state): State<AppState>,
     req: Request,
 ) -> impl IntoResponse {
-    println!("\n=== Write Request ===");
-    println!("Database: {}", db);
+    debug!("Write Request: db={}", db);
 
     // Read body
     let body = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("Error reading body: {}", e);
+            error!("Error reading body: {}", e);
             return (StatusCode::BAD_REQUEST, format!("Error reading body: {}", e));
         }
     };
@@ -485,7 +491,7 @@ async fn write_handler(
     let data = match String::from_utf8(body.to_vec()) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Invalid UTF-8: {}", e);
+            error!("Invalid UTF-8: {}", e);
             return (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e));
         }
     };
@@ -498,14 +504,13 @@ async fn write_handler_query_param(
     State(state): State<AppState>,
     req: Request,
 ) -> impl IntoResponse {
-    println!("\n=== Write Request (InfluxDB-compatible) ===");
-    println!("Database: {}", params.db);
+    debug!("Write Request (InfluxDB-compatible): db={}", params.db);
 
     // Read body
     let body = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("Error reading body: {}", e);
+            error!("Error reading body: {}", e);
             return (StatusCode::BAD_REQUEST, format!("Error reading body: {}", e));
         }
     };
@@ -513,7 +518,7 @@ async fn write_handler_query_param(
     let data = match String::from_utf8(body.to_vec()) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Invalid UTF-8: {}", e);
+            error!("Invalid UTF-8: {}", e);
             return (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e));
         }
     };
@@ -526,11 +531,11 @@ async fn process_write_data(
     data: &str,
     state: AppState,
 ) -> (StatusCode, String) {
-    println!("Raw data:\n{}", data);
+    debug!("Processing write data: {} bytes", data.len());
 
     // Parse line protocol
     let points = parse_multiple_lines(data);
-    println!("Parsed {} points", points.len());
+    info!("Parsed {} points", points.len());
 
     if points.is_empty() {
         return (StatusCode::BAD_REQUEST, "No valid points to write".to_string());
@@ -551,18 +556,16 @@ async fn process_write_data(
 
     // Add to cache and register catalog.schema
     for ((schema, measurement), points) in grouped {
-        println!("Adding {} points for catalog={}, schema={}, table={}", 
+        debug!("Adding {} points for catalog={}, schema={}, table={}", 
             points.len(), db, schema, measurement);
         
         // Ensure catalog.schema is registered in query engine
         if let Err(e) = state.query_engine.ensure_schema(db, &schema).await {
-            eprintln!("⚠️  Warning: Failed to register schema {}.{}: {}", db, schema, e);
+            warn!("Failed to register schema {}.{}: {}", db, schema, e);
         }
         
         state.cache.add_points(db, &schema, &measurement, points).await;
     }
-
-    println!("==================\n");
 
     (StatusCode::OK, "Data added to cache\n".to_string())
 }
@@ -571,10 +574,7 @@ async fn log_request(req: Request) -> impl IntoResponse {
     let method = req.method().clone();
     let uri = req.uri().clone();
 
-    println!("\n=== Request ===");
-    println!("Method: {}", method);
-    println!("URL: {}", uri);
-    println!("===============\n");
+    warn!("Endpoint not found: {} {}", method, uri);
 
     (
         StatusCode::NOT_FOUND,
@@ -588,8 +588,7 @@ async fn compact_handler(
     Path(db): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    println!("\n=== Compact Database Request ===");
-    println!("Database: {}", db);
+    info!("Compact Database Request: db={}", db);
 
     // Convert config to compactor's CompactionConfig
     let config = compactor::CompactionConfig {
@@ -634,7 +633,7 @@ async fn compact_handler(
             }
         }
         Err(e) => {
-            eprintln!("❌ Compaction error: {}", e);
+            error!("Compaction error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Compaction error: {}", e))
         }
     }
@@ -645,8 +644,7 @@ async fn compact_measurement_handler(
     Path((db, measurement)): Path<(String, String)>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    println!("\n=== Compact Measurement Request ===");
-    println!("Database: {}, Measurement: {}", db, measurement);
+    info!("Compact Measurement Request: db={}, measurement={}", db, measurement);
 
     // Convert config to compactor's CompactionConfig
     let config = compactor::CompactionConfig {
@@ -670,7 +668,7 @@ async fn compact_measurement_handler(
                 result.bytes_after as f64 / 1024.0 / 1024.0,
                 result.rows_compacted
             );
-            println!("✅ {}", message);
+            info!("{}", message);
             (StatusCode::OK, message)
         }
         Ok(None) => {
@@ -678,11 +676,11 @@ async fn compact_measurement_handler(
                 "No compaction needed for {}/{} (minimum file threshold not met)",
                 db, measurement
             );
-            println!("ℹ️  {}", message);
+            info!("{}", message);
             (StatusCode::OK, message)
         }
         Err(e) => {
-            eprintln!("❌ Compaction error: {}", e);
+            error!("Compaction error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Compaction error: {}", e))
         }
     }
@@ -694,8 +692,7 @@ async fn series_stats_handler(
     Path(db): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    println!("\n=== Series Stats Request ===");
-    println!("Database: {}", db);
+    debug!("Series Stats Request: db={}", db);
 
     match state.series_tracker.get_series_stats(&db).await {
         Ok(stats) => {
@@ -729,11 +726,11 @@ async fn series_stats_handler(
                 }).collect::<Vec<_>>()
             });
 
-            println!("✅ Returned stats for {} services, {} total series", stats.len(), total_series);
+            info!("Returned stats for {} services, {} total series", stats.len(), total_series);
             (StatusCode::OK, serde_json::to_string_pretty(&response).unwrap())
         }
         Err(e) => {
-            eprintln!("❌ Error getting series stats: {}", e);
+            error!("Error getting series stats: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Error getting series stats: {}", e),
@@ -748,8 +745,7 @@ async fn list_schemas_handler(
     Path(db): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    println!("\n=== List Schemas Request ===");
-    println!("Database: {}", db);
+    debug!("List Schemas Request: db={}", db);
 
     match state.query_engine.list_schemas(&db).await {
         Ok(schemas) => {
@@ -758,11 +754,11 @@ async fn list_schemas_handler(
                 "schemas": schemas,
                 "count": schemas.len()
             });
-            println!("✅ Found {} schema(s)", schemas.len());
+            info!("Found {} schema(s)", schemas.len());
             (StatusCode::OK, serde_json::to_string_pretty(&response).unwrap())
         }
         Err(e) => {
-            eprintln!("❌ Error: {}", e);
+            error!("List schemas error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
         }
     }
@@ -772,8 +768,7 @@ async fn list_schema_tables_handler(
     Path((db, schema)): Path<(String, String)>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    println!("\n=== List Schema Tables Request ===");
-    println!("Database: {}, Schema: {}", db, schema);
+    debug!("List Schema Tables Request: db={}, schema={}", db, schema);
 
     match state.query_engine.list_tables_in_schema(&db, &schema).await {
         Ok(tables) => {
@@ -783,11 +778,11 @@ async fn list_schema_tables_handler(
                 "tables": tables,
                 "count": tables.len()
             });
-            println!("✅ Found {} table(s)", tables.len());
+            info!("Found {} table(s)", tables.len());
             (StatusCode::OK, serde_json::to_string_pretty(&response).unwrap())
         }
         Err(e) => {
-            eprintln!("❌ Error: {}", e);
+            error!("List schema tables error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
         }
     }

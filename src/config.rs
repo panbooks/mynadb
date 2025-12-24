@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use tracing::{error, info};
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10,6 +11,7 @@ pub struct Config {
     pub cache: CacheConfig,
     pub compaction: CompactionConfig,
     pub series_tracker: SeriesTrackerConfig,
+    pub logging: LoggingConfig,
 }
 
 /// Server configuration
@@ -88,6 +90,34 @@ pub struct SeriesTrackerConfig {
     pub stats_dir: String,
 }
 
+/// Logging configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    /// Log level (trace, debug, info, warn, error)
+    #[serde(default = "default_log_level")]
+    pub level: String,
+    
+    /// Log directory path
+    #[serde(default = "default_log_dir")]
+    pub log_dir: String,
+    
+    /// Log file name prefix
+    #[serde(default = "default_log_file_prefix")]
+    pub file_prefix: String,
+    
+    /// Log file rotation (daily, hourly, never)
+    #[serde(default = "default_log_rotation")]
+    pub rotation: String,
+    
+    /// Maximum number of log files to keep
+    #[serde(default = "default_log_max_files")]
+    pub max_files: usize,
+    
+    /// Enable JSON formatted logs
+    #[serde(default = "default_log_json")]
+    pub json_format: bool,
+}
+
 // Default value functions
 fn default_http_host() -> String {
     "0.0.0.0".to_string()
@@ -145,6 +175,30 @@ fn default_series_stats_dir() -> String {
     "series_stats".to_string()
 }
 
+fn default_log_level() -> String {
+    "info".to_string()
+}
+
+fn default_log_dir() -> String {
+    "./logs".to_string()
+}
+
+fn default_log_file_prefix() -> String {
+    "stats-service".to_string()
+}
+
+fn default_log_rotation() -> String {
+    "daily".to_string()
+}
+
+fn default_log_max_files() -> usize {
+    30
+}
+
+fn default_log_json() -> bool {
+    false
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -172,6 +226,14 @@ impl Default for Config {
                 flush_interval_secs: default_series_flush_interval(),
                 stats_dir: default_series_stats_dir(),
             },
+            logging: LoggingConfig {
+                level: default_log_level(),
+                log_dir: default_log_dir(),
+                file_prefix: default_log_file_prefix(),
+                rotation: default_log_rotation(),
+                max_files: default_log_max_files(),
+                json_format: default_log_json(),
+            },
         }
     }
 }
@@ -193,12 +255,13 @@ impl Config {
     pub fn load_or_default(path: &str) -> Self {
         match Self::from_file(path) {
             Ok(config) => {
-                println!("✅ Loaded configuration from: {}", path);
+                // Note: This is called before logging is initialized, so we use eprintln
+                // It will only show during startup before logging takes over
+                info!("Loaded configuration from: {}", path);
                 config
             }
             Err(e) => {
-                println!("⚠️  Could not load config file: {}", e);
-                println!("⚠️  Using default configuration");
+                error!("Could not load config file, path: {}, error: {}. Using default configuration", path, e);
                 Config::default()
             }
         }

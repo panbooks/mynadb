@@ -6,6 +6,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::{info, warn, error, debug};
 
 // Compaction constants
 const LEVEL_PREFIX: char = 'L';
@@ -168,7 +169,7 @@ impl Compactor {
                         // No compaction needed
                     }
                     Err(e) => {
-                        eprintln!("Warning: Failed to compact {}/{}: {}", db, measurement, e);
+                        warn!("Failed to compact {}/{}: {}", db, measurement, e);
                     }
                 }
             }
@@ -218,7 +219,7 @@ impl Compactor {
         // Calculate total size
         let total_bytes_before: u64 = file_infos.iter().map(|f| f.size).sum();
 
-        println!("🔧 Compacting {}/{}: {} files ({} L0), {:.2} MB", 
+        info!("Compacting {}/{}: {} files ({} L0), {:.2} MB", 
                  db, measurement, total_files_before, l0_files_before,
                  total_bytes_before as f64 / 1024.0 / 1024.0);
 
@@ -233,7 +234,7 @@ impl Compactor {
             .collect();
 
         if l0_files.len() >= config.min_files {
-            println!("  📦 Compacting {} L0 files (priority)", l0_files.len());
+            info!("Compacting {} L0 files (priority)", l0_files.len());
             
             let file_groups = self.group_files_by_size(&l0_files, config)?;
             
@@ -242,7 +243,7 @@ impl Compactor {
                     continue;
                 }
                 
-                println!("    Group {}: {} files", group_idx + 1, group.len());
+                debug!("Group {}: {} files", group_idx + 1, group.len());
                 
                 let paths: Vec<PathBuf> = group.iter().map(|f| f.path.clone()).collect();
                 let batches = self.read_parquet_files(&paths)?;
@@ -265,14 +266,14 @@ impl Compactor {
                 self.write_compacted_file(&compacted_filename, batches)?;
                 compacted_file_paths.push(compacted_filename.clone());
                 
-                println!("    ✅ Created: {} ({} rows)", compacted_filename, rows);
+                info!("Created: {} ({} rows)", compacted_filename, rows);
                 
                 // Delete old files
                 for file in &paths {
                     if let Err(e) = fs::remove_file(file) {
-                        eprintln!("    ⚠️  Failed to delete {}: {}", file.display(), e);
+                        warn!("Failed to delete {}: {}", file.display(), e);
                     } else {
-                        println!("    🗑️  Deleted: {}", file.display());
+                        debug!("Deleted: {}", file.display());
                     }
                 }
             }
@@ -286,7 +287,7 @@ impl Compactor {
                 .collect();
             
             if level_files.len() >= config.min_files {
-                println!("  📦 Compacting {} L{} files", level_files.len(), level);
+                info!("Compacting {} L{} files", level_files.len(), level);
                 
                 let file_groups = self.group_files_by_size(&level_files, config)?;
                 
@@ -295,7 +296,7 @@ impl Compactor {
                         continue;
                     }
                     
-                    println!("    Group {}: {} files", group_idx + 1, group.len());
+                    debug!("Group {}: {} files", group_idx + 1, group.len());
                     
                     let paths: Vec<PathBuf> = group.iter().map(|f| f.path.clone()).collect();
                     let batches = self.read_parquet_files(&paths)?;
@@ -318,14 +319,14 @@ impl Compactor {
                     self.write_compacted_file(&compacted_filename, batches)?;
                     compacted_file_paths.push(compacted_filename.clone());
                     
-                    println!("    ✅ Created: {} ({} rows)", compacted_filename, rows);
+                    info!("Created: {} ({} rows)", compacted_filename, rows);
                     
                     // Delete old files
                     for file in &paths {
                         if let Err(e) = fs::remove_file(file) {
-                            eprintln!("    ⚠️  Failed to delete {}: {}", file.display(), e);
+                            warn!("Failed to delete {}: {}", file.display(), e);
                         } else {
-                            println!("    🗑️  Deleted: {}", file.display());
+                            debug!("Deleted: {}", file.display());
                         }
                     }
                 }
@@ -338,7 +339,7 @@ impl Compactor {
         let l0_files_after = new_file_infos.iter().filter(|f| f.level == 0).count();
         let total_bytes_after: u64 = new_file_infos.iter().map(|f| f.size).sum();
 
-        println!("✅ Compaction complete: L0 {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB)",
+        info!("Compaction complete: L0 {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB)",
                  l0_files_before, l0_files_after,
                  total_files_before, total_files_after,
                  total_bytes_before as f64 / 1024.0 / 1024.0,
@@ -476,10 +477,7 @@ impl Compactor {
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
 
-            println!(
-                "🔧 Background compaction started for '{}': every {} seconds",
-                db, interval_secs
-            );
+            info!("Background compaction started for '{}': every {} seconds", db, interval_secs);
 
             loop {
                 ticker.tick().await;
@@ -487,10 +485,10 @@ impl Compactor {
                 match self.compact_database(&db, &config).await {
                     Ok(results) => {
                         if !results.is_empty() {
-                            println!("🔄 Background compaction: {} measurement(s) compacted", results.len());
+                            info!("Background compaction: {} measurement(s) compacted", results.len());
                             for result in results {
-                                println!(
-                                    "   {}/{}: L0 {} -> {}, Total {} -> {} files",
+                                info!(
+                                    "{}/{}: L0 {} -> {}, Total {} -> {} files",
                                     result.db, result.measurement,
                                     result.l0_files_before, result.l0_files_after,
                                     result.files_before, result.files_after
@@ -499,7 +497,7 @@ impl Compactor {
                         }
                     }
                     Err(e) => {
-                        eprintln!("🔄 Background compaction error: {}", e);
+                        error!("Background compaction error: {}", e);
                     }
                 }
             }

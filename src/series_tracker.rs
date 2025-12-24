@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
+use tracing::{info, warn, error, debug};
 
 // System catalog/schema constants (catalog.schema.table format)
 const SYSTEM_CATALOG: &str = "_system";
@@ -109,18 +110,18 @@ impl SeriesTracker {
                     if let Ok(files) = std::fs::read_dir(&path) {
                         for file_entry in files.flatten() {
                             if let Some(name) = file_entry.file_name().to_str() {
-                                if name.ends_with(".tmp") {
-                                    if let Err(e) = std::fs::remove_file(file_entry.path()) {
-                                        eprintln!("⚠️  Failed to cleanup temp file '{}': {}", file_entry.path().display(), e);
-                                    } else {
-                                        println!("🧹 Cleaned up leftover temp file: {}", name);
-                                    }
-                                }
-                            }
+                    if name.ends_with(".tmp") {
+                        if let Err(e) = std::fs::remove_file(file_entry.path()) {
+                            warn!("Failed to cleanup temp file '{}': {}", file_entry.path().display(), e);
+                        } else {
+                            info!("Cleaned up leftover temp file: {}", name);
                         }
                     }
                 }
             }
+        }
+    }
+}
         }
     }
     
@@ -129,10 +130,7 @@ impl SeriesTracker {
         tokio::spawn(async move {
             let mut ticker = interval(Duration::from_secs(flush_interval_secs));
 
-            println!(
-                "🔄 Series tracker background flush started: every {} seconds",
-                flush_interval_secs
-            );
+            info!("Series tracker background flush started: every {} seconds", flush_interval_secs);
 
             loop {
                 ticker.tick().await;
@@ -140,11 +138,11 @@ impl SeriesTracker {
                 match self.flush_all().await {
                     Ok(count) => {
                         if count > 0 {
-                            println!("🔄 Series tracker flush: {} database(s) updated", count);
+                            info!("Series tracker flush: {} database(s) updated", count);
                         }
                     }
                     Err(e) => {
-                        eprintln!("🔄 Series tracker flush error: {}", e);
+                        error!("Series tracker flush error: {}", e);
                     }
                 }
             }
@@ -248,13 +246,13 @@ impl SeriesTracker {
         let mut flushed_count = 0;
         for (db, records) in pending.drain() {
             if !records.is_empty() {
-                println!("💾 Flushing {} series records for database '{}'", records.len(), db);
+                debug!("Flushing {} series records for database '{}'", records.len(), db);
                 match self.flush_database(&db, records).await {
                     Ok(()) => {
                         flushed_count += 1;
                     }
                     Err(e) => {
-                        eprintln!("❌ Failed to flush database '{}': {}", db, e);
+                        error!("Failed to flush database '{}': {}", db, e);
                     }
                 }
             }
@@ -355,12 +353,12 @@ impl SeriesTracker {
             let builder = match ParquetRecordBatchReaderBuilder::try_new(file) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("⚠️  Corrupted stats file detected at '{}': {}", file_path.display(), e);
-                    eprintln!("   Deleting corrupted file...");
+                    warn!("Corrupted stats file detected at '{}': {}", file_path.display(), e);
+                    warn!("Deleting corrupted file...");
                     if let Err(del_err) = std::fs::remove_file(&file_path) {
-                        eprintln!("   Failed to delete corrupted file: {}", del_err);
+                        error!("Failed to delete corrupted file: {}", del_err);
                     } else {
-                        eprintln!("   ✓ Corrupted file deleted successfully");
+                        info!("Corrupted file deleted successfully");
                     }
                     continue;
                 }
@@ -369,12 +367,12 @@ impl SeriesTracker {
             let mut reader = match builder.build() {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("⚠️  Corrupted stats file detected at '{}': {}", file_path.display(), e);
-                    eprintln!("   Deleting corrupted file...");
+                    warn!("Corrupted stats file detected at '{}': {}", file_path.display(), e);
+                    warn!("Deleting corrupted file...");
                     if let Err(del_err) = std::fs::remove_file(&file_path) {
-                        eprintln!("   Failed to delete corrupted file: {}", del_err);
+                        error!("Failed to delete corrupted file: {}", del_err);
                     } else {
-                        eprintln!("   ✓ Corrupted file deleted successfully");
+                        info!("Corrupted file deleted successfully");
                     }
                     continue;
                 }
@@ -462,12 +460,12 @@ impl SeriesTracker {
             let builder = match ParquetRecordBatchReaderBuilder::try_new(file) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("⚠️  Corrupted cache file detected at '{}': {}", file_path.display(), e);
-                    eprintln!("   Deleting corrupted file...");
+                    warn!("Corrupted cache file detected at '{}': {}", file_path.display(), e);
+                    warn!("Deleting corrupted file...");
                     if let Err(del_err) = std::fs::remove_file(&file_path) {
-                        eprintln!("   Failed to delete corrupted file: {}", del_err);
+                        error!("Failed to delete corrupted file: {}", del_err);
                     } else {
-                        eprintln!("   ✓ Corrupted file deleted successfully");
+                        info!("Corrupted file deleted successfully");
                     }
                     continue;
                 }
@@ -476,12 +474,12 @@ impl SeriesTracker {
             let mut reader = match builder.build() {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("⚠️  Corrupted cache file detected at '{}': {}", file_path.display(), e);
-                    eprintln!("   Deleting corrupted file...");
+                    warn!("Corrupted cache file detected at '{}': {}", file_path.display(), e);
+                    warn!("Deleting corrupted file...");
                     if let Err(del_err) = std::fs::remove_file(&file_path) {
-                        eprintln!("   Failed to delete corrupted file: {}", del_err);
+                        error!("Failed to delete corrupted file: {}", del_err);
                     } else {
-                        eprintln!("   ✓ Corrupted file deleted successfully");
+                        info!("Corrupted file deleted successfully");
                     }
                     continue;
                 }
@@ -517,7 +515,7 @@ impl SeriesTracker {
         }
 
         if loaded_count > 0 {
-            println!("📊 Loaded {} series into cache for database '{}'", loaded_count, db);
+            info!("Loaded {} series into cache for database '{}'", loaded_count, db);
         }
         Ok(())
     }
