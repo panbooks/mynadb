@@ -1,0 +1,248 @@
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+
+/// Main configuration structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    pub server: ServerConfig,
+    pub storage: StorageConfig,
+    pub cache: CacheConfig,
+    pub compaction: CompactionConfig,
+    pub series_tracker: SeriesTrackerConfig,
+}
+
+/// Server configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerConfig {
+    /// HTTP REST API host
+    #[serde(default = "default_http_host")]
+    pub http_host: String,
+    
+    /// HTTP REST API port
+    #[serde(default = "default_http_port")]
+    pub http_port: u16,
+    
+    /// Arrow Flight gRPC host
+    #[serde(default = "default_flight_host")]
+    pub flight_host: String,
+    
+    /// Arrow Flight gRPC port
+    #[serde(default = "default_flight_port")]
+    pub flight_port: u16,
+}
+
+/// Storage configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageConfig {
+    /// Data directory path
+    #[serde(default = "default_data_dir")]
+    pub data_dir: String,
+    
+    /// System directory name (for metadata)
+    #[serde(default = "default_system_dir")]
+    pub system_dir: String,
+}
+
+/// Cache configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheConfig {
+    /// Background flush interval in seconds
+    #[serde(default = "default_cache_flush_interval")]
+    pub flush_interval_secs: u64,
+    
+    /// Maximum cache size in MB before forcing flush
+    #[serde(default = "default_cache_max_size_mb")]
+    pub max_size_mb: u64,
+}
+
+/// Compaction configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionConfig {
+    /// Minimum number of files to trigger compaction
+    #[serde(default = "default_compaction_min_files")]
+    pub min_files: usize,
+    
+    /// Maximum file size in MB before compaction
+    #[serde(default = "default_compaction_max_file_size_mb")]
+    pub max_file_size_mb: u64,
+    
+    /// Target file size in MB after compaction
+    #[serde(default = "default_compaction_target_file_size_mb")]
+    pub target_file_size_mb: u64,
+    
+    /// Maximum compaction level
+    #[serde(default = "default_compaction_max_level")]
+    pub max_level: u32,
+}
+
+/// Series tracker configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeriesTrackerConfig {
+    /// Background flush interval in seconds
+    #[serde(default = "default_series_flush_interval")]
+    pub flush_interval_secs: u64,
+    
+    /// Series stats directory name
+    #[serde(default = "default_series_stats_dir")]
+    pub stats_dir: String,
+}
+
+// Default value functions
+fn default_http_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_http_port() -> u16 {
+    7000
+}
+
+fn default_flight_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_flight_port() -> u16 {
+    7001
+}
+
+fn default_data_dir() -> String {
+    "./data".to_string()
+}
+
+fn default_system_dir() -> String {
+    "_system".to_string()
+}
+
+fn default_cache_flush_interval() -> u64 {
+    30
+}
+
+fn default_cache_max_size_mb() -> u64 {
+    1024 // 1GB
+}
+
+fn default_compaction_min_files() -> usize {
+    5
+}
+
+fn default_compaction_max_file_size_mb() -> u64 {
+    100
+}
+
+fn default_compaction_target_file_size_mb() -> u64 {
+    500
+}
+
+fn default_compaction_max_level() -> u32 {
+    5
+}
+
+fn default_series_flush_interval() -> u64 {
+    60
+}
+
+fn default_series_stats_dir() -> String {
+    "series_stats".to_string()
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            server: ServerConfig {
+                http_host: default_http_host(),
+                http_port: default_http_port(),
+                flight_host: default_flight_host(),
+                flight_port: default_flight_port(),
+            },
+            storage: StorageConfig {
+                data_dir: default_data_dir(),
+                system_dir: default_system_dir(),
+            },
+            cache: CacheConfig {
+                flush_interval_secs: default_cache_flush_interval(),
+                max_size_mb: default_cache_max_size_mb(),
+            },
+            compaction: CompactionConfig {
+                min_files: default_compaction_min_files(),
+                max_file_size_mb: default_compaction_max_file_size_mb(),
+                target_file_size_mb: default_compaction_target_file_size_mb(),
+                max_level: default_compaction_max_level(),
+            },
+            series_tracker: SeriesTrackerConfig {
+                flush_interval_secs: default_series_flush_interval(),
+                stats_dir: default_series_stats_dir(),
+            },
+        }
+    }
+}
+
+impl Config {
+    /// Load configuration from TOML file
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+        
+        let config: Config = toml::from_str(&content)
+            .map_err(|e| format!("Failed to parse config file: {}", e))?;
+        
+        Ok(config)
+    }
+    
+    /// Load configuration with fallback to default
+    /// Tries to load from file, if not found uses default
+    pub fn load_or_default(path: &str) -> Self {
+        match Self::from_file(path) {
+            Ok(config) => {
+                println!("✅ Loaded configuration from: {}", path);
+                config
+            }
+            Err(e) => {
+                println!("⚠️  Could not load config file: {}", e);
+                println!("⚠️  Using default configuration");
+                Config::default()
+            }
+        }
+    }
+    
+    /// Save configuration to TOML file
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), String> {
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize config: {}", e))?;
+        
+        fs::write(path, content)
+            .map_err(|e| format!("Failed to write config file: {}", e))?;
+        
+        Ok(())
+    }
+    
+    /// Get HTTP server address
+    pub fn http_addr(&self) -> String {
+        format!("{}:{}", self.server.http_host, self.server.http_port)
+    }
+    
+    /// Get Flight server address
+    pub fn flight_addr(&self) -> String {
+        format!("{}:{}", self.server.flight_host, self.server.flight_port)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = Config::default();
+        assert_eq!(config.server.http_port, 7000);
+        assert_eq!(config.server.flight_port, 7001);
+        assert_eq!(config.cache.flush_interval_secs, 30);
+    }
+
+    #[test]
+    fn test_toml_serialization() {
+        let config = Config::default();
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(config.server.http_port, parsed.server.http_port);
+    }
+}

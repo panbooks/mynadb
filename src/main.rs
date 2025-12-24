@@ -1,5 +1,6 @@
 mod cache;
 mod compactor;
+mod config;
 mod database_manager;
 mod flight_service;
 mod line_protocol;
@@ -15,7 +16,8 @@ use axum::{
     Json, Router,
 };
 use cache::DataCache;
-use compactor::{Compactor, CompactionConfig};
+use compactor::Compactor;
+use config::Config;
 use database_manager::DatabaseManager;
 use flight_service::StatsFlightService;
 use line_protocol::parse_multiple_lines;
@@ -33,6 +35,7 @@ struct AppState {
     db_manager: Arc<DatabaseManager>,
     compactor: Arc<Compactor>,
     series_tracker: Arc<SeriesTracker>,
+    config: Arc<Config>,
 }
 
 #[derive(Deserialize)]
@@ -65,22 +68,24 @@ struct CompactRequest {
 
 #[tokio::main]
 async fn main() {
+    // Load configuration
+    let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| "config.toml".to_string());
+    let config = Arc::new(Config::load_or_default(&config_path));
+    
     // Create data directory
-    std::fs::create_dir_all("./data").expect("Failed to create data directory");
+    std::fs::create_dir_all(&config.storage.data_dir)
+        .expect("Failed to create data directory");
 
     // Initialize components
-    let cache = DataCache::new("./data");
-    cache.clone().start_background_flush(30);
+    let cache = DataCache::new(&config.storage.data_dir);
+    cache.clone().start_background_flush(config.cache.flush_interval_secs);
 
-    let query_engine = Arc::new(QueryEngine::new("./data"));
-    let db_manager = Arc::new(DatabaseManager::new("./data"));
-    let compactor = Arc::new(Compactor::new("./data"));
+    let query_engine = Arc::new(QueryEngine::new(&config.storage.data_dir));
+    let db_manager = Arc::new(DatabaseManager::new(&config.storage.data_dir));
+    let compactor = Arc::new(Compactor::new(&config.storage.data_dir));
     
-    let series_tracker = Arc::new(SeriesTracker::new("./data"));
-    // Load existing series stats into cache on startup
-    // (Note: we'll load on-demand per database)
-    // Start background flush for series tracker (every 60 seconds)
-    Arc::clone(&series_tracker).start_background_flush(60);
+    let series_tracker = Arc::new(SeriesTracker::new(&config.storage.data_dir));
+    Arc::clone(&series_tracker).start_background_flush(config.series_tracker.flush_interval_secs);
 
     let state = AppState {
         cache,
@@ -88,6 +93,7 @@ async fn main() {
         db_manager,
         compactor,
         series_tracker,
+        config: config.clone(),
     };
 
     let app = Router::new()
@@ -121,36 +127,37 @@ async fn main() {
         .with_state(state.clone());
 
     // Start HTTP server
-    let http_listener = tokio::net::TcpListener::bind("0.0.0.0:7000")
+    let http_addr = config.http_addr();
+    let http_listener = tokio::net::TcpListener::bind(&http_addr)
         .await
         .unwrap();
 
     println!("🚀 Time Series Database Server");
-    println!("📊 Data directory: ./data");
-    println!("⏱️  Cache flush interval: 30 seconds");
-    println!("⏱️  Series tracker flush interval: 60 seconds");
+    println!("📊 Data directory: {}", config.storage.data_dir);
+    println!("⏱️  Cache flush interval: {} seconds", config.cache.flush_interval_secs);
+    println!("⏱️  Series tracker flush interval: {} seconds", config.series_tracker.flush_interval_secs);
     println!("🔍 Query engine: DataFusion SQL (auto-registration)");
-    println!("\n🌐 HTTP REST API: http://0.0.0.0:7000");
-    println!("✈️  Arrow Flight API: grpc://0.0.0.0:7001");
+    println!("\n🌐 HTTP REST API: http://{}", http_addr);
+    println!("✈️  Arrow Flight API: grpc://{}", config.flight_addr());
     println!("\n📝 Quick start:");
     println!("   # Create database");
-    println!("   curl -X POST http://localhost:7000/databases -H 'Content-Type: application/json' -d '{{\"name\":\"mydb\"}}'");
+    println!("   curl -X POST http://localhost:{}/databases -H 'Content-Type: application/json' -d '{{\"name\":\"mydb\"}}'", config.server.http_port);
     println!("\n   # Write data (path-based)");
-    println!("   curl -X POST http://localhost:7000/write/mydb -d 'cpu,host=server01 usage=23.5'");
+    println!("   curl -X POST http://localhost:{}/write/mydb -d 'cpu,host=server01 usage=23.5'", config.server.http_port);
     println!("\n   # Write data (InfluxDB-compatible)");
-    println!("   curl -X POST 'http://localhost:7000/write?db=mydb' -d 'cpu,host=server01 usage=23.5'");
+    println!("   curl -X POST 'http://localhost:{}/write?db=mydb' -d 'cpu,host=server01 usage=23.5'", config.server.http_port);
     println!("\n   # Query data (HTTP)");
-    println!("   curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'");
+    println!("   curl 'http://localhost:{}/query/mydb?sql=SELECT * FROM cpu LIMIT 10'", config.server.http_port);
     println!("\n   # Query data (Flight CLI)");
-    println!("   datafusion-cli --host localhost --port 7001");
+    println!("   datafusion-cli --host localhost --port {}", config.server.flight_port);
     println!("   > USE mydb;");
     println!("   > SELECT * FROM cpu LIMIT 10;");
     println!("\n   # Series cardinality stats");
-    println!("   curl http://localhost:7000/series_stats/mydb");
+    println!("   curl http://localhost:{}/series_stats/mydb", config.server.http_port);
 
     // Start Arrow Flight server
     let flight_service = StatsFlightService::new(state.query_engine.clone());
-    let flight_addr = "0.0.0.0:7001".parse().unwrap();
+    let flight_addr = config.flight_addr().parse().unwrap();
     
     let flight_server = tokio::spawn(async move {
         println!("\n✈️  Arrow Flight server starting on {}", flight_addr);
@@ -162,8 +169,9 @@ async fn main() {
     });
 
     // Start HTTP server
+    let http_addr_display = http_addr.clone();
     let http_server = tokio::spawn(async move {
-        println!("🌐 HTTP server starting on 0.0.0.0:7000\n");
+        println!("🌐 HTTP server starting on {}\n", http_addr_display);
         axum::serve(http_listener, app).await.unwrap();
     });
 
@@ -570,7 +578,13 @@ async fn compact_handler(
     println!("\n=== Compact Database Request ===");
     println!("Database: {}", db);
 
-    let config = CompactionConfig::default();
+    // Convert config to compactor's CompactionConfig
+    let config = compactor::CompactionConfig {
+        min_files: state.config.compaction.min_files,
+        max_file_size: state.config.compaction.max_file_size_mb * 1024 * 1024,
+        target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
+        max_level: state.config.compaction.max_level,
+    };
 
     match state.compactor.compact_database(&db, &config).await {
         Ok(results) => {
@@ -621,7 +635,13 @@ async fn compact_measurement_handler(
     println!("\n=== Compact Measurement Request ===");
     println!("Database: {}, Measurement: {}", db, measurement);
 
-    let config = CompactionConfig::default();
+    // Convert config to compactor's CompactionConfig
+    let config = compactor::CompactionConfig {
+        min_files: state.config.compaction.min_files,
+        max_file_size: state.config.compaction.max_file_size_mb * 1024 * 1024,
+        target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
+        max_level: state.config.compaction.max_level,
+    };
 
     match state.compactor.compact_measurement(&db, &measurement, &config).await {
         Ok(Some(result)) => {
