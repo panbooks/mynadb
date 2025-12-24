@@ -17,8 +17,8 @@ use crate::query_engine::QueryEngine;
 
 /// Convert DataFusion DataType to Arrow DataType
 /// This is needed because DataFusion may use a different arrow version
-fn convert_data_type(dt: &datafusion::arrow::datatypes::DataType) -> arrow::datatypes::DataType {
-    use arrow::datatypes::{DataType, Field, TimeUnit};
+fn convert_data_type(dt: &arrow::datatypes::DataType) -> arrow::datatypes::DataType {
+    use arrow::datatypes::DataType;
     use datafusion::arrow::datatypes::DataType as DfDataType;
 
     match dt {
@@ -39,15 +39,7 @@ fn convert_data_type(dt: &datafusion::arrow::datatypes::DataType) -> arrow::data
         DfDataType::LargeUtf8 => DataType::LargeUtf8,
         DfDataType::Binary => DataType::Binary,
         DfDataType::LargeBinary => DataType::LargeBinary,
-        DfDataType::Timestamp(unit, tz) => {
-            let arrow_unit = match unit {
-                datafusion::arrow::datatypes::TimeUnit::Second => TimeUnit::Second,
-                datafusion::arrow::datatypes::TimeUnit::Millisecond => TimeUnit::Millisecond,
-                datafusion::arrow::datatypes::TimeUnit::Microsecond => TimeUnit::Microsecond,
-                datafusion::arrow::datatypes::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
-            };
-            DataType::Timestamp(arrow_unit, tz.clone())
-        }
+        DfDataType::Timestamp(unit, tz) => DataType::Timestamp(unit.clone(), tz.clone()),
         DfDataType::Date32 => DataType::Date32,
         DfDataType::Date64 => DataType::Date64,
         _ => DataType::Utf8, // Fallback for unsupported types
@@ -138,7 +130,7 @@ impl Flight for StatsFlightService {
             .map_err(|e| Status::internal(format!("Schema error: {}", e)))?;
 
         // Serialize schema using SchemaAsIpc
-        let schema_ipc = SchemaAsIpc::new(&schema, &Default::default());
+        let _schema_ipc = SchemaAsIpc::new(&schema, &Default::default());
 
         let flight_info = FlightInfo::new()
             .try_with_schema(&*schema)

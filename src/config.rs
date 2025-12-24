@@ -20,15 +20,15 @@ pub struct ServerConfig {
     /// HTTP REST API host
     #[serde(default = "default_http_host")]
     pub http_host: String,
-    
+
     /// HTTP REST API port
     #[serde(default = "default_http_port")]
     pub http_port: u16,
-    
+
     /// Arrow Flight gRPC host
     #[serde(default = "default_flight_host")]
     pub flight_host: String,
-    
+
     /// Arrow Flight gRPC port
     #[serde(default = "default_flight_port")]
     pub flight_port: u16,
@@ -40,7 +40,7 @@ pub struct StorageConfig {
     /// Data directory path
     #[serde(default = "default_data_dir")]
     pub data_dir: String,
-    
+
     /// System directory name (for metadata)
     #[serde(default = "default_system_dir")]
     pub system_dir: String,
@@ -52,7 +52,7 @@ pub struct CacheConfig {
     /// Background flush interval in seconds
     #[serde(default = "default_cache_flush_interval")]
     pub flush_interval_secs: u64,
-    
+
     /// Maximum cache size in MB before forcing flush
     #[serde(default = "default_cache_max_size_mb")]
     pub max_size_mb: u64,
@@ -64,18 +64,22 @@ pub struct CompactionConfig {
     /// Minimum number of files to trigger compaction
     #[serde(default = "default_compaction_min_files")]
     pub min_files: usize,
-    
+
     /// Maximum file size in MB before compaction
     #[serde(default = "default_compaction_max_file_size_mb")]
     pub max_file_size_mb: u64,
-    
+
     /// Target file size in MB after compaction
     #[serde(default = "default_compaction_target_file_size_mb")]
     pub target_file_size_mb: u64,
-    
+
     /// Maximum compaction level
     #[serde(default = "default_compaction_max_level")]
     pub max_level: u32,
+    
+    /// Background compaction interval in seconds (0 = disabled)
+    #[serde(default = "default_compaction_interval_secs")]
+    pub interval_secs: u64,
 }
 
 /// Series tracker configuration
@@ -84,7 +88,7 @@ pub struct SeriesTrackerConfig {
     /// Background flush interval in seconds
     #[serde(default = "default_series_flush_interval")]
     pub flush_interval_secs: u64,
-    
+
     /// Series stats directory name
     #[serde(default = "default_series_stats_dir")]
     pub stats_dir: String,
@@ -96,23 +100,23 @@ pub struct LoggingConfig {
     /// Log level (trace, debug, info, warn, error)
     #[serde(default = "default_log_level")]
     pub level: String,
-    
+
     /// Log directory path
     #[serde(default = "default_log_dir")]
     pub log_dir: String,
-    
+
     /// Log file name prefix
     #[serde(default = "default_log_file_prefix")]
     pub file_prefix: String,
-    
+
     /// Log file rotation (daily, hourly, never)
     #[serde(default = "default_log_rotation")]
     pub rotation: String,
-    
+
     /// Maximum number of log files to keep
     #[serde(default = "default_log_max_files")]
     pub max_files: usize,
-    
+
     /// Enable JSON formatted logs
     #[serde(default = "default_log_json")]
     pub json_format: bool,
@@ -165,6 +169,10 @@ fn default_compaction_target_file_size_mb() -> u64 {
 
 fn default_compaction_max_level() -> u32 {
     5
+}
+
+fn default_compaction_interval_secs() -> u64 {
+    60 // 5 min
 }
 
 fn default_series_flush_interval() -> u64 {
@@ -221,6 +229,7 @@ impl Default for Config {
                 max_file_size_mb: default_compaction_max_file_size_mb(),
                 target_file_size_mb: default_compaction_target_file_size_mb(),
                 max_level: default_compaction_max_level(),
+                interval_secs: default_compaction_interval_secs(),
             },
             series_tracker: SeriesTrackerConfig {
                 flush_interval_secs: default_series_flush_interval(),
@@ -243,13 +252,13 @@ impl Config {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let content = fs::read_to_string(path)
             .map_err(|e| format!("Failed to read config file: {}", e))?;
-        
+
         let config: Config = toml::from_str(&content)
             .map_err(|e| format!("Failed to parse config file: {}", e))?;
-        
+
         Ok(config)
     }
-    
+
     /// Load configuration with fallback to default
     /// Tries to load from file, if not found uses default
     pub fn load_or_default(path: &str) -> Self {
@@ -266,23 +275,23 @@ impl Config {
             }
         }
     }
-    
+
     /// Save configuration to TOML file
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), String> {
         let content = toml::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
-        
+
         fs::write(path, content)
             .map_err(|e| format!("Failed to write config file: {}", e))?;
-        
+
         Ok(())
     }
-    
+
     /// Get HTTP server address
     pub fn http_addr(&self) -> String {
         format!("{}:{}", self.server.http_host, self.server.http_port)
     }
-    
+
     /// Get Flight server address
     pub fn flight_addr(&self) -> String {
         format!("{}:{}", self.server.flight_host, self.server.flight_port)

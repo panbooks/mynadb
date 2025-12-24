@@ -29,6 +29,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::transport::Server;
 use tracing::{info, warn, error, debug};
+use clap::Parser;
+
+/// Stats Service - Time series database with Arrow Flight API
+#[derive(Parser, Debug)]
+#[command(name = "stats-service")]
+#[command(version = "0.1.0")]
+#[command(about = "Time series database with Arrow Flight API", long_about = None)]
+struct Cli {
+    /// Path to configuration file
+    #[arg(short = 'c', long = "config", default_value = "config.toml")]
+    config: String,
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -70,16 +82,19 @@ struct CompactRequest {
 
 #[tokio::main]
 async fn main() {
-    // Load configuration
-    let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| "config.toml".to_string());
-    let config = Arc::new(Config::load_or_default(&config_path));
+    // Parse command line arguments
+    let cli = Cli::parse();
     
+    // Load configuration (CLI arg takes precedence over env var)
+    let config_path = cli.config;
+    let config = Arc::new(Config::load_or_default(&config_path));
+
     // Initialize logging
     if let Err(e) = logger::init_logging(&config.logging) {
         eprintln!("Failed to initialize logging: {}", e);
         std::process::exit(1);
     }
-    
+
     // Welcome messages (only these go to stdout)
     welcome!("═══════════════════════════════════════════════════════");
     welcome!("  📊 Stats Service - Time Series Stats Database");
@@ -92,9 +107,9 @@ async fn main() {
     welcome!("   Log Directory: {}", config.logging.log_dir);
     welcome!("   Log Level: {}", config.logging.level);
     welcome!("");
-    
+
     info!("Stats Service starting with config: {:?}", *config);
-    
+
     // Create data directory
     std::fs::create_dir_all(&config.storage.data_dir)
         .expect("Failed to create data directory");
@@ -106,13 +121,27 @@ async fn main() {
 
     info!("Initializing query engine");
     let query_engine = Arc::new(QueryEngine::new(&config.storage.data_dir));
-    
+
     info!("Initializing database manager");
     let db_manager = Arc::new(DatabaseManager::new(&config.storage.data_dir));
-    
+
     info!("Initializing compactor");
     let compactor = Arc::new(Compactor::new(&config.storage.data_dir));
     
+    // Start background compaction if enabled
+    if config.compaction.interval_secs > 0 {
+        let compaction_config = compactor::CompactionConfig {
+            min_files: config.compaction.min_files,
+            max_file_size: config.compaction.max_file_size_mb * 1024 * 1024,
+            target_file_size: config.compaction.target_file_size_mb * 1024 * 1024,
+            max_level: config.compaction.max_level,
+        };
+        Arc::clone(&compactor).start_background_compaction(
+            config.compaction.interval_secs,
+            compaction_config,
+        );
+    }
+
     info!("Initializing series tracker");
     let series_tracker = Arc::new(SeriesTracker::new(&config.storage.data_dir));
     Arc::clone(&series_tracker).start_background_flush(config.series_tracker.flush_interval_secs);
@@ -152,8 +181,8 @@ async fn main() {
         .route("/databases/:db/tables/:table", delete(delete_table_handler))
         .route("/schema/:db/:table", get(schema_handler))
         // Compaction endpoints
-        .route("/compact/:db", post(compact_handler))
-        .route("/compact/:db/:measurement", post(compact_measurement_handler))
+        .route("/compact/:catalog", post(compact_handler))
+        .route("/compact/:catalog/:schema/:table", post(compact_table_handler))
         // Series cardinality tracking
         .route("/series_stats/:db", get(series_stats_handler))
         .fallback(log_request)
@@ -170,11 +199,16 @@ async fn main() {
     info!("Data directory: {}", config.storage.data_dir);
     info!("Cache flush interval: {} seconds", config.cache.flush_interval_secs);
     info!("Series tracker flush interval: {} seconds", config.series_tracker.flush_interval_secs);
+    if config.compaction.interval_secs > 0 {
+        info!("Background compaction interval: {} seconds", config.compaction.interval_secs);
+    } else {
+        info!("Background compaction: disabled");
+    }
 
     // Start Arrow Flight server
     let flight_service = StatsFlightService::new(state.query_engine.clone());
     let flight_addr = config.flight_addr().parse().unwrap();
-    
+
     let flight_server = tokio::spawn(async move {
         info!("Arrow Flight server starting on {}", flight_addr);
         Server::builder()
@@ -546,7 +580,7 @@ async fn process_write_data(
 
     // Group points by schema (service tag) and measurement
     use crate::cache::DataCache;
-    
+
     let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::new();
     for point in points {
         let schema = DataCache::extract_schema(&point.tags);
@@ -556,14 +590,14 @@ async fn process_write_data(
 
     // Add to cache and register catalog.schema
     for ((schema, measurement), points) in grouped {
-        debug!("Adding {} points for catalog={}, schema={}, table={}", 
+        debug!("Adding {} points for catalog={}, schema={}, table={}",
             points.len(), db, schema, measurement);
-        
+
         // Ensure catalog.schema is registered in query engine
         if let Err(e) = state.query_engine.ensure_schema(db, &schema).await {
             warn!("Failed to register schema {}.{}: {}", db, schema, e);
         }
-        
+
         state.cache.add_points(db, &schema, &measurement, points).await;
     }
 
@@ -585,10 +619,10 @@ async fn log_request(req: Request) -> impl IntoResponse {
 // ===== Compaction Handlers =====
 
 async fn compact_handler(
-    Path(db): Path<String>,
+    Path(catalog): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    info!("Compact Database Request: db={}", db);
+    info!("Compact Catalog Request: catalog={}", catalog);
 
     // Convert config to compactor's CompactionConfig
     let config = compactor::CompactionConfig {
@@ -598,7 +632,7 @@ async fn compact_handler(
         max_level: state.config.compaction.max_level,
     };
 
-    match state.compactor.compact_database(&db, &config).await {
+    match state.compactor.compact_catalog(&catalog, &config).await {
         Ok(results) => {
             if results.is_empty() {
                 (StatusCode::OK, "No compaction needed (minimum file threshold not met)".to_string())
@@ -607,8 +641,10 @@ async fn compact_handler(
                     .iter()
                     .map(|r| {
                         format!(
-                            "{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
-                            r.measurement,
+                            "{}.{}.{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
+                            r.catalog,
+                            r.schema,
+                            r.table,
                             r.l0_files_before,
                             r.l0_files_after,
                             r.files_before,
@@ -624,9 +660,9 @@ async fn compact_handler(
                 (
                     StatusCode::OK,
                     format!(
-                        "Compacted {} measurement(s) in database '{}'\n\n{}",
+                        "Compacted {} table(s) in catalog '{}'\n\n{}",
                         results.len(),
-                        db,
+                        catalog,
                         summary
                     ),
                 )
@@ -640,11 +676,11 @@ async fn compact_handler(
 }
 
 
-async fn compact_measurement_handler(
-    Path((db, measurement)): Path<(String, String)>,
+async fn compact_table_handler(
+    Path((catalog, schema, table)): Path<(String, String, String)>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    info!("Compact Measurement Request: db={}, measurement={}", db, measurement);
+    info!("Compact Table Request: catalog={}, schema={}, table={}", catalog, schema, table);
 
     // Convert config to compactor's CompactionConfig
     let config = compactor::CompactionConfig {
@@ -654,12 +690,13 @@ async fn compact_measurement_handler(
         max_level: state.config.compaction.max_level,
     };
 
-    match state.compactor.compact_measurement(&db, &measurement, &config).await {
+    match state.compactor.compact_table(&catalog, &schema, &table, &config).await {
         Ok(Some(result)) => {
             let message = format!(
-                "Compacted {}/{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
-                result.db,
-                result.measurement,
+                "Compacted {}.{}.{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
+                result.catalog,
+                result.schema,
+                result.table,
                 result.l0_files_before,
                 result.l0_files_after,
                 result.files_before,
@@ -673,8 +710,8 @@ async fn compact_measurement_handler(
         }
         Ok(None) => {
             let message = format!(
-                "No compaction needed for {}/{} (minimum file threshold not met)",
-                db, measurement
+                "No compaction needed for {}.{}.{} (minimum file threshold not met)",
+                catalog, schema, table
             );
             info!("{}", message);
             (StatusCode::OK, message)
