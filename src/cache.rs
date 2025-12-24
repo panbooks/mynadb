@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
-use tracing::{info, warn, error, debug};
+use tracing::{info, error, debug};
 
 const DEFAULT_SCHEMA: &str = "default";
 

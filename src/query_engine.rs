@@ -1,9 +1,7 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::prelude::*;
-use datafusion::catalog::{CatalogProvider, SchemaProvider};
 use datafusion::catalog_common::MemoryCatalogProvider;
 use datafusion::catalog_common::MemorySchemaProvider;
-use datafusion::datasource::TableProvider;
 use datafusion::sql::TableReference;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

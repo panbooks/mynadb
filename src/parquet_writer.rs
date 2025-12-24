@@ -5,7 +5,6 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
-use std::collections::HashMap;
 use std::fs::{create_dir_all, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -92,9 +91,9 @@ impl ParquetWriter {
     /// Merge schemas from multiple batches, keeping all unique fields
     fn merge_schemas(batches: &[RecordBatch]) -> Result<Schema, String> {
         use std::collections::HashMap;
-        
+
         let mut field_map: HashMap<String, Field> = HashMap::new();
-        
+
         for batch in batches {
             for field in batch.schema().fields() {
                 let name = field.name().clone();
@@ -113,10 +112,10 @@ impl ParquetWriter {
                 }
             }
         }
-        
+
         // Maintain field order: timestamp, measurement, tags (sorted), fields (sorted)
         let mut fields = Vec::new();
-        
+
         // Add in priority order
         if let Some(f) = field_map.remove("timestamp") {
             fields.push(f);
@@ -124,14 +123,14 @@ impl ParquetWriter {
         if let Some(f) = field_map.remove("measurement") {
             fields.push(f);
         }
-        
+
         // Add remaining fields in sorted order
         let mut remaining: Vec<_> = field_map.into_iter().collect();
         remaining.sort_by(|a, b| a.0.cmp(&b.0));
         for (_, field) in remaining {
             fields.push(field);
         }
-        
+
         Ok(Schema::new(fields))
     }
 
@@ -141,12 +140,12 @@ impl ParquetWriter {
         target_schema: &Arc<Schema>,
     ) -> Result<RecordBatch, String> {
         use arrow::array::new_null_array;
-        
+
         let mut arrays: Vec<ArrayRef> = Vec::new();
-        
+
         for target_field in target_schema.fields() {
             let field_name = target_field.name();
-            
+
             // Check if field exists in source batch
             if let Some(column) = batch.column_by_name(field_name) {
                 arrays.push(column.clone());
@@ -156,7 +155,7 @@ impl ParquetWriter {
                 arrays.push(null_array);
             }
         }
-        
+
         RecordBatch::try_new(target_schema.clone(), arrays)
             .map_err(|e| format!("Failed to create adapted batch: {}", e))
     }
@@ -240,6 +239,7 @@ impl ParquetWriter {
         Ok(Schema::new(fields))
     }
 
+    #[allow(dead_code)]
     fn points_to_record_batch(
         &self,
         points: &[Point],
