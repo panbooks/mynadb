@@ -26,9 +26,9 @@ impl ParquetWriter {
         }
     }
 
-    /// Get measurement directory path
-    fn get_measurement_path(&self, db_name: &str, measurement: &str) -> PathBuf {
-        Path::new(&self.data_dir).join(db_name).join(measurement)
+    /// Get table directory path: data_dir/catalog/schema/table/
+    fn get_table_path(&self, catalog: &str, schema: &str, table: &str) -> PathBuf {
+        Path::new(&self.data_dir).join(catalog).join(schema).join(table)
     }
 
     /// Generate a leveled parquet filename
@@ -38,37 +38,48 @@ impl ParquetWriter {
 
     pub fn write_batches(
         &self,
-        db_name: &str,
-        measurement: &str,
+        catalog: &str,
+        schema: &str,
+        table: &str,
         batches: Vec<RecordBatch>,
     ) -> Result<String, String> {
         if batches.is_empty() {
             return Err("No batches to write".to_string());
         }
 
-        // Create directory structure: data/db/measurement/
-        let measurement_path = self.get_measurement_path(db_name, measurement);
-        create_dir_all(&measurement_path)
-            .map_err(|e| format!("Failed to create measurement directory: {}", e))?;
+        // Create directory structure: data/catalog/schema/table/
+        let table_path = self.get_table_path(catalog, schema, table);
+        create_dir_all(&table_path)
+            .map_err(|e| format!("Failed to create table directory: {}", e))?;
 
         // Generate filename with L0 prefix (Level 0 - raw files)
         let timestamp = chrono::Utc::now().timestamp_millis();
-        let filename = measurement_path.join(Self::generate_filename(RAW_FILE_LEVEL, timestamp));
+        let filename = table_path.join(Self::generate_filename(RAW_FILE_LEVEL, timestamp));
 
-        // Get schema from first batch
-        let schema = batches[0].schema();
+        // Merge schemas from all batches to create unified schema
+        let merged_schema = Self::merge_schemas(&batches)?;
+        let schema_ref = Arc::new(merged_schema);
 
         // Write to Parquet
         let file = File::create(&filename).map_err(|e| format!("Failed to create file: {}", e))?;
         let props = WriterProperties::builder().build();
-        let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
+        let mut writer = ArrowWriter::try_new(file, schema_ref.clone(), Some(props))
             .map_err(|e| format!("Failed to create writer: {}", e))?;
 
-        // Write all batches
+        // Write all batches (may need to be adapted to merged schema)
         for batch in batches {
-            writer
-                .write(&batch)
-                .map_err(|e| format!("Failed to write batch: {}", e))?;
+            // If batch schema matches merged schema, write directly
+            if batch.schema() == schema_ref {
+                writer
+                    .write(&batch)
+                    .map_err(|e| format!("Failed to write batch: {}", e))?;
+            } else {
+                // Adapt batch to merged schema
+                let adapted = Self::adapt_batch_to_schema(&batch, &schema_ref)?;
+                writer
+                    .write(&adapted)
+                    .map_err(|e| format!("Failed to write adapted batch: {}", e))?;
+            }
         }
 
         writer
@@ -78,28 +89,101 @@ impl ParquetWriter {
         Ok(filename.to_string_lossy().to_string())
     }
 
+    /// Merge schemas from multiple batches, keeping all unique fields
+    fn merge_schemas(batches: &[RecordBatch]) -> Result<Schema, String> {
+        use std::collections::HashMap;
+        
+        let mut field_map: HashMap<String, Field> = HashMap::new();
+        
+        for batch in batches {
+            for field in batch.schema().fields() {
+                let name = field.name().clone();
+                if let Some(existing) = field_map.get(&name) {
+                    // Check type compatibility
+                    if existing.data_type() != field.data_type() {
+                        return Err(format!(
+                            "Incompatible types for field '{}': {:?} vs {:?}",
+                            name,
+                            existing.data_type(),
+                            field.data_type()
+                        ));
+                    }
+                } else {
+                    field_map.insert(name, field.as_ref().clone());
+                }
+            }
+        }
+        
+        // Maintain field order: timestamp, measurement, tags (sorted), fields (sorted)
+        let mut fields = Vec::new();
+        
+        // Add in priority order
+        if let Some(f) = field_map.remove("timestamp") {
+            fields.push(f);
+        }
+        if let Some(f) = field_map.remove("measurement") {
+            fields.push(f);
+        }
+        
+        // Add remaining fields in sorted order
+        let mut remaining: Vec<_> = field_map.into_iter().collect();
+        remaining.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, field) in remaining {
+            fields.push(field);
+        }
+        
+        Ok(Schema::new(fields))
+    }
+
+    /// Adapt a batch to match a target schema
+    fn adapt_batch_to_schema(
+        batch: &RecordBatch,
+        target_schema: &Arc<Schema>,
+    ) -> Result<RecordBatch, String> {
+        use arrow::array::new_null_array;
+        
+        let mut arrays: Vec<ArrayRef> = Vec::new();
+        
+        for target_field in target_schema.fields() {
+            let field_name = target_field.name();
+            
+            // Check if field exists in source batch
+            if let Some(column) = batch.column_by_name(field_name) {
+                arrays.push(column.clone());
+            } else {
+                // Field doesn't exist, create null array
+                let null_array = new_null_array(target_field.data_type(), batch.num_rows());
+                arrays.push(null_array);
+            }
+        }
+        
+        RecordBatch::try_new(target_schema.clone(), arrays)
+            .map_err(|e| format!("Failed to create adapted batch: {}", e))
+    }
+
     pub fn write_points(
         &self,
-        db_name: &str,
-        measurement: &str,
+        catalog: &str,
+        schema: &str,
+        table: &str,
         points: Vec<Point>,
     ) -> Result<String, String> {
         if points.is_empty() {
             return Err("No points to write".to_string());
         }
 
-        // Create directory structure: data/db/measurement/
-        let measurement_path = self.get_measurement_path(db_name, measurement);
-        create_dir_all(&measurement_path)
-            .map_err(|e| format!("Failed to create measurement directory: {}", e))?;
+        // Create directory structure: data/catalog/schema/table/
+        let table_path = self.get_table_path(catalog, schema, table);
+        create_dir_all(&table_path)
+            .map_err(|e| format!("Failed to create table directory: {}", e))?;
 
         // Generate filename with L0 prefix (Level 0 - raw files)
         let timestamp = chrono::Utc::now().timestamp_millis();
-        let filename = measurement_path.join(Self::generate_filename(RAW_FILE_LEVEL, timestamp));
+        let filename = table_path.join(Self::generate_filename(RAW_FILE_LEVEL, timestamp));
 
         // Build schema dynamically from first point
-        let schema = self.build_schema(&points[0])?;
-        let schema_ref = Arc::new(schema);
+        let arrow_schema = self.build_schema(&points[0])?;
+        let schema_ref = Arc::new(arrow_schema);
 
         // Create RecordBatch
         let batch = self.points_to_record_batch(&points, schema_ref.clone())?;
