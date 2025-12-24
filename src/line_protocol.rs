@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone)]
 pub struct Point {
@@ -6,6 +7,7 @@ pub struct Point {
     pub tags: HashMap<String, String>,
     pub fields: HashMap<String, FieldValue>,
     pub timestamp: Option<i64>,
+    pub date: i32,  // Date32 type: days since Unix epoch (1970-01-01)
 }
 
 #[derive(Debug, Clone)]
@@ -45,11 +47,15 @@ pub fn parse_line_protocol(line: &str) -> Result<Point, String> {
         None
     };
 
+    // Compute date from timestamp (Date32: days since Unix epoch)
+    let date = compute_date_from_timestamp(timestamp);
+
     Ok(Point {
         measurement,
         tags,
         fields,
         timestamp,
+        date,
     })
 }
 
@@ -120,6 +126,33 @@ fn parse_field_value(value: &str) -> Result<FieldValue, String> {
         .parse::<f64>()
         .map(FieldValue::Float)
         .map_err(|e| format!("Invalid field value: {}", e))
+}
+
+/// Convert timestamp (nanoseconds) to Date32 (days since Unix epoch)
+fn compute_date_from_timestamp(timestamp: Option<i64>) -> i32 {
+    let dt = if let Some(ts_nanos) = timestamp {
+        DateTime::from_timestamp(ts_nanos / 1_000_000_000, (ts_nanos % 1_000_000_000) as u32)
+            .unwrap_or_else(|| Utc::now())
+    } else {
+        Utc::now()
+    };
+    
+    // Calculate days since Unix epoch (1970-01-01)
+    let epoch = DateTime::from_timestamp(0, 0).unwrap();
+    let duration = dt.signed_duration_since(epoch);
+    duration.num_days() as i32
+}
+
+/// Format Date32 value as YYYY-MM-DD string for directory names
+pub fn format_date32_as_string(date32: i32) -> String {
+    let epoch = DateTime::from_timestamp(0, 0).unwrap();
+    let date = epoch + chrono::Duration::days(date32 as i64);
+    date.format("%Y-%m-%d").to_string()
+}
+
+/// Format Date32 value as Hive partition format: date=YYYY-MM-DD
+pub fn format_date32_as_partition(date32: i32) -> String {
+    format!("date={}", format_date32_as_string(date32))
 }
 
 pub fn parse_multiple_lines(data: &str) -> Vec<Point> {

@@ -40,10 +40,10 @@ impl QueryEngine {
     /// Ensure schema exists in catalog, create if needed
     async fn ensure_schema_in_catalog(&self, catalog_name: &str, schema_name: &str) -> Result<(), String> {
         self.ensure_catalog(catalog_name).await?;
-        
+
         let catalog = self.ctx.catalog(catalog_name)
             .ok_or_else(|| format!("Catalog '{}' not found", catalog_name))?;
-        
+
         if catalog.schema(schema_name).is_none() {
             let schema = Arc::new(MemorySchemaProvider::new());
             catalog.register_schema(schema_name, schema)
@@ -53,7 +53,7 @@ impl QueryEngine {
         Ok(())
     }
 
-    /// Register a table in catalog.schema.table format
+    /// Register a table in catalog.schema.table format with partition support
     pub async fn register_table(
         &self,
         catalog_name: &str,
@@ -80,13 +80,34 @@ impl QueryEngine {
             }
         }
 
-        // Use proper TableReference with catalog.schema.table format
-        let table_ref = TableReference::full(catalog_name, schema_name, table_name);
-
-        self.ctx
-            .register_parquet(table_ref, &table_path, ParquetReadOptions::default())
-            .await
-            .map_err(|e| format!("Failed to register table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
+        // Check if table has Hive-style partitions
+        let partitions = self.discover_table_partitions(&table_path)?;
+        
+        if !partitions.is_empty() {
+            // Use CREATE EXTERNAL TABLE with PARTITIONED BY for Hive partitions
+            let create_sql = format!(
+                "CREATE EXTERNAL TABLE {}.{}.{} \
+                 STORED AS PARQUET \
+                 PARTITIONED BY (date) \
+                 LOCATION '{}'",
+                catalog_name, schema_name, table_name, table_path
+            );
+            
+            self.ctx.sql(&create_sql).await
+                .map_err(|e| format!("Failed to create partitioned table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
+            
+            debug!("Registered partitioned table: {}.{}.{} with {} partitions", 
+                   catalog_name, schema_name, table_name, partitions.len());
+        } else {
+            // No partitions, use standard registration
+            let table_ref = TableReference::full(catalog_name, schema_name, table_name);
+            self.ctx
+                .register_parquet(table_ref, &table_path, ParquetReadOptions::default())
+                .await
+                .map_err(|e| format!("Failed to register table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
+            
+            debug!("Registered non-partitioned table: {}.{}.{}", catalog_name, schema_name, table_name);
+        }
 
         // Track registration
         let mut catalogs = self.registered_catalogs.write().await;
@@ -94,8 +115,47 @@ impl QueryEngine {
             .or_insert_with(HashSet::new)
             .insert(schema_name.to_string());
 
-        debug!("Registered table: {}.{}.{}", catalog_name, schema_name, table_name);
         Ok(())
+    }
+
+    /// Discover date partitions in a table directory
+    fn discover_table_partitions(&self, table_path: &str) -> Result<Vec<String>, String> {
+        let path = std::path::Path::new(table_path);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let entries = std::fs::read_dir(path)
+            .map_err(|e| format!("Failed to read table directory: {}", e))?;
+
+        let mut partitions = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                if let Some(dir_name) = path.file_name().and_then(|s| s.to_str()) {
+                    // Check for Hive-style partition format: date=YYYY-MM-DD
+                    if dir_name.starts_with("date=") {
+                        partitions.push(dir_name.to_string());
+                    }
+                }
+            }
+        }
+
+        partitions.sort();
+        Ok(partitions)
+    }
+
+    /// List all partitions for a specific table
+    pub async fn list_table_partitions(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+    ) -> Result<Vec<String>, String> {
+        let table_path = format!("{}/{}/{}/{}", self.data_dir, catalog_name, schema_name, table_name);
+        self.discover_table_partitions(&table_path)
     }
 
     /// Auto-discover and register all tables in catalog.schema from disk
@@ -379,7 +439,7 @@ impl QueryEngine {
         index: usize,
     ) -> Result<serde_json::Value, String> {
         use datafusion::arrow::array::*;
-        use datafusion::arrow::datatypes::DataType;
+        use datafusion::arrow::datatypes::{DataType, UInt16Type};
 
         if array.is_null(index) {
             return Ok(serde_json::Value::Null);
@@ -416,6 +476,19 @@ impl QueryEngine {
                     .downcast_ref::<TimestampNanosecondArray>()
                     .unwrap();
                 Ok(serde_json::json!(arr.value(index)))
+            }
+            DataType::Dictionary(_, value_type) => {
+                // Handle dictionary-encoded strings (used for partition columns)
+                match value_type.as_ref() {
+                    DataType::Utf8 => {
+                        let dict_array = array.as_any().downcast_ref::<DictionaryArray<UInt16Type>>().unwrap();
+                        let keys = dict_array.keys();
+                        let key = keys.value(index);
+                        let values = dict_array.values().as_any().downcast_ref::<StringArray>().unwrap();
+                        Ok(serde_json::json!(values.value(key as usize)))
+                    }
+                    _ => Ok(serde_json::json!(format!("Unsupported dictionary value type: {:?}", value_type))),
+                }
             }
             _ => Ok(serde_json::json!(format!("Unsupported type: {:?}", array.data_type()))),
         }

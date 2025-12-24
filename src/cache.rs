@@ -1,4 +1,4 @@
-use crate::line_protocol::Point;
+use crate::line_protocol::{Point, format_date32_as_partition};
 use crate::parquet_writer::ParquetWriter;
 use arrow::array::{
     Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
@@ -13,14 +13,13 @@ use tracing::{info, error, debug};
 const DEFAULT_SCHEMA: &str = "default";
 
 /// Cache key: (catalog/database, schema/service, table/measurement)
-type CacheKey = (String, String, String);
+type CacheKey = (String, String, String, i32);
 
 #[derive(Clone)]
 pub struct DataCache {
     // Store RecordBatches instead of Points for better performance
     cache: Arc<Mutex<HashMap<CacheKey, Vec<RecordBatch>>>>,
     writer: Arc<ParquetWriter>,
-    data_dir: String,
 }
 
 impl DataCache {
@@ -31,7 +30,6 @@ impl DataCache {
         DataCache {
             cache,
             writer,
-            data_dir: data_dir.to_string(),
         }
     }
 
@@ -42,7 +40,7 @@ impl DataCache {
             return;
         }
 
-        let key = (catalog.to_string(), schema.to_string(), table.to_string());
+        let key = (catalog.to_string(), schema.to_string(), table.to_string(), points[0].date);
 
         // Convert points to RecordBatch
         match Self::points_to_record_batch(&points) {
@@ -204,18 +202,19 @@ impl DataCache {
         let mut files_written = 0;
         let mut errors = Vec::new();
 
-        for ((catalog, schema, table), batches) in cache.drain() {
+        for ((catalog, schema, table, date), batches) in cache.drain() {
             let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-            debug!("Writing {} rows for {}.{}.{}", total_rows, catalog, schema, table);
+            let date_partition = format_date32_as_partition(date);
+            debug!("Writing {} rows for {}.{}.{}/{}", total_rows, catalog, schema, table, date_partition);
 
-            match self.writer.write_batches(&catalog, &schema, &table, batches) {
+            match self.writer.write_batches_partitioned(&catalog, &schema, &table, date, batches) {
                 Ok(filename) => {
                     info!("Written to: {}", filename);
                     files_written += 1;
                 }
                 Err(e) => {
-                    error!("Error writing {}.{}.{}: {}", catalog, schema, table, e);
-                    errors.push(format!("{}.{}.{}: {}", catalog, schema, table, e));
+                    error!("Error writing {}.{}.{}/{}: {}", catalog, schema, table, date_partition, e);
+                    errors.push(format!("{}.{}.{}/{}: {}", catalog, schema, table, date_partition, e));
                 }
             }
         }
