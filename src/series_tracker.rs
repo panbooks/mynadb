@@ -11,10 +11,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 
-// System directory and file constants
-const SYSTEM_DIR: &str = "_system";
-const SERIES_STATS_DIR: &str = "series_stats";
-const SERIES_STATS_FILE_EXT: &str = "parquet";
+// System catalog/schema constants (catalog.schema.table format)
+const SYSTEM_CATALOG: &str = "_system";
+const SERIES_STATS_SCHEMA: &str = "series_stats";
 const MONITOR_SERVICE_TAG: &str = "service";
 const DEFAULT_SERVICE_NAME: &str = "unknown";
 
@@ -37,17 +36,50 @@ pub struct SeriesTracker {
 }
 
 impl SeriesTracker {
-    /// Get the series stats directory path
-    fn get_stats_dir(&self) -> PathBuf {
+    /// Get the series stats schema directory path (_system/series_stats/)
+    fn get_stats_schema_dir(&self) -> PathBuf {
         Path::new(&self.data_dir)
-            .join(SYSTEM_DIR)
-            .join(SERIES_STATS_DIR)
+            .join(SYSTEM_CATALOG)
+            .join(SERIES_STATS_SCHEMA)
     }
 
-    /// Get the series stats file path for a database
-    fn get_stats_file_path(&self, db: &str) -> PathBuf {
-        self.get_stats_dir()
-            .join(format!("{}.{}", db, SERIES_STATS_FILE_EXT))
+    /// Get the table directory path for a database (_system/series_stats/{db}/)
+    fn get_table_dir(&self, db: &str) -> PathBuf {
+        self.get_stats_schema_dir().join(db)
+    }
+
+    /// Get the parquet file path for a database table
+    /// Format: _system/series_stats/{db}/L0_{timestamp}.parquet
+    fn get_parquet_file_path(&self, db: &str) -> PathBuf {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        self.get_table_dir(db)
+            .join(format!("L0_{}.parquet", timestamp))
+    }
+    
+    /// Get all parquet files for a database table
+    fn get_all_parquet_files(&self, db: &str) -> Result<Vec<PathBuf>, String> {
+        let table_dir = self.get_table_dir(db);
+        
+        if !table_dir.exists() {
+            return Ok(Vec::new());
+        }
+        
+        let entries = std::fs::read_dir(&table_dir)
+            .map_err(|e| format!("Failed to read table directory: {}", e))?;
+        
+        let mut files = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("parquet") {
+                files.push(path);
+            }
+        }
+        
+        files.sort();
+        Ok(files)
     }
 }
 
@@ -67,15 +99,24 @@ impl SeriesTracker {
     
     /// Clean up temporary files left from previous crashes
     fn cleanup_temp_files(&self) {
-        let stats_dir = self.get_stats_dir();
-        if let Ok(entries) = std::fs::read_dir(&stats_dir) {
+        let stats_schema_dir = self.get_stats_schema_dir();
+        
+        // Clean up temp files in each table directory
+        if let Ok(entries) = std::fs::read_dir(&stats_schema_dir) {
             for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.ends_with(".tmp") {
-                        if let Err(e) = std::fs::remove_file(entry.path()) {
-                            eprintln!("⚠️  Failed to cleanup temp file '{}': {}", entry.path().display(), e);
-                        } else {
-                            println!("🧹 Cleaned up leftover temp file: {}", name);
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Ok(files) = std::fs::read_dir(&path) {
+                        for file_entry in files.flatten() {
+                            if let Some(name) = file_entry.file_name().to_str() {
+                                if name.ends_with(".tmp") {
+                                    if let Err(e) = std::fs::remove_file(file_entry.path()) {
+                                        eprintln!("⚠️  Failed to cleanup temp file '{}': {}", file_entry.path().display(), e);
+                                    } else {
+                                        println!("🧹 Cleaned up leftover temp file: {}", name);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -222,13 +263,13 @@ impl SeriesTracker {
         Ok(flushed_count)
     }
     
-    /// Flush pending writes for a specific database (batch write)
+    /// Flush pending writes for a specific database (append-only write to new parquet file)
     async fn flush_database(&self, db: &str, new_records: HashSet<SeriesRecord>) -> Result<(), String> {
-        let stats_dir = self.get_stats_dir();
-        std::fs::create_dir_all(&stats_dir)
-            .map_err(|e| format!("Failed to create stats directory: {}", e))?;
+        let table_dir = self.get_table_dir(db);
+        std::fs::create_dir_all(&table_dir)
+            .map_err(|e| format!("Failed to create table directory: {}", e))?;
 
-        let file_path = self.get_stats_file_path(db);
+        let file_path = self.get_parquet_file_path(db);
         
         let schema = Arc::new(Schema::new(vec![
             Field::new("service", DataType::Utf8, false),
@@ -236,80 +277,18 @@ impl SeriesTracker {
             Field::new("hash", DataType::Int64, false),
         ]));
 
-        // Collect existing data if file exists
+        // Convert new records directly to arrays (append-only, no merge)
         let mut services = Vec::new();
         let mut metrics = Vec::new();
         let mut hashes = Vec::new();
 
-        if file_path.exists() && std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0) > 0 {
-            use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-            
-            match File::open(&file_path) {
-                Ok(read_file) => {
-                    match ParquetRecordBatchReaderBuilder::try_new(read_file) {
-                        Ok(builder) => {
-                            match builder.build() {
-                                Ok(mut reader) => {
-                                    while let Some(Ok(batch)) = reader.next() {
-                                        let service_col = batch
-                                            .column(0)
-                                            .as_any()
-                                            .downcast_ref::<StringArray>()
-                                            .unwrap();
-                                        let metric_col = batch
-                                            .column(1)
-                                            .as_any()
-                                            .downcast_ref::<StringArray>()
-                                            .unwrap();
-                                        let hash_col = batch
-                                            .column(2)
-                                            .as_any()
-                                            .downcast_ref::<Int64Array>()
-                                            .unwrap();
-
-                                        for i in 0..batch.num_rows() {
-                                            services.push(service_col.value(i).to_string());
-                                            metrics.push(metric_col.value(i).to_string());
-                                            hashes.push(hash_col.value(i));
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("⚠️  Corrupted Parquet file detected at '{}': {}", file_path.display(), e);
-                                    eprintln!("   Deleting corrupted file and recreating...");
-                                    if let Err(del_err) = std::fs::remove_file(&file_path) {
-                                        eprintln!("   Failed to delete corrupted file: {}", del_err);
-                                    } else {
-                                        eprintln!("   ✓ Corrupted file deleted successfully");
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("⚠️  Corrupted Parquet file detected at '{}': {}", file_path.display(), e);
-                            eprintln!("   Deleting corrupted file and recreating...");
-                            if let Err(del_err) = std::fs::remove_file(&file_path) {
-                                eprintln!("   Failed to delete corrupted file: {}", del_err);
-                            } else {
-                                eprintln!("   ✓ Corrupted file deleted successfully");
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    return Err(format!("Failed to open existing file: {}", e));
-                }
-            }
-        }
-
-        // Add new records (batch)
         for record in new_records {
             services.push(record.service);
             metrics.push(record.metric);
             hashes.push(record.hash);
         }
 
-        // Create arrays from all data
+        // Create arrays from new data
         let service_array = StringArray::from(services);
         let metric_array = StringArray::from(metrics);
         let hash_array = Int64Array::from(hashes);
@@ -328,12 +307,6 @@ impl SeriesTracker {
         let temp_file_path = file_path.parent()
             .ok_or("Invalid file path")?
             .join(format!("{}.tmp", file_path.file_name().unwrap().to_string_lossy()));
-        
-        // Ensure directory exists before creating temp file
-        if let Some(parent) = temp_file_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create parent directory: {}", e))?;
-        }
         
         let file = File::create(&temp_file_path)
             .map_err(|e| format!("Failed to create temp file '{}': {}", temp_file_path.display(), e))?;
@@ -360,77 +333,82 @@ impl SeriesTracker {
 
     /// Get series count statistics grouped by service
     pub async fn get_series_stats(&self, db: &str) -> Result<HashMap<String, SeriesStats>, String> {
-        let file_path = self.get_stats_file_path(db);
+        let parquet_files = self.get_all_parquet_files(db)?;
 
-        if !file_path.exists() || std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0) == 0 {
+        if parquet_files.is_empty() {
             return Ok(HashMap::new());
         }
 
-        // Read the Parquet file
+        // Read all Parquet files in the table directory
         use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-        use std::fs::File;
-
-        let file = File::open(&file_path)
-            .map_err(|e| format!("Failed to open stats file: {}", e))?;
-
-        let builder = match ParquetRecordBatchReaderBuilder::try_new(file) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("⚠️  Corrupted stats file detected at '{}': {}", file_path.display(), e);
-                eprintln!("   Deleting corrupted file and recreating...");
-                if let Err(del_err) = std::fs::remove_file(&file_path) {
-                    eprintln!("   Failed to delete corrupted file: {}", del_err);
-                } else {
-                    eprintln!("   ✓ Corrupted file deleted successfully");
-                }
-                return Ok(HashMap::new());
-            }
-        };
-        
-        let mut reader = match builder.build() {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("⚠️  Corrupted stats file detected at '{}': {}", file_path.display(), e);
-                eprintln!("   Deleting corrupted file and recreating...");
-                if let Err(del_err) = std::fs::remove_file(&file_path) {
-                    eprintln!("   Failed to delete corrupted file: {}", del_err);
-                } else {
-                    eprintln!("   ✓ Corrupted file deleted successfully");
-                }
-                return Ok(HashMap::new());
-            }
-        };
 
         let mut stats: HashMap<String, HashMap<String, HashSet<i64>>> = HashMap::new();
 
-        while let Some(Ok(batch)) = reader.next() {
-            let service_col = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let metric_col = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let hash_col = batch
-                .column(2)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
+        for file_path in parquet_files {
+            if std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0) == 0 {
+                continue;
+            }
 
-            for i in 0..batch.num_rows() {
-                let service = service_col.value(i).to_string();
-                let metric = metric_col.value(i).to_string();
-                let hash = hash_col.value(i);
+            let file = File::open(&file_path)
+                .map_err(|e| format!("Failed to open stats file: {}", e))?;
 
-                stats
-                    .entry(service)
-                    .or_insert_with(HashMap::new)
-                    .entry(metric)
-                    .or_insert_with(HashSet::new)
-                    .insert(hash);
+            let builder = match ParquetRecordBatchReaderBuilder::try_new(file) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("⚠️  Corrupted stats file detected at '{}': {}", file_path.display(), e);
+                    eprintln!("   Deleting corrupted file...");
+                    if let Err(del_err) = std::fs::remove_file(&file_path) {
+                        eprintln!("   Failed to delete corrupted file: {}", del_err);
+                    } else {
+                        eprintln!("   ✓ Corrupted file deleted successfully");
+                    }
+                    continue;
+                }
+            };
+            
+            let mut reader = match builder.build() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("⚠️  Corrupted stats file detected at '{}': {}", file_path.display(), e);
+                    eprintln!("   Deleting corrupted file...");
+                    if let Err(del_err) = std::fs::remove_file(&file_path) {
+                        eprintln!("   Failed to delete corrupted file: {}", del_err);
+                    } else {
+                        eprintln!("   ✓ Corrupted file deleted successfully");
+                    }
+                    continue;
+                }
+            };
+
+            while let Some(Ok(batch)) = reader.next() {
+                let service_col = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let metric_col = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let hash_col = batch
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+
+                for i in 0..batch.num_rows() {
+                    let service = service_col.value(i).to_string();
+                    let metric = metric_col.value(i).to_string();
+                    let hash = hash_col.value(i);
+
+                    stats
+                        .entry(service)
+                        .or_insert_with(HashMap::new)
+                        .entry(metric)
+                        .or_insert_with(HashSet::new)
+                        .insert(hash);
+                }
             }
         }
 
@@ -462,75 +440,85 @@ impl SeriesTracker {
 
     /// Load existing stats into cache on startup
     pub async fn load_cache(&self, db: &str) -> Result<(), String> {
-        let file_path = self.get_stats_file_path(db);
+        let parquet_files = self.get_all_parquet_files(db)?;
 
-        if !file_path.exists() || std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0) == 0 {
+        if parquet_files.is_empty() {
             return Ok(());
         }
 
         use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-        use std::fs::File;
-
-        let file = File::open(&file_path)
-            .map_err(|e| format!("Failed to open stats file: {}", e))?;
-
-        let builder = match ParquetRecordBatchReaderBuilder::try_new(file) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("⚠️  Corrupted cache file detected at '{}': {}", file_path.display(), e);
-                eprintln!("   Deleting corrupted file and recreating...");
-                if let Err(del_err) = std::fs::remove_file(&file_path) {
-                    eprintln!("   Failed to delete corrupted file: {}", del_err);
-                } else {
-                    eprintln!("   ✓ Corrupted file deleted successfully");
-                }
-                return Ok(());
-            }
-        };
-        
-        let mut reader = match builder.build() {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("⚠️  Corrupted cache file detected at '{}': {}", file_path.display(), e);
-                eprintln!("   Deleting corrupted file and recreating...");
-                if let Err(del_err) = std::fs::remove_file(&file_path) {
-                    eprintln!("   Failed to delete corrupted file: {}", del_err);
-                } else {
-                    eprintln!("   ✓ Corrupted file deleted successfully");
-                }
-                return Ok(());
-            }
-        };
 
         let mut cache = self.cache.write().await;
+        let mut loaded_count = 0;
 
-        while let Some(Ok(batch)) = reader.next() {
-            let service_col = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let metric_col = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let hash_col = batch
-                .column(2)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
+        for file_path in parquet_files {
+            if std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0) == 0 {
+                continue;
+            }
 
-            for i in 0..batch.num_rows() {
-                let service = service_col.value(i).to_string();
-                let metric = metric_col.value(i).to_string();
-                let hash = hash_col.value(i);
+            let file = File::open(&file_path)
+                .map_err(|e| format!("Failed to open stats file: {}", e))?;
 
-                cache.insert((service, metric, hash));
+            let builder = match ParquetRecordBatchReaderBuilder::try_new(file) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("⚠️  Corrupted cache file detected at '{}': {}", file_path.display(), e);
+                    eprintln!("   Deleting corrupted file...");
+                    if let Err(del_err) = std::fs::remove_file(&file_path) {
+                        eprintln!("   Failed to delete corrupted file: {}", del_err);
+                    } else {
+                        eprintln!("   ✓ Corrupted file deleted successfully");
+                    }
+                    continue;
+                }
+            };
+            
+            let mut reader = match builder.build() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("⚠️  Corrupted cache file detected at '{}': {}", file_path.display(), e);
+                    eprintln!("   Deleting corrupted file...");
+                    if let Err(del_err) = std::fs::remove_file(&file_path) {
+                        eprintln!("   Failed to delete corrupted file: {}", del_err);
+                    } else {
+                        eprintln!("   ✓ Corrupted file deleted successfully");
+                    }
+                    continue;
+                }
+            };
+
+            while let Some(Ok(batch)) = reader.next() {
+                let service_col = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let metric_col = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let hash_col = batch
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+
+                for i in 0..batch.num_rows() {
+                    let service = service_col.value(i).to_string();
+                    let metric = metric_col.value(i).to_string();
+                    let hash = hash_col.value(i);
+
+                    if cache.insert((service, metric, hash)) {
+                        loaded_count += 1;
+                    }
+                }
             }
         }
 
-        println!("📊 Loaded {} series into cache for database '{}'", cache.len(), db);
+        if loaded_count > 0 {
+            println!("📊 Loaded {} series into cache for database '{}'", loaded_count, db);
+        }
         Ok(())
     }
 }

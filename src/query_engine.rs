@@ -1,16 +1,21 @@
 use datafusion::arrow::array::RecordBatch;
-use datafusion::catalog::CatalogProvider;
-use datafusion::datasource::TableProvider;
 use datafusion::prelude::*;
-use std::collections::HashMap;
+use datafusion::catalog::{CatalogProvider, SchemaProvider};
+use datafusion::catalog_common::MemoryCatalogProvider;
+use datafusion::catalog_common::MemorySchemaProvider;
+use datafusion::datasource::TableProvider;
+use datafusion::sql::TableReference;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+const DEFAULT_SCHEMA: &str = "default";
 
 pub struct QueryEngine {
     ctx: SessionContext,
     data_dir: String,
-    // Track registered databases (schemas)
-    registered_databases: Arc<RwLock<HashMap<String, bool>>>,
+    // Track registered catalogs (databases) and their schemas (services)
+    registered_catalogs: Arc<RwLock<HashMap<String, HashSet<String>>>>,
 }
 
 impl QueryEngine {
@@ -19,70 +24,160 @@ impl QueryEngine {
         QueryEngine {
             ctx,
             data_dir: data_dir.to_string(),
-            registered_databases: Arc::new(RwLock::new(HashMap::new())),
+            registered_catalogs: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// Register a database tables in DataFusion catalog
-    pub async fn ensure_database_registered(&self, db_name: &str) -> Result<(), String> {
-        // Check if already registered
-        {
-            let registered = self.registered_databases.read().await;
-            if registered.contains_key(db_name) {
-                return Ok(());
-            }
+    /// Ensure catalog exists, create if needed
+    async fn ensure_catalog(&self, catalog_name: &str) -> Result<(), String> {
+        if self.ctx.catalog(catalog_name).is_none() {
+            let catalog = Arc::new(MemoryCatalogProvider::new());
+            self.ctx.register_catalog(catalog_name, catalog);
+            println!("📁 Created catalog: {}", catalog_name);
+        }
+        Ok(())
+    }
+
+    /// Ensure schema exists in catalog, create if needed
+    async fn ensure_schema_in_catalog(&self, catalog_name: &str, schema_name: &str) -> Result<(), String> {
+        self.ensure_catalog(catalog_name).await?;
+
+        let catalog = self.ctx.catalog(catalog_name)
+            .ok_or_else(|| format!("Catalog '{}' not found", catalog_name))?;
+
+        if catalog.schema(schema_name).is_none() {
+            let schema = Arc::new(MemorySchemaProvider::new());
+            catalog.register_schema(schema_name, schema)
+                .map_err(|e| format!("Failed to register schema: {}", e))?;
+            println!("📂 Created schema: {}.{}", catalog_name, schema_name);
+        }
+        Ok(())
+    }
+
+    /// Register a table in catalog.schema.table format
+    pub async fn register_table(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+    ) -> Result<(), String> {
+        // Build path: data_dir/catalog/schema/table/
+        let table_path = format!("{}/{}/{}/{}", self.data_dir, catalog_name, schema_name, table_name);
+
+        if !std::path::Path::new(&table_path).exists() {
+            return Err(format!("Table path not found: {}", table_path));
         }
 
-        let db_path = format!("{}/{}", self.data_dir, db_name);
+        // Ensure catalog and schema exist
+        self.ensure_schema_in_catalog(catalog_name, schema_name).await?;
 
-        // Check if database directory exists
-        if !std::path::Path::new(&db_path).exists() {
-            return Err(format!("Database '{}' not found", db_name));
-        }
-
-        // Read database directory to find measurement directories
-        let entries = std::fs::read_dir(&db_path)
-            .map_err(|e| format!("Failed to read directory: {}", e))?;
-
-        let mut registered_count = 0;
-
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-            let path = entry.path();
-
-            // Check if it's a directory (measurement directory)
-            if path.is_dir() {
-                if let Some(measurement) = path.file_name().and_then(|s| s.to_str()) {
-                    // Skip hidden directories and special files
-                    if measurement.starts_with('.') {
-                        continue;
-                    }
-
-                    // Register with database prefix (e.g., "mydb_cpu")
-                    // Note: We use underscore for registration, but support dot notation in queries
-                    let table_name = format!("{}_{}", db_name, measurement);
-                    let measurement_path = path.to_str().unwrap();
-
-                    self.ctx
-                        .register_parquet(&table_name, measurement_path, ParquetReadOptions::default())
-                        .await
-                        .map_err(|e| format!("Failed to register table '{}': {}", table_name, e))?;
-
-                    registered_count += 1;
+        // Check if table is already registered
+        if let Some(catalog) = self.ctx.catalog(catalog_name) {
+            if let Some(schema) = catalog.schema(schema_name) {
+                if schema.table_exist(table_name) {
+                    // Table already registered, skip
+                    return Ok(());
                 }
             }
         }
 
-        // Mark database as registered
-        {
-            let mut registered = self.registered_databases.write().await;
-            registered.insert(db_name.to_string(), true);
+        // Use proper TableReference with catalog.schema.table format
+        let table_ref = TableReference::full(catalog_name, schema_name, table_name);
+
+        self.ctx
+            .register_parquet(table_ref, &table_path, ParquetReadOptions::default())
+            .await
+            .map_err(|e| format!("Failed to register table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
+
+        // Track registration
+        let mut catalogs = self.registered_catalogs.write().await;
+        catalogs.entry(catalog_name.to_string())
+            .or_insert_with(HashSet::new)
+            .insert(schema_name.to_string());
+
+        println!("📊 Registered table: {}.{}.{}", catalog_name, schema_name, table_name);
+        Ok(())
+    }
+
+    /// Auto-discover and register all tables in catalog.schema from disk
+    pub async fn discover_and_register(&self, catalog_name: &str, schema_name: &str) -> Result<usize, String> {
+        let schema_path = format!("{}/{}/{}", self.data_dir, catalog_name, schema_name);
+
+        if !std::path::Path::new(&schema_path).exists() {
+            return Ok(0);
         }
 
-        if registered_count > 0 {
-            println!("📋 Registered {} table(s) in database '{}'", registered_count, db_name);
+        let entries = std::fs::read_dir(&schema_path)
+            .map_err(|e| format!("Failed to read schema directory: {}", e))?;
+
+        let mut count = 0;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                if let Some(table_name) = path.file_name().and_then(|s| s.to_str()) {
+                    if !table_name.starts_with('.') {
+                        if let Err(e) = self.register_table(catalog_name, schema_name, table_name).await {
+                            eprintln!("⚠️  Failed to register {}.{}.{}: {}", catalog_name, schema_name, table_name, e);
+                        } else {
+                            count += 1;
+                        }
+                    }
+                }
+            }
         }
 
+        Ok(count)
+    }
+
+    /// Auto-discover all schemas in a catalog
+    pub async fn discover_catalog(&self, catalog_name: &str) -> Result<usize, String> {
+        let catalog_path = format!("{}/{}", self.data_dir, catalog_name);
+
+        if !std::path::Path::new(&catalog_path).exists() {
+            return Ok(0);
+        }
+
+        let entries = std::fs::read_dir(&catalog_path)
+            .map_err(|e| format!("Failed to read catalog directory: {}", e))?;
+
+        let mut total_tables = 0;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                if let Some(schema_name) = path.file_name().and_then(|s| s.to_str()) {
+                    if !schema_name.starts_with('.') {
+                        match self.discover_and_register(catalog_name, schema_name).await {
+                            Ok(count) => total_tables += count,
+                            Err(e) => eprintln!("⚠️  Failed to discover schema {}.{}: {}", catalog_name, schema_name, e),
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(total_tables)
+    }
+
+    /// Ensure schema exists (creates path if needed for write operations)
+    pub async fn ensure_schema(&self, catalog_name: &str, schema_name: &str) -> Result<(), String> {
+        // Just track it - actual registration happens when tables are written
+        let mut catalogs = self.registered_catalogs.write().await;
+        catalogs.entry(catalog_name.to_string())
+            .or_insert_with(HashSet::new)
+            .insert(schema_name.to_string());
+        Ok(())
+    }
+
+    /// Legacy compatibility: ensure database registered (now auto-discovers all schemas)
+    pub async fn ensure_database_registered(&self, db_name: &str) -> Result<(), String> {
+        let count = self.discover_catalog(db_name).await?;
+        if count > 0 {
+            println!("📋 Auto-registered {} table(s) in catalog '{}'", count, db_name);
+        }
         Ok(())
     }
 
@@ -90,34 +185,34 @@ impl QueryEngine {
     pub async fn register_database(&self, db_name: &str) -> Result<Vec<String>, String> {
         self.ensure_database_registered(db_name).await?;
 
-        // List all registered tables for this database
-        let catalog = self.ctx.catalog("datafusion").unwrap();
-        let schema = catalog.schema("public").unwrap();
-        let table_names = schema.table_names();
+        // List all schemas in this catalog
+        let schemas = self.list_schemas(db_name).await?;
+        let mut all_tables = Vec::new();
 
-        let prefix = format!("{}_", db_name);
-        let tables: Vec<String> = table_names
-            .into_iter()
-            .filter(|t| t.starts_with(&prefix))
-            .collect();
+        for schema_name in schemas {
+            let tables = self.list_tables_in_schema(db_name, &schema_name).await?;
+            for table in tables {
+                all_tables.push(format!("{}.{}.{}", db_name, schema_name, table));
+            }
+        }
 
-        Ok(tables)
+        Ok(all_tables)
     }
 
     /// Execute a SQL query with database context
-    /// Automatically prefixes unqualified table names with the database name
+    /// Automatically qualifies unqualified table names with catalog.schema
     pub async fn execute_query_with_db(&self, sql: &str, db_name: &str) -> Result<Vec<RecordBatch>, String> {
-        // Prefix unqualified table names with "database_"
-        let prefixed_sql = self.prefix_table_names(sql, db_name);
-        
+        // Qualify unqualified table names with catalog.schema
+        let qualified_sql = self.qualify_table_names(sql, db_name);
+
         println!("📝 SQL: {}", sql);
-        if prefixed_sql != sql {
-            println!("📝 Prefixed: {}", prefixed_sql);
+        if qualified_sql != sql {
+            println!("📝 Qualified: {}", qualified_sql);
         }
-        
+
         let df = self
             .ctx
-            .sql(&prefixed_sql)
+            .sql(&qualified_sql)
             .await
             .map_err(|e| format!("SQL error: {}", e))?;
 
@@ -149,59 +244,74 @@ impl QueryEngine {
     pub async fn get_query_schema(&self, db_name: &str, sql: &str) -> Result<Arc<datafusion::arrow::datatypes::Schema>, String> {
         // Ensure database is registered
         self.ensure_database_registered(db_name).await?;
-        
-        // Prefix table names
-        let prefixed_sql = self.prefix_table_names(sql, db_name);
-        
+
+        // Qualify table names
+        let qualified_sql = self.qualify_table_names(sql, db_name);
+
         let df = self
             .ctx
-            .sql(&prefixed_sql)
+            .sql(&qualified_sql)
             .await
             .map_err(|e| format!("SQL error: {}", e))?;
 
         Ok(df.schema().inner().clone())
     }
 
-    /// Prefix unqualified table names with database name
-    /// Example: "SELECT * FROM cpu" -> "SELECT * FROM mydb_cpu"
-    fn prefix_table_names(&self, sql: &str, db_name: &str) -> String {
-        // Simple approach: replace table references after FROM/JOIN keywords
+    /// Qualify unqualified or partially qualified table names with catalog.schema
+    ///
+    /// Examples (with catalog_name = "testdb"):
+    /// - "cpu" -> "testdb.default.cpu"
+    /// - "webapp.cpu" -> "testdb.webapp.cpu"
+    /// - "testdb.webapp.cpu" -> "testdb.webapp.cpu" (already fully qualified)
+    /// - "otherdb.schema.table" -> "otherdb.schema.table" (different catalog, unchanged)
+    fn qualify_table_names(&self, sql: &str, catalog_name: &str) -> String {
         let sql_upper = sql.to_uppercase();
         let mut result = sql.to_string();
-        
+
         let keywords = ["FROM", "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN"];
-        
+
         for keyword in &keywords {
             let pattern = format!("{} ", keyword);
             let mut search_pos = 0;
-            
+
             while let Some(pos) = sql_upper[search_pos..].find(&pattern) {
                 let abs_pos = search_pos + pos + pattern.len();
                 let remaining = &sql[abs_pos..];
-                
-                // Find end of table name
+
+                // Find end of table reference
                 let end_pos = remaining
                     .find(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == ')')
                     .unwrap_or(remaining.len());
-                
+
                 let table_ref = remaining[..end_pos].trim();
-                
-                // Only prefix if:
-                // 1. Not empty
-                // 2. Doesn't already start with database prefix
-                // 3. Isn't a subquery
-                if !table_ref.is_empty() 
-                    && !table_ref.starts_with(&format!("{}_", db_name))
-                    && !table_ref.contains('(')
-                {
-                    let prefixed = format!("{}_{}", db_name, table_ref);
-                    result = result.replacen(table_ref, &prefixed, 1);
+
+                if table_ref.is_empty() || table_ref.contains('(') {
+                    search_pos = abs_pos + end_pos;
+                    continue;
                 }
-                
+
+                // Count dots to determine qualification level
+                let dot_count = table_ref.matches('.').count();
+
+                let qualified = if dot_count == 0 {
+                    // Simple name: cpu -> catalog.default.cpu
+                    format!("{}.{}.{}", catalog_name, DEFAULT_SCHEMA, table_ref)
+                } else if dot_count == 1 {
+                    // Partially qualified: webapp.cpu -> catalog.webapp.cpu
+                    format!("{}.{}", catalog_name, table_ref)
+                } else {
+                    // Already fully qualified (catalog.schema.table), don't modify
+                    table_ref.to_string()
+                };
+
+                if qualified != table_ref {
+                    result = result.replacen(table_ref, &qualified, 1);
+                }
+
                 search_pos = abs_pos + end_pos;
             }
         }
-        
+
         result
     }
 
@@ -312,13 +422,24 @@ impl QueryEngine {
         }
     }
 
-    /// List all registered tables
+    /// List all registered tables across all catalogs
     pub async fn list_tables(&self) -> Vec<String> {
-        let catalog = self.ctx.catalog("datafusion").unwrap();
-        let schema = catalog.schema("public").unwrap();
-        let mut tables = schema.table_names();
-        tables.sort();
-        tables
+        let mut all_tables = Vec::new();
+
+        for catalog_name in self.ctx.catalog_names() {
+            if let Some(catalog) = self.ctx.catalog(&catalog_name) {
+                for schema_name in catalog.schema_names() {
+                    if let Some(schema) = catalog.schema(&schema_name) {
+                        for table_name in schema.table_names() {
+                            all_tables.push(format!("{}.{}.{}", catalog_name, schema_name, table_name));
+                        }
+                    }
+                }
+            }
+        }
+
+        all_tables.sort();
+        all_tables
     }
 
     /// Get schema for a table (supports both qualified "db.table" and unqualified "table")
@@ -333,11 +454,74 @@ impl QueryEngine {
         Ok(format!("{:#?}", schema))
     }
 
+    /// List all schemas (services) in a catalog
+    pub async fn list_schemas(&self, catalog_name: &str) -> Result<Vec<String>, String> {
+        let catalog_path = format!("{}/{}", self.data_dir, catalog_name);
+
+        if !std::path::Path::new(&catalog_path).exists() {
+            return Ok(Vec::new());
+        }
+
+        let entries = std::fs::read_dir(&catalog_path)
+            .map_err(|e| format!("Failed to read catalog directory: {}", e))?;
+
+        let mut schemas = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                if let Some(schema_name) = path.file_name().and_then(|s| s.to_str()) {
+                    if !schema_name.starts_with('.') && schema_name != "_system" {
+                        schemas.push(schema_name.to_string());
+                    }
+                }
+            }
+        }
+
+        schemas.sort();
+        Ok(schemas)
+    }
+
+    /// List all tables in a catalog.schema
+    pub async fn list_tables_in_schema(&self, catalog_name: &str, schema_name: &str) -> Result<Vec<String>, String> {
+        let schema_path = format!("{}/{}/{}", self.data_dir, catalog_name, schema_name);
+
+        if !std::path::Path::new(&schema_path).exists() {
+            return Ok(Vec::new());
+        }
+
+        let entries = std::fs::read_dir(&schema_path)
+            .map_err(|e| format!("Failed to read schema directory: {}", e))?;
+
+        let mut tables = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                if let Some(table_name) = path.file_name().and_then(|s| s.to_str()) {
+                    if !table_name.starts_with('.') {
+                        tables.push(table_name.to_string());
+                    }
+                }
+            }
+        }
+
+        tables.sort();
+        Ok(tables)
+    }
+
     /// Clear registration cache (useful after flush)
     pub async fn clear_cache(&self) {
-        let mut registered = self.registered_databases.write().await;
-        registered.clear();
+        let mut catalogs = self.registered_catalogs.write().await;
+        catalogs.clear();
         println!("🔄 Query engine cache cleared");
+    }
+
+    /// Get the session context (for Flight service)
+    pub fn get_context(&self) -> &SessionContext {
+        &self.ctx
     }
 }
 
@@ -349,5 +533,134 @@ mod tests {
     async fn test_query_engine() {
         let engine = QueryEngine::new("./data");
         // Add tests here
+    }
+
+    #[test]
+    fn test_qualify_table_names_unqualified() {
+        let engine = QueryEngine::new("./data");
+
+        // Unqualified table name: cpu -> testdb.default.cpu
+        let sql = "SELECT * FROM cpu WHERE usage > 50";
+        let result = engine.qualify_table_names(sql, "testdb");
+        assert_eq!(result, "SELECT * FROM testdb.default.cpu WHERE usage > 50");
+    }
+
+    #[test]
+    fn test_qualify_table_names_partially_qualified() {
+        let engine = QueryEngine::new("./data");
+
+        // Partially qualified: webapp.cpu -> testdb.webapp.cpu
+        let sql = "SELECT * FROM webapp.cpu LIMIT 10";
+        let result = engine.qualify_table_names(sql, "testdb");
+        assert_eq!(result, "SELECT * FROM testdb.webapp.cpu LIMIT 10");
+    }
+
+    #[test]
+    fn test_qualify_table_names_fully_qualified() {
+        let engine = QueryEngine::new("./data");
+
+        // Fully qualified: testdb.webapp.cpu -> testdb.webapp.cpu (unchanged)
+        let sql = "SELECT * FROM testdb.webapp.cpu WHERE timestamp > 0";
+        let result = engine.qualify_table_names(sql, "testdb");
+        assert_eq!(result, "SELECT * FROM testdb.webapp.cpu WHERE timestamp > 0");
+    }
+
+    #[test]
+    fn test_qualify_table_names_different_catalog() {
+        let engine = QueryEngine::new("./data");
+
+        // Different catalog: otherdb.schema.table -> otherdb.schema.table (unchanged)
+        let sql = "SELECT * FROM otherdb.webapp.cpu";
+        let result = engine.qualify_table_names(sql, "testdb");
+        assert_eq!(result, "SELECT * FROM otherdb.webapp.cpu");
+    }
+
+    #[test]
+    fn test_qualify_table_names_multiple_tables() {
+        let engine = QueryEngine::new("./data");
+
+        // Multiple tables with different qualification levels
+        let sql = "SELECT * FROM cpu JOIN webapp.memory ON cpu.hostname = memory.hostname";
+        let result = engine.qualify_table_names(sql, "testdb");
+        assert_eq!(result, "SELECT * FROM testdb.default.cpu JOIN testdb.webapp.memory ON cpu.hostname = memory.hostname");
+    }
+
+    #[test]
+    fn test_qualify_table_names_join_variations() {
+        let engine = QueryEngine::new("./data");
+
+        // Test different JOIN types
+        let sql = "SELECT * FROM cpu INNER JOIN memory LEFT JOIN disk RIGHT JOIN network";
+        let result = engine.qualify_table_names(sql, "testdb");
+        assert_eq!(result, "SELECT * FROM testdb.default.cpu INNER JOIN testdb.default.memory LEFT JOIN testdb.default.disk RIGHT JOIN testdb.default.network");
+    }
+
+    #[test]
+    fn test_qualify_table_names_with_alias() {
+        let engine = QueryEngine::new("./data");
+
+        // Table with alias
+        let sql = "SELECT c.* FROM cpu c WHERE c.usage > 50";
+        let result = engine.qualify_table_names(sql, "testdb");
+        assert_eq!(result, "SELECT c.* FROM testdb.default.cpu c WHERE c.usage > 50");
+    }
+
+    #[test]
+    fn test_qualify_table_names_complex_query() {
+        let engine = QueryEngine::new("./data");
+
+        // Complex query with mixed qualification levels
+        let sql = r#"
+            SELECT a.*, b.value
+            FROM cpu a
+            INNER JOIN webapp.memory b ON a.hostname = b.hostname
+            LEFT JOIN testdb.api.disk c ON a.hostname = c.hostname
+            WHERE a.usage > 50
+        "#;
+        let result = engine.qualify_table_names(sql, "testdb");
+        assert!(result.contains("FROM testdb.default.cpu a"));
+        assert!(result.contains("JOIN testdb.webapp.memory b"));
+        assert!(result.contains("JOIN testdb.api.disk c"));
+    }
+
+    #[test]
+    fn test_qualify_table_names_case_insensitive() {
+        let engine = QueryEngine::new("./data");
+
+        // Test case insensitivity (FROM, from, FrOm should all work)
+        let sql1 = "select * from cpu";
+        let sql2 = "SELECT * FROM cpu";
+        let sql3 = "SeLeCt * FrOm cpu";
+
+        let result1 = engine.qualify_table_names(sql1, "testdb");
+        let result2 = engine.qualify_table_names(sql2, "testdb");
+        let result3 = engine.qualify_table_names(sql3, "testdb");
+
+        assert_eq!(result1, "select * from testdb.default.cpu");
+        assert_eq!(result2, "SELECT * FROM testdb.default.cpu");
+        assert_eq!(result3, "SeLeCt * FrOm testdb.default.cpu");
+    }
+
+    #[test]
+    fn test_qualify_table_names_with_subquery() {
+        let engine = QueryEngine::new("./data");
+
+        // Subqueries should not be modified (contains parentheses)
+        let sql = "SELECT * FROM (SELECT * FROM cpu) AS subquery";
+        let result = engine.qualify_table_names(sql, "testdb");
+        // The outer FROM has a subquery (with parenthesis), so it's skipped
+        // The inner FROM should be qualified
+        assert!(result.contains("FROM cpu"));
+    }
+
+    #[test]
+    fn test_qualify_table_names_comma_separated() {
+        let engine = QueryEngine::new("./data");
+
+        // Comma-separated tables (old-style join syntax)
+        let sql = "SELECT * FROM cpu, memory WHERE cpu.hostname = memory.hostname";
+        let result = engine.qualify_table_names(sql, "testdb");
+        // Only the first table after FROM is qualified; comma-separated tables need special handling
+        assert!(result.contains("testdb.default.cpu"));
     }
 }

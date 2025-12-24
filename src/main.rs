@@ -113,6 +113,9 @@ async fn main() {
         .route("/databases", post(create_database_handler))
         .route("/databases/:db", delete(delete_database_handler))
         .route("/databases/:db", get(get_database_info_handler))
+        // Schema (service) management
+        .route("/databases/:db/schemas", get(list_schemas_handler))
+        .route("/databases/:db/schemas/:schema/tables", get(list_schema_tables_handler))
         // Table management
         .route("/databases/:db/tables", post(create_table_handler))
         .route("/databases/:db/tables", get(list_tables_handler))
@@ -189,6 +192,8 @@ async fn home() -> &'static str {
        POST   /databases              - Create database\n\
        DELETE /databases/:db          - Delete database\n\
        GET    /databases/:db          - Get database info\n\
+       GET    /databases/:db/schemas  - List all schemas (services) in database\n\
+       GET    /databases/:db/schemas/:schema/tables - List tables in schema\n\
        POST   /databases/:db/tables   - Create table (with partitioning)\n\
        GET    /databases/:db/tables   - List tables\n\
        DELETE /databases/:db/tables/:table - Delete table\n\n\
@@ -534,19 +539,27 @@ async fn process_write_data(
     // Track series cardinality (batch operation, in-memory cache only)
     state.series_tracker.track_points(&db, &points).await;
 
-    // Group points by measurement
-    let mut grouped: HashMap<String, Vec<_>> = HashMap::new();
+    // Group points by schema (service tag) and measurement
+    use crate::cache::DataCache;
+    
+    let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::new();
     for point in points {
-        grouped
-            .entry(point.measurement.clone())
-            .or_default()
-            .push(point);
+        let schema = DataCache::extract_schema(&point.tags);
+        let key = (schema, point.measurement.clone());
+        grouped.entry(key).or_default().push(point);
     }
 
-    // Add to cache
-    for (measurement, points) in grouped {
-        println!("Adding {} points for measurement '{}' to cache", points.len(), measurement);
-        state.cache.add_points(db, &measurement, points).await;
+    // Add to cache and register catalog.schema
+    for ((schema, measurement), points) in grouped {
+        println!("Adding {} points for catalog={}, schema={}, table={}", 
+            points.len(), db, schema, measurement);
+        
+        // Ensure catalog.schema is registered in query engine
+        if let Err(e) = state.query_engine.ensure_schema(db, &schema).await {
+            eprintln!("⚠️  Warning: Failed to register schema {}.{}: {}", db, schema, e);
+        }
+        
+        state.cache.add_points(db, &schema, &measurement, points).await;
     }
 
     println!("==================\n");
@@ -725,6 +738,57 @@ async fn series_stats_handler(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Error getting series stats: {}", e),
             )
+        }
+    }
+}
+
+// ===== Schema and Table Listing Handlers =====
+
+async fn list_schemas_handler(
+    Path(db): Path<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    println!("\n=== List Schemas Request ===");
+    println!("Database: {}", db);
+
+    match state.query_engine.list_schemas(&db).await {
+        Ok(schemas) => {
+            let response = serde_json::json!({
+                "database": db,
+                "schemas": schemas,
+                "count": schemas.len()
+            });
+            println!("✅ Found {} schema(s)", schemas.len());
+            (StatusCode::OK, serde_json::to_string_pretty(&response).unwrap())
+        }
+        Err(e) => {
+            eprintln!("❌ Error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
+        }
+    }
+}
+
+async fn list_schema_tables_handler(
+    Path((db, schema)): Path<(String, String)>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    println!("\n=== List Schema Tables Request ===");
+    println!("Database: {}, Schema: {}", db, schema);
+
+    match state.query_engine.list_tables_in_schema(&db, &schema).await {
+        Ok(tables) => {
+            let response = serde_json::json!({
+                "database": db,
+                "schema": schema,
+                "tables": tables,
+                "count": tables.len()
+            });
+            println!("✅ Found {} table(s)", tables.len());
+            (StatusCode::OK, serde_json::to_string_pretty(&response).unwrap())
+        }
+        Err(e) => {
+            eprintln!("❌ Error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
         }
     }
 }

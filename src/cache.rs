@@ -9,8 +9,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
 
-/// Cache key: (database, measurement)
-type CacheKey = (String, String);
+const DEFAULT_SCHEMA: &str = "default";
+
+/// Cache key: (catalog/database, schema/service, table/measurement)
+type CacheKey = (String, String, String);
 
 #[derive(Clone)]
 pub struct DataCache {
@@ -33,12 +35,13 @@ impl DataCache {
     }
 
     /// Add points to the in-memory cache as RecordBatch
-    pub async fn add_points(&self, db: &str, measurement: &str, points: Vec<Point>) {
+    /// catalog = database, schema = service, table = measurement
+    pub async fn add_points(&self, catalog: &str, schema: &str, table: &str, points: Vec<Point>) {
         if points.is_empty() {
             return;
         }
 
-        let key = (db.to_string(), measurement.to_string());
+        let key = (catalog.to_string(), schema.to_string(), table.to_string());
 
         // Convert points to RecordBatch
         match Self::points_to_record_batch(&points) {
@@ -51,7 +54,7 @@ impl DataCache {
                     .map(|batches| batches.iter().map(|b| b.num_rows()).sum::<usize>())
                     .sum();
 
-                println!("📦 Cache: {} rows across {} measurement(s)", total_rows, cache.len());
+                println!("📦 Cache: {} rows across {} table(s)", total_rows, cache.len());
             }
             Err(e) => {
                 eprintln!("❌ Failed to convert points to RecordBatch: {}", e);
@@ -200,18 +203,18 @@ impl DataCache {
         let mut files_written = 0;
         let mut errors = Vec::new();
 
-        for ((db, measurement), batches) in cache.drain() {
+        for ((catalog, schema, table), batches) in cache.drain() {
             let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-            println!("  Writing {} rows for {}/{}", total_rows, db, measurement);
+            println!("  Writing {} rows for {}.{}.{}", total_rows, catalog, schema, table);
 
-            match self.writer.write_batches(&db, &measurement, batches) {
+            match self.writer.write_batches(&catalog, &schema, &table, batches) {
                 Ok(filename) => {
                     println!("  ✅ Written to: {}", filename);
                     files_written += 1;
                 }
                 Err(e) => {
-                    eprintln!("  ❌ Error writing {}/{}: {}", db, measurement, e);
-                    errors.push(format!("{}/{}: {}", db, measurement, e));
+                    eprintln!("  ❌ Error writing {}.{}.{}: {}", catalog, schema, table, e);
+                    errors.push(format!("{}.{}.{}: {}", catalog, schema, table, e));
                 }
             }
         }
@@ -237,6 +240,21 @@ impl DataCache {
             total_rows,
             num_measurements,
         }
+    }
+
+    /// Extract schema name from service tag, default to "default"
+    /// Numeric schemas are prefixed with "svc_" to avoid SQL parser issues
+    pub fn extract_schema(tags: &HashMap<String, String>) -> String {
+        tags.get("service")
+            .map(|s| {
+                // If service value is purely numeric, prefix with "svc_"
+                if s.chars().all(|c| c.is_numeric()) {
+                    format!("svc_{}", s)
+                } else {
+                    s.clone()
+                }
+            })
+            .unwrap_or_else(|| DEFAULT_SCHEMA.to_string())
     }
 
     /// Start background flush task that runs every interval
