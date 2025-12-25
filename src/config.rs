@@ -61,9 +61,13 @@ pub struct CacheConfig {
 /// Compaction configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactionConfig {
-    /// Minimum number of files to trigger compaction
+    /// Minimum number of L0 files to trigger minor compaction
     #[serde(default = "default_compaction_min_files")]
     pub min_files: usize,
+
+    /// Minimum number of files at L1+ to trigger major compaction
+    #[serde(default = "default_compaction_major_min_files")]
+    pub major_min_files: usize,
 
     /// Maximum file size in MB before compaction
     #[serde(default = "default_compaction_max_file_size_mb")]
@@ -159,6 +163,10 @@ fn default_compaction_min_files() -> usize {
     5
 }
 
+fn default_compaction_major_min_files() -> usize {
+    4
+}
+
 fn default_compaction_max_file_size_mb() -> u64 {
     100
 }
@@ -168,7 +176,7 @@ fn default_compaction_target_file_size_mb() -> u64 {
 }
 
 fn default_compaction_max_level() -> u32 {
-    5
+    4 // L0, L1, L2, L3, L4
 }
 
 fn default_compaction_interval_secs() -> u64 {
@@ -226,6 +234,7 @@ impl Default for Config {
             },
             compaction: CompactionConfig {
                 min_files: default_compaction_min_files(),
+                major_min_files: default_compaction_major_min_files(),
                 max_file_size_mb: default_compaction_max_file_size_mb(),
                 target_file_size_mb: default_compaction_target_file_size_mb(),
                 max_level: default_compaction_max_level(),

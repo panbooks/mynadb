@@ -24,8 +24,11 @@ flush_interval_secs = 30
 max_size_mb = 1024
 
 [compaction]
-# Minimum number of files to trigger compaction
+# Minimum number of L0 files to trigger minor compaction (L0 → L1)
 min_files = 5
+
+# Minimum number of files at L1+ to trigger major compaction (L1 → L2, L2 → L3, etc.)
+major_min_files = 4
 
 # Maximum file size in MB before compaction
 max_file_size_mb = 100
@@ -33,8 +36,11 @@ max_file_size_mb = 100
 # Target file size in MB after compaction
 target_file_size_mb = 500
 
-# Maximum compaction level
-max_level = 5
+# Maximum compaction level (0-4: L0, L1, L2, L3, L4)
+max_level = 4
+
+# Background compaction interval in seconds (0 = disabled)
+interval_secs = 60
 
 [series_tracker]
 # Background flush interval for series tracking (seconds)
