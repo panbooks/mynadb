@@ -382,19 +382,6 @@ impl Compactor {
         }))
     }
 
-    /// Compact a specific table (legacy method - now compacts first non-partitioned files or first partition)
-    pub async fn compact_table(
-        &self,
-        catalog: &str,
-        schema: &str,
-        table: &str,
-        config: &CompactionConfig,
-    ) -> Result<Option<CompactionResult>, String> {
-        // For backward compatibility, compact all partitions
-        let results = self.compact_table_all_partitions(catalog, schema, table, config).await?;
-        Ok(results.into_iter().next())
-    }
-
     /// List all parquet files with level information
     fn list_parquet_file_infos(&self, dir: &str) -> Result<Vec<ParquetFileInfo>, String> {
         let entries = fs::read_dir(dir)

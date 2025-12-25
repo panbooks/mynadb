@@ -147,17 +147,6 @@ impl QueryEngine {
         Ok(partitions)
     }
 
-    /// List all partitions for a specific table
-    pub async fn list_table_partitions(
-        &self,
-        catalog_name: &str,
-        schema_name: &str,
-        table_name: &str,
-    ) -> Result<Vec<String>, String> {
-        let table_path = format!("{}/{}/{}/{}", self.data_dir, catalog_name, schema_name, table_name);
-        self.discover_table_partitions(&table_path)
-    }
-
     /// Auto-discover and register all tables in catalog.schema from disk
     pub async fn discover_and_register(&self, catalog_name: &str, schema_name: &str) -> Result<usize, String> {
         let schema_path = format!("{}/{}/{}", self.data_dir, catalog_name, schema_name);
@@ -240,24 +229,6 @@ impl QueryEngine {
         Ok(())
     }
 
-    /// Register all Parquet files in a database as tables
-    pub async fn register_database(&self, db_name: &str) -> Result<Vec<String>, String> {
-        self.ensure_database_registered(db_name).await?;
-
-        // List all schemas in this catalog
-        let schemas = self.list_schemas(db_name).await?;
-        let mut all_tables = Vec::new();
-
-        for schema_name in schemas {
-            let tables = self.list_tables_in_schema(db_name, &schema_name).await?;
-            for table in tables {
-                all_tables.push(format!("{}.{}.{}", db_name, schema_name, table));
-            }
-        }
-
-        Ok(all_tables)
-    }
-
     /// Execute a SQL query with database context
     /// Automatically qualifies unqualified table names with catalog.schema
     pub async fn execute_query_with_db(&self, sql: &str, db_name: &str) -> Result<Vec<RecordBatch>, String> {
@@ -269,18 +240,7 @@ impl QueryEngine {
             debug!("Qualified: {}", qualified_sql);
         }
 
-        let df = self
-            .ctx
-            .sql(&qualified_sql)
-            .await
-            .map_err(|e| format!("SQL error: {}", e))?;
-
-        let batches = df
-            .collect()
-            .await
-            .map_err(|e| format!("Execution error: {}", e))?;
-
-        Ok(batches)
+        self.execute_query(&qualified_sql).await
     }
 
     /// Execute a SQL query (without DB context)
@@ -377,25 +337,6 @@ impl QueryEngine {
     /// Execute query and return as JSON (with DB context)
     pub async fn execute_query_json_with_db(&self, sql: &str, db_name: &str) -> Result<String, String> {
         let batches = self.execute_query_with_db(sql, db_name).await?;
-
-        if batches.is_empty() {
-            return Ok("[]".to_string());
-        }
-
-        // Convert to JSON
-        let mut results = Vec::new();
-        for batch in batches {
-            let json_rows = Self::batch_to_json(&batch)?;
-            results.extend(json_rows);
-        }
-
-        serde_json::to_string_pretty(&results)
-            .map_err(|e| format!("JSON serialization error: {}", e))
-    }
-
-    /// Execute query and return as JSON
-    pub async fn execute_query_json(&self, sql: &str) -> Result<String, String> {
-        let batches = self.execute_query(sql).await?;
 
         if batches.is_empty() {
             return Ok("[]".to_string());
@@ -582,18 +523,6 @@ impl QueryEngine {
 
         tables.sort();
         Ok(tables)
-    }
-
-    /// Clear registration cache (useful after flush)
-    pub async fn clear_cache(&self) {
-        let mut catalogs = self.registered_catalogs.write().await;
-        catalogs.clear();
-        info!("Query engine cache cleared");
-    }
-
-    /// Get the session context (for Flight service)
-    pub fn get_context(&self) -> &SessionContext {
-        &self.ctx
     }
 }
 

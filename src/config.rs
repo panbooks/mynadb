@@ -276,17 +276,6 @@ impl Config {
         }
     }
 
-    /// Save configuration to TOML file
-    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), String> {
-        let content = toml::to_string_pretty(self)
-            .map_err(|e| format!("Failed to serialize config: {}", e))?;
-
-        fs::write(path, content)
-            .map_err(|e| format!("Failed to write config file: {}", e))?;
-
-        Ok(())
-    }
-
     /// Get HTTP server address
     pub fn http_addr(&self) -> String {
         format!("{}:{}", self.server.http_host, self.server.http_port)

@@ -1,8 +1,8 @@
-use crate::line_protocol::{FieldValue, Point, format_date32_as_partition};
+use crate::line_protocol::{format_date32_as_partition, FieldValue, Point};
 use arrow::array::{
     ArrayRef, Date32Array, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
 };
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use arrow::datatypes::{Field, Schema};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use std::fs::{create_dir_all, File};
@@ -225,45 +225,6 @@ impl ParquetWriter {
 
         RecordBatch::try_new(target_schema.clone(), arrays)
             .map_err(|e| format!("Failed to create adapted batch: {}", e))
-    }
-
-    fn build_schema(&self, point: &Point) -> Result<Schema, String> {
-        let mut fields = Vec::new();
-
-        // Timestamp field (always first)
-        fields.push(Field::new(
-            "timestamp",
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            false,
-        ));
-
-        // Date field (Date32)
-        fields.push(Field::new("date", DataType::Date32, false));
-
-        // Measurement field
-        fields.push(Field::new("measurement", DataType::Utf8, false));
-
-        // Tag fields
-        let mut tag_keys: Vec<_> = point.tags.keys().collect();
-        tag_keys.sort();
-        for key in tag_keys {
-            fields.push(Field::new(key, DataType::Utf8, true));
-        }
-
-        // Field columns
-        let mut field_keys: Vec<_> = point.fields.keys().collect();
-        field_keys.sort();
-        for key in field_keys {
-            let data_type = match point.fields.get(key.as_str()).unwrap() {
-                FieldValue::Float(_) => DataType::Float64,
-                FieldValue::Integer(_) => DataType::Int64,
-                FieldValue::String(_) => DataType::Utf8,
-                FieldValue::Boolean(_) => DataType::Boolean,
-            };
-            fields.push(Field::new(key, data_type, true));
-        }
-
-        Ok(Schema::new(fields))
     }
 
     #[allow(dead_code)]
