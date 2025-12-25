@@ -15,9 +15,10 @@ const PARQUET_EXT: &str = ".parquet";
 
 // Default compaction thresholds
 const DEFAULT_MIN_FILES: usize = 5;
+const DEFAULT_MAJOR_MIN_FILES: usize = 4; // Minimum files for L1+ compaction
 const DEFAULT_MAX_FILE_SIZE_MB: u64 = 100;
 const DEFAULT_TARGET_FILE_SIZE_MB: u64 = 500;
-const DEFAULT_MAX_LEVEL: u32 = 5;
+const DEFAULT_MAX_LEVEL: u32 = 4; // L0, L1, L2, L3, L4
 const MB_TO_BYTES: u64 = 1024 * 1024;
 
 /// Compactor is responsible for merging small Parquet files into larger ones
@@ -31,13 +32,15 @@ pub struct Compactor {
 
 #[derive(Debug, Clone)]
 pub struct CompactionConfig {
-    /// Minimum number of files to trigger compaction
+    /// Minimum number of L0 files to trigger minor compaction (L0 → L1)
     pub min_files: usize,
+    /// Minimum number of files at L1+ to trigger major compaction (L1 → L2, L2 → L3, etc.)
+    pub major_min_files: usize,
     /// Maximum file size in bytes before compaction (default: 100MB)
     pub max_file_size: u64,
     /// Target file size after compaction (default: 500MB)
     pub target_file_size: u64,
-    /// Maximum compaction level
+    /// Maximum compaction level (0-4: L0, L1, L2, L3, L4)
     pub max_level: u32,
 }
 
@@ -45,6 +48,7 @@ impl Default for CompactionConfig {
     fn default() -> Self {
         CompactionConfig {
             min_files: DEFAULT_MIN_FILES,
+            major_min_files: DEFAULT_MAJOR_MIN_FILES,
             max_file_size: DEFAULT_MAX_FILE_SIZE_MB * MB_TO_BYTES,
             target_file_size: DEFAULT_TARGET_FILE_SIZE_MB * MB_TO_BYTES,
             max_level: DEFAULT_MAX_LEVEL,
@@ -287,11 +291,6 @@ impl Compactor {
         let total_files_before = file_infos.len();
         let l0_files_before = file_infos.iter().filter(|f| f.level == 0).count();
 
-        // Check if compaction is needed
-        if l0_files_before < config.min_files {
-            return Ok(None);
-        }
-
         // Calculate total size
         let total_bytes_before: u64 = file_infos.iter().map(|f| f.size).sum();
 
@@ -299,60 +298,47 @@ impl Compactor {
                  catalog, schema, table, date_partition, total_files_before, l0_files_before,
                  total_bytes_before as f64 / 1024.0 / 1024.0);
 
-        // Perform leveled compaction (prioritize L0 files)
+        // Perform multi-level compaction
         let mut total_rows = 0;
-        let mut compacted_file_paths = Vec::new();
+        let mut compaction_happened = false;
 
-        // Step 1: Compact L0 files first (highest priority)
-        let l0_files: Vec<_> = file_infos.iter()
-            .filter(|f| f.level == 0)
-            .cloned()
-            .collect();
+        // Step 1: Minor compaction (L0 → L1) - highest priority
+        if l0_files_before >= config.min_files {
+            let l0_files: Vec<_> = file_infos.iter()
+                .filter(|f| f.level == 0)
+                .cloned()
+                .collect();
 
-        if l0_files.len() >= config.min_files {
-            info!("Compacting {} L0 files (priority)", l0_files.len());
+            info!("Minor compaction: {} L0 files → L1", l0_files.len());
 
-            let file_groups = self.group_files_by_size(&l0_files, config)?;
+            let rows = self.compact_level_files(&partition_path, &l0_files, 0, config).await?;
+            total_rows += rows;
+            compaction_happened = true;
+        }
 
-            for (group_idx, group) in file_groups.iter().enumerate() {
-                if group.len() < 2 {
-                    continue;
-                }
+        // Step 2: Major compactions (L1 → L2, L2 → L3, L3 → L4)
+        // Refresh file list after L0 compaction
+        let file_infos_updated = self.list_parquet_file_infos(&partition_path)?;
+        
+        for current_level in 1..=config.max_level {
+            let level_files: Vec<_> = file_infos_updated.iter()
+                .filter(|f| f.level == current_level)
+                .cloned()
+                .collect();
 
-                debug!("Group {}: {} files", group_idx + 1, group.len());
+            if level_files.len() >= config.major_min_files && current_level < config.max_level {
+                info!("Major compaction: {} L{} files → L{}", 
+                      level_files.len(), current_level, current_level + 1);
 
-                let paths: Vec<PathBuf> = group.iter().map(|f| f.path.clone()).collect();
-                let batches = self.read_parquet_files(&paths)?;
-                let rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+                let rows = self.compact_level_files(&partition_path, &level_files, current_level, config).await?;
                 total_rows += rows;
-
-                // Determine next level (L0 → L1)
-                let next_level = 1;
-                let timestamp = chrono::Utc::now().timestamp_millis();
-                let compacted_filename = format!(
-                    "{}/{}{}{}{}{}",
-                    partition_path,
-                    LEVEL_PREFIX,
-                    next_level,
-                    LEVEL_SEPARATOR,
-                    timestamp,
-                    PARQUET_EXT
-                );
-
-                self.write_compacted_file(&compacted_filename, batches)?;
-                compacted_file_paths.push(compacted_filename.clone());
-
-                info!("Created: {} ({} rows)", compacted_filename, rows);
-
-                // Delete old files
-                for file in &paths {
-                    if let Err(e) = fs::remove_file(file) {
-                        warn!("Failed to delete {}: {}", file.display(), e);
-                    } else {
-                        debug!("Deleted: {}", file.display());
-                    }
-                }
+                compaction_happened = true;
             }
+        }
+
+        // If no compaction happened, return None
+        if !compaction_happened {
+            return Ok(None);
         }
 
         // Recalculate files after compaction
@@ -380,6 +366,72 @@ impl Compactor {
             bytes_after: total_bytes_after,
             rows_compacted: total_rows,
         }))
+    }
+
+    /// Compact files at a specific level to the next level
+    /// Returns the total number of rows compacted
+    async fn compact_level_files(
+        &self,
+        partition_path: &str,
+        level_files: &[ParquetFileInfo],
+        current_level: u32,
+        config: &CompactionConfig,
+    ) -> Result<usize, String> {
+        if level_files.is_empty() {
+            return Ok(0);
+        }
+
+        let next_level = current_level + 1;
+        let mut total_rows = 0;
+
+        // Group files by size to avoid exceeding target file size
+        let file_groups = self.group_files_by_size(level_files, config)?;
+
+        for (group_idx, group) in file_groups.iter().enumerate() {
+            // Need at least 2 files to compact (unless it's the only group)
+            if group.len() < 2 && file_groups.len() > 1 {
+                continue;
+            }
+
+            debug!("Compacting L{} group {}: {} files", current_level, group_idx + 1, group.len());
+
+            let paths: Vec<PathBuf> = group.iter().map(|f| f.path.clone()).collect();
+            let batches = self.read_parquet_files(&paths)?;
+            let rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+            total_rows += rows;
+
+            // Create compacted file at next level
+            let timestamp = chrono::Utc::now().timestamp_millis();
+            let compacted_filename = format!(
+                "{}/{}{}{}{}{}",
+                partition_path,
+                LEVEL_PREFIX,
+                next_level,
+                LEVEL_SEPARATOR,
+                timestamp,
+                PARQUET_EXT
+            );
+
+            self.write_compacted_file(&compacted_filename, batches)?;
+
+            info!("Created L{} file: {} ({} rows from {} L{} files)", 
+                  next_level, 
+                  Path::new(&compacted_filename).file_name().unwrap().to_str().unwrap(),
+                  rows,
+                  group.len(),
+                  current_level);
+
+            // Delete old files after successful write
+            for file in &paths {
+                if let Err(e) = fs::remove_file(file) {
+                    warn!("Failed to delete {}: {}", file.display(), e);
+                } else {
+                    debug!("Deleted: {}", file.display());
+                }
+            }
+        }
+
+        Ok(total_rows)
     }
 
     /// List all parquet files with level information
@@ -512,7 +564,7 @@ impl Compactor {
                         if path.is_dir() {
                             if let Some(catalog_name) = path.file_name().and_then(|n| n.to_str()) {
                                 // Skip hidden directories and series_stats
-                                if catalog_name.starts_with('.') || catalog_name == "series_stats" {
+                                if catalog_name.starts_with('.') {
                                     continue;
                                 }
 

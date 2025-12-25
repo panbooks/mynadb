@@ -136,6 +136,7 @@ async fn main() {
     if config.compaction.interval_secs > 0 {
         let compaction_config = compactor::CompactionConfig {
             min_files: config.compaction.min_files,
+            major_min_files: config.compaction.major_min_files,
             max_file_size: config.compaction.max_file_size_mb * 1024 * 1024,
             target_file_size: config.compaction.target_file_size_mb * 1024 * 1024,
             max_level: config.compaction.max_level,
@@ -641,6 +642,7 @@ async fn compact_handler(
     // Convert config to compactor's CompactionConfig
     let config = compactor::CompactionConfig {
         min_files: state.config.compaction.min_files,
+        major_min_files: state.config.compaction.major_min_files,
         max_file_size: state.config.compaction.max_file_size_mb * 1024 * 1024,
         target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
         max_level: state.config.compaction.max_level,
@@ -700,6 +702,7 @@ async fn compact_table_handler(
     // Convert config to compactor's CompactionConfig
     let config = compactor::CompactionConfig {
         min_files: state.config.compaction.min_files,
+        major_min_files: state.config.compaction.major_min_files,
         max_file_size: state.config.compaction.max_file_size_mb * 1024 * 1024,
         target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
         max_level: state.config.compaction.max_level,
@@ -766,6 +769,7 @@ async fn compact_partition_handler(
     // Convert config to compactor's CompactionConfig
     let config = compactor::CompactionConfig {
         min_files: state.config.compaction.min_files,
+        major_min_files: state.config.compaction.major_min_files,
         max_file_size: state.config.compaction.max_file_size_mb * 1024 * 1024,
         target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
         max_level: state.config.compaction.max_level,
