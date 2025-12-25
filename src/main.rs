@@ -584,7 +584,7 @@ async fn process_write_data(
 
     // Parse line protocol
     let points = parse_multiple_lines(data);
-    info!("Parsed {} points", points.len());
+    debug!("Parsed {} points", points.len());
 
     if points.is_empty() {
         return (StatusCode::BAD_REQUEST, "No valid points to write".to_string());
