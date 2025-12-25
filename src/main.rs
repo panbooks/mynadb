@@ -75,12 +75,6 @@ struct CreateTableRequest {
 }
 
 #[derive(Deserialize)]
-struct CompactRequest {
-    #[serde(default)]
-    measurement: Option<String>,
-}
-
-#[derive(Deserialize)]
 struct RetentionRequest {
     /// Delete partitions before this date (YYYY-MM-DD)
     #[serde(default)]

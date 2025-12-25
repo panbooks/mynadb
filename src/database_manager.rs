@@ -130,26 +130,6 @@ impl DatabaseManager {
         Ok(databases)
     }
 
-    /// List tables in a database
-    pub fn list_tables(&self, db_name: &str) -> Result<Vec<TableConfig>, String> {
-        let config = self.load_config(db_name)?;
-        Ok(config.tables)
-    }
-
-    /// Get table configuration
-    pub fn get_table_config(
-        &self,
-        db_name: &str,
-        table_name: &str,
-    ) -> Result<TableConfig, String> {
-        let config = self.load_config(db_name)?;
-        config
-            .tables
-            .into_iter()
-            .find(|t| t.name == table_name)
-            .ok_or_else(|| format!("Table '{}' not found", table_name))
-    }
-
     /// Delete a database
     pub fn delete_database(&self, db_name: &str) -> Result<String, String> {
         let db_path = self.get_database_path(db_name);

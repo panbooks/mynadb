@@ -1,6 +1,5 @@
 use crate::config::LoggingConfig;
 use std::fs;
-use tracing::Level;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 /// Initialize logging based on configuration
