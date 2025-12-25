@@ -211,66 +211,6 @@ impl ParquetWriter {
             arrays.push(Arc::new(StringArray::from(values)));
         }
 
-        // Build field arrays
-        let mut field_keys: Vec<_> = first_point.fields.keys().collect();
-        field_keys.sort();
-
-        for key in field_keys {
-            let field_type = first_point.fields.get(key.as_str()).unwrap();
-            match field_type {
-                FieldValue::Float(_) => {
-                    let values: Vec<Option<f64>> = points
-                        .iter()
-                        .map(|p| {
-                            p.fields.get(key.as_str()).and_then(|v| match v {
-                                FieldValue::Float(f) => Some(*f),
-                                _ => None,
-                            })
-                        })
-                        .collect();
-                    arrays.push(Arc::new(Float64Array::from(values)));
-                }
-                FieldValue::Integer(_) => {
-                    let values: Vec<Option<i64>> = points
-                        .iter()
-                        .map(|p| {
-                            p.fields.get(key.as_str()).and_then(|v| match v {
-                                FieldValue::Integer(i) => Some(*i),
-                                _ => None,
-                            })
-                        })
-                        .collect();
-                    arrays.push(Arc::new(Int64Array::from(values)));
-                }
-                FieldValue::String(_) => {
-                    let values: Vec<Option<&str>> = points
-                        .iter()
-                        .map(|p| {
-                            p.fields.get(key.as_str()).and_then(|v| match v {
-                                FieldValue::String(s) => Some(s.as_str()),
-                                _ => None,
-                            })
-                        })
-                        .collect();
-                    arrays.push(Arc::new(StringArray::from(values)));
-                }
-                FieldValue::Boolean(_) => {
-                    let values: Vec<Option<bool>> = points
-                        .iter()
-                        .map(|p| {
-                            p.fields.get(key.as_str()).and_then(|v| match v {
-                                FieldValue::Boolean(b) => Some(*b),
-                                _ => None,
-                            })
-                        })
-                        .collect();
-                    arrays.push(Arc::new(
-                        arrow::array::BooleanArray::from(values),
-                    ));
-                }
-            }
-        }
-
         RecordBatch::try_new(schema, arrays).map_err(|e| format!("Failed to create batch: {}", e))
     }
 }
