@@ -14,6 +14,19 @@ data_dir = "./data"
 # System directory name for metadata
 system_dir = "_system"
 
+[schema]
+# Tag keys to extract schema from (default: ["service"])
+# The first matching tag key will be used as the schema
+# Example: ["service", "hierarchy_2", "app_name"]
+tag_keys = ["MONITOR.service", "hierarchy_2", "service"]
+
+# Default schema name when tag is not present
+default_name = "default"
+
+# Whether to prefix purely numeric schemas (e.g., "123" -> "service_123")
+# This avoids SQL parser issues with numeric identifiers
+prefix_numeric = true
+
 [cache]
 # Background flush interval in seconds
 flush_interval_secs = 30

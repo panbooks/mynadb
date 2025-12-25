@@ -8,6 +8,7 @@ use tracing::{error, info};
 pub struct Config {
     pub server: ServerConfig,
     pub storage: StorageConfig,
+    pub schema: SchemaConfig,
     pub cache: CacheConfig,
     pub compaction: CompactionConfig,
     pub series_tracker: SeriesTrackerConfig,
@@ -44,6 +45,23 @@ pub struct StorageConfig {
     /// System directory name (for metadata)
     #[serde(default = "default_system_dir")]
     pub system_dir: String,
+}
+
+/// Schema extraction configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchemaConfig {
+    /// Tag keys to extract schema from (default: ["service"])
+    /// The first matching tag key will be used as the schema
+    #[serde(default = "default_schema_tag_keys")]
+    pub tag_keys: Vec<String>,
+
+    /// Default schema name when tag is not present
+    #[serde(default = "default_schema_name")]
+    pub default_name: String,
+
+    /// Whether to prefix purely numeric schemas (e.g., "123" -> "service_123")
+    #[serde(default = "default_schema_prefix_numeric")]
+    pub prefix_numeric: bool,
 }
 
 /// Cache configuration
@@ -215,6 +233,18 @@ fn default_log_json() -> bool {
     false
 }
 
+fn default_schema_tag_keys() -> Vec<String> {
+    vec!["service".to_string()]
+}
+
+fn default_schema_name() -> String {
+    "default".to_string()
+}
+
+fn default_schema_prefix_numeric() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -227,6 +257,11 @@ impl Default for Config {
             storage: StorageConfig {
                 data_dir: default_data_dir(),
                 system_dir: default_system_dir(),
+            },
+            schema: SchemaConfig {
+                tag_keys: default_schema_tag_keys(),
+                default_name: default_schema_name(),
+                prefix_numeric: default_schema_prefix_numeric(),
             },
             cache: CacheConfig {
                 flush_interval_secs: default_cache_flush_interval(),

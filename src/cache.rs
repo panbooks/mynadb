@@ -1,5 +1,6 @@
 use crate::line_protocol::{Point, format_date32_as_partition};
 use crate::parquet_writer::ParquetWriter;
+use crate::config::SchemaConfig;
 use arrow::array::{
     Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
 };
@@ -10,8 +11,6 @@ use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
 use tracing::{info, error, debug};
 
-const DEFAULT_SCHEMA: &str = "default";
-
 /// Cache key: (catalog/database, schema/service, table/measurement)
 type CacheKey = (String, String, String, i32);
 
@@ -20,16 +19,18 @@ pub struct DataCache {
     // Store RecordBatches instead of Points for better performance
     cache: Arc<Mutex<HashMap<CacheKey, Vec<RecordBatch>>>>,
     writer: Arc<ParquetWriter>,
+    schema_config: Arc<SchemaConfig>,
 }
 
 impl DataCache {
-    pub fn new(data_dir: &str) -> Self {
+    pub fn new(data_dir: &str, schema_config: Arc<SchemaConfig>) -> Self {
         let cache = Arc::new(Mutex::new(HashMap::new()));
         let writer = Arc::new(ParquetWriter::new(data_dir));
 
         DataCache {
             cache,
             writer,
+            schema_config,
         }
     }
 
@@ -242,19 +243,27 @@ impl DataCache {
         }
     }
 
-    /// Extract schema name from service tag, default to "default"
-    /// Numeric schemas are prefixed with "svc_" to avoid SQL parser issues
-    pub fn extract_schema(tags: &HashMap<String, String>) -> String {
-        tags.get("service")
-            .map(|s| {
-                // If service value is purely numeric, prefix with "svc_"
-                if s.chars().all(|c| c.is_numeric()) {
-                    format!("svc_{}", s)
+    /// Extract schema name from service tag, default to configured default
+    /// Supports:
+    /// - Multiple tag keys: tries each tag key in order until one is found
+    /// - Simple values: "service" -> "service"
+    /// - Numeric values: "123" -> "service_123" (if prefix_numeric=true)
+    /// - Custom tag keys: hierarchy_2, hierarchy_1, etc.
+    pub fn extract_schema(&self, tags: &HashMap<String, String>) -> String {
+        // Try each tag key in order until we find one
+        for tag_key in &self.schema_config.tag_keys {
+            if let Some(value) = tags.get(tag_key) {
+                // Prefix numeric schemas to avoid SQL parser issues
+                return if self.schema_config.prefix_numeric && value.chars().all(|c| c.is_numeric()) {
+                    format!("service_{}", value)
                 } else {
-                    s.clone()
+                    value.clone()
                 }
-            })
-            .unwrap_or_else(|| DEFAULT_SCHEMA.to_string())
+            }
+        }
+
+        // No matching tag found, use default
+        self.schema_config.default_name.clone()
     }
 
     /// Start background flush task that runs every interval

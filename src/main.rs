@@ -120,7 +120,7 @@ async fn main() {
 
     // Initialize components
     info!("Initializing data cache");
-    let cache = DataCache::new(&config.storage.data_dir);
+    let cache = DataCache::new(&config.storage.data_dir, Arc::new(config.schema.clone()));
     cache.clone().start_background_flush(config.cache.flush_interval_secs);
 
     info!("Initializing query engine");
@@ -148,7 +148,7 @@ async fn main() {
     }
 
     info!("Initializing series tracker");
-    let series_tracker = Arc::new(SeriesTracker::new(&config.storage.data_dir));
+    let series_tracker = Arc::new(SeriesTracker::new(&config.storage.data_dir, Arc::new(config.schema.clone())));
     Arc::clone(&series_tracker).start_background_flush(config.series_tracker.flush_interval_secs);
 
     let state = AppState {
@@ -598,7 +598,7 @@ async fn process_write_data(
 
     let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::new();
     for point in points {
-        let schema = DataCache::extract_schema(&point.tags);
+        let schema = state.cache.extract_schema(&point.tags);
         let key = (schema, point.measurement.clone());
         grouped.entry(key).or_default().push(point);
     }

@@ -1,4 +1,5 @@
 use crate::line_protocol::Point;
+use crate::config::SchemaConfig;
 use datafusion::arrow::array::{Int64Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -15,8 +16,6 @@ use tracing::{info, warn, error, debug};
 // System catalog/schema constants (catalog.schema.table format)
 const SYSTEM_CATALOG: &str = "_system";
 const SERIES_STATS_SCHEMA: &str = "series_stats";
-const MONITOR_SERVICE_TAG: &str = "service";
-const DEFAULT_SERVICE_NAME: &str = "unknown";
 
 /// Series record for batching
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
@@ -34,6 +33,8 @@ pub struct SeriesTracker {
     cache: Arc<RwLock<HashSet<(String, String, i64)>>>,
     /// Pending writes buffer per database
     pending_writes: Arc<RwLock<HashMap<String, HashSet<SeriesRecord>>>>,
+    /// Schema configuration for extracting service name
+    schema_config: Arc<SchemaConfig>,
 }
 
 impl SeriesTracker {
@@ -85,11 +86,12 @@ impl SeriesTracker {
 }
 
 impl SeriesTracker {
-    pub fn new(data_dir: &str) -> Self {
+    pub fn new(data_dir: &str, schema_config: Arc<SchemaConfig>) -> Self {
         let tracker = SeriesTracker {
             data_dir: data_dir.to_string(),
             cache: Arc::new(RwLock::new(HashSet::new())),
             pending_writes: Arc::new(RwLock::new(HashMap::new())),
+            schema_config,
         };
         
         // Clean up any leftover temp files from previous crashes
@@ -161,12 +163,8 @@ impl SeriesTracker {
         
         // First pass: identify new series (minimizing write lock time)
         for point in points {
-            let service = point
-                .tags
-                .iter()
-                .find(|(k, _)| *k == MONITOR_SERVICE_TAG)
-                .map(|(_, v)| v.clone())
-                .unwrap_or_else(|| DEFAULT_SERVICE_NAME.to_string());
+            // Extract service name using schema config (same logic as extract_schema in cache.rs)
+            let service = self.extract_service_name(&point.tags);
 
             let hash = self.calculate_tag_hash(&point.tags);
             let key = (service.clone(), point.measurement.clone(), hash);
@@ -211,6 +209,21 @@ impl SeriesTracker {
         }
     }
 
+    /// Extract service name from tags using schema config
+    /// Iterates through tag_keys in order, returning the first match
+    fn extract_service_name(&self, tags: &HashMap<String, String>) -> String {
+        for tag_key in &self.schema_config.tag_keys {
+            if let Some(value) = tags.get(tag_key) {
+                if self.schema_config.prefix_numeric && value.chars().all(|c| c.is_numeric()) {
+                    return format!("service_{}", value);
+                } else {
+                    return value.clone();
+                }
+            }
+        }
+        self.schema_config.default_name.clone()
+    }
+
     /// Calculate hash of tags excluding MONITOR.service
     fn calculate_tag_hash(&self, tags: &HashMap<String, String>) -> i64 {
         use std::collections::hash_map::DefaultHasher;
@@ -219,7 +232,6 @@ impl SeriesTracker {
         // Filter out MONITOR.service and sort the rest
         let mut filtered_tags: Vec<(&str, &str)> = tags
             .iter()
-            .filter(|(k, _)| *k != MONITOR_SERVICE_TAG)
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         
@@ -533,17 +545,23 @@ mod tests {
 
     #[test]
     fn test_tag_hash() {
-        let tracker = SeriesTracker::new("./test_data");
+        use crate::config::SchemaConfig;
+        let schema_config = Arc::new(SchemaConfig {
+            tag_keys: vec!["service".to_string()],
+            default_name: "default".to_string(),
+            prefix_numeric: true,
+        });
+        let tracker = SeriesTracker::new("./test_data", schema_config);
         
         // Same tags in different order should produce same hash
         let mut tags1 = HashMap::new();
         tags1.insert("host".to_string(), "server1".to_string());
         tags1.insert("type".to_string(), "http".to_string());
-        tags1.insert(MONITOR_SERVICE_TAG.to_string(), "api".to_string());
+        tags1.insert("service".to_string(), "api".to_string());
         
         let mut tags2 = HashMap::new();
         tags2.insert("type".to_string(), "http".to_string());
-        tags2.insert(MONITOR_SERVICE_TAG.to_string(), "api".to_string());
+        tags2.insert("service".to_string(), "api".to_string());
         tags2.insert("host".to_string(), "server1".to_string());
         
         let hash1 = tracker.calculate_tag_hash(&tags1);
@@ -553,21 +571,27 @@ mod tests {
     }
 
     #[test]
-    fn test_tag_hash_excludes_monitor_service() {
-        let tracker = SeriesTracker::new("./test_data");
+    fn test_tag_hash_excludes_service() {
+        use crate::config::SchemaConfig;
+        let schema_config = Arc::new(SchemaConfig {
+            tag_keys: vec!["service".to_string()],
+            default_name: "default".to_string(),
+            prefix_numeric: true,
+        });
+        let tracker = SeriesTracker::new("./test_data", schema_config);
         
-        // Different MONITOR.service should produce same hash if other tags are same
+        // Different service should produce same hash if other tags are same
         let mut tags1 = HashMap::new();
         tags1.insert("host".to_string(), "server1".to_string());
-        tags1.insert(MONITOR_SERVICE_TAG.to_string(), "api".to_string());
+        tags1.insert("service".to_string(), "api".to_string());
         
         let mut tags2 = HashMap::new();
         tags2.insert("host".to_string(), "server1".to_string());
-        tags2.insert(MONITOR_SERVICE_TAG.to_string(), "web".to_string());
+        tags2.insert("service".to_string(), "web".to_string());
         
         let hash1 = tracker.calculate_tag_hash(&tags1);
         let hash2 = tracker.calculate_tag_hash(&tags2);
         
-        assert_eq!(hash1, hash2, "MONITOR.service should not affect hash");
+        assert_eq!(hash1, hash2, "service tag should not affect hash");
     }
 }
