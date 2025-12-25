@@ -5,7 +5,6 @@ use chrono::{DateTime, Utc};
 pub struct Point {
     pub measurement: String,
     pub tags: HashMap<String, String>,
-    pub fields: HashMap<String, FieldValue>,
     pub timestamp: Option<i64>,
     pub date: i32,  // Date32 type: days since Unix epoch (1970-01-01)
 }
@@ -38,7 +37,7 @@ pub fn parse_line_protocol(line: &str) -> Result<Point, String> {
     let (measurement, tags) = parse_measurement_and_tags(measurement_part)?;
 
     // Parse fields
-    let fields = parse_fields(parts[1])?;
+    // let fields = parse_fields(parts[1])?;
 
     // Parse timestamp (optional)
     let timestamp = if parts.len() > 2 {
@@ -53,7 +52,6 @@ pub fn parse_line_protocol(line: &str) -> Result<Point, String> {
     Ok(Point {
         measurement,
         tags,
-        fields,
         timestamp,
         date,
     })
@@ -170,7 +168,6 @@ mod tests {
         let line = "cpu usage=23.5 1672531200000000000";
         let point = parse_line_protocol(line).unwrap();
         assert_eq!(point.measurement, "cpu");
-        assert_eq!(point.fields.len(), 1);
     }
 
     #[test]
@@ -179,6 +176,5 @@ mod tests {
         let point = parse_line_protocol(line).unwrap();
         assert_eq!(point.measurement, "cpu");
         assert_eq!(point.tags.get("host"), Some(&"server01".to_string()));
-        assert_eq!(point.fields.len(), 2);
     }
 }

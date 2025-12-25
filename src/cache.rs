@@ -91,19 +91,6 @@ impl DataCache {
             fields.push(Field::new(key, DataType::Utf8, true));
         }
 
-        // Fields
-        let mut field_keys: Vec<_> = first_point.fields.keys().cloned().collect();
-        field_keys.sort();
-        for key in &field_keys {
-            let data_type = match first_point.fields.get(key).unwrap() {
-                crate::line_protocol::FieldValue::Float(_) => DataType::Float64,
-                crate::line_protocol::FieldValue::Integer(_) => DataType::Int64,
-                crate::line_protocol::FieldValue::String(_) => DataType::Utf8,
-                crate::line_protocol::FieldValue::Boolean(_) => DataType::Boolean,
-            };
-            fields.push(Field::new(key, data_type, true));
-        }
-
         let schema = Arc::new(Schema::new(fields));
 
         // Build arrays
@@ -130,61 +117,6 @@ impl DataCache {
                 .map(|p| p.tags.get(key).map(|s| s.as_str()))
                 .collect();
             arrays.push(Arc::new(StringArray::from(values)));
-        }
-
-        // Field arrays
-        for key in &field_keys {
-            let field_type = first_point.fields.get(key).unwrap();
-            match field_type {
-                crate::line_protocol::FieldValue::Float(_) => {
-                    let values: Vec<Option<f64>> = points
-                        .iter()
-                        .map(|p| {
-                            p.fields.get(key).and_then(|v| match v {
-                                crate::line_protocol::FieldValue::Float(f) => Some(*f),
-                                _ => None,
-                            })
-                        })
-                        .collect();
-                    arrays.push(Arc::new(Float64Array::from(values)));
-                }
-                crate::line_protocol::FieldValue::Integer(_) => {
-                    let values: Vec<Option<i64>> = points
-                        .iter()
-                        .map(|p| {
-                            p.fields.get(key).and_then(|v| match v {
-                                crate::line_protocol::FieldValue::Integer(i) => Some(*i),
-                                _ => None,
-                            })
-                        })
-                        .collect();
-                    arrays.push(Arc::new(Int64Array::from(values)));
-                }
-                crate::line_protocol::FieldValue::String(_) => {
-                    let values: Vec<Option<&str>> = points
-                        .iter()
-                        .map(|p| {
-                            p.fields.get(key).and_then(|v| match v {
-                                crate::line_protocol::FieldValue::String(s) => Some(s.as_str()),
-                                _ => None,
-                            })
-                        })
-                        .collect();
-                    arrays.push(Arc::new(StringArray::from(values)));
-                }
-                crate::line_protocol::FieldValue::Boolean(_) => {
-                    let values: Vec<Option<bool>> = points
-                        .iter()
-                        .map(|p| {
-                            p.fields.get(key).and_then(|v| match v {
-                                crate::line_protocol::FieldValue::Boolean(b) => Some(*b),
-                                _ => None,
-                            })
-                        })
-                        .collect();
-                    arrays.push(Arc::new(arrow::array::BooleanArray::from(values)));
-                }
-            }
         }
 
         RecordBatch::try_new(schema, arrays)
