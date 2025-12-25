@@ -65,6 +65,66 @@ system_dir = "_system"
 - Mount dedicated disk for data directory
 - Use absolute paths
 
+### [schema]
+Schema extraction configuration - determines how to extract schema names from metric tags
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `tag_key` | string | `"service"` | Tag key to extract schema from |
+| `default_name` | string | `"default"` | Default schema when tag is absent |
+| `prefix_numeric` | bool | `true` | Prefix numeric schemas with "service_" |
+| `extract_last_part` | bool | `false` | Extract last part after separator |
+| `separator` | string | `"."` | Separator for hierarchical names |
+
+**Example:**
+```toml
+[schema]
+tag_key = "service"
+default_name = "default"
+prefix_numeric = true
+extract_last_part = false
+separator = "."
+```
+
+**Use Cases:**
+
+**1. Simple Service Tags:**
+```toml
+[schema]
+tag_key = "service"
+extract_last_part = false
+```
+- Tag `service="web"` → Schema: `web`
+- Tag `service="api"` → Schema: `api`
+
+**2. Hierarchical Service Tags (Extract Last Part):**
+```toml
+[schema]
+tag_key = "service"
+extract_last_part = true
+separator = "."
+```
+- Tag `service="MONITOR.web"` → Schema: `web`
+- Tag `service="PROD.api"` → Schema: `api`
+
+**3. Custom Tag Keys:**
+```toml
+[schema]
+tag_key = "hierarchy_2"
+extract_last_part = false
+```
+- Tag `hierarchy_2="service_1"` → Schema: `service_1`
+- Tag `hierarchy_2="service_2"` → Schema: `service_2`
+
+**4. Numeric Service IDs:**
+```toml
+[schema]
+tag_key = "service"
+prefix_numeric = true
+```
+- Tag `service="123"` → Schema: `service_123` (avoids SQL parser issues)
+- Tag `service="web"` → Schema: `web`
+
 ### [cache]
 In-memory cache settings
 
@@ -138,6 +198,13 @@ flight_port = 7001
 data_dir = "./data"
 system_dir = "_system"
 
+[schema]
+tag_key = "service"
+default_name = "default"
+prefix_numeric = true
+extract_last_part = false
+separator = "."
+
 [cache]
 flush_interval_secs = 30
 max_size_mb = 1024
@@ -164,6 +231,13 @@ flight_port = 7001
 [storage]
 data_dir = "/data0/data"  # SSD/NVMe mount
 system_dir = "_system"
+
+[schema]
+tag_key = "service"
+default_name = "default"
+prefix_numeric = true
+extract_last_part = false
+separator = "."
 
 [cache]
 flush_interval_secs = 30

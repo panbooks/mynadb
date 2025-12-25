@@ -86,7 +86,7 @@ impl QueryEngine {
         if !partitions.is_empty() {
             // Use CREATE EXTERNAL TABLE with PARTITIONED BY for Hive partitions
             let create_sql = format!(
-                "CREATE EXTERNAL TABLE {}.{}.{} \
+                "CREATE EXTERNAL TABLE '{}'.'{}'.'{}' \
                  STORED AS PARQUET \
                  PARTITIONED BY (date) \
                  LOCATION '{}'",

@@ -16,6 +16,29 @@ data_dir = "./data"
 # System directory name (for metadata and series stats)
 system_dir = "_system"
 
+[schema]
+# Tag key to extract schema from (default: "service")
+# Customize this to use other tags like "hierarchy_1", "hierarchy_2", etc.
+tag_key = "service"
+
+# Default schema name when tag is not present
+default_name = "default"
+
+# Whether to prefix purely numeric schemas (e.g., "123" -> "service_123")
+# This avoids SQL parser issues with numeric identifiers
+prefix_numeric = true
+
+# Whether to extract the last part after dot separator
+# Examples:
+#   false: "MONITOR.service" -> "MONITOR.service" (keeps full value as-is)
+#   true:  "MONITOR.service" -> "service" (extracts last part after ".")
+# Useful when your service tags are hierarchical
+extract_last_part = false
+
+# Custom separator for hierarchical schema names (default: ".")
+# Used when extract_last_part = true
+separator = "."
+
 [cache]
 # Background flush interval in seconds
 flush_interval_secs = 30
