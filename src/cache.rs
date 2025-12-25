@@ -7,6 +7,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
 use tracing::{info, error, debug};
@@ -192,6 +193,7 @@ impl DataCache {
 
     /// Flush all cached data to disk
     pub async fn flush(&self) -> Result<usize, String> {
+        let start = Instant::now();
         let mut cache = self.cache.lock().await;
 
         if cache.is_empty() {
@@ -210,7 +212,7 @@ impl DataCache {
 
             match self.writer.write_batches_partitioned(&catalog, &schema, &table, date, batches) {
                 Ok(filename) => {
-                    info!("Written to: {}", filename);
+                    debug!("Written to: {}", filename);
                     files_written += 1;
                 }
                 Err(e) => {
@@ -220,11 +222,13 @@ impl DataCache {
             }
         }
 
+        let elapsed = start.elapsed();
+
         if !errors.is_empty() {
-            return Err(format!("Flush completed with {} error(s)", errors.len()));
+            return Err(format!("Flush completed with {} error(s) in {:?}", errors.len(), elapsed));
         }
 
-        info!("Flush complete: {} file(s) written", files_written);
+        info!("Flush complete: {} file(s) writtenv in {:?}", files_written, elapsed);
         Ok(files_written)
     }
 
@@ -277,14 +281,10 @@ impl DataCache {
                 ticker.tick().await;
 
                 match self.flush().await {
-                    Ok(count) => {
-                        if count > 0 {
-                            info!("Background flush: {} file(s) written", count);
-                        }
-                    }
                     Err(e) => {
                         error!("Background flush error: {}", e);
                     }
+                    _ => {}
                 }
             }
         });

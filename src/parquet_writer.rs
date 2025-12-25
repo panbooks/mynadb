@@ -97,61 +97,6 @@ impl ParquetWriter {
         Ok(filename.to_string_lossy().to_string())
     }
 
-    /// Legacy method: write batches without date partitioning (for backward compatibility)
-    #[allow(dead_code)]
-    pub fn write_batches(
-        &self,
-        catalog: &str,
-        schema: &str,
-        table: &str,
-        batches: Vec<RecordBatch>,
-    ) -> Result<String, String> {
-        if batches.is_empty() {
-            return Err("No batches to write".to_string());
-        }
-
-        // Create directory structure: data/catalog/schema/table/
-        let table_path = self.get_table_path(catalog, schema, table);
-        create_dir_all(&table_path)
-            .map_err(|e| format!("Failed to create table directory: {}", e))?;
-
-        // Generate filename with L0 prefix (Level 0 - raw files)
-        let timestamp = chrono::Utc::now().timestamp_millis();
-        let filename = table_path.join(Self::generate_filename(RAW_FILE_LEVEL, timestamp));
-
-        // Merge schemas from all batches to create unified schema
-        let merged_schema = Self::merge_schemas(&batches)?;
-        let schema_ref = Arc::new(merged_schema);
-
-        // Write to Parquet
-        let file = File::create(&filename).map_err(|e| format!("Failed to create file: {}", e))?;
-        let props = WriterProperties::builder().build();
-        let mut writer = ArrowWriter::try_new(file, schema_ref.clone(), Some(props))
-            .map_err(|e| format!("Failed to create writer: {}", e))?;
-
-        // Write all batches (may need to be adapted to merged schema)
-        for batch in batches {
-            // If batch schema matches merged schema, write directly
-            if batch.schema() == schema_ref {
-                writer
-                    .write(&batch)
-                    .map_err(|e| format!("Failed to write batch: {}", e))?;
-            } else {
-                // Adapt batch to merged schema
-                let adapted = Self::adapt_batch_to_schema(&batch, &schema_ref)?;
-                writer
-                    .write(&adapted)
-                    .map_err(|e| format!("Failed to write adapted batch: {}", e))?;
-            }
-        }
-
-        writer
-            .close()
-            .map_err(|e| format!("Failed to close writer: {}", e))?;
-
-        Ok(filename.to_string_lossy().to_string())
-    }
-
     /// Merge schemas from multiple batches, keeping all unique fields
     fn merge_schemas(batches: &[RecordBatch]) -> Result<Schema, String> {
         use std::collections::HashMap;
