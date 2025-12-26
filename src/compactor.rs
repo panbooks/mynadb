@@ -310,6 +310,7 @@ impl Compactor {
     ) -> Result<Option<CompactionResult>, String> {
         // Use empty string as partition identifier for non-partitioned tables
         let partition_id = "";
+        let start = Instant::now();
         let lock = self.get_lock(catalog, schema, table, partition_id).await;
         let _guard = lock.lock().await;
 
@@ -391,11 +392,12 @@ impl Compactor {
         let l0_files_after = file_infos_after.iter().filter(|f| f.level == 0).count();
         let total_bytes_after: u64 = file_infos_after.iter().map(|f| f.size).sum();
 
-        info!("Compaction complete: {}.{}.{}: {} -> {} files, {:.2} MB -> {:.2} MB",
+        info!("Compaction complete: {}.{}.{}: {} -> {} files, {:.2} MB -> {:.2} MB in {:?}",
             catalog, schema, table,
             total_files_before, total_files_after,
             total_bytes_before as f64 / 1024.0 / 1024.0,
-            total_bytes_after as f64 / 1024.0 / 1024.0);
+            total_bytes_after as f64 / 1024.0 / 1024.0,
+            start.elapsed());
 
         Ok(Some(CompactionResult {
             catalog: catalog.to_string(),
