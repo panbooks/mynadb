@@ -2,7 +2,7 @@ use crate::line_protocol::{Point, format_date32_as_partition};
 use crate::parquet_writer::ParquetWriter;
 use crate::config::SchemaConfig;
 use arrow::array::{
-    Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+    RecordBatch, StringArray, TimestampNanosecondArray,
 };
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use std::collections::HashMap;

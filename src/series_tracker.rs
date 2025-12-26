@@ -1,6 +1,6 @@
 use crate::line_protocol::Point;
 use crate::config::SchemaConfig;
-use datafusion::arrow::array::{Int64Array, StringArray};
+use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::parquet::arrow::ArrowWriter;
@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use arrow::array::UInt64Array;
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 use tracing::{info, warn, error, debug};
@@ -22,7 +23,7 @@ const SERIES_STATS_SCHEMA: &str = "series_stats";
 struct SeriesRecord {
     service: String,
     metric: String,
-    hash: i64,
+    hash: u64,
 }
 
 /// Series tracker for monitoring metric cardinality
@@ -30,7 +31,7 @@ struct SeriesRecord {
 pub struct SeriesTracker {
     data_dir: String,
     /// In-memory cache: (service, metric, hash) -> exists
-    cache: Arc<RwLock<HashSet<(String, String, i64)>>>,
+    cache: Arc<RwLock<HashSet<(String, String, u64)>>>,
     /// Pending writes buffer per database
     pending_writes: Arc<RwLock<HashMap<String, HashSet<SeriesRecord>>>>,
     /// Schema configuration for extracting service name
@@ -99,34 +100,49 @@ impl SeriesTracker {
         
         tracker
     }
-    
+
     /// Clean up temporary files left from previous crashes
     fn cleanup_temp_files(&self) {
         let stats_schema_dir = self.get_stats_schema_dir();
-        
-        // Clean up temp files in each table directory
-        if let Ok(entries) = std::fs::read_dir(&stats_schema_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    if let Ok(files) = std::fs::read_dir(&path) {
-                        for file_entry in files.flatten() {
-                            if let Some(name) = file_entry.file_name().to_str() {
-                    if name.ends_with(".tmp") {
-                        if let Err(e) = std::fs::remove_file(file_entry.path()) {
-                            warn!("Failed to cleanup temp file '{}': {}", file_entry.path().display(), e);
-                        } else {
-                            info!("Cleaned up leftover temp file: {}", name);
-                        }
+
+        let Ok(table_dirs) = std::fs::read_dir(&stats_schema_dir) else {
+            return;
+        };
+
+        for table in table_dirs.flatten() {
+            let path = table.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let Ok(files) = std::fs::read_dir(&path) else {
+                continue;
+            };
+
+            for file in files.flatten() {
+                let file_path = file.path();
+
+                if file_path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    != Some("tmp")
+                {
+                    continue;
+                }
+
+                match std::fs::remove_file(&file_path) {
+                    Ok(_) => {
+                        info!("Cleaned up leftover temp file: {}", file_path.display());
+                    }
+                    Err(e) => {
+                        warn!("Failed to cleanup temp file '{}': {}", file_path.display(), e);
                     }
                 }
             }
         }
     }
-}
-        }
-    }
-    
+
+
     /// Start background flush task
     pub fn start_background_flush(self: Arc<Self>, flush_interval_secs: u64) {
         tokio::spawn(async move {
@@ -214,24 +230,34 @@ impl SeriesTracker {
     fn extract_service_name(&self, tags: &HashMap<String, String>) -> String {
         for tag_key in &self.schema_config.tag_keys {
             if let Some(value) = tags.get(tag_key) {
-                if self.schema_config.prefix_numeric && value.chars().all(|c| c.is_numeric()) {
-                    return format!("service_{}", value);
+                return if self.schema_config.prefix_numeric && value.chars().all(|c| c.is_numeric()) {
+                    format!("service_{}", value)
                 } else {
-                    return value.clone();
+                    value.clone()
                 }
             }
         }
         self.schema_config.default_name.clone()
     }
 
+    fn extract_service_key(&self, tags: &HashMap<String, String>) -> Option<&str> {
+        self.schema_config.tag_keys
+            .iter()
+            .find(|tag_key| tags.contains_key(*tag_key))
+            .map(|s| s.as_str())
+    }
+
     /// Calculate hash of tags excluding MONITOR.service
-    fn calculate_tag_hash(&self, tags: &HashMap<String, String>) -> i64 {
+    fn calculate_tag_hash(&self, tags: &HashMap<String, String>) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
+
+        let service_key = self.extract_service_key(tags);
 
         // Filter out MONITOR.service and sort the rest
         let mut filtered_tags: Vec<(&str, &str)> = tags
             .iter()
+            .filter(|(key, _)| Some(key.as_str()) != service_key)
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         
@@ -244,7 +270,7 @@ impl SeriesTracker {
             value.hash(&mut hasher);
         }
         
-        hasher.finish() as i64
+        hasher.finish()
     }
 
     /// Flush all pending writes for all databases
@@ -301,7 +327,7 @@ impl SeriesTracker {
         // Create arrays from new data
         let service_array = StringArray::from(services);
         let metric_array = StringArray::from(metrics);
-        let hash_array = Int64Array::from(hashes);
+        let hash_array = UInt64Array::from(hashes);
 
         let batch = RecordBatch::try_new(
             schema.clone(),
@@ -352,7 +378,7 @@ impl SeriesTracker {
         // Read all Parquet files in the table directory
         use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-        let mut stats: HashMap<String, HashMap<String, HashSet<i64>>> = HashMap::new();
+        let mut stats: HashMap<String, HashMap<String, HashSet<u64>>> = HashMap::new();
 
         for file_path in parquet_files {
             if std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0) == 0 {
@@ -404,7 +430,7 @@ impl SeriesTracker {
                 let hash_col = batch
                     .column(2)
                     .as_any()
-                    .downcast_ref::<Int64Array>()
+                    .downcast_ref::<UInt64Array>()
                     .unwrap();
 
                 for i in 0..batch.num_rows() {
@@ -449,6 +475,7 @@ impl SeriesTracker {
     }
 
     /// Load existing stats into cache on startup
+    #[allow(dead_code)]
     pub async fn load_cache(&self, db: &str) -> Result<(), String> {
         let parquet_files = self.get_all_parquet_files(db)?;
 
@@ -511,7 +538,7 @@ impl SeriesTracker {
                 let hash_col = batch
                     .column(2)
                     .as_any()
-                    .downcast_ref::<Int64Array>()
+                    .downcast_ref::<UInt64Array>()
                     .unwrap();
 
                 for i in 0..batch.num_rows() {

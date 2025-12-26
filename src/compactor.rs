@@ -41,6 +41,7 @@ pub struct CompactionConfig {
     /// Minimum number of files at L1+ to trigger major compaction (L1 → L2, L2 → L3, etc.)
     pub major_min_files: usize,
     /// Maximum file size in bytes before compaction (default: 100MB)
+    #[allow(dead_code)]
     pub max_file_size: u64,
     /// Target file size after compaction (default: 500MB)
     pub target_file_size: u64,

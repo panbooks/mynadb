@@ -9,7 +9,7 @@ flight_port = 7001
 
 [storage]
 # Data directory path (use absolute path in production)
-data_dir = "./data"
+data_dir = "/data0/stats/data"
 
 # System directory name for metadata
 system_dir = "_system"
@@ -62,7 +62,7 @@ stats_dir = "series_stats"
 level = "info"
 
 # Log directory path
-log_dir = "./logs"
+log_dir = "/data0/stats/logs"
 
 # Log file name prefix
 file_prefix = "stats-service"
