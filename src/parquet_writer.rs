@@ -1,6 +1,6 @@
-use crate::line_protocol::{format_date32_as_partition, FieldValue, Point};
+use crate::line_protocol::{format_date32_as_partition, Point};
 use arrow::array::{
-    ArrayRef, Date32Array, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+    ArrayRef, Date32Array, RecordBatch, StringArray, TimestampNanosecondArray,
 };
 use arrow::datatypes::{Field, Schema};
 use parquet::arrow::ArrowWriter;

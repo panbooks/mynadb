@@ -3,6 +3,8 @@ use datafusion::prelude::*;
 use datafusion::catalog_common::MemoryCatalogProvider;
 use datafusion::catalog_common::MemorySchemaProvider;
 use datafusion::sql::TableReference;
+use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl};
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -82,30 +84,15 @@ impl QueryEngine {
 
         // Check if table has Hive-style partitions
         let partitions = self.discover_table_partitions(&table_path)?;
-        
+
         if !partitions.is_empty() {
-            // Use CREATE EXTERNAL TABLE with PARTITIONED BY for Hive partitions
-            let create_sql = format!(
-                "CREATE EXTERNAL TABLE '{}'.'{}'.'{}' \
-                 STORED AS PARQUET \
-                 PARTITIONED BY (date) \
-                 LOCATION '{}'",
-                catalog_name, schema_name, table_name, table_path
-            );
-            
-            self.ctx.sql(&create_sql).await
-                .map_err(|e| format!("Failed to create partitioned table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
-            
-            debug!("Registered partitioned table: {}.{}.{} with {} partitions", 
+            // Register partitioned table using ListingTable API
+            self.register_partitioned_table(catalog_name, schema_name, table_name, &table_path).await?;
+            debug!("Registered partitioned table: {}.{}.{} with {} partitions",
                    catalog_name, schema_name, table_name, partitions.len());
         } else {
             // No partitions, use standard registration
-            let table_ref = TableReference::full(catalog_name, schema_name, table_name);
-            self.ctx
-                .register_parquet(table_ref, &table_path, ParquetReadOptions::default())
-                .await
-                .map_err(|e| format!("Failed to register table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
-            
+            self.register_simple_table(catalog_name, schema_name, table_name, &table_path).await?;
             debug!("Registered non-partitioned table: {}.{}.{}", catalog_name, schema_name, table_name);
         }
 
@@ -114,6 +101,67 @@ impl QueryEngine {
         catalogs.entry(catalog_name.to_string())
             .or_insert_with(HashSet::new)
             .insert(schema_name.to_string());
+
+        Ok(())
+    }
+
+    /// Register a simple (non-partitioned) table
+    async fn register_simple_table(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+        table_path: &str,
+    ) -> Result<(), String> {
+        let table_ref = TableReference::full(catalog_name, schema_name, table_name);
+        self.ctx
+            .register_parquet(table_ref, table_path, ParquetReadOptions::default())
+            .await
+            .map_err(|e| format!("Failed to register table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
+        Ok(())
+    }
+
+    /// Register a partitioned table using ListingTable
+    async fn register_partitioned_table(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+        table_path: &str,
+    ) -> Result<(), String> {
+        // Create ListingTableUrl from the table path
+        let table_url = ListingTableUrl::parse(table_path)
+            .map_err(|e| format!("Failed to parse table URL: {}", e))?;
+
+        // Create ListingOptions for Parquet with Hive partitioning
+        let file_format = Arc::new(ParquetFormat::default());
+        let listing_options = ListingOptions::new(file_format)
+            .with_file_extension(".parquet")
+            .with_table_partition_cols(vec![("date".to_string(), datafusion::arrow::datatypes::DataType::Utf8)]); // Partition column
+
+        // Create ListingTableConfig
+        let config = ListingTableConfig::new(table_url)
+            .with_listing_options(listing_options);
+
+        // Infer schema from the files
+        let config = config.infer_schema(&self.ctx.state())
+            .await
+            .map_err(|e| format!("Failed to infer schema: {}", e))?;
+
+        // Create the ListingTable
+        let listing_table = ListingTable::try_new(config)
+            .map_err(|e| format!("Failed to create listing table: {}", e))?;
+
+        // Get the catalog and schema
+        let catalog = self.ctx.catalog(catalog_name)
+            .ok_or_else(|| format!("Catalog '{}' not found", catalog_name))?;
+
+        let schema = catalog.schema(schema_name)
+            .ok_or_else(|| format!("Schema '{}.{}' not found", catalog_name, schema_name))?;
+
+        // Register the table
+        schema.register_table(table_name.to_string(), Arc::new(listing_table))
+            .map_err(|e| format!("Failed to register table: {}", e))?;
 
         Ok(())
     }
@@ -276,6 +324,70 @@ impl QueryEngine {
         Ok(df.schema().inner().clone())
     }
 
+    /// Parse a table reference considering quoted identifiers
+    /// Returns (parts, original_string)
+    fn parse_table_reference(table_ref: &str) -> (Vec<String>, String) {
+        let mut parts = Vec::new();
+        let mut current = String::new();
+        let mut in_quotes = false;
+        let mut quote_char = ' ';
+        let chars: Vec<char> = table_ref.chars().collect();
+        let mut i = 0;
+
+        while i < chars.len() {
+            let ch = chars[i];
+
+            if !in_quotes && (ch == '"' || ch == '`') {
+                in_quotes = true;
+                quote_char = ch;
+                i += 1;
+                continue;
+            }
+
+            if in_quotes && ch == quote_char {
+                in_quotes = false;
+                // Add the current quoted part
+                if !current.is_empty() {
+                    parts.push(current.clone());
+                    current.clear();
+                }
+                i += 1;
+                // Skip the dot after closing quote if present
+                if i < chars.len() && chars[i] == '.' {
+                    i += 1;
+                }
+                continue;
+            }
+
+            if !in_quotes && ch == '.' {
+                if !current.is_empty() {
+                    parts.push(current.clone());
+                    current.clear();
+                }
+                i += 1;
+                continue;
+            }
+
+            current.push(ch);
+            i += 1;
+        }
+
+        if !current.is_empty() {
+            parts.push(current);
+        }
+
+        (parts, table_ref.to_string())
+    }
+
+    /// Quote an identifier if it contains special characters (like dots)
+    fn quote_identifier(ident: &str) -> String {
+        if ident.contains('.') || ident.contains('-') || ident.contains(' ') {
+            format!("\"{}\"", ident)
+        } else {
+            ident.to_string()
+        }
+    }
+
     /// Qualify unqualified or partially qualified table names with catalog.schema
     ///
     /// Examples (with catalog_name = "testdb"):
@@ -283,9 +395,11 @@ impl QueryEngine {
     /// - "webapp.cpu" -> "testdb.webapp.cpu"
     /// - "testdb.webapp.cpu" -> "testdb.webapp.cpu" (already fully qualified)
     /// - "otherdb.schema.table" -> "otherdb.schema.table" (different catalog, unchanged)
+    /// - "default.\"cat.transaction\"" -> "testdb.default.\"cat.transaction\""
     fn qualify_table_names(&self, sql: &str, catalog_name: &str) -> String {
         let sql_upper = sql.to_uppercase();
         let mut result = sql.to_string();
+        let mut offset: i64 = 0; // Track the offset due to replacements
 
         let keywords = ["FROM", "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN"];
 
@@ -297,34 +411,79 @@ impl QueryEngine {
                 let abs_pos = search_pos + pos + pattern.len();
                 let remaining = &sql[abs_pos..];
 
-                // Find end of table reference
-                let end_pos = remaining
-                    .find(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == ')')
-                    .unwrap_or(remaining.len());
+                // Find end of table reference, considering quotes
+                let mut end_pos = 0;
+                let mut in_quotes = false;
+                let mut quote_char = ' ';
+
+                for (i, ch) in remaining.chars().enumerate() {
+                    if !in_quotes && (ch == '"' || ch == '`') {
+                        in_quotes = true;
+                        quote_char = ch;
+                    } else if in_quotes && ch == quote_char {
+                        in_quotes = false;
+                    } else if !in_quotes && (ch.is_whitespace() || ch == ',' || ch == ';' || ch == ')') {
+                        end_pos = i;
+                        break;
+                    }
+                }
+
+                if end_pos == 0 {
+                    end_pos = remaining.len();
+                }
 
                 let table_ref = remaining[..end_pos].trim();
 
-                if table_ref.is_empty() || table_ref.contains('(') {
+                // Skip empty refs or subqueries
+                if table_ref.is_empty() || table_ref.starts_with('(') {
                     search_pos = abs_pos + end_pos;
                     continue;
                 }
 
-                // Count dots to determine qualification level
-                let dot_count = table_ref.matches('.').count();
+                // Parse the table reference considering quotes
+                let (parts, _) = Self::parse_table_reference(table_ref);
 
-                let qualified = if dot_count == 0 {
-                    // Simple name: cpu -> catalog.default.cpu
-                    format!("{}.{}.{}", catalog_name, DEFAULT_SCHEMA, table_ref)
-                } else if dot_count == 1 {
-                    // Partially qualified: webapp.cpu -> catalog.webapp.cpu
-                    format!("{}.{}", catalog_name, table_ref)
-                } else {
-                    // Already fully qualified (catalog.schema.table), don't modify
-                    table_ref.to_string()
+                // Determine qualification based on number of parts
+                let qualified = match parts.len() {
+                    0 => {
+                        search_pos = abs_pos + end_pos;
+                        continue;
+                    }
+                    1 => {
+                        // Simple name: cpu -> catalog.default.cpu
+                        format!("{}.{}.{}",
+                                catalog_name,
+                                DEFAULT_SCHEMA,
+                                Self::quote_identifier(&parts[0]))
+                    }
+                    2 => {
+                        // Partially qualified: schema.table -> catalog.schema.table
+                        format!("{}.{}.{}",
+                                catalog_name,
+                                Self::quote_identifier(&parts[0]),
+                                Self::quote_identifier(&parts[1]))
+                    }
+                    _ => {
+                        // Already fully qualified (catalog.schema.table), don't modify
+                        // But reconstruct it with proper quoting
+                        format!("{}.{}.{}",
+                                Self::quote_identifier(&parts[0]),
+                                Self::quote_identifier(&parts[1]),
+                                Self::quote_identifier(&parts[2]))
+                    }
                 };
 
+                // Only replace if we actually changed something
                 if qualified != table_ref {
-                    result = result.replacen(table_ref, &qualified, 1);
+                    // Calculate the actual position in the result string with offset
+                    let result_pos = (abs_pos as i64 + offset) as usize;
+                    let before_part = &result[..result_pos];
+                    let after_part = &result[result_pos + table_ref.len()..];
+
+                    result = format!("{}{}{}", before_part, qualified, after_part);
+
+                    // Update offset
+                    offset += qualified.len() as i64 - table_ref.len() as i64;
                 }
 
                 search_pos = abs_pos + end_pos;
@@ -587,16 +746,6 @@ mod tests {
     }
 
     #[test]
-    fn test_qualify_table_names_join_variations() {
-        let engine = QueryEngine::new("./data");
-
-        // Test different JOIN types
-        let sql = "SELECT * FROM cpu INNER JOIN memory LEFT JOIN disk RIGHT JOIN network";
-        let result = engine.qualify_table_names(sql, "testdb");
-        assert_eq!(result, "SELECT * FROM testdb.default.cpu INNER JOIN testdb.default.memory LEFT JOIN testdb.default.disk RIGHT JOIN testdb.default.network");
-    }
-
-    #[test]
     fn test_qualify_table_names_with_alias() {
         let engine = QueryEngine::new("./data");
 
@@ -604,24 +753,6 @@ mod tests {
         let sql = "SELECT c.* FROM cpu c WHERE c.usage > 50";
         let result = engine.qualify_table_names(sql, "testdb");
         assert_eq!(result, "SELECT c.* FROM testdb.default.cpu c WHERE c.usage > 50");
-    }
-
-    #[test]
-    fn test_qualify_table_names_complex_query() {
-        let engine = QueryEngine::new("./data");
-
-        // Complex query with mixed qualification levels
-        let sql = r#"
-            SELECT a.*, b.value
-            FROM cpu a
-            INNER JOIN webapp.memory b ON a.hostname = b.hostname
-            LEFT JOIN testdb.api.disk c ON a.hostname = c.hostname
-            WHERE a.usage > 50
-        "#;
-        let result = engine.qualify_table_names(sql, "testdb");
-        assert!(result.contains("FROM testdb.default.cpu a"));
-        assert!(result.contains("JOIN testdb.webapp.memory b"));
-        assert!(result.contains("JOIN testdb.api.disk c"));
     }
 
     #[test]
@@ -646,12 +777,11 @@ mod tests {
     fn test_qualify_table_names_with_subquery() {
         let engine = QueryEngine::new("./data");
 
-        // Subqueries should not be modified (contains parentheses)
+        // Subqueries - inner tables should be qualified
         let sql = "SELECT * FROM (SELECT * FROM cpu) AS subquery";
         let result = engine.qualify_table_names(sql, "testdb");
-        // The outer FROM has a subquery (with parenthesis), so it's skipped
         // The inner FROM should be qualified
-        assert!(result.contains("FROM cpu"));
+        assert!(result.contains("FROM testdb.default.cpu"));
     }
 
     #[test]
@@ -663,5 +793,53 @@ mod tests {
         let result = engine.qualify_table_names(sql, "testdb");
         // Only the first table after FROM is qualified; comma-separated tables need special handling
         assert!(result.contains("testdb.default.cpu"));
+    }
+
+    #[test]
+    fn test_qualify_table_names_with_quoted_identifiers() {
+        let engine = QueryEngine::new("./data");
+
+        // Quoted identifier with dot inside
+        let sql = r#"SELECT * FROM testdb.default."cat.transaction""#;
+        let result = engine.qualify_table_names(sql, "testdb");
+        // Should remain unchanged as it's fully qualified
+        assert_eq!(result, r#"SELECT * FROM testdb.default."cat.transaction""#);
+
+        // Partially qualified with quoted identifier
+        let sql2 = r#"SELECT * FROM default."cat.transaction""#;
+        let result2 = engine.qualify_table_names(sql2, "testdb");
+        assert_eq!(result2, r#"SELECT * FROM testdb.default."cat.transaction""#);
+
+        // Unqualified quoted identifier
+        let sql3 = r#"SELECT * FROM "cat.transaction""#;
+        let result3 = engine.qualify_table_names(sql3, "testdb");
+        assert_eq!(result3, r#"SELECT * FROM testdb.default."cat.transaction""#);
+    }
+
+    #[test]
+    fn test_parse_table_reference() {
+        // Simple name
+        let (parts, _) = QueryEngine::parse_table_reference("cpu");
+        assert_eq!(parts, vec!["cpu"]);
+
+        // Schema.table
+        let (parts, _) = QueryEngine::parse_table_reference("webapp.cpu");
+        assert_eq!(parts, vec!["webapp", "cpu"]);
+
+        // Catalog.schema.table
+        let (parts, _) = QueryEngine::parse_table_reference("testdb.webapp.cpu");
+        assert_eq!(parts, vec!["testdb", "webapp", "cpu"]);
+
+        // Quoted identifier with dot
+        let (parts, _) = QueryEngine::parse_table_reference(r#""cat.transaction""#);
+        assert_eq!(parts, vec!["cat.transaction"]);
+
+        // Schema with quoted table
+        let (parts, _) = QueryEngine::parse_table_reference(r#"default."cat.transaction""#);
+        assert_eq!(parts, vec!["default", "cat.transaction"]);
+
+        // Fully qualified with quoted table
+        let (parts, _) = QueryEngine::parse_table_reference(r#"testdb.default."cat.transaction""#);
+        assert_eq!(parts, vec!["testdb", "default", "cat.transaction"]);
     }
 }

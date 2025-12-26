@@ -293,7 +293,7 @@ async fn list_databases_handler(State(state): State<AppState>) -> impl IntoRespo
                 "databases": databases,
                 "count": databases.len()
             });
-            (StatusCode::OK, Json(response).to_string())
+            (StatusCode::OK, serde_json::to_string_pretty(&response).unwrap())
         }
         Err(e) => {
             error!("List databases error: {}", e);
@@ -592,9 +592,6 @@ async fn process_write_data(
 
     // Track series cardinality (batch operation, in-memory cache only)
     state.series_tracker.track_points(&db, &points).await;
-
-    // Group points by schema (service tag) and measurement
-    use crate::cache::DataCache;
 
     let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::new();
     for point in points {
