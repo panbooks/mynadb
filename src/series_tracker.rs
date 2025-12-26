@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 use arrow::array::UInt64Array;
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
@@ -153,10 +154,11 @@ impl SeriesTracker {
             loop {
                 ticker.tick().await;
 
+                let start = Instant::now();
                 match self.flush_all().await {
                     Ok(count) => {
                         if count > 0 {
-                            info!("Series tracker flush: {} database(s) updated", count);
+                            info!("Series tracker flush: {} database(s) updated in {:?}", count, start.elapsed());
                         }
                     }
                     Err(e) => {
@@ -310,7 +312,7 @@ impl SeriesTracker {
         let schema = Arc::new(Schema::new(vec![
             Field::new("service", DataType::Utf8, false),
             Field::new("metric", DataType::Utf8, false),
-            Field::new("hash", DataType::Int64, false),
+            Field::new("hash", DataType::UInt64, false),
         ]));
 
         // Convert new records directly to arrays (append-only, no merge)

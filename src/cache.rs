@@ -160,7 +160,7 @@ impl DataCache {
             return Err(format!("Flush completed with {} error(s) in {:?}", errors.len(), elapsed));
         }
 
-        info!("Flush complete: {} file(s) writtenv in {:?}", files_written, elapsed);
+        info!("Flush complete: {} file(s) written in {:?}", files_written, elapsed);
         Ok(files_written)
     }
 

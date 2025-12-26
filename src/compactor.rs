@@ -338,7 +338,7 @@ impl Compactor {
         // Calculate total size
         let total_bytes_before: u64 = file_infos.iter().map(|f| f.size).sum();
 
-        info!("Compacting non-partitioned {}.{}.{}: {} files ({} L0), {:.2} MB",
+        debug!("Compacting non-partitioned {}.{}.{}: {} files ({} L0), {:.2} MB",
                  catalog, schema, table, total_files_before, l0_files_before,
                  total_bytes_before as f64 / 1024.0 / 1024.0);
 
