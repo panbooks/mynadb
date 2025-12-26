@@ -550,6 +550,10 @@ impl QueryEngine {
                 let arr = array.as_any().downcast_ref::<Int64Array>().unwrap();
                 Ok(serde_json::json!(arr.value(index)))
             }
+            DataType::UInt64 => {
+                let arr = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+                Ok(serde_json::json!(arr.value(index)))
+            }
             DataType::Float64 => {
                 let arr = array.as_any().downcast_ref::<Float64Array>().unwrap();
                 Ok(serde_json::json!(arr.value(index)))
