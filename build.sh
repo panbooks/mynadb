@@ -1,9 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
 set -x
 
+# Ensure we're inside a git repository
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "Error: not inside a git repository"
+  exit 1
+fi
+
+# Try to get exact tag, fallback to short commit hash
+if git describe --tags --exact-match >/dev/null 2>&1; then
+  version=$(git describe --tags --exact-match)
+else
+  version=$(git rev-parse --short HEAD)
+fi
+
+archive="dist.${version}.gz"
+
 cargo build --release
-cp -rf target/release/stats dist/
-cp -rf config.toml dist/
 
-[ -f dist.gz ] && rm -f dist.gz
+rm -rf dist
+mkdir -p dist
 
-tar cvfz dist.gz dist/
+cp -f target/release/stats dist/
+cp -f config.toml dist/
+
+rm -f "${archive}"
+tar czf "${archive}" dist/
+
+echo "Created archive: ${archive}"
