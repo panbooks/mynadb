@@ -28,8 +28,8 @@ struct SeriesRecord {
     date: i32, // Date32: days since Unix epoch
 }
 
-/// Type alias for series cache: (service, metric, hash, date) -> exists
-type SeriesCache = Arc<RwLock<HashSet<(String, String, u64, i32)>>>;
+/// Type alias for series cache: hash -> exists
+type SeriesCache = Arc<RwLock<HashSet<u64>>>;
 
 /// Type alias for pending writes buffer: (db, date) -> records
 type PendingWrites = Arc<RwLock<HashMap<(String, i32), HashSet<SeriesRecord>>>>;
@@ -212,6 +212,19 @@ impl SeriesTracker {
         });
     }
 
+    /// Calculate series hash for cache
+    fn calculate_series_hash(service: &str, metric: &str, tag_hash: u64, date: i32) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        service.hash(&mut hasher);
+        metric.hash(&mut hasher);
+        tag_hash.hash(&mut hasher);
+        date.hash(&mut hasher);
+        hasher.finish()
+    }
+
     /// Track multiple points in batch (more efficient than individual track_point calls)
     /// This method minimizes lock contention by batching cache and pending writes operations
     pub async fn track_points(&self, db: &str, points: &[Point]) {
@@ -229,18 +242,19 @@ impl SeriesTracker {
 
             let hash = self.calculate_tag_hash(&point.tags);
             let date = point.date;
-            let key = (service.clone(), point.measurement.clone(), hash, date);
+            
+            let key_hash = Self::calculate_series_hash(&service, &point.measurement, hash, date);
 
             // Check if already tracked
             {
                 let cache = self.cache.read().await;
-                if cache.contains(&key) {
+                if cache.contains(&key_hash) {
                     continue;
                 }
             }
 
             new_records.push((
-                key,
+                key_hash,
                 SeriesRecord {
                     service,
                     metric: point.measurement.clone(),
@@ -258,8 +272,8 @@ impl SeriesTracker {
         let mut actually_new = Vec::new();
         {
             let mut cache = self.cache.write().await;
-            for (key, record) in new_records {
-                if cache.insert(key) {
+            for (key_hash, record) in new_records {
+                if cache.insert(key_hash) {
                     actually_new.push(record);
                 }
             }
@@ -642,11 +656,13 @@ impl SeriesTracker {
                     .unwrap();
 
                 for i in 0..batch.num_rows() {
-                    let service = service_col.value(i).to_string();
-                    let metric = metric_col.value(i).to_string();
+                    let service = service_col.value(i);
+                    let metric = metric_col.value(i);
                     let hash = hash_col.value(i);
+                    
+                    let key_hash = Self::calculate_series_hash(service, metric, hash, date);
 
-                    if cache.insert((service, metric, hash, date)) {
+                    if cache.insert(key_hash) {
                         loaded_count += 1;
                     }
                 }
