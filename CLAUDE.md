@@ -127,6 +127,24 @@ SELECT * FROM svc_1.cpu
 SELECT * FROM cpu
 ```
 
+## Test Scripts
+
+All test scripts are in `scripts/`:
+
+| Script | Category | Description |
+|--------|----------|-------------|
+| `test_build.sh` | Build | Verify compilation |
+| `test_write.sh` | Write/Schema | Test catalog.schema.table structure |
+| `test_schemas.sh` | Write/Schema | Test schema/table listing APIs |
+| `test_partitions.sh` | Partition | Partition management features |
+| `test_partition_query.sh` | Partition | Query partitions after restart |
+| `test_compaction.sh` | Compaction | Basic leveled compaction |
+| `test_compaction_multilevel.sh` | Compaction | Multi-level L0→L1→L2... |
+| `test_compaction_nonpartitioned.sh` | Compaction | Non-partitioned tables |
+| `test_compaction_aggressive.sh` | Compaction | Lower threshold compaction |
+| `test_series_stats.sh` | Series Stats | Cardinality tracking |
+| `test_comprehensive.sh` | Comprehensive | Full test with queries |
+
 ## Documentation
 
 | File | Content |

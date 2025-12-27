@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # Test script for partition management features
-# Prerequisites: stats-service must be running on http://localhost:3000
+# Prerequisites: stats-service must be running on http://localhost:7000
 
 set -e
 
-BASE_URL="http://localhost:3000"
+BASE_URL="http://localhost:7000"
 CATALOG="testdb"
 SCHEMA="default"
 TABLE="cpu"
