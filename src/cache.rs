@@ -212,11 +212,8 @@ impl DataCache {
             loop {
                 ticker.tick().await;
 
-                match self.flush().await {
-                    Err(e) => {
-                        error!("Background flush error: {}", e);
-                    }
-                    _ => {}
+                if let Err(e) = self.flush().await {
+                    error!("Background flush error: {}", e);
                 }
             }
         });
