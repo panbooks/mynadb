@@ -126,3 +126,16 @@ SELECT * FROM svc_1.cpu
 -- Simple name (auto-prefixes catalog.default.)
 SELECT * FROM cpu
 ```
+
+## Documentation
+
+| File | Content |
+|------|---------|
+| `README.md` | Project overview |
+| `ARCHITECTURE.md` | System architecture |
+| `CONFIG.md` | Configuration reference |
+| `docs/quickstart.md` | Getting started guide |
+| `docs/schema-configuration.md` | Schema extraction setup |
+| `docs/compaction.md` | Compaction strategy |
+| `docs/arrow-flight.md` | Arrow Flight integration |
+| `docs/troubleshooting.md` | Common issues and fixes |
