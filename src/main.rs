@@ -17,19 +17,19 @@ use axum::{
     Json, Router,
 };
 use cache::DataCache;
+use clap::Parser;
 use compactor::Compactor;
 use config::Config;
 use database_manager::DatabaseManager;
 use flight_service::StatsFlightService;
 use line_protocol::parse_multiple_lines;
 use query_engine::QueryEngine;
-use series_tracker::SeriesTracker;
 use serde::{Deserialize, Serialize};
+use series_tracker::SeriesTracker;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::transport::Server;
-use tracing::{info, warn, error, debug};
-use clap::Parser;
+use tracing::{debug, error, info, warn};
 
 /// Stats Service - Time series database with Arrow Flight API
 #[derive(Parser, Debug)]
@@ -88,7 +88,7 @@ struct RetentionRequest {
 async fn main() {
     // Parse command line arguments
     let cli = Cli::parse();
-    
+
     // Load configuration (CLI arg takes precedence over env var)
     let config_path = cli.config;
     let config = Arc::new(Config::load_or_default(&config_path));
@@ -115,13 +115,14 @@ async fn main() {
     info!("Stats Service starting with config: {:?}", *config);
 
     // Create data directory
-    std::fs::create_dir_all(&config.storage.data_dir)
-        .expect("Failed to create data directory");
+    std::fs::create_dir_all(&config.storage.data_dir).expect("Failed to create data directory");
 
     // Initialize components
     info!("Initializing data cache");
     let cache = DataCache::new(&config.storage.data_dir, Arc::new(config.schema.clone()));
-    cache.clone().start_background_flush(config.cache.flush_interval_secs);
+    cache
+        .clone()
+        .start_background_flush(config.cache.flush_interval_secs);
 
     info!("Initializing query engine");
     let query_engine = Arc::new(QueryEngine::new(&config.storage.data_dir));
@@ -131,7 +132,7 @@ async fn main() {
 
     info!("Initializing compactor");
     let compactor = Arc::new(Compactor::new(&config.storage.data_dir));
-    
+
     // Start background compaction if enabled
     if config.compaction.interval_secs > 0 {
         let compaction_config = compactor::CompactionConfig {
@@ -141,14 +142,15 @@ async fn main() {
             target_file_size: config.compaction.target_file_size_mb * 1024 * 1024,
             max_level: config.compaction.max_level,
         };
-        Arc::clone(&compactor).start_background_compaction(
-            config.compaction.interval_secs,
-            compaction_config,
-        );
+        Arc::clone(&compactor)
+            .start_background_compaction(config.compaction.interval_secs, compaction_config);
     }
 
     info!("Initializing series tracker");
-    let series_tracker = Arc::new(SeriesTracker::new(&config.storage.data_dir, Arc::new(config.schema.clone())));
+    let series_tracker = Arc::new(SeriesTracker::new(
+        &config.storage.data_dir,
+        Arc::new(config.schema.clone()),
+    ));
     Arc::clone(&series_tracker).start_background_flush(config.series_tracker.flush_interval_secs);
 
     let state = AppState {
@@ -165,7 +167,7 @@ async fn main() {
         .route("/health", get(health))
         // Write endpoints
         .route("/write/:db", post(write_handler))
-        .route("/write", post(write_handler_query_param))  // InfluxDB-compatible
+        .route("/write", post(write_handler_query_param)) // InfluxDB-compatible
         // Cache management
         .route("/stats", get(stats_handler))
         .route("/flush", post(flush_handler))
@@ -179,7 +181,10 @@ async fn main() {
         .route("/databases/:db", get(get_database_info_handler))
         // Schema (service) management
         .route("/databases/:db/schemas", get(list_schemas_handler))
-        .route("/databases/:db/schemas/:schema/tables", get(list_schema_tables_handler))
+        .route(
+            "/databases/:db/schemas/:schema/tables",
+            get(list_schema_tables_handler),
+        )
         // Table management
         .route("/databases/:db/tables", post(create_table_handler))
         .route("/databases/:db/tables", get(list_tables_handler))
@@ -187,12 +192,27 @@ async fn main() {
         .route("/schema/:db/:table", get(schema_handler))
         // Compaction endpoints
         .route("/compact/:catalog", post(compact_handler))
-        .route("/compact/:catalog/:schema/:table", post(compact_table_handler))
-        .route("/compact/:catalog/:schema/:table/:date", post(compact_partition_handler))
+        .route(
+            "/compact/:catalog/:schema/:table",
+            post(compact_table_handler),
+        )
+        .route(
+            "/compact/:catalog/:schema/:table/:date",
+            post(compact_partition_handler),
+        )
         // Partition management endpoints
-        .route("/partitions/:catalog/:schema/:table", get(list_partitions_handler))
-        .route("/partitions/:catalog/:schema/:table/:date", delete(delete_partition_handler))
-        .route("/retention/:catalog/:schema/:table", post(delete_old_partitions_handler))
+        .route(
+            "/partitions/:catalog/:schema/:table",
+            get(list_partitions_handler),
+        )
+        .route(
+            "/partitions/:catalog/:schema/:table/:date",
+            delete(delete_partition_handler),
+        )
+        .route(
+            "/retention/:catalog/:schema/:table",
+            post(delete_old_partitions_handler),
+        )
         // Series cardinality tracking
         .route("/series_stats/:db", get(series_stats_handler))
         .fallback(log_request)
@@ -200,17 +220,24 @@ async fn main() {
 
     // Start HTTP server
     let http_addr = config.http_addr();
-    let http_listener = tokio::net::TcpListener::bind(&http_addr)
-        .await
-        .unwrap();
+    let http_listener = tokio::net::TcpListener::bind(&http_addr).await.unwrap();
 
     info!("HTTP REST API bound to: {}", http_addr);
     info!("Arrow Flight API will bind to: {}", config.flight_addr());
     info!("Data directory: {}", config.storage.data_dir);
-    info!("Cache flush interval: {} seconds", config.cache.flush_interval_secs);
-    info!("Series tracker flush interval: {} seconds", config.series_tracker.flush_interval_secs);
+    info!(
+        "Cache flush interval: {} seconds",
+        config.cache.flush_interval_secs
+    );
+    info!(
+        "Series tracker flush interval: {} seconds",
+        config.series_tracker.flush_interval_secs
+    );
     if config.compaction.interval_secs > 0 {
-        info!("Background compaction interval: {} seconds", config.compaction.interval_secs);
+        info!(
+            "Background compaction interval: {} seconds",
+            config.compaction.interval_secs
+        );
     } else {
         info!("Background compaction: disabled");
     }
@@ -293,7 +320,10 @@ async fn list_databases_handler(State(state): State<AppState>) -> impl IntoRespo
                 "databases": databases,
                 "count": databases.len()
             });
-            (StatusCode::OK, serde_json::to_string_pretty(&response).unwrap())
+            (
+                StatusCode::OK,
+                serde_json::to_string_pretty(&response).unwrap(),
+            )
         }
         Err(e) => {
             error!("List databases error: {}", e);
@@ -361,9 +391,15 @@ async fn create_table_handler(
     State(state): State<AppState>,
     Json(req): Json<CreateTableRequest>,
 ) -> impl IntoResponse {
-    info!("Create Table Request: db={}, table={}, partition_by={:?}", db, req.name, req.partition_by);
+    info!(
+        "Create Table Request: db={}, table={}, partition_by={:?}",
+        db, req.name, req.partition_by
+    );
 
-    match state.db_manager.create_table(&db, &req.name, req.partition_by) {
+    match state
+        .db_manager
+        .create_table(&db, &req.name, req.partition_by)
+    {
         Ok(msg) => {
             info!("Table created: {}", msg);
             (StatusCode::CREATED, msg)
@@ -414,14 +450,14 @@ async fn flush_handler(State(state): State<AppState>) -> impl IntoResponse {
     match state.cache.flush().await {
         Ok(count) => {
             info!("Manual flush completed: {} files", count);
-            (
-                StatusCode::OK,
-                format!("Flushed {} file(s) to disk", count),
-            )
+            (StatusCode::OK, format!("Flushed {} file(s) to disk", count))
         }
         Err(e) => {
             error!("Manual flush error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Flush error: {}", e))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Flush error: {}", e),
+            )
         }
     }
 }
@@ -446,22 +482,19 @@ async fn query_handler_post(
     execute_query(db, body, state).await
 }
 
-async fn execute_query(
-    db: String,
-    sql: String,
-    state: AppState,
-) -> impl IntoResponse {
+async fn execute_query(db: String, sql: String, state: AppState) -> impl IntoResponse {
     // Auto-register database tables (simplified!)
     if let Err(e) = state.query_engine.ensure_database_registered(&db).await {
         error!("Error auto-registering database: {}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Error: {}", e),
-        );
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e));
     }
 
     // Execute query with database context (auto-prefix table names)
-    match state.query_engine.execute_query_json_with_db(&sql, &db).await {
+    match state
+        .query_engine
+        .execute_query_json_with_db(&sql, &db)
+        .await
+    {
         Ok(json) => {
             info!("Query executed successfully");
             (StatusCode::OK, json)
@@ -496,7 +529,10 @@ async fn list_tables_handler(
         "tables": db_tables,
         "count": db_tables.len()
     });
-    (StatusCode::OK, serde_json::to_string_pretty(&response).unwrap())
+    (
+        StatusCode::OK,
+        serde_json::to_string_pretty(&response).unwrap(),
+    )
 }
 
 async fn schema_handler(
@@ -533,7 +569,10 @@ async fn write_handler(
         Ok(b) => b,
         Err(e) => {
             error!("Error reading body: {}", e);
-            return (StatusCode::BAD_REQUEST, format!("Error reading body: {}", e));
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Error reading body: {}", e),
+            );
         }
     };
 
@@ -560,7 +599,10 @@ async fn write_handler_query_param(
         Ok(b) => b,
         Err(e) => {
             error!("Error reading body: {}", e);
-            return (StatusCode::BAD_REQUEST, format!("Error reading body: {}", e));
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Error reading body: {}", e),
+            );
         }
     };
 
@@ -575,11 +617,7 @@ async fn write_handler_query_param(
     process_write_data(&params.db, &data, state).await
 }
 
-async fn process_write_data(
-    db: &str,
-    data: &str,
-    state: AppState,
-) -> (StatusCode, String) {
+async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCode, String) {
     debug!("Processing write data: {} bytes", data.len());
 
     // Parse line protocol
@@ -587,7 +625,10 @@ async fn process_write_data(
     debug!("Parsed {} points", points.len());
 
     if points.is_empty() {
-        return (StatusCode::BAD_REQUEST, "No valid points to write".to_string());
+        return (
+            StatusCode::BAD_REQUEST,
+            "No valid points to write".to_string(),
+        );
     }
 
     // Track series cardinality (batch operation, in-memory cache only)
@@ -602,15 +643,23 @@ async fn process_write_data(
 
     // Add to cache and register catalog.schema
     for ((schema, measurement), points) in grouped {
-        debug!("Adding {} points for catalog={}, schema={}, table={}",
-            points.len(), db, schema, measurement);
+        debug!(
+            "Adding {} points for catalog={}, schema={}, table={}",
+            points.len(),
+            db,
+            schema,
+            measurement
+        );
 
         // Ensure catalog.schema is registered in query engine
         if let Err(e) = state.query_engine.ensure_schema(db, &schema).await {
             warn!("Failed to register schema {}.{}: {}", db, schema, e);
         }
 
-        state.cache.add_points(db, &schema, &measurement, points).await;
+        state
+            .cache
+            .add_points(db, &schema, &measurement, points)
+            .await;
     }
 
     (StatusCode::OK, "Data added to cache\n".to_string())
@@ -648,7 +697,10 @@ async fn compact_handler(
     match state.compactor.compact_catalog(&catalog, &config).await {
         Ok(results) => {
             if results.is_empty() {
-                (StatusCode::OK, "No compaction needed (minimum file threshold not met)".to_string())
+                (
+                    StatusCode::OK,
+                    "No compaction needed (minimum file threshold not met)".to_string(),
+                )
             } else {
                 let summary = results
                     .iter()
@@ -684,17 +736,22 @@ async fn compact_handler(
         }
         Err(e) => {
             error!("Compaction error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Compaction error: {}", e))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Compaction error: {}", e),
+            )
         }
     }
 }
-
 
 async fn compact_table_handler(
     Path((catalog, schema, table)): Path<(String, String, String)>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    info!("Compact Table Request: catalog={}, schema={}, table={}", catalog, schema, table);
+    info!(
+        "Compact Table Request: catalog={}, schema={}, table={}",
+        catalog, schema, table
+    );
 
     // Convert config to compactor's CompactionConfig
     let config = compactor::CompactionConfig {
@@ -705,13 +762,20 @@ async fn compact_table_handler(
         max_level: state.config.compaction.max_level,
     };
 
-    match state.compactor.compact_table_all_partitions(&catalog, &schema, &table, &config).await {
+    match state
+        .compactor
+        .compact_table_all_partitions(&catalog, &schema, &table, &config)
+        .await
+    {
         Ok(results) => {
             if results.is_empty() {
-                (StatusCode::OK, format!(
-                    "No compaction needed for {}.{}.{} (minimum file threshold not met)",
-                    catalog, schema, table
-                ))
+                (
+                    StatusCode::OK,
+                    format!(
+                        "No compaction needed for {}.{}.{} (minimum file threshold not met)",
+                        catalog, schema, table
+                    ),
+                )
             } else {
                 let summary = results
                     .iter()
@@ -736,7 +800,9 @@ async fn compact_table_handler(
                     format!(
                         "Compacted {} partition(s) in {}.{}.{}\n\n{}",
                         results.len(),
-                        catalog, schema, table,
+                        catalog,
+                        schema,
+                        table,
                         summary
                     ),
                 )
@@ -744,7 +810,10 @@ async fn compact_table_handler(
         }
         Err(e) => {
             error!("Compaction error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Compaction error: {}", e))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Compaction error: {}", e),
+            )
         }
     }
 }
@@ -753,8 +822,10 @@ async fn compact_partition_handler(
     Path((catalog, schema, table, date)): Path<(String, String, String, String)>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    info!("Compact Partition Request: catalog={}, schema={}, table={}, date={}", 
-        catalog, schema, table, date);
+    info!(
+        "Compact Partition Request: catalog={}, schema={}, table={}, date={}",
+        catalog, schema, table, date
+    );
 
     // Format as date partition (date=YYYY-MM-DD)
     let date_partition = if date.starts_with("date=") {
@@ -772,7 +843,11 @@ async fn compact_partition_handler(
         max_level: state.config.compaction.max_level,
     };
 
-    match state.compactor.compact_table_partition(&catalog, &schema, &table, &date_partition, &config).await {
+    match state
+        .compactor
+        .compact_table_partition(&catalog, &schema, &table, &date_partition, &config)
+        .await
+    {
         Ok(Some(result)) => {
             let message = format!(
                 "Compacted {}.{}.{}/{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
@@ -801,7 +876,10 @@ async fn compact_partition_handler(
         }
         Err(e) => {
             error!("Compaction error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Compaction error: {}", e))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Compaction error: {}", e),
+            )
         }
     }
 }
@@ -846,8 +924,15 @@ async fn series_stats_handler(
                 }).collect::<Vec<_>>()
             });
 
-            info!("Returned stats for {} services, {} total series", stats.len(), total_series);
-            (StatusCode::OK, serde_json::to_string_pretty(&response).unwrap())
+            info!(
+                "Returned stats for {} services, {} total series",
+                stats.len(),
+                total_series
+            );
+            (
+                StatusCode::OK,
+                serde_json::to_string_pretty(&response).unwrap(),
+            )
         }
         Err(e) => {
             error!("Error getting series stats: {}", e);
@@ -875,7 +960,10 @@ async fn list_schemas_handler(
                 "count": schemas.len()
             });
             info!("Found {} schema(s)", schemas.len());
-            (StatusCode::OK, serde_json::to_string_pretty(&response).unwrap())
+            (
+                StatusCode::OK,
+                serde_json::to_string_pretty(&response).unwrap(),
+            )
         }
         Err(e) => {
             error!("List schemas error: {}", e);
@@ -899,7 +987,10 @@ async fn list_schema_tables_handler(
                 "count": tables.len()
             });
             info!("Found {} table(s)", tables.len());
-            (StatusCode::OK, serde_json::to_string_pretty(&response).unwrap())
+            (
+                StatusCode::OK,
+                serde_json::to_string_pretty(&response).unwrap(),
+            )
         }
         Err(e) => {
             error!("List schema tables error: {}", e);
@@ -914,9 +1005,15 @@ async fn list_partitions_handler(
     Path((catalog, schema, table)): Path<(String, String, String)>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    debug!("List Partitions Request: catalog={}, schema={}, table={}", catalog, schema, table);
+    debug!(
+        "List Partitions Request: catalog={}, schema={}, table={}",
+        catalog, schema, table
+    );
 
-    match state.db_manager.discover_table_partitions(&catalog, &schema, &table) {
+    match state
+        .db_manager
+        .discover_table_partitions(&catalog, &schema, &table)
+    {
         Ok(partitions) => {
             let response = serde_json::json!({
                 "catalog": catalog,
@@ -934,7 +1031,10 @@ async fn list_partitions_handler(
                 "total_size_mb": partitions.iter().map(|p| p.total_size_bytes).sum::<u64>() as f64 / 1024.0 / 1024.0
             });
             info!("Found {} partition(s)", partitions.len());
-            (StatusCode::OK, serde_json::to_string_pretty(&response).unwrap())
+            (
+                StatusCode::OK,
+                serde_json::to_string_pretty(&response).unwrap(),
+            )
         }
         Err(e) => {
             error!("List partitions error: {}", e);
@@ -947,10 +1047,15 @@ async fn delete_partition_handler(
     Path((catalog, schema, table, date)): Path<(String, String, String, String)>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    info!("Delete Partition Request: catalog={}, schema={}, table={}, date={}", 
-        catalog, schema, table, date);
+    info!(
+        "Delete Partition Request: catalog={}, schema={}, table={}, date={}",
+        catalog, schema, table, date
+    );
 
-    match state.db_manager.delete_partition(&catalog, &schema, &table, &date) {
+    match state
+        .db_manager
+        .delete_partition(&catalog, &schema, &table, &date)
+    {
         Ok(msg) => {
             info!("{}", msg);
             (StatusCode::OK, msg)
@@ -967,18 +1072,25 @@ async fn delete_old_partitions_handler(
     State(state): State<AppState>,
     Json(req): Json<RetentionRequest>,
 ) -> impl IntoResponse {
-    info!("Delete Old Partitions Request: catalog={}, schema={}, table={}", catalog, schema, table);
+    info!(
+        "Delete Old Partitions Request: catalog={}, schema={}, table={}",
+        catalog, schema, table
+    );
 
     let deleted = if let Some(days) = req.older_than_days {
         info!("Deleting partitions older than {} days", days);
-        state.db_manager.delete_partitions_older_than_days(&catalog, &schema, &table, days)
+        state
+            .db_manager
+            .delete_partitions_older_than_days(&catalog, &schema, &table, days)
     } else if let Some(before_date) = req.before_date {
         info!("Deleting partitions before {}", before_date);
-        state.db_manager.delete_partitions_before(&catalog, &schema, &table, &before_date)
+        state
+            .db_manager
+            .delete_partitions_before(&catalog, &schema, &table, &before_date)
     } else {
         return (
             StatusCode::BAD_REQUEST,
-            "Must specify either 'older_than_days' or 'before_date'".to_string()
+            "Must specify either 'older_than_days' or 'before_date'".to_string(),
         );
     };
 

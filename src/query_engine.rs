@@ -1,14 +1,16 @@
 use datafusion::arrow::array::RecordBatch;
-use datafusion::prelude::*;
 use datafusion::catalog_common::MemoryCatalogProvider;
 use datafusion::catalog_common::MemorySchemaProvider;
-use datafusion::sql::TableReference;
-use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
+use datafusion::prelude::*;
+use datafusion::sql::TableReference;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
 const DEFAULT_SCHEMA: &str = "default";
 
@@ -40,15 +42,22 @@ impl QueryEngine {
     }
 
     /// Ensure schema exists in catalog, create if needed
-    async fn ensure_schema_in_catalog(&self, catalog_name: &str, schema_name: &str) -> Result<(), String> {
+    async fn ensure_schema_in_catalog(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+    ) -> Result<(), String> {
         self.ensure_catalog(catalog_name).await?;
 
-        let catalog = self.ctx.catalog(catalog_name)
+        let catalog = self
+            .ctx
+            .catalog(catalog_name)
             .ok_or_else(|| format!("Catalog '{}' not found", catalog_name))?;
 
         if catalog.schema(schema_name).is_none() {
             let schema = Arc::new(MemorySchemaProvider::new());
-            catalog.register_schema(schema_name, schema)
+            catalog
+                .register_schema(schema_name, schema)
                 .map_err(|e| format!("Failed to register schema: {}", e))?;
             info!("Created schema: {}.{}", catalog_name, schema_name);
         }
@@ -63,14 +72,18 @@ impl QueryEngine {
         table_name: &str,
     ) -> Result<(), String> {
         // Build path: data_dir/catalog/schema/table/
-        let table_path = format!("{}/{}/{}/{}", self.data_dir, catalog_name, schema_name, table_name);
+        let table_path = format!(
+            "{}/{}/{}/{}",
+            self.data_dir, catalog_name, schema_name, table_name
+        );
 
         if !std::path::Path::new(&table_path).exists() {
             return Err(format!("Table path not found: {}", table_path));
         }
 
         // Ensure catalog and schema exist
-        self.ensure_schema_in_catalog(catalog_name, schema_name).await?;
+        self.ensure_schema_in_catalog(catalog_name, schema_name)
+            .await?;
 
         // Check if table is already registered
         if let Some(catalog) = self.ctx.catalog(catalog_name) {
@@ -87,18 +100,29 @@ impl QueryEngine {
 
         if !partitions.is_empty() {
             // Register partitioned table using ListingTable API
-            self.register_partitioned_table(catalog_name, schema_name, table_name, &table_path).await?;
-            debug!("Registered partitioned table: {}.{}.{} with {} partitions",
-                   catalog_name, schema_name, table_name, partitions.len());
+            self.register_partitioned_table(catalog_name, schema_name, table_name, &table_path)
+                .await?;
+            debug!(
+                "Registered partitioned table: {}.{}.{} with {} partitions",
+                catalog_name,
+                schema_name,
+                table_name,
+                partitions.len()
+            );
         } else {
             // No partitions, use standard registration
-            self.register_simple_table(catalog_name, schema_name, table_name, &table_path).await?;
-            debug!("Registered non-partitioned table: {}.{}.{}", catalog_name, schema_name, table_name);
+            self.register_simple_table(catalog_name, schema_name, table_name, &table_path)
+                .await?;
+            debug!(
+                "Registered non-partitioned table: {}.{}.{}",
+                catalog_name, schema_name, table_name
+            );
         }
 
         // Track registration
         let mut catalogs = self.registered_catalogs.write().await;
-        catalogs.entry(catalog_name.to_string())
+        catalogs
+            .entry(catalog_name.to_string())
             .or_insert_with(HashSet::new)
             .insert(schema_name.to_string());
 
@@ -117,7 +141,12 @@ impl QueryEngine {
         self.ctx
             .register_parquet(table_ref, table_path, ParquetReadOptions::default())
             .await
-            .map_err(|e| format!("Failed to register table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to register table '{}.{}.{}': {}",
+                    catalog_name, schema_name, table_name, e
+                )
+            })?;
         Ok(())
     }
 
@@ -137,14 +166,17 @@ impl QueryEngine {
         let file_format = Arc::new(ParquetFormat::default());
         let listing_options = ListingOptions::new(file_format)
             .with_file_extension(".parquet")
-            .with_table_partition_cols(vec![("date".to_string(), datafusion::arrow::datatypes::DataType::Utf8)]); // Partition column
+            .with_table_partition_cols(vec![(
+                "date".to_string(),
+                datafusion::arrow::datatypes::DataType::Utf8,
+            )]); // Partition column
 
         // Create ListingTableConfig
-        let config = ListingTableConfig::new(table_url)
-            .with_listing_options(listing_options);
+        let config = ListingTableConfig::new(table_url).with_listing_options(listing_options);
 
         // Infer schema from the files
-        let config = config.infer_schema(&self.ctx.state())
+        let config = config
+            .infer_schema(&self.ctx.state())
             .await
             .map_err(|e| format!("Failed to infer schema: {}", e))?;
 
@@ -153,14 +185,18 @@ impl QueryEngine {
             .map_err(|e| format!("Failed to create listing table: {}", e))?;
 
         // Get the catalog and schema
-        let catalog = self.ctx.catalog(catalog_name)
+        let catalog = self
+            .ctx
+            .catalog(catalog_name)
             .ok_or_else(|| format!("Catalog '{}' not found", catalog_name))?;
 
-        let schema = catalog.schema(schema_name)
+        let schema = catalog
+            .schema(schema_name)
             .ok_or_else(|| format!("Schema '{}.{}' not found", catalog_name, schema_name))?;
 
         // Register the table
-        schema.register_table(table_name.to_string(), Arc::new(listing_table))
+        schema
+            .register_table(table_name.to_string(), Arc::new(listing_table))
             .map_err(|e| format!("Failed to register table: {}", e))?;
 
         Ok(())
@@ -196,7 +232,11 @@ impl QueryEngine {
     }
 
     /// Auto-discover and register all tables in catalog.schema from disk
-    pub async fn discover_and_register(&self, catalog_name: &str, schema_name: &str) -> Result<usize, String> {
+    pub async fn discover_and_register(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+    ) -> Result<usize, String> {
         let schema_path = format!("{}/{}/{}", self.data_dir, catalog_name, schema_name);
 
         if !std::path::Path::new(&schema_path).exists() {
@@ -214,8 +254,14 @@ impl QueryEngine {
             if path.is_dir() {
                 if let Some(table_name) = path.file_name().and_then(|s| s.to_str()) {
                     if !table_name.starts_with('.') {
-                        if let Err(e) = self.register_table(catalog_name, schema_name, table_name).await {
-                            warn!("Failed to register {}.{}.{}: {}", catalog_name, schema_name, table_name, e);
+                        if let Err(e) = self
+                            .register_table(catalog_name, schema_name, table_name)
+                            .await
+                        {
+                            warn!(
+                                "Failed to register {}.{}.{}: {}",
+                                catalog_name, schema_name, table_name, e
+                            );
                         } else {
                             count += 1;
                         }
@@ -248,7 +294,10 @@ impl QueryEngine {
                     if !schema_name.starts_with('.') {
                         match self.discover_and_register(catalog_name, schema_name).await {
                             Ok(count) => total_tables += count,
-                            Err(e) => warn!("Failed to discover schema {}.{}: {}", catalog_name, schema_name, e),
+                            Err(e) => warn!(
+                                "Failed to discover schema {}.{}: {}",
+                                catalog_name, schema_name, e
+                            ),
                         }
                     }
                 }
@@ -262,7 +311,8 @@ impl QueryEngine {
     pub async fn ensure_schema(&self, catalog_name: &str, schema_name: &str) -> Result<(), String> {
         // Just track it - actual registration happens when tables are written
         let mut catalogs = self.registered_catalogs.write().await;
-        catalogs.entry(catalog_name.to_string())
+        catalogs
+            .entry(catalog_name.to_string())
             .or_insert_with(HashSet::new)
             .insert(schema_name.to_string());
         Ok(())
@@ -272,14 +322,21 @@ impl QueryEngine {
     pub async fn ensure_database_registered(&self, db_name: &str) -> Result<(), String> {
         let count = self.discover_catalog(db_name).await?;
         if count > 0 {
-            info!("Auto-registered {} table(s) in catalog '{}'", count, db_name);
+            info!(
+                "Auto-registered {} table(s) in catalog '{}'",
+                count, db_name
+            );
         }
         Ok(())
     }
 
     /// Execute a SQL query with database context
     /// Automatically qualifies unqualified table names with catalog.schema
-    pub async fn execute_query_with_db(&self, sql: &str, db_name: &str) -> Result<Vec<RecordBatch>, String> {
+    pub async fn execute_query_with_db(
+        &self,
+        sql: &str,
+        db_name: &str,
+    ) -> Result<Vec<RecordBatch>, String> {
         // Qualify unqualified table names with catalog.schema
         let qualified_sql = self.qualify_table_names(sql, db_name);
 
@@ -308,7 +365,11 @@ impl QueryEngine {
     }
 
     /// Get the schema for a SQL query without executing it
-    pub async fn get_query_schema(&self, db_name: &str, sql: &str) -> Result<Arc<datafusion::arrow::datatypes::Schema>, String> {
+    pub async fn get_query_schema(
+        &self,
+        db_name: &str,
+        sql: &str,
+    ) -> Result<Arc<datafusion::arrow::datatypes::Schema>, String> {
         // Ensure database is registered
         self.ensure_database_registered(db_name).await?;
 
@@ -401,7 +462,14 @@ impl QueryEngine {
         let mut result = sql.to_string();
         let mut offset: i64 = 0; // Track the offset due to replacements
 
-        let keywords = ["FROM", "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN"];
+        let keywords = [
+            "FROM",
+            "JOIN",
+            "INNER JOIN",
+            "LEFT JOIN",
+            "RIGHT JOIN",
+            "FULL JOIN",
+        ];
 
         for keyword in &keywords {
             let pattern = format!("{} ", keyword);
@@ -422,7 +490,9 @@ impl QueryEngine {
                         quote_char = ch;
                     } else if in_quotes && ch == quote_char {
                         in_quotes = false;
-                    } else if !in_quotes && (ch.is_whitespace() || ch == ',' || ch == ';' || ch == ')') {
+                    } else if !in_quotes
+                        && (ch.is_whitespace() || ch == ',' || ch == ';' || ch == ')')
+                    {
                         end_pos = i;
                         break;
                     }
@@ -451,25 +521,31 @@ impl QueryEngine {
                     }
                     1 => {
                         // Simple name: cpu -> catalog.default.cpu
-                        format!("{}.{}.{}",
-                                catalog_name,
-                                DEFAULT_SCHEMA,
-                                Self::quote_identifier(&parts[0]))
+                        format!(
+                            "{}.{}.{}",
+                            catalog_name,
+                            DEFAULT_SCHEMA,
+                            Self::quote_identifier(&parts[0])
+                        )
                     }
                     2 => {
                         // Partially qualified: schema.table -> catalog.schema.table
-                        format!("{}.{}.{}",
-                                catalog_name,
-                                Self::quote_identifier(&parts[0]),
-                                Self::quote_identifier(&parts[1]))
+                        format!(
+                            "{}.{}.{}",
+                            catalog_name,
+                            Self::quote_identifier(&parts[0]),
+                            Self::quote_identifier(&parts[1])
+                        )
                     }
                     _ => {
                         // Already fully qualified (catalog.schema.table), don't modify
                         // But reconstruct it with proper quoting
-                        format!("{}.{}.{}",
-                                Self::quote_identifier(&parts[0]),
-                                Self::quote_identifier(&parts[1]),
-                                Self::quote_identifier(&parts[2]))
+                        format!(
+                            "{}.{}.{}",
+                            Self::quote_identifier(&parts[0]),
+                            Self::quote_identifier(&parts[1]),
+                            Self::quote_identifier(&parts[2])
+                        )
                     }
                 };
 
@@ -494,7 +570,11 @@ impl QueryEngine {
     }
 
     /// Execute query and return as JSON (with DB context)
-    pub async fn execute_query_json_with_db(&self, sql: &str, db_name: &str) -> Result<String, String> {
+    pub async fn execute_query_json_with_db(
+        &self,
+        sql: &str,
+        db_name: &str,
+    ) -> Result<String, String> {
         let batches = self.execute_query_with_db(sql, db_name).await?;
 
         if batches.is_empty() {
@@ -585,16 +665,29 @@ impl QueryEngine {
                 // Handle dictionary-encoded strings (used for partition columns)
                 match value_type.as_ref() {
                     DataType::Utf8 => {
-                        let dict_array = array.as_any().downcast_ref::<DictionaryArray<UInt16Type>>().unwrap();
+                        let dict_array = array
+                            .as_any()
+                            .downcast_ref::<DictionaryArray<UInt16Type>>()
+                            .unwrap();
                         let keys = dict_array.keys();
                         let key = keys.value(index);
-                        let values = dict_array.values().as_any().downcast_ref::<StringArray>().unwrap();
+                        let values = dict_array
+                            .values()
+                            .as_any()
+                            .downcast_ref::<StringArray>()
+                            .unwrap();
                         Ok(serde_json::json!(values.value(key as usize)))
                     }
-                    _ => Ok(serde_json::json!(format!("Unsupported dictionary value type: {:?}", value_type))),
+                    _ => Ok(serde_json::json!(format!(
+                        "Unsupported dictionary value type: {:?}",
+                        value_type
+                    ))),
                 }
             }
-            _ => Ok(serde_json::json!(format!("Unsupported type: {:?}", array.data_type()))),
+            _ => Ok(serde_json::json!(format!(
+                "Unsupported type: {:?}",
+                array.data_type()
+            ))),
         }
     }
 
@@ -607,7 +700,8 @@ impl QueryEngine {
                 for schema_name in catalog.schema_names() {
                     if let Some(schema) = catalog.schema(&schema_name) {
                         for table_name in schema.table_names() {
-                            all_tables.push(format!("{}.{}.{}", catalog_name, schema_name, table_name));
+                            all_tables
+                                .push(format!("{}.{}.{}", catalog_name, schema_name, table_name));
                         }
                     }
                 }
@@ -660,7 +754,11 @@ impl QueryEngine {
     }
 
     /// List all tables in a catalog.schema
-    pub async fn list_tables_in_schema(&self, catalog_name: &str, schema_name: &str) -> Result<Vec<String>, String> {
+    pub async fn list_tables_in_schema(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+    ) -> Result<Vec<String>, String> {
         let schema_path = format!("{}/{}/{}", self.data_dir, catalog_name, schema_name);
 
         if !std::path::Path::new(&schema_path).exists() {
@@ -726,7 +824,10 @@ mod tests {
         // Fully qualified: testdb.webapp.cpu -> testdb.webapp.cpu (unchanged)
         let sql = "SELECT * FROM testdb.webapp.cpu WHERE timestamp > 0";
         let result = engine.qualify_table_names(sql, "testdb");
-        assert_eq!(result, "SELECT * FROM testdb.webapp.cpu WHERE timestamp > 0");
+        assert_eq!(
+            result,
+            "SELECT * FROM testdb.webapp.cpu WHERE timestamp > 0"
+        );
     }
 
     #[test]
@@ -756,7 +857,10 @@ mod tests {
         // Table with alias
         let sql = "SELECT c.* FROM cpu c WHERE c.usage > 50";
         let result = engine.qualify_table_names(sql, "testdb");
-        assert_eq!(result, "SELECT c.* FROM testdb.default.cpu c WHERE c.usage > 50");
+        assert_eq!(
+            result,
+            "SELECT c.* FROM testdb.default.cpu c WHERE c.usage > 50"
+        );
     }
 
     #[test]

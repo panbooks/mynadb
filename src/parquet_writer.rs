@@ -1,7 +1,5 @@
 use crate::line_protocol::{format_date32_as_partition, Point};
-use arrow::array::{
-    ArrayRef, Date32Array, RecordBatch, StringArray, TimestampNanosecondArray,
-};
+use arrow::array::{ArrayRef, Date32Array, RecordBatch, StringArray, TimestampNanosecondArray};
 use arrow::datatypes::{Field, Schema};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
@@ -27,7 +25,10 @@ impl ParquetWriter {
 
     /// Get table directory path: data_dir/catalog/schema/table/
     fn get_table_path(&self, catalog: &str, schema: &str, table: &str) -> PathBuf {
-        Path::new(&self.data_dir).join(catalog).join(schema).join(table)
+        Path::new(&self.data_dir)
+            .join(catalog)
+            .join(schema)
+            .join(table)
     }
 
     /// Get partition directory path: data_dir/catalog/schema/table/date=YYYY-MM-DD/
@@ -38,7 +39,10 @@ impl ParquetWriter {
 
     /// Generate a leveled parquet filename
     fn generate_filename(level: u32, timestamp: i64) -> String {
-        format!("{}{}_{}.{}", LEVEL_PREFIX, level, timestamp, PARQUET_FILE_EXT)
+        format!(
+            "{}{}_{}.{}",
+            LEVEL_PREFIX, level, timestamp, PARQUET_FILE_EXT
+        )
     }
 
     /// Write batches to a partitioned directory structure

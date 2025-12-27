@@ -20,15 +20,12 @@ pub fn init_logging(config: &LoggingConfig) -> Result<(), String> {
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     // Build the filter
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(config.level.clone()));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(config.level.clone()));
 
     // Create file layer
     let file_layer = if config.json_format {
-        fmt::layer()
-            .json()
-            .with_writer(non_blocking)
-            .boxed()
+        fmt::layer().json().with_writer(non_blocking).boxed()
     } else {
         fmt::layer()
             .with_writer(non_blocking)

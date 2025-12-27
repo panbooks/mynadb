@@ -1,16 +1,14 @@
-use crate::line_protocol::{Point, format_date32_as_partition};
-use crate::parquet_writer::ParquetWriter;
 use crate::config::SchemaConfig;
-use arrow::array::{
-    RecordBatch, StringArray, TimestampNanosecondArray,
-};
+use crate::line_protocol::{format_date32_as_partition, Point};
+use crate::parquet_writer::ParquetWriter;
+use arrow::array::{RecordBatch, StringArray, TimestampNanosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
-use tracing::{info, error, debug};
+use tracing::{debug, error, info};
 
 /// Cache key: (catalog/database, schema/service, table/measurement)
 type CacheKey = (String, String, String, i32);
@@ -42,7 +40,12 @@ impl DataCache {
             return;
         }
 
-        let key = (catalog.to_string(), schema.to_string(), table.to_string(), points[0].date);
+        let key = (
+            catalog.to_string(),
+            schema.to_string(),
+            table.to_string(),
+            points[0].date,
+        );
 
         // Convert points to RecordBatch
         match Self::points_to_record_batch(&points) {
@@ -140,16 +143,28 @@ impl DataCache {
         for ((catalog, schema, table, date), batches) in cache.drain() {
             let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
             let date_partition = format_date32_as_partition(date);
-            debug!("Writing {} rows for {}.{}.{}/{}", total_rows, catalog, schema, table, date_partition);
+            debug!(
+                "Writing {} rows for {}.{}.{}/{}",
+                total_rows, catalog, schema, table, date_partition
+            );
 
-            match self.writer.write_batches_partitioned(&catalog, &schema, &table, date, batches) {
+            match self
+                .writer
+                .write_batches_partitioned(&catalog, &schema, &table, date, batches)
+            {
                 Ok(filename) => {
                     debug!("Written to: {}", filename);
                     files_written += 1;
                 }
                 Err(e) => {
-                    error!("Error writing {}.{}.{}/{}: {}", catalog, schema, table, date_partition, e);
-                    errors.push(format!("{}.{}.{}/{}: {}", catalog, schema, table, date_partition, e));
+                    error!(
+                        "Error writing {}.{}.{}/{}: {}",
+                        catalog, schema, table, date_partition, e
+                    );
+                    errors.push(format!(
+                        "{}.{}.{}/{}: {}",
+                        catalog, schema, table, date_partition, e
+                    ));
                 }
             }
         }
@@ -157,10 +172,17 @@ impl DataCache {
         let elapsed = start.elapsed();
 
         if !errors.is_empty() {
-            return Err(format!("Flush completed with {} error(s) in {:?}", errors.len(), elapsed));
+            return Err(format!(
+                "Flush completed with {} error(s) in {:?}",
+                errors.len(),
+                elapsed
+            ));
         }
 
-        info!("Flush complete: {} file(s) written in {:?}", files_written, elapsed);
+        info!(
+            "Flush complete: {} file(s) written in {:?}",
+            files_written, elapsed
+        );
         Ok(files_written)
     }
 
@@ -190,11 +212,12 @@ impl DataCache {
         for tag_key in &self.schema_config.tag_keys {
             if let Some(value) = tags.get(tag_key) {
                 // Prefix numeric schemas to avoid SQL parser issues
-                return if self.schema_config.prefix_numeric && value.chars().all(|c| c.is_numeric()) {
+                return if self.schema_config.prefix_numeric && value.chars().all(|c| c.is_numeric())
+                {
                     format!("service_{}", value)
                 } else {
                     value.clone()
-                }
+                };
             }
         }
 
@@ -207,7 +230,10 @@ impl DataCache {
         tokio::spawn(async move {
             let mut ticker = interval(Duration::from_secs(flush_interval_secs));
 
-            info!("Background flush started: every {} seconds", flush_interval_secs);
+            info!(
+                "Background flush started: every {} seconds",
+                flush_interval_secs
+            );
 
             loop {
                 ticker.tick().await;

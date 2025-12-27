@@ -1,12 +1,12 @@
-use std::collections::HashMap;
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Point {
     pub measurement: String,
     pub tags: HashMap<String, String>,
     pub timestamp: Option<i64>,
-    pub date: i32,  // Date32 type: days since Unix epoch (1970-01-01)
+    pub date: i32, // Date32 type: days since Unix epoch (1970-01-01)
 }
 
 /// Parse InfluxDB line protocol
@@ -77,7 +77,7 @@ fn compute_date_from_timestamp(timestamp: Option<i64>) -> i32 {
     } else {
         Utc::now()
     };
-    
+
     // Calculate days since Unix epoch (1970-01-01)
     let epoch = DateTime::from_timestamp(0, 0).unwrap();
     let duration = dt.signed_duration_since(epoch);
