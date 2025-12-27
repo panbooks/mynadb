@@ -98,7 +98,7 @@ pub struct CompactionConfig {
     /// Maximum compaction level
     #[serde(default = "default_compaction_max_level")]
     pub max_level: u32,
-    
+
     /// Background compaction interval in seconds (0 = disabled)
     #[serde(default = "default_compaction_interval_secs")]
     pub interval_secs: u64,
@@ -294,11 +294,11 @@ impl Default for Config {
 impl Config {
     /// Load configuration from TOML file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
+        let content =
+            fs::read_to_string(path).map_err(|e| format!("Failed to read config file: {}", e))?;
 
-        let config: Config = toml::from_str(&content)
-            .map_err(|e| format!("Failed to parse config file: {}", e))?;
+        let config: Config =
+            toml::from_str(&content).map_err(|e| format!("Failed to parse config file: {}", e))?;
 
         Ok(config)
     }
@@ -314,7 +314,10 @@ impl Config {
                 config
             }
             Err(e) => {
-                error!("Could not load config file, path: {}, error: {}. Using default configuration", path, e);
+                error!(
+                    "Could not load config file, path: {}, error: {}. Using default configuration",
+                    path, e
+                );
                 Config::default()
             }
         }

@@ -1,12 +1,12 @@
+use arrow::array::RecordBatch;
+use arrow::datatypes::Schema;
+use arrow::ipc::writer::IpcWriteOptions;
 use arrow_flight::{
     encode::FlightDataEncoderBuilder,
     flight_service_server::{FlightService as Flight, FlightServiceServer},
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaAsIpc, SchemaResult, Ticket,
 };
-use arrow::array::RecordBatch;
-use arrow::datatypes::Schema;
-use arrow::ipc::writer::IpcWriteOptions;
 use futures::{stream, Stream, TryStreamExt};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -68,21 +68,18 @@ impl StatsFlightService {
 
 #[tonic::async_trait]
 impl Flight for StatsFlightService {
-    type HandshakeStream = Pin<
-        Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send + 'static>,
-    >;
+    type HandshakeStream =
+        Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send + 'static>>;
     type ListFlightsStream =
-    Pin<Box<dyn Stream<Item = Result<FlightInfo, Status>> + Send + 'static>>;
-    type DoGetStream =
-    Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
-    type DoPutStream =
-    Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>;
+        Pin<Box<dyn Stream<Item = Result<FlightInfo, Status>> + Send + 'static>>;
+    type DoGetStream = Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
+    type DoPutStream = Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>;
     type DoActionStream =
-    Pin<Box<dyn Stream<Item = Result<arrow_flight::Result, Status>> + Send + 'static>>;
+        Pin<Box<dyn Stream<Item = Result<arrow_flight::Result, Status>> + Send + 'static>>;
     type ListActionsStream =
-    Pin<Box<dyn Stream<Item = Result<ActionType, Status>> + Send + 'static>>;
+        Pin<Box<dyn Stream<Item = Result<ActionType, Status>> + Send + 'static>>;
     type DoExchangeStream =
-    Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
+        Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
 
     async fn handshake(
         &self,
@@ -120,11 +117,13 @@ impl Flight for StatsFlightService {
         };
 
         // Parse database from SQL or use current database
-        let db = self.current_db.read().await.clone()
-            .ok_or_else(|| Status::failed_precondition("No database selected. Use: USE <database>;"))?;
+        let db = self.current_db.read().await.clone().ok_or_else(|| {
+            Status::failed_precondition("No database selected. Use: USE <database>;")
+        })?;
 
         // Get schema from query
-        let schema = self.query_engine
+        let schema = self
+            .query_engine
             .get_query_schema(&db, &sql)
             .await
             .map_err(|e| Status::internal(format!("Schema error: {}", e)))?;
@@ -137,8 +136,7 @@ impl Flight for StatsFlightService {
             .map_err(|e| Status::internal(format!("Failed to encode schema: {}", e)))?
             .with_descriptor(descriptor)
             .with_endpoint(
-                arrow_flight::FlightEndpoint::new()
-                    .with_ticket(Ticket::new(sql.into_bytes()))
+                arrow_flight::FlightEndpoint::new().with_ticket(Ticket::new(sql.into_bytes())),
             );
 
         Ok(Response::new(flight_info))
@@ -153,10 +151,15 @@ impl Flight for StatsFlightService {
         let sql = String::from_utf8(descriptor.cmd.to_vec())
             .map_err(|e| Status::invalid_argument(format!("Invalid UTF-8: {}", e)))?;
 
-        let db = self.current_db.read().await.clone()
+        let db = self
+            .current_db
+            .read()
+            .await
+            .clone()
             .ok_or_else(|| Status::failed_precondition("No database selected"))?;
 
-        let schema = self.query_engine
+        let schema = self
+            .query_engine
             .get_query_schema(&db, &sql)
             .await
             .map_err(|e| Status::internal(format!("Schema error: {}", e)))?;
@@ -164,7 +167,7 @@ impl Flight for StatsFlightService {
         // Create SchemaResult using IpcMessage
         use arrow_flight::IpcMessage;
         let options = IpcWriteOptions::default();
-        let schema_ref: &Schema = &schema;  // Dereference Arc<Schema> to &Schema
+        let schema_ref: &Schema = &schema; // Dereference Arc<Schema> to &Schema
         let message = IpcMessage::try_from(SchemaAsIpc::new(schema_ref, &options))
             .map_err(|e| Status::internal(format!("Schema encoding error: {}", e)))?;
 
@@ -194,11 +197,13 @@ impl Flight for StatsFlightService {
         }
 
         // Get current database
-        let db = self.current_db.read().await.clone()
-            .ok_or_else(|| Status::failed_precondition("No database selected. Use: USE <database>;"))?;
+        let db = self.current_db.read().await.clone().ok_or_else(|| {
+            Status::failed_precondition("No database selected. Use: USE <database>;")
+        })?;
 
         // Execute query (returns datafusion::arrow RecordBatches)
-        let df_batches = self.query_engine
+        let df_batches = self
+            .query_engine
             .execute_query_with_db(&sql, &db)
             .await
             .map_err(|e| Status::internal(format!("Query execution error: {}", e)))?;
@@ -210,30 +215,36 @@ impl Flight for StatsFlightService {
 
         // Convert DataFusion RecordBatches to Arrow RecordBatches
         // They have the same structure but different types due to version mismatch
-        let arrow_batches: Vec<RecordBatch> = df_batches.into_iter()
+        let arrow_batches: Vec<RecordBatch> = df_batches
+            .into_iter()
             .map(|df_batch| {
                 // Get schema and convert
                 let schema = df_batch.schema();
                 let arrow_schema = arrow::datatypes::Schema::new(
-                    schema.fields().iter().map(|f| {
-                        arrow::datatypes::Field::new(
-                            f.name(),
-                            convert_data_type(f.data_type()),
-                            f.is_nullable()
-                        )
-                    }).collect::<Vec<_>>()
+                    schema
+                        .fields()
+                        .iter()
+                        .map(|f| {
+                            arrow::datatypes::Field::new(
+                                f.name(),
+                                convert_data_type(f.data_type()),
+                                f.is_nullable(),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
                 );
 
                 // Create new RecordBatch with same data
-                RecordBatch::try_new(
-                    Arc::new(arrow_schema),
-                    df_batch.columns().to_vec()
-                ).unwrap()
+                RecordBatch::try_new(Arc::new(arrow_schema), df_batch.columns().to_vec()).unwrap()
             })
             .collect();
 
         // Use FlightDataEncoder
-        let batch_stream = stream::iter(arrow_batches.into_iter().map(Ok::<_, arrow_flight::error::FlightError>));
+        let batch_stream = stream::iter(
+            arrow_batches
+                .into_iter()
+                .map(Ok::<_, arrow_flight::error::FlightError>),
+        );
 
         let flight_data_stream = FlightDataEncoderBuilder::new()
             .build(batch_stream)
@@ -275,12 +286,10 @@ impl Flight for StatsFlightService {
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<Self::ListActionsStream>, Status> {
-        let actions = vec![
-            ActionType {
-                r#type: "USE".to_string(),
-                description: "Set current database: USE <database_name>".to_string(),
-            },
-        ];
+        let actions = vec![ActionType {
+            r#type: "USE".to_string(),
+            description: "Set current database: USE <database_name>".to_string(),
+        }];
         let output = stream::iter(actions.into_iter().map(Ok));
         Ok(Response::new(Box::pin(output)))
     }

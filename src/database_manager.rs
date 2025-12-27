@@ -81,10 +81,12 @@ impl DatabaseManager {
         }
 
         // Load or create config
-        let mut config = self.load_config(db_name).unwrap_or_else(|_| DatabaseConfig {
-            name: db_name.to_string(),
-            tables: Vec::new(),
-        });
+        let mut config = self
+            .load_config(db_name)
+            .unwrap_or_else(|_| DatabaseConfig {
+                name: db_name.to_string(),
+                tables: Vec::new(),
+            });
 
         // Check if table already exists
         if config.tables.iter().any(|t| t.name == table_name) {
@@ -157,7 +159,10 @@ impl DatabaseManager {
 
         self.save_config(&config)?;
 
-        Ok(format!("Table '{}' deleted from database '{}'", table_name, db_name))
+        Ok(format!(
+            "Table '{}' deleted from database '{}'",
+            table_name, db_name
+        ))
     }
 
     /// Load database config
@@ -168,8 +173,8 @@ impl DatabaseManager {
             return Err(format!("Database config not found for '{}'", db_name));
         }
 
-        let content = read_to_string(&config_path)
-            .map_err(|e| format!("Failed to read config: {}", e))?;
+        let content =
+            read_to_string(&config_path).map_err(|e| format!("Failed to read config: {}", e))?;
 
         serde_json::from_str(&content).map_err(|e| format!("Failed to parse config: {}", e))
     }
@@ -198,7 +203,8 @@ impl DatabaseManager {
         schema_name: &str,
         table_name: &str,
     ) -> Result<Vec<PartitionInfo>, String> {
-        let table_path = self.get_database_path(catalog_name)
+        let table_path = self
+            .get_database_path(catalog_name)
             .join(schema_name)
             .join(table_name);
 
@@ -280,7 +286,8 @@ impl DatabaseManager {
             format!("date={}", partition)
         };
 
-        let partition_path = self.get_database_path(catalog_name)
+        let partition_path = self
+            .get_database_path(catalog_name)
             .join(schema_name)
             .join(table_name)
             .join(&partition_dir);
@@ -323,10 +330,14 @@ impl DatabaseManager {
 
         for partition in partitions {
             if partition.date.as_str() < before_date {
-                match self.delete_partition(catalog_name, schema_name, table_name, &partition.date) {
+                match self.delete_partition(catalog_name, schema_name, table_name, &partition.date)
+                {
                     Ok(msg) => deleted.push(msg),
                     Err(e) => {
-                        return Err(format!("Failed to delete partition {}: {}", partition.date, e));
+                        return Err(format!(
+                            "Failed to delete partition {}: {}",
+                            partition.date, e
+                        ));
                     }
                 }
             }

@@ -1,19 +1,19 @@
-use crate::line_protocol::Point;
 use crate::config::SchemaConfig;
+use crate::line_protocol::Point;
+use arrow::array::UInt64Array;
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
 use std::collections::{HashMap, HashSet};
-use std::fs::{File};
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
-use arrow::array::UInt64Array;
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
-use tracing::{info, warn, error, debug};
+use tracing::{debug, error, info, warn};
 
 // System catalog/schema constants (catalog.schema.table format)
 const SYSTEM_CATALOG: &str = "_system";
@@ -62,18 +62,18 @@ impl SeriesTracker {
         self.get_table_dir(db)
             .join(format!("L0_{}.parquet", timestamp))
     }
-    
+
     /// Get all parquet files for a database table
     fn get_all_parquet_files(&self, db: &str) -> Result<Vec<PathBuf>, String> {
         let table_dir = self.get_table_dir(db);
-        
+
         if !table_dir.exists() {
             return Ok(Vec::new());
         }
-        
+
         let entries = std::fs::read_dir(&table_dir)
             .map_err(|e| format!("Failed to read table directory: {}", e))?;
-        
+
         let mut files = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
@@ -81,7 +81,7 @@ impl SeriesTracker {
                 files.push(path);
             }
         }
-        
+
         files.sort();
         Ok(files)
     }
@@ -95,10 +95,10 @@ impl SeriesTracker {
             pending_writes: Arc::new(RwLock::new(HashMap::new())),
             schema_config,
         };
-        
+
         // Clean up any leftover temp files from previous crashes
         tracker.cleanup_temp_files();
-        
+
         tracker
     }
 
@@ -123,11 +123,7 @@ impl SeriesTracker {
             for file in files.flatten() {
                 let file_path = file.path();
 
-                if file_path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    != Some("tmp")
-                {
+                if file_path.extension().and_then(|ext| ext.to_str()) != Some("tmp") {
                     continue;
                 }
 
@@ -136,20 +132,26 @@ impl SeriesTracker {
                         info!("Cleaned up leftover temp file: {}", file_path.display());
                     }
                     Err(e) => {
-                        warn!("Failed to cleanup temp file '{}': {}", file_path.display(), e);
+                        warn!(
+                            "Failed to cleanup temp file '{}': {}",
+                            file_path.display(),
+                            e
+                        );
                     }
                 }
             }
         }
     }
 
-
     /// Start background flush task
     pub fn start_background_flush(self: Arc<Self>, flush_interval_secs: u64) {
         tokio::spawn(async move {
             let mut ticker = interval(Duration::from_secs(flush_interval_secs));
 
-            info!("Series tracker background flush started: every {} seconds", flush_interval_secs);
+            info!(
+                "Series tracker background flush started: every {} seconds",
+                flush_interval_secs
+            );
 
             loop {
                 ticker.tick().await;
@@ -158,7 +160,11 @@ impl SeriesTracker {
                 match self.flush_all().await {
                     Ok(count) => {
                         if count > 0 {
-                            info!("Series tracker flush: {} database(s) updated in {:?}", count, start.elapsed());
+                            info!(
+                                "Series tracker flush: {} database(s) updated in {:?}",
+                                count,
+                                start.elapsed()
+                            );
                         }
                     }
                     Err(e) => {
@@ -178,7 +184,7 @@ impl SeriesTracker {
 
         // Collect all new series records
         let mut new_records = Vec::new();
-        
+
         // First pass: identify new series (minimizing write lock time)
         for point in points {
             // Extract service name using schema config (same logic as extract_schema in cache.rs)
@@ -195,11 +201,14 @@ impl SeriesTracker {
                 }
             }
 
-            new_records.push((key, SeriesRecord {
-                service,
-                metric: point.measurement.clone(),
-                hash,
-            }));
+            new_records.push((
+                key,
+                SeriesRecord {
+                    service,
+                    metric: point.measurement.clone(),
+                    hash,
+                },
+            ));
         }
 
         if new_records.is_empty() {
@@ -232,18 +241,20 @@ impl SeriesTracker {
     fn extract_service_name(&self, tags: &HashMap<String, String>) -> String {
         for tag_key in &self.schema_config.tag_keys {
             if let Some(value) = tags.get(tag_key) {
-                return if self.schema_config.prefix_numeric && value.chars().all(|c| c.is_numeric()) {
+                return if self.schema_config.prefix_numeric && value.chars().all(|c| c.is_numeric())
+                {
                     format!("service_{}", value)
                 } else {
                     value.clone()
-                }
+                };
             }
         }
         self.schema_config.default_name.clone()
     }
 
     fn extract_service_key(&self, tags: &HashMap<String, String>) -> Option<&str> {
-        self.schema_config.tag_keys
+        self.schema_config
+            .tag_keys
             .iter()
             .find(|tag_key| tags.contains_key(*tag_key))
             .map(|s| s.as_str())
@@ -262,7 +273,7 @@ impl SeriesTracker {
             .filter(|(key, _)| Some(key.as_str()) != service_key)
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        
+
         filtered_tags.sort();
 
         // Create a stable hash from sorted tags
@@ -271,22 +282,26 @@ impl SeriesTracker {
             key.hash(&mut hasher);
             value.hash(&mut hasher);
         }
-        
+
         hasher.finish()
     }
 
     /// Flush all pending writes for all databases
     pub async fn flush_all(&self) -> Result<usize, String> {
         let mut pending = self.pending_writes.write().await;
-        
+
         if pending.is_empty() {
             return Ok(0);
         }
-        
+
         let mut flushed_count = 0;
         for (db, records) in pending.drain() {
             if !records.is_empty() {
-                debug!("Flushing {} series records for database '{}'", records.len(), db);
+                debug!(
+                    "Flushing {} series records for database '{}'",
+                    records.len(),
+                    db
+                );
                 match self.flush_database(&db, records).await {
                     Ok(()) => {
                         flushed_count += 1;
@@ -297,18 +312,22 @@ impl SeriesTracker {
                 }
             }
         }
-        
+
         Ok(flushed_count)
     }
-    
+
     /// Flush pending writes for a specific database (append-only write to new parquet file)
-    async fn flush_database(&self, db: &str, new_records: HashSet<SeriesRecord>) -> Result<(), String> {
+    async fn flush_database(
+        &self,
+        db: &str,
+        new_records: HashSet<SeriesRecord>,
+    ) -> Result<(), String> {
         let table_dir = self.get_table_dir(db);
         std::fs::create_dir_all(&table_dir)
             .map_err(|e| format!("Failed to create table directory: {}", e))?;
 
         let file_path = self.get_parquet_file_path(db);
-        
+
         let schema = Arc::new(Schema::new(vec![
             Field::new("service", DataType::Utf8, false),
             Field::new("metric", DataType::Utf8, false),
@@ -342,12 +361,18 @@ impl SeriesTracker {
         .map_err(|e| format!("Failed to create record batch: {}", e))?;
 
         // Write to temporary file first for atomic operation
-        let temp_file_path = file_path.parent()
-            .ok_or("Invalid file path")?
-            .join(format!("{}.tmp", file_path.file_name().unwrap().to_string_lossy()));
-        
-        let file = File::create(&temp_file_path)
-            .map_err(|e| format!("Failed to create temp file '{}': {}", temp_file_path.display(), e))?;
+        let temp_file_path = file_path.parent().ok_or("Invalid file path")?.join(format!(
+            "{}.tmp",
+            file_path.file_name().unwrap().to_string_lossy()
+        ));
+
+        let file = File::create(&temp_file_path).map_err(|e| {
+            format!(
+                "Failed to create temp file '{}': {}",
+                temp_file_path.display(),
+                e
+            )
+        })?;
 
         let props = WriterProperties::builder().build();
         let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
@@ -356,15 +381,20 @@ impl SeriesTracker {
         writer
             .write(&batch)
             .map_err(|e| format!("Failed to write batch: {}", e))?;
-        
+
         writer
             .close()
             .map_err(|e| format!("Failed to close writer: {}", e))?;
 
         // Atomic rename: only after successful write
-        std::fs::rename(&temp_file_path, &file_path)
-            .map_err(|e| format!("Failed to rename '{}' to '{}': {}", 
-                temp_file_path.display(), file_path.display(), e))?;
+        std::fs::rename(&temp_file_path, &file_path).map_err(|e| {
+            format!(
+                "Failed to rename '{}' to '{}': {}",
+                temp_file_path.display(),
+                file_path.display(),
+                e
+            )
+        })?;
 
         Ok(())
     }
@@ -387,13 +417,17 @@ impl SeriesTracker {
                 continue;
             }
 
-            let file = File::open(&file_path)
-                .map_err(|e| format!("Failed to open stats file: {}", e))?;
+            let file =
+                File::open(&file_path).map_err(|e| format!("Failed to open stats file: {}", e))?;
 
             let builder = match ParquetRecordBatchReaderBuilder::try_new(file) {
                 Ok(b) => b,
                 Err(e) => {
-                    warn!("Corrupted stats file detected at '{}': {}", file_path.display(), e);
+                    warn!(
+                        "Corrupted stats file detected at '{}': {}",
+                        file_path.display(),
+                        e
+                    );
                     warn!("Deleting corrupted file...");
                     if let Err(del_err) = std::fs::remove_file(&file_path) {
                         error!("Failed to delete corrupted file: {}", del_err);
@@ -403,11 +437,15 @@ impl SeriesTracker {
                     continue;
                 }
             };
-            
+
             let mut reader = match builder.build() {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!("Corrupted stats file detected at '{}': {}", file_path.display(), e);
+                    warn!(
+                        "Corrupted stats file detected at '{}': {}",
+                        file_path.display(),
+                        e
+                    );
                     warn!("Deleting corrupted file...");
                     if let Err(del_err) = std::fs::remove_file(&file_path) {
                         error!("Failed to delete corrupted file: {}", del_err);
@@ -495,13 +533,17 @@ impl SeriesTracker {
                 continue;
             }
 
-            let file = File::open(&file_path)
-                .map_err(|e| format!("Failed to open stats file: {}", e))?;
+            let file =
+                File::open(&file_path).map_err(|e| format!("Failed to open stats file: {}", e))?;
 
             let builder = match ParquetRecordBatchReaderBuilder::try_new(file) {
                 Ok(b) => b,
                 Err(e) => {
-                    warn!("Corrupted cache file detected at '{}': {}", file_path.display(), e);
+                    warn!(
+                        "Corrupted cache file detected at '{}': {}",
+                        file_path.display(),
+                        e
+                    );
                     warn!("Deleting corrupted file...");
                     if let Err(del_err) = std::fs::remove_file(&file_path) {
                         error!("Failed to delete corrupted file: {}", del_err);
@@ -511,11 +553,15 @@ impl SeriesTracker {
                     continue;
                 }
             };
-            
+
             let mut reader = match builder.build() {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!("Corrupted cache file detected at '{}': {}", file_path.display(), e);
+                    warn!(
+                        "Corrupted cache file detected at '{}': {}",
+                        file_path.display(),
+                        e
+                    );
                     warn!("Deleting corrupted file...");
                     if let Err(del_err) = std::fs::remove_file(&file_path) {
                         error!("Failed to delete corrupted file: {}", del_err);
@@ -556,7 +602,10 @@ impl SeriesTracker {
         }
 
         if loaded_count > 0 {
-            info!("Loaded {} series into cache for database '{}'", loaded_count, db);
+            info!(
+                "Loaded {} series into cache for database '{}'",
+                loaded_count, db
+            );
         }
         Ok(())
     }
@@ -581,21 +630,21 @@ mod tests {
             prefix_numeric: true,
         });
         let tracker = SeriesTracker::new("./test_data", schema_config);
-        
+
         // Same tags in different order should produce same hash
         let mut tags1 = HashMap::new();
         tags1.insert("host".to_string(), "server1".to_string());
         tags1.insert("type".to_string(), "http".to_string());
         tags1.insert("service".to_string(), "api".to_string());
-        
+
         let mut tags2 = HashMap::new();
         tags2.insert("type".to_string(), "http".to_string());
         tags2.insert("service".to_string(), "api".to_string());
         tags2.insert("host".to_string(), "server1".to_string());
-        
+
         let hash1 = tracker.calculate_tag_hash(&tags1);
         let hash2 = tracker.calculate_tag_hash(&tags2);
-        
+
         assert_eq!(hash1, hash2, "Same tags should produce same hash");
     }
 
@@ -608,19 +657,19 @@ mod tests {
             prefix_numeric: true,
         });
         let tracker = SeriesTracker::new("./test_data", schema_config);
-        
+
         // Different service should produce same hash if other tags are same
         let mut tags1 = HashMap::new();
         tags1.insert("host".to_string(), "server1".to_string());
         tags1.insert("service".to_string(), "api".to_string());
-        
+
         let mut tags2 = HashMap::new();
         tags2.insert("host".to_string(), "server1".to_string());
         tags2.insert("service".to_string(), "web".to_string());
-        
+
         let hash1 = tracker.calculate_tag_hash(&tags1);
         let hash2 = tracker.calculate_tag_hash(&tags2);
-        
+
         assert_eq!(hash1, hash2, "service tag should not affect hash");
     }
 }
