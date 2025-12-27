@@ -17,7 +17,7 @@ use tracing::{debug, error, info, warn};
 
 // System catalog/schema constants (catalog.schema.table format)
 const SYSTEM_CATALOG: &str = "_system";
-const SERIES_STATS_SCHEMA: &str = "series_stats";
+const SERIES_STATS_SCHEMA: &str = "pmc";
 
 /// Series record for batching
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
@@ -47,27 +47,27 @@ pub struct SeriesTracker {
 }
 
 impl SeriesTracker {
-    /// Get the series stats schema directory path (_system/series_stats/)
+    /// Get the series stats schema directory path (_system/pmc/)
     fn get_stats_schema_dir(&self) -> PathBuf {
         Path::new(&self.data_dir)
             .join(SYSTEM_CATALOG)
             .join(SERIES_STATS_SCHEMA)
     }
 
-    /// Get the table directory path for a database (_system/series_stats/{db}/)
+    /// Get the table directory path for a database (_system/pmc/{db}/)
     fn get_table_dir(&self, db: &str) -> PathBuf {
         self.get_stats_schema_dir().join(db)
     }
 
     /// Get the partition directory path for a database and date
-    /// Format: _system/series_stats/{db}/date=YYYY-MM-DD/
+    /// Format: _system/pmc/{db}/date=YYYY-MM-DD/
     fn get_partition_dir(&self, db: &str, date: i32) -> PathBuf {
         let date_partition = format_date32_as_partition(date);
         self.get_table_dir(db).join(date_partition)
     }
 
     /// Get the parquet file path for a database table with date partition
-    /// Format: _system/series_stats/{db}/date=YYYY-MM-DD/L0_{timestamp}.parquet
+    /// Format: _system/pmc/{db}/date=YYYY-MM-DD/L0_{timestamp}.parquet
     fn get_parquet_file_path(&self, db: &str, date: i32) -> PathBuf {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

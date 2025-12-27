@@ -344,7 +344,7 @@ impl Compactor {
         Ok(false)
     }
 
-    /// Compact a non-partitioned table (e.g., series_stats)
+    /// Compact a non-partitioned table (e.g., pmc)
     async fn compact_non_partitioned_table(
         &self,
         catalog: &str,

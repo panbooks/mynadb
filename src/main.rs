@@ -214,7 +214,7 @@ async fn main() {
             post(delete_old_partitions_handler),
         )
         // Series cardinality tracking
-        .route("/series_stats/:db", get(series_stats_handler))
+        .route("/pmc/:db", get(series_stats_handler))
         .fallback(log_request)
         .with_state(state.clone());
 
