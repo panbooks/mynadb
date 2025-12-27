@@ -1,34 +1,48 @@
 # Quick Start Guide
 
-## Build and Run
+## Step 1: Build and Run
 
 ```bash
-# Build
-cargo build --release
-
-# Run (uses config.toml by default)
-./target/release/stats
-
-# Or with custom config
-CONFIG_PATH=config.production.toml ./target/release/stats
+cd stats
+cargo run
 ```
 
-Server starts on:
-- HTTP: `http://localhost:7000`
-- Arrow Flight: `grpc://localhost:7001`
+You should see:
+```
+🚀 Time Series Database Server running on http://0.0.0.0:7000
+📊 Data directory: ./data
+⏱️  Flush interval: 30 seconds
+🔄 Background flush started: every 30 seconds
+```
 
-## Write Data
+## Step 2: Write Some Data
+
+Open a new terminal and run:
 
 ```bash
 # Simple write
 curl -X POST http://localhost:7000/write/mydb \
   -d 'cpu,host=server01 usage=75.5'
+```
 
-# With tags and timestamp
-curl -X POST http://localhost:7000/write/mydb \
-  -d 'cpu,host=server01,region=us-east usage=23.5,idle=76.5 1609459200000000000'
+**Note**: Data is now cached in memory! It won't be written to disk immediately.
 
-# Multiple measurements
+## Step 3: Check Cache Statistics
+
+```bash
+curl http://localhost:7000/stats
+```
+
+Output:
+```
+Cache Statistics:
+  Points: 1
+  Measurements: 1
+```
+
+## Step 4: Write More Data
+
+```bash
 curl -X POST http://localhost:7000/write/mydb -d '
 cpu,host=server01 usage=80.5
 cpu,host=server02 usage=45.2
@@ -36,86 +50,113 @@ memory,host=server01 used=16.5,total=32.0
 '
 ```
 
-## Query Data
-
-### HTTP API
+Check stats again:
 ```bash
-# Simple query
-curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'
-
-# Aggregation
-curl 'http://localhost:7000/query/mydb?sql=SELECT host, AVG(usage) FROM cpu GROUP BY host'
-
-# POST for complex queries
-curl -X POST http://localhost:7000/query/mydb \
-  -d "SELECT * FROM cpu WHERE usage > 50 ORDER BY timestamp DESC"
-```
-
-### Arrow Flight (datafusion-cli)
-```bash
-datafusion-cli --host localhost --port 7001
-
-> SELECT * FROM mydb.default.cpu;
-> SELECT host, AVG(usage) FROM mydb.default.cpu GROUP BY host;
-```
-
-## Other Operations
-
-```bash
-# Check cache stats
 curl http://localhost:7000/stats
+```
 
-# Manual flush to disk
+## Step 5: Manual Flush (Optional)
+
+To immediately write data to disk instead of waiting 30 seconds:
+
+```bash
 curl -X POST http://localhost:7000/flush
+```
 
-# List tables
+Output:
+```
+Flushed 2 file(s) to disk
+```
+
+## Step 6: Run Full Test Suite
+
+```bash
+./test_with_queries.sh
+```
+
+This will write data AND run SQL queries to demonstrate all features.
+
+## Step 7: Query Your Data
+
+Now that data is flushed to disk, you can query it with SQL!
+
+### List available tables
+```bash
 curl http://localhost:7000/tables/mydb
-
-# Compact database
-curl -X POST http://localhost:7000/compact/mydb
-
-# Series cardinality
-curl http://localhost:7000/series_stats/mydb
-
-# Health check
-curl http://localhost:7000/health
 ```
 
-## Configuration
-
-Edit `config.toml`:
-
-```toml
-[server]
-http_port = 7000
-flight_port = 7001
-
-[storage]
-data_dir = "/data0/stats/data"
-
-[cache]
-flush_interval_secs = 30
-max_size_mb = 1024
-
-[compaction]
-min_files = 4
-target_file_size_mb = 500
+### Simple query
+```bash
+curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM mydb_cpu LIMIT 5'
 ```
 
-## Data Flow
+### Aggregate query
+```bash
+curl 'http://localhost:7000/query/mydb?sql=SELECT host, AVG(usage) as avg_usage FROM mydb_cpu GROUP BY host'
+```
 
-1. **Write** - Data cached in memory (Arrow format)
-2. **Flush** - Every 30s, cache written to Parquet files (L0)
-3. **Compaction** - L0 files merged into L1, L2, etc.
-4. **Query** - DataFusion reads Parquet files
+### Complex query (using POST)
+```bash
+curl -X POST http://localhost:7000/query/mydb \
+  -d "SELECT * FROM mydb_cpu WHERE usage > 50 ORDER BY timestamp DESC"
+```
 
-## File Structure
+## Step 8: Verify the Data
+
+After flushing (either manually or after 30 seconds):
+
+```bash
+ls -lh ./data/mydb/
+```
+
+You should see Parquet files like:
+```
+cpu_1703251234567.parquet
+memory_1703251234890.parquet
+```
+
+**Key Difference from Before:**
+- Multiple write requests within 30 seconds → Combined into single Parquet file per measurement
+- Significantly reduces the number of files created
+
+## Understanding the Caching Flow
+
+1. **Write Request** → Data is parsed and stored in memory (Arrow format)
+2. **Cache Accumulates** → Multiple writes within 30 seconds are buffered together
+3. **Background Flush** → Every 30 seconds, all cached data is written to Parquet
+4. **Result** → One Parquet file per measurement per 30-second window
+
+## Example Timeline
 
 ```
-data/
-└── mydb/                  # catalog (database)
-    └── default/           # schema (from service tag)
-        └── cpu/           # table (measurement)
-            └── date=2024-01-15/
-                └── L0_*.parquet
+00:00 - Write 10 CPU points → Cache: 10 points
+00:05 - Write 20 CPU points → Cache: 30 points
+00:15 - Write 15 CPU points → Cache: 45 points
+00:30 - AUTO FLUSH → cpu_timestamp.parquet (45 points total)
+00:35 - Write 10 CPU points → Cache: 10 points
+01:00 - AUTO FLUSH → cpu_timestamp2.parquet (10 points total)
+```
+
+## Manual Flush Use Cases
+
+Use `POST /flush` when you need to:
+- Ensure data is persisted before shutdown
+- Test data writing immediately
+- Flush important data that can't wait 30 seconds
+- Debug or verify data storage
+
+## What's Next?
+
+Try writing your own data! The format is:
+```
+measurement[,tag=value...] field=value[,field=value...] [timestamp]
+```
+
+Example:
+```bash
+curl -X POST http://localhost:7000/write/metrics -d '
+requests,service=api,method=GET count=100i,latency=45.2
+requests,service=api,method=POST count=50i,latency=128.7
+database,type=postgres queries=1000i,avg_time=23.5
+'
 ```

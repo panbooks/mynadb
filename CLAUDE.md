@@ -145,15 +145,3 @@ All test scripts are in `scripts/`:
 | `test_series_stats.sh` | Series Stats | Cardinality tracking |
 | `test_comprehensive.sh` | Comprehensive | Full test with queries |
 
-## Documentation
-
-| File | Content |
-|------|---------|
-| `README.md` | Project overview |
-| `ARCHITECTURE.md` | System architecture |
-| `CONFIG.md` | Configuration reference |
-| `docs/quickstart.md` | Getting started guide |
-| `docs/schema-configuration.md` | Schema extraction setup |
-| `docs/compaction.md` | Compaction strategy |
-| `docs/arrow-flight.md` | Arrow Flight integration |
-| `docs/troubleshooting.md` | Common issues and fixes |
