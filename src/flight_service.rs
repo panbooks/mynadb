@@ -39,7 +39,7 @@ fn convert_data_type(dt: &arrow::datatypes::DataType) -> arrow::datatypes::DataT
         DfDataType::LargeUtf8 => DataType::LargeUtf8,
         DfDataType::Binary => DataType::Binary,
         DfDataType::LargeBinary => DataType::LargeBinary,
-        DfDataType::Timestamp(unit, tz) => DataType::Timestamp(unit.clone(), tz.clone()),
+        DfDataType::Timestamp(unit, tz) => DataType::Timestamp(*unit, tz.clone()),
         DfDataType::Date32 => DataType::Date32,
         DfDataType::Date64 => DataType::Date64,
         _ => DataType::Utf8, // Fallback for unsupported types
@@ -133,7 +133,7 @@ impl Flight for StatsFlightService {
         let _schema_ipc = SchemaAsIpc::new(&schema, &Default::default());
 
         let flight_info = FlightInfo::new()
-            .try_with_schema(&*schema)
+            .try_with_schema(&schema)
             .map_err(|e| Status::internal(format!("Failed to encode schema: {}", e)))?
             .with_descriptor(descriptor)
             .with_endpoint(
@@ -164,7 +164,7 @@ impl Flight for StatsFlightService {
         // Create SchemaResult using IpcMessage
         use arrow_flight::IpcMessage;
         let options = IpcWriteOptions::default();
-        let schema_ref: &Schema = &*schema;  // Dereference Arc<Schema> to &Schema
+        let schema_ref: &Schema = &schema;  // Dereference Arc<Schema> to &Schema
         let message = IpcMessage::try_from(SchemaAsIpc::new(schema_ref, &options))
             .map_err(|e| Status::internal(format!("Schema encoding error: {}", e)))?;
 

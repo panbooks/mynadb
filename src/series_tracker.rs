@@ -442,9 +442,9 @@ impl SeriesTracker {
 
                     stats
                         .entry(service)
-                        .or_insert_with(HashMap::new)
+                        .or_default()
                         .entry(metric)
-                        .or_insert_with(HashSet::new)
+                        .or_default()
                         .insert(hash);
                 }
             }

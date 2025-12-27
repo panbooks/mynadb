@@ -591,7 +591,7 @@ async fn process_write_data(
     }
 
     // Track series cardinality (batch operation, in-memory cache only)
-    state.series_tracker.track_points(&db, &points).await;
+    state.series_tracker.track_points(db, &points).await;
 
     let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::new();
     for point in points {

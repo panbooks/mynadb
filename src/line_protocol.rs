@@ -73,7 +73,7 @@ fn parse_measurement_and_tags(part: &str) -> Result<(String, HashMap<String, Str
 fn compute_date_from_timestamp(timestamp: Option<i64>) -> i32 {
     let dt = if let Some(ts_nanos) = timestamp {
         DateTime::from_timestamp(ts_nanos / 1_000_000_000, (ts_nanos % 1_000_000_000) as u32)
-            .unwrap_or_else(|| Utc::now())
+            .unwrap_or_else(Utc::now)
     } else {
         Utc::now()
     };

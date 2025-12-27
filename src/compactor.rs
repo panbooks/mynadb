@@ -25,13 +25,16 @@ const DEFAULT_TARGET_FILE_SIZE_MB: u64 = 500;
 const DEFAULT_MAX_LEVEL: u32 = 4; // L0, L1, L2, L3, L4
 const MB_TO_BYTES: u64 = 1024 * 1024;
 
+/// Type alias for compaction locks map
+/// Key: (catalog, schema, table, date_partition)
+type CompactionLocks = Arc<RwLock<HashMap<(String, String, String, String), Arc<tokio::sync::Mutex<()>>>>>;
+
 /// Compactor is responsible for merging small Parquet files into larger ones
 /// using a leveled compaction strategy (similar to LSM-tree)
 pub struct Compactor {
     data_dir: String,
     /// Lock to prevent concurrent compaction and read/write operations
-    /// Key: (catalog, schema, table, date_partition)
-    locks: Arc<RwLock<std::collections::HashMap<(String, String, String, String), Arc<tokio::sync::Mutex<()>>>>>,
+    locks: CompactionLocks,
 }
 
 #[derive(Debug, Clone)]
