@@ -33,6 +33,18 @@ pub struct ServerConfig {
     /// Arrow Flight gRPC port
     #[serde(default = "default_flight_port")]
     pub flight_port: u16,
+
+    /// MySQL protocol host
+    #[serde(default = "default_mysql_host")]
+    pub mysql_host: String,
+
+    /// MySQL protocol port
+    #[serde(default = "default_mysql_port")]
+    pub mysql_port: u16,
+
+    /// Enable MySQL protocol
+    #[serde(default = "default_mysql_enabled")]
+    pub mysql_enabled: bool,
 }
 
 /// Storage configuration
@@ -161,6 +173,18 @@ fn default_flight_port() -> u16 {
     7001
 }
 
+fn default_mysql_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_mysql_port() -> u16 {
+    7003
+}
+
+fn default_mysql_enabled() -> bool {
+    true
+}
+
 fn default_data_dir() -> String {
     "./data".to_string()
 }
@@ -253,6 +277,9 @@ impl Default for Config {
                 http_port: default_http_port(),
                 flight_host: default_flight_host(),
                 flight_port: default_flight_port(),
+                mysql_host: default_mysql_host(),
+                mysql_port: default_mysql_port(),
+                mysql_enabled: default_mysql_enabled(),
             },
             storage: StorageConfig {
                 data_dir: default_data_dir(),
@@ -331,6 +358,11 @@ impl Config {
     /// Get Flight server address
     pub fn flight_addr(&self) -> String {
         format!("{}:{}", self.server.flight_host, self.server.flight_port)
+    }
+
+    /// Get MySQL server address
+    pub fn mysql_addr(&self) -> String {
+        format!("{}:{}", self.server.mysql_host, self.server.mysql_port)
     }
 }
 
