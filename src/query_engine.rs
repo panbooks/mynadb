@@ -695,7 +695,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_query_engine() {
-        let engine = QueryEngine::new("./data");
+        let _engine = QueryEngine::new("./data");
         // Add tests here
     }
 
