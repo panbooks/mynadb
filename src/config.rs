@@ -198,7 +198,7 @@ fn default_cache_flush_interval() -> u64 {
 }
 
 fn default_cache_max_size_mb() -> u64 {
-    1024 // 1GB
+    4096 // 4GB
 }
 
 fn default_compaction_min_files() -> usize {

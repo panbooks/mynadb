@@ -32,7 +32,7 @@ prefix_numeric = true
 flush_interval_secs = 30
 
 # Maximum cache size in MB before forcing flush
-max_size_mb = 1024
+max_size_mb = 4096
 
 [compaction]
 # Minimum number of files to trigger compaction
