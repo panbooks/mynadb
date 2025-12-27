@@ -5,6 +5,7 @@ mod database_manager;
 mod flight_service;
 mod line_protocol;
 mod logger;
+mod mysql_service;
 mod parquet_writer;
 mod query_engine;
 mod series_tracker;
@@ -22,6 +23,7 @@ use compactor::Compactor;
 use config::Config;
 use database_manager::DatabaseManager;
 use flight_service::StatsFlightService;
+use mysql_service::MysqlService;
 use line_protocol::parse_multiple_lines;
 use query_engine::QueryEngine;
 use serde::{Deserialize, Serialize};
@@ -107,6 +109,9 @@ async fn main() {
     welcome!("🚀 Starting server...");
     welcome!("   HTTP API: http://{}", config.http_addr());
     welcome!("   Flight API: {}", config.flight_addr());
+    if config.server.mysql_enabled {
+        welcome!("   MySQL API: {}", config.mysql_addr());
+    }
     welcome!("   Data Directory: {}", config.storage.data_dir);
     welcome!("   Log Directory: {}", config.logging.log_dir);
     welcome!("   Log Level: {}", config.logging.level);
@@ -255,6 +260,24 @@ async fn main() {
             .expect("Flight server failed");
     });
 
+    // Start MySQL server (if enabled)
+    let mysql_server = if config.server.mysql_enabled {
+        let mysql_service = MysqlService::new(
+            state.query_engine.clone(),
+            tokio::runtime::Handle::current(),
+            config.storage.data_dir.clone(),
+        );
+        let mysql_addr = config.mysql_addr();
+        Some(tokio::task::spawn_blocking(move || {
+            info!("MySQL server starting on {}", mysql_addr);
+            if let Err(e) = mysql_service.run(&mysql_addr) {
+                error!("MySQL server error: {}", e);
+            }
+        }))
+    } else {
+        None
+    };
+
     // Start HTTP server
     let http_addr_display = http_addr.clone();
     let http_server = tokio::spawn(async move {
@@ -264,7 +287,7 @@ async fn main() {
         axum::serve(http_listener, app).await.unwrap();
     });
 
-    // Wait for both servers
+    // Wait for servers
     tokio::select! {
         _ = flight_server => {
             error!("Flight server stopped unexpectedly");
@@ -273,6 +296,17 @@ async fn main() {
         _ = http_server => {
             error!("HTTP server stopped unexpectedly");
             welcome!("❌ HTTP server stopped");
+        },
+        _ = async {
+            if let Some(mysql) = mysql_server {
+                mysql.await.ok();
+            } else {
+                // If MySQL is not enabled, this future never completes
+                std::future::pending::<()>().await
+            }
+        } => {
+            error!("MySQL server stopped unexpectedly");
+            welcome!("❌ MySQL server stopped");
         },
     }
 }
