@@ -1,5 +1,5 @@
 use crate::config::SchemaConfig;
-use crate::line_protocol::Point;
+use crate::line_protocol::{format_date32_as_partition, Point};
 use arrow::array::UInt64Array;
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -25,16 +25,23 @@ struct SeriesRecord {
     service: String,
     metric: String,
     hash: u64,
+    date: i32, // Date32: days since Unix epoch
 }
+
+/// Type alias for series cache: (service, metric, hash, date) -> exists
+type SeriesCache = Arc<RwLock<HashSet<(String, String, u64, i32)>>>;
+
+/// Type alias for pending writes buffer: (db, date) -> records
+type PendingWrites = Arc<RwLock<HashMap<(String, i32), HashSet<SeriesRecord>>>>;
 
 /// Series tracker for monitoring metric cardinality
 /// Tracks unique series by service, metric, and tag combination hash
 pub struct SeriesTracker {
     data_dir: String,
-    /// In-memory cache: (service, metric, hash) -> exists
-    cache: Arc<RwLock<HashSet<(String, String, u64)>>>,
-    /// Pending writes buffer per database
-    pending_writes: Arc<RwLock<HashMap<String, HashSet<SeriesRecord>>>>,
+    /// In-memory cache: (service, metric, hash, date) -> exists
+    cache: SeriesCache,
+    /// Pending writes buffer per database and date partition: (db, date) -> records
+    pending_writes: PendingWrites,
     /// Schema configuration for extracting service name
     schema_config: Arc<SchemaConfig>,
 }
@@ -52,18 +59,25 @@ impl SeriesTracker {
         self.get_stats_schema_dir().join(db)
     }
 
-    /// Get the parquet file path for a database table
-    /// Format: _system/series_stats/{db}/L0_{timestamp}.parquet
-    fn get_parquet_file_path(&self, db: &str) -> PathBuf {
+    /// Get the partition directory path for a database and date
+    /// Format: _system/series_stats/{db}/date=YYYY-MM-DD/
+    fn get_partition_dir(&self, db: &str, date: i32) -> PathBuf {
+        let date_partition = format_date32_as_partition(date);
+        self.get_table_dir(db).join(date_partition)
+    }
+
+    /// Get the parquet file path for a database table with date partition
+    /// Format: _system/series_stats/{db}/date=YYYY-MM-DD/L0_{timestamp}.parquet
+    fn get_parquet_file_path(&self, db: &str, date: i32) -> PathBuf {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        self.get_table_dir(db)
+        self.get_partition_dir(db, date)
             .join(format!("L0_{}.parquet", timestamp))
     }
 
-    /// Get all parquet files for a database table
+    /// Get all parquet files for a database table (searches all date partitions)
     fn get_all_parquet_files(&self, db: &str) -> Result<Vec<PathBuf>, String> {
         let table_dir = self.get_table_dir(db);
 
@@ -71,13 +85,36 @@ impl SeriesTracker {
             return Ok(Vec::new());
         }
 
+        let mut files = Vec::new();
+
+        // Iterate through date partition directories
         let entries = std::fs::read_dir(&table_dir)
             .map_err(|e| format!("Failed to read table directory: {}", e))?;
 
-        let mut files = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("parquet") {
+
+            // Check for date partition directories (date=YYYY-MM-DD)
+            if path.is_dir() {
+                if let Some(dir_name) = path.file_name().and_then(|s| s.to_str()) {
+                    if dir_name.starts_with("date=") {
+                        // Read parquet files in partition directory
+                        if let Ok(partition_entries) = std::fs::read_dir(&path) {
+                            for pentry in partition_entries.flatten() {
+                                let ppath = pentry.path();
+                                if ppath.is_file()
+                                    && ppath.extension().and_then(|s| s.to_str()) == Some("parquet")
+                                {
+                                    files.push(ppath);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Also check for legacy non-partitioned files directly in table dir
+            else if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("parquet")
+            {
                 files.push(path);
             }
         }
@@ -191,7 +228,8 @@ impl SeriesTracker {
             let service = self.extract_service_name(&point.tags);
 
             let hash = self.calculate_tag_hash(&point.tags);
-            let key = (service.clone(), point.measurement.clone(), hash);
+            let date = point.date;
+            let key = (service.clone(), point.measurement.clone(), hash, date);
 
             // Check if already tracked
             {
@@ -207,6 +245,7 @@ impl SeriesTracker {
                     service,
                     metric: point.measurement.clone(),
                     hash,
+                    date,
                 },
             ));
         }
@@ -226,12 +265,15 @@ impl SeriesTracker {
             }
         }
 
-        // Batch insert into pending writes (single write lock)
+        // Batch insert into pending writes (single write lock), grouped by (db, date)
         if !actually_new.is_empty() {
             let mut pending = self.pending_writes.write().await;
-            let db_pending = pending.entry(db.to_string()).or_insert_with(HashSet::new);
             for record in actually_new {
-                db_pending.insert(record);
+                let key = (db.to_string(), record.date);
+                pending
+                    .entry(key)
+                    .or_insert_with(HashSet::new)
+                    .insert(record);
             }
         }
     }
@@ -295,19 +337,24 @@ impl SeriesTracker {
         }
 
         let mut flushed_count = 0;
-        for (db, records) in pending.drain() {
+        for ((db, date), records) in pending.drain() {
             if !records.is_empty() {
+                let date_partition = format_date32_as_partition(date);
                 debug!(
-                    "Flushing {} series records for database '{}'",
+                    "Flushing {} series records for database '{}' partition '{}'",
                     records.len(),
-                    db
+                    db,
+                    date_partition
                 );
-                match self.flush_database(&db, records).await {
+                match self.flush_database_partition(&db, date, records).await {
                     Ok(()) => {
                         flushed_count += 1;
                     }
                     Err(e) => {
-                        error!("Failed to flush database '{}': {}", db, e);
+                        error!(
+                            "Failed to flush database '{}' partition '{}': {}",
+                            db, date_partition, e
+                        );
                     }
                 }
             }
@@ -316,18 +363,20 @@ impl SeriesTracker {
         Ok(flushed_count)
     }
 
-    /// Flush pending writes for a specific database (append-only write to new parquet file)
-    async fn flush_database(
+    /// Flush pending writes for a specific database partition (append-only write to new parquet file)
+    async fn flush_database_partition(
         &self,
         db: &str,
+        date: i32,
         new_records: HashSet<SeriesRecord>,
     ) -> Result<(), String> {
-        let table_dir = self.get_table_dir(db);
-        std::fs::create_dir_all(&table_dir)
-            .map_err(|e| format!("Failed to create table directory: {}", e))?;
+        let partition_dir = self.get_partition_dir(db, date);
+        std::fs::create_dir_all(&partition_dir)
+            .map_err(|e| format!("Failed to create partition directory: {}", e))?;
 
-        let file_path = self.get_parquet_file_path(db);
+        let file_path = self.get_parquet_file_path(db, date);
 
+        // Note: date is NOT in schema - it's a Hive partition column (date=YYYY-MM-DD in path)
         let schema = Arc::new(Schema::new(vec![
             Field::new("service", DataType::Utf8, false),
             Field::new("metric", DataType::Utf8, false),
@@ -572,6 +621,9 @@ impl SeriesTracker {
                 }
             };
 
+            // Extract date from partition path (date=YYYY-MM-DD)
+            let date = Self::extract_date_from_path(&file_path);
+
             while let Some(Ok(batch)) = reader.next() {
                 let service_col = batch
                     .column(0)
@@ -594,7 +646,7 @@ impl SeriesTracker {
                     let metric = metric_col.value(i).to_string();
                     let hash = hash_col.value(i);
 
-                    if cache.insert((service, metric, hash)) {
+                    if cache.insert((service, metric, hash, date)) {
                         loaded_count += 1;
                     }
                 }
@@ -608,6 +660,21 @@ impl SeriesTracker {
             );
         }
         Ok(())
+    }
+
+    /// Extract date (days since epoch) from partition path like ".../date=2024-01-15/..."
+    fn extract_date_from_path(path: &Path) -> i32 {
+        for ancestor in path.ancestors() {
+            if let Some(dir_name) = ancestor.file_name().and_then(|s| s.to_str()) {
+                if let Some(date_str) = dir_name.strip_prefix("date=") {
+                    if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+                        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                        return (date - epoch).num_days() as i32;
+                    }
+                }
+            }
+        }
+        0
     }
 }
 
