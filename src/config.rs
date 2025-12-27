@@ -206,7 +206,7 @@ fn default_series_flush_interval() -> u64 {
 }
 
 fn default_series_stats_dir() -> String {
-    "series_stats".to_string()
+    "pmc".to_string()
 }
 
 fn default_log_level() -> String {
