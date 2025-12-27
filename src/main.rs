@@ -123,8 +123,15 @@ async fn main() {
     std::fs::create_dir_all(&config.storage.data_dir).expect("Failed to create data directory");
 
     // Initialize components
-    info!("Initializing data cache");
-    let cache = DataCache::new(&config.storage.data_dir, Arc::new(config.schema.clone()));
+    info!(
+        "Initializing data cache (max: {}MB, flush threshold: 80%)",
+        config.cache.max_size_mb
+    );
+    let cache = DataCache::with_max_size(
+        &config.storage.data_dir,
+        Arc::new(config.schema.clone()),
+        config.cache.max_size_mb,
+    );
     cache
         .clone()
         .start_background_flush(config.cache.flush_interval_secs);
@@ -469,11 +476,37 @@ async fn health() -> &'static str {
 
 async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
     let stats = state.cache.stats().await;
+
+    // Format bytes in human-readable format
+    let format_bytes = |bytes: usize| -> String {
+        if bytes >= 1024 * 1024 * 1024 {
+            format!("{:.2} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
+        } else if bytes >= 1024 * 1024 {
+            format!("{:.2} MB", bytes as f64 / 1024.0 / 1024.0)
+        } else if bytes >= 1024 {
+            format!("{:.2} KB", bytes as f64 / 1024.0)
+        } else {
+            format!("{} B", bytes)
+        }
+    };
+
     (
         StatusCode::OK,
         format!(
-            "Cache Statistics:\n  Rows: {}\n  Measurements: {}\n",
-            stats.total_rows, stats.num_measurements
+            "Cache Statistics:\n\
+             ─────────────────────────────\n\
+               Rows:         {}\n\
+               Tables:       {}\n\
+               Size:         {} / {} ({}%)\n\
+               Size (bytes): {} / {}\n\
+             ─────────────────────────────\n",
+            stats.total_rows,
+            stats.num_measurements,
+            format_bytes(stats.size_bytes),
+            format_bytes(stats.max_size_bytes),
+            stats.usage_percent(),
+            stats.size_bytes,
+            stats.max_size_bytes
         ),
     )
 }
@@ -690,10 +723,18 @@ async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCod
             warn!("Failed to register schema {}.{}: {}", db, schema, e);
         }
 
-        state
+        // P0: Return 503 if cache is full
+        if let Err(e) = state
             .cache
             .add_points(db, &schema, &measurement, points)
-            .await;
+            .await
+        {
+            error!("Cache write failed: {}", e);
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("Cache full, try again later: {}\n", e),
+            );
+        }
     }
 
     (StatusCode::OK, "Data added to cache\n".to_string())
