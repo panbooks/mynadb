@@ -1,5 +1,5 @@
-use crate::line_protocol::{format_date32_as_partition, Point};
-use arrow::array::{ArrayRef, Date32Array, RecordBatch, StringArray, TimestampNanosecondArray};
+use crate::line_protocol::format_date32_as_partition;
+use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{Field, Schema};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
@@ -174,47 +174,5 @@ impl ParquetWriter {
 
         RecordBatch::try_new(target_schema.clone(), arrays)
             .map_err(|e| format!("Failed to create adapted batch: {}", e))
-    }
-
-    #[allow(dead_code)]
-    fn points_to_record_batch(
-        &self,
-        points: &[Point],
-        schema: Arc<Schema>,
-    ) -> Result<RecordBatch, String> {
-        let mut arrays: Vec<ArrayRef> = Vec::new();
-
-        // Build timestamp array
-        let timestamps: Vec<i64> = points
-            .iter()
-            .map(|p| {
-                p.timestamp
-                    .unwrap_or_else(|| chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0))
-            })
-            .collect();
-        arrays.push(Arc::new(TimestampNanosecondArray::from(timestamps)));
-
-        // Build date array (Date32)
-        let dates: Vec<i32> = points.iter().map(|p| p.date).collect();
-        arrays.push(Arc::new(Date32Array::from(dates)));
-
-        // Build measurement array
-        let measurements: Vec<&str> = points.iter().map(|p| p.measurement.as_str()).collect();
-        arrays.push(Arc::new(StringArray::from(measurements)));
-
-        // Build tag arrays
-        let first_point = &points[0];
-        let mut tag_keys: Vec<_> = first_point.tags.keys().collect();
-        tag_keys.sort();
-
-        for key in tag_keys {
-            let values: Vec<Option<&str>> = points
-                .iter()
-                .map(|p| p.tags.get(key.as_str()).map(|s| s.as_str()))
-                .collect();
-            arrays.push(Arc::new(StringArray::from(values)));
-        }
-
-        RecordBatch::try_new(schema, arrays).map_err(|e| format!("Failed to create batch: {}", e))
     }
 }
