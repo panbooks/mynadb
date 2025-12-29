@@ -1,7 +1,6 @@
-use crate::config::SchemaConfig;
 use crate::line_protocol::{format_date32_as_partition, Point};
 use crate::parquet_writer::ParquetWriter;
-use arrow::array::{Array, RecordBatch, StringArray, TimestampNanosecondArray};
+use arrow::array::{RecordBatch, StringArray, TimestampNanosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -25,7 +24,6 @@ pub struct DataCache {
     // Store RecordBatches instead of Points for better performance
     cache: Arc<Mutex<HashMap<CacheKey, Vec<RecordBatch>>>>,
     writer: Arc<ParquetWriter>,
-    schema_config: Arc<SchemaConfig>,
     // Track current cache size in bytes (atomic for lock-free reads)
     cache_size_bytes: Arc<AtomicUsize>,
     // Maximum cache size in bytes
@@ -35,11 +33,7 @@ pub struct DataCache {
 }
 
 impl DataCache {
-    pub fn new(data_dir: &str, schema_config: Arc<SchemaConfig>) -> Self {
-        Self::with_max_size(data_dir, schema_config, DEFAULT_MAX_SIZE_MB)
-    }
-
-    pub fn with_max_size(data_dir: &str, schema_config: Arc<SchemaConfig>, max_size_mb: u64) -> Self {
+    pub fn with_max_size(data_dir: &str, max_size_mb: u64) -> Self {
         let cache = Arc::new(Mutex::new(HashMap::new()));
         let writer = Arc::new(ParquetWriter::new(data_dir));
         let max_size_bytes = (max_size_mb as usize) * 1024 * 1024;
@@ -47,7 +41,6 @@ impl DataCache {
         DataCache {
             cache,
             writer,
-            schema_config,
             cache_size_bytes: Arc::new(AtomicUsize::new(0)),
             max_size_bytes,
             flush_notify: Arc::new(Notify::new()),
@@ -293,30 +286,6 @@ impl DataCache {
             size_bytes,
             max_size_bytes: self.max_size_bytes,
         }
-    }
-
-    /// Extract schema name from service tag, default to configured default
-    /// Supports:
-    /// - Multiple tag keys: tries each tag key in order until one is found
-    /// - Simple values: "service" -> "service"
-    /// - Numeric values: "123" -> "service_123" (if prefix_numeric=true)
-    /// - Custom tag keys: hierarchy_2, hierarchy_1, etc.
-    pub fn extract_schema(&self, tags: &HashMap<String, String>) -> String {
-        // Try each tag key in order until we find one
-        for tag_key in &self.schema_config.tag_keys {
-            if let Some(value) = tags.get(tag_key) {
-                // Prefix numeric schemas to avoid SQL parser issues
-                return if self.schema_config.prefix_numeric && value.chars().all(|c| c.is_numeric())
-                {
-                    format!("service_{}", value)
-                } else {
-                    value.clone()
-                };
-            }
-        }
-
-        // No matching tag found, use default
-        self.schema_config.default_name.clone()
     }
 
     /// Start background flush task that runs every interval OR when size threshold is reached

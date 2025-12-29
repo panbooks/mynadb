@@ -131,7 +131,6 @@ async fn main() {
     );
     let cache = DataCache::with_max_size(
         &config.storage.data_dir,
-        Arc::new(config.schema.clone()),
         config.cache.max_size_mb,
     );
     cache
@@ -172,8 +171,8 @@ async fn main() {
     match db_manager.list_databases() {
         Ok(databases) => {
             for db in databases {
-                // Skip system directory
-                if db == config.storage.system_dir {
+                // only load _system directory
+                if db != config.storage.system_dir {
                     continue;
                 }
                 match series_tracker.load_cache(&db).await {
@@ -736,8 +735,8 @@ async fn write_handler_query_param(
 async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCode, String) {
     debug!("Processing write data: {} bytes", data.len());
 
-    // Parse line protocol
-    let points = parse_multiple_lines(data);
+    // Parse line protocol with schema extraction
+    let points = parse_multiple_lines(data, &state.config.schema);
     debug!("Parsed {} points", points.len());
 
     if points.is_empty() {
@@ -752,7 +751,7 @@ async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCod
 
     let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::new();
     for point in points {
-        let schema = state.cache.extract_schema(&point.tags);
+        let schema = point.service.clone();
         let key = (schema, point.measurement.clone());
         grouped.entry(key).or_default().push(point);
     }

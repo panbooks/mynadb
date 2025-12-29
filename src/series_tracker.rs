@@ -287,9 +287,8 @@ impl SeriesTracker {
 
             // First pass: identify new series for this date and database
             for point in date_points {
-                let service = self.extract_service_name(&point.tags);
                 let tag_hash = self.calculate_tag_hash(&point.tags);
-                let series_hash = Self::calculate_series_hash(&service, &point.measurement, tag_hash);
+                let series_hash = Self::calculate_series_hash(&point.service, &point.measurement, tag_hash);
 
                 // Check if already tracked for this date and database
                 {
@@ -304,7 +303,7 @@ impl SeriesTracker {
                 new_records.push((
                     series_hash,
                     SeriesRecord {
-                        service,
+                        service: point.service.clone(),
                         metric: point.measurement.clone(),
                         hash: tag_hash,
                         date,
@@ -339,22 +338,6 @@ impl SeriesTracker {
                     .extend(actually_new);
             }
         }
-    }
-
-    /// Extract service name from tags using schema config
-    /// Iterates through tag_keys in order, returning the first match
-    fn extract_service_name(&self, tags: &HashMap<String, String>) -> String {
-        for tag_key in &self.schema_config.tag_keys {
-            if let Some(value) = tags.get(tag_key) {
-                return if self.schema_config.prefix_numeric && value.chars().all(|c| c.is_numeric())
-                {
-                    format!("service_{}", value)
-                } else {
-                    value.clone()
-                };
-            }
-        }
-        self.schema_config.default_name.clone()
     }
 
     fn extract_service_key(&self, tags: &HashMap<String, String>) -> Option<&str> {
