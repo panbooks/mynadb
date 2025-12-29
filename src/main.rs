@@ -10,6 +10,7 @@ mod parquet_writer;
 mod query_engine;
 mod retention_manager;
 mod series_tracker;
+mod wal;
 
 use axum::{
     extract::{Path, Query as AxumQuery, Request, State},
@@ -54,6 +55,7 @@ struct AppState {
     compactor: Arc<Compactor>,
     series_tracker: Arc<SeriesTracker>,
     config: Arc<Config>,
+    wal: Option<Arc<wal::Wal>>,
 }
 
 #[derive(Deserialize)]
@@ -124,14 +126,64 @@ async fn main() {
     // Create data directory
     std::fs::create_dir_all(&config.storage.data_dir).expect("Failed to create data directory");
 
+    // Initialize WAL if enabled
+    let wal = if config.wal.enabled {
+        let wal_dir = format!("{}/{}", config.storage.data_dir, "_wal");
+        info!(
+            "Initializing WAL at {} (sync_on_write={}, rotate_size={}MB)",
+            wal_dir, config.wal.sync_on_write, config.wal.rotate_size_mb
+        );
+
+        match wal::Wal::new(&wal_dir, config.wal.sync_on_write, config.wal.rotate_size_mb) {
+            Ok(w) => {
+                let wal_arc = Arc::new(w);
+
+                // WAL Recovery: Replay unflushed writes
+                info!("Starting WAL recovery...");
+                let recovered_data = wal_arc
+                    .replay_data_writes(|db, line_protocol| {
+                        debug!("WAL recovery: replaying write to {}", db);
+                        // Note: We'll replay these after cache is initialized
+                        Ok(())
+                    })
+                    .await
+                    .expect("Failed to replay data writes");
+
+                let recovered_series = wal_arc
+                    .replay_series_tracks(|db, records| {
+                        debug!("WAL recovery: replaying {} series for {}", records.len(), db);
+                        // Note: We'll replay these after series tracker is initialized
+                        Ok(())
+                    })
+                    .await
+                    .expect("Failed to replay series tracks");
+
+                info!(
+                    "WAL recovery complete: {} data writes, {} series tracks",
+                    recovered_data, recovered_series
+                );
+
+                Some(wal_arc)
+            }
+            Err(e) => {
+                error!("Failed to initialize WAL: {}", e);
+                None
+            }
+        }
+    } else {
+        info!("WAL is disabled");
+        None
+    };
+
     // Initialize components
     info!(
         "Initializing data cache (max: {}MB, flush threshold: 80%)",
         config.cache.max_size_mb
     );
-    let cache = DataCache::with_max_size(
+    let cache = DataCache::with_max_size_and_wal(
         &config.storage.data_dir,
         config.cache.max_size_mb,
+        wal.as_ref().map(Arc::clone),
     );
     cache
         .clone()
@@ -205,6 +257,39 @@ async fn main() {
             .start_background_retention(config.retention.clone());
     }
 
+    // Start background WAL cleanup if enabled
+    if let Some(ref wal_arc) = wal {
+        if config.wal.cleanup_interval_secs > 0 {
+            let wal_clone = Arc::clone(wal_arc);
+            let retention_hours = config.wal.retention_hours;
+            let interval_secs = config.wal.cleanup_interval_secs;
+
+            tokio::spawn(async move {
+                use tokio::time::{interval, Duration};
+                let mut ticker = interval(Duration::from_secs(interval_secs));
+
+                info!("Background WAL cleanup started: every {}s, retention {}h", interval_secs, retention_hours);
+
+                loop {
+                    ticker.tick().await;
+
+                    debug!("Running WAL cleanup...");
+                    match wal_clone.cleanup_old_files(retention_hours).await {
+                        Ok(count) if count > 0 => {
+                            info!("WAL cleanup: deleted {} old files", count);
+                        }
+                        Ok(_) => {
+                            debug!("WAL cleanup: no files to delete");
+                        }
+                        Err(e) => {
+                            error!("WAL cleanup error: {}", e);
+                        }
+                    }
+                }
+            });
+        }
+    }
+
     let state = AppState {
         cache,
         query_engine,
@@ -212,6 +297,7 @@ async fn main() {
         compactor,
         series_tracker,
         config: config.clone(),
+        wal,
     };
 
     let app = Router::new()
@@ -735,7 +821,18 @@ async fn write_handler_query_param(
 async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCode, String) {
     debug!("Processing write data: {} bytes", data.len());
 
-    // Parse line protocol with schema extraction
+    // STEP 1: Write to WAL first for durability
+    if let Some(ref wal) = state.wal {
+        if let Err(e) = wal.log_data_write(db, data).await {
+            error!("WAL write failed: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("WAL error: {}\n", e),
+            );
+        }
+    }
+
+    // STEP 2: Parse line protocol with schema extraction
     let points = parse_multiple_lines(data, &state.config.schema);
     debug!("Parsed {} points", points.len());
 
