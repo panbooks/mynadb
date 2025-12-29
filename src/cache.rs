@@ -323,6 +323,10 @@ impl DataCache {
                 self.max_size_bytes * FLUSH_THRESHOLD_PERCENT / 100 / 1024 / 1024
             );
 
+            // Skip the first immediate tick to avoid flushing right after startup/recovery
+            ticker.tick().await;
+            debug!("Background flush: skipped first immediate tick");
+
             loop {
                 // Wait for either: timer tick OR size-based flush notification
                 tokio::select! {

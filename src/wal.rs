@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// WAL entry type discriminator
 #[repr(u8)]
@@ -337,14 +337,73 @@ impl Wal {
         match fs::remove_file(&old_file) {
             Ok(_) => {
                 info!("Deleted old WAL file after flush: {}", old_file.display());
-                Ok(())
             }
             Err(e) => {
                 warn!("Failed to delete old WAL file {}: {}", old_file.display(), e);
                 // Don't fail - rotation succeeded, deletion is best-effort
-                Ok(())
             }
         }
+
+        // Also clean up any empty WAL files immediately to prevent accumulation
+        if let Err(e) = self.cleanup_empty_files().await {
+            warn!("Failed to clean up empty WAL files: {}", e);
+            // Don't fail the rotation on cleanup error
+        }
+
+        Ok(())
+    }
+
+    /// Clean up empty WAL files (zero bytes)
+    /// Called after rotation to prevent accumulation of empty files
+    async fn cleanup_empty_files(&self) -> Result<usize, String> {
+        let mut deleted = 0;
+
+        // Get current file paths to avoid deleting active files
+        let current_data_path = {
+            let writer = self.data_writer.lock().await;
+            writer.path.clone()
+        };
+        let current_series_path = {
+            let writer = self.series_writer.lock().await;
+            writer.path.clone()
+        };
+
+        let entries = fs::read_dir(&self.wal_dir)
+            .map_err(|e| format!("Failed to read WAL directory: {}", e))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+            let path = entry.path();
+
+            // Skip if it's the current active file
+            if path == current_data_path || path == current_series_path {
+                continue;
+            }
+
+            if path.is_file() {
+                if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                    if filename.ends_with(".wal") {
+                        // Check if file is empty
+                        if let Ok(metadata) = fs::metadata(&path) {
+                            if metadata.len() == 0 {
+                                debug!("Deleting empty WAL file: {}", path.display());
+                                if let Err(e) = fs::remove_file(&path) {
+                                    warn!("Failed to delete empty WAL file {}: {}", path.display(), e);
+                                } else {
+                                    deleted += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if deleted > 0 {
+            debug!("Cleaned up {} empty WAL files", deleted);
+        }
+
+        Ok(deleted)
     }
 
     /// Rotate data WAL file (public for post-flush rotation)
@@ -404,6 +463,11 @@ impl Wal {
                 Ok(())
             })?;
         }
+
+        // NOTE: Do NOT delete old WAL files here!
+        // The replayed data is now in cache (volatile), but not yet in Parquet (durable).
+        // If we crash again before flush → data would be lost.
+        // Old WAL files will be cleaned up by rotate_and_delete_old_wal() after the first flush.
 
         Ok(count)
     }
@@ -531,16 +595,37 @@ impl Wal {
             if path.is_file() {
                 if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
                     if filename.ends_with(".wal") {
-                        // Extract timestamp from filename: "prefix_TIMESTAMP.wal"
-                        if let Some(timestamp_str) = filename.split('_').nth(1).and_then(|s| s.strip_suffix(".wal")) {
-                            if let Ok(file_timestamp) = timestamp_str.parse::<u64>() {
-                                if file_timestamp < cutoff {
-                                    debug!("Deleting old WAL file: {}", path.display());
-                                    fs::remove_file(&path)
-                                        .map_err(|e| format!("Failed to delete WAL file: {}", e))?;
-                                    deleted += 1;
+                        // Get file metadata to check size and age
+                        let metadata = fs::metadata(&path)
+                            .map_err(|e| format!("Failed to read metadata for {}: {}", path.display(), e))?;
+
+                        let file_size = metadata.len();
+                        let should_delete = if file_size == 0 {
+                            // Delete empty files immediately (no data to preserve)
+                            debug!("Deleting empty WAL file: {}", path.display());
+                            true
+                        } else {
+                            // Delete old files based on retention policy
+                            if let Some(timestamp_str) = filename.split('_').nth(1).and_then(|s| s.strip_suffix(".wal")) {
+                                if let Ok(file_timestamp) = timestamp_str.parse::<u64>() {
+                                    if file_timestamp < cutoff {
+                                        debug!("Deleting old WAL file: {}", path.display());
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
                                 }
+                            } else {
+                                false
                             }
+                        };
+
+                        if should_delete {
+                            fs::remove_file(&path)
+                                .map_err(|e| format!("Failed to delete WAL file: {}", e))?;
+                            deleted += 1;
                         }
                     }
                 }

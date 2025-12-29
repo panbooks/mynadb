@@ -136,34 +136,8 @@ async fn main() {
 
         match wal::Wal::new(&wal_dir, config.wal.sync_on_write, config.wal.rotate_size_mb) {
             Ok(w) => {
-                let wal_arc = Arc::new(w);
-
-                // WAL Recovery: Replay unflushed writes
-                info!("Starting WAL recovery...");
-                let recovered_data = wal_arc
-                    .replay_data_writes(|db, line_protocol| {
-                        debug!("WAL recovery: replaying write to {}", db);
-                        // Note: We'll replay these after cache is initialized
-                        Ok(())
-                    })
-                    .await
-                    .expect("Failed to replay data writes");
-
-                let recovered_series = wal_arc
-                    .replay_series_tracks(|db, records| {
-                        debug!("WAL recovery: replaying {} series for {}", records.len(), db);
-                        // Note: We'll replay these after series tracker is initialized
-                        Ok(())
-                    })
-                    .await
-                    .expect("Failed to replay series tracks");
-
-                info!(
-                    "WAL recovery complete: {} data writes, {} series tracks",
-                    recovered_data, recovered_series
-                );
-
-                Some(wal_arc)
+                info!("WAL initialized successfully - recovery will happen after components initialize");
+                Some(Arc::new(w))
             }
             Err(e) => {
                 error!("Failed to initialize WAL: {}", e);
@@ -243,6 +217,71 @@ async fn main() {
     }
 
     Arc::clone(&series_tracker).start_background_flush(config.series_tracker.flush_interval_secs);
+
+    // WAL Recovery: Now that cache and series_tracker are initialized, replay unflushed writes
+    if let Some(ref wal_arc) = wal {
+        info!("Starting WAL recovery - replaying unflushed writes...");
+
+        // Prepare references for recovery closure
+        let cache_for_recovery = cache.clone();
+        let series_tracker_for_recovery = Arc::clone(&series_tracker);
+        let query_engine_for_recovery = Arc::clone(&query_engine);
+        let config_for_recovery = config.clone();
+
+        let recovered_data = wal_arc
+            .replay_data_writes(|db, line_protocol| {
+                debug!("WAL recovery: replaying {} bytes to {}", line_protocol.len(), db);
+
+                // Use the same ingestion logic as normal writes (via block_in_place for sync callback)
+                match tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(ingest_line_protocol_to_cache(
+                        db,
+                        line_protocol,
+                        &cache_for_recovery,
+                        Some(&series_tracker_for_recovery),
+                        Some(&query_engine_for_recovery),
+                        &config_for_recovery.schema,
+                    ))
+                }) {
+                    Ok(count) => {
+                        debug!("WAL recovery: replayed {} points to {}", count, db);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        error!("WAL recovery failed for {}: {}", db, e);
+                        Err(e)
+                    }
+                }
+            })
+            .await;
+
+        match recovered_data {
+            Ok(count) => {
+                if count > 0 {
+                    info!("WAL recovery: replayed {} data write entries", count);
+
+                    // Flush recovered data to Parquet immediately to ensure durability
+                    // This also cleans up old WAL files via rotate_and_delete_old_wal()
+                    info!("Flushing recovered data to Parquet for durability...");
+                    match cache.flush().await {
+                        Ok(files) => {
+                            info!("Recovery flush complete: {} file(s) written", files);
+                        }
+                        Err(e) => {
+                            error!("Recovery flush failed: {}", e);
+                            // Don't fail startup, but old WAL files will remain until next flush
+                        }
+                    }
+                } else {
+                    info!("WAL recovery: no data writes to replay");
+                }
+            }
+            Err(e) => {
+                error!("WAL recovery failed: {}", e);
+                // Don't fail startup, but log the error
+            }
+        }
+    }
 
     info!("Initializing retention manager");
     let retention_manager = Arc::new(RetentionManager::new(
@@ -707,6 +746,65 @@ async fn execute_query(db: String, sql: String, state: AppState) -> impl IntoRes
     }
 }
 
+/// Helper function to parse line protocol and add to cache
+/// This is used by both the normal write path and WAL recovery
+async fn ingest_line_protocol_to_cache(
+    db: &str,
+    line_protocol: &str,
+    cache: &DataCache,
+    series_tracker: Option<&SeriesTracker>,
+    query_engine: Option<&Arc<QueryEngine>>,
+    schema_config: &config::SchemaConfig,
+) -> Result<usize, String> {
+    // Parse line protocol
+    let points = parse_multiple_lines(line_protocol, schema_config);
+
+    if points.is_empty() {
+        return Err("No valid points to write".to_string());
+    }
+
+    let point_count = points.len();
+
+    // Track series cardinality (if tracker provided)
+    if let Some(tracker) = series_tracker {
+        tracker.track_points(db, &points).await;
+    }
+
+    // Group by schema and measurement
+    let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::new();
+    for point in points {
+        let schema = point.service.clone();
+        let key = (schema, point.measurement.clone());
+        grouped.entry(key).or_default().push(point);
+    }
+
+    // Add to cache and register catalog.schema
+    for ((schema, measurement), points) in grouped {
+        debug!(
+            "Adding {} points for catalog={}, schema={}, table={}",
+            points.len(),
+            db,
+            schema,
+            measurement
+        );
+
+        // Ensure catalog.schema is registered in query engine (if provided)
+        if let Some(qe) = query_engine {
+            if let Err(e) = qe.ensure_schema(db, &schema).await {
+                warn!("Failed to register schema {}.{}: {}", db, schema, e);
+            }
+        }
+
+        // Add to cache
+        cache
+            .add_points(db, &schema, &measurement, points)
+            .await
+            .map_err(|e| format!("Cache error: {}", e))?;
+    }
+
+    Ok(point_count)
+}
+
 async fn list_tables_handler(
     Path(db): Path<String>,
     State(state): State<AppState>,
@@ -832,57 +930,30 @@ async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCod
         }
     }
 
-    // STEP 2: Parse line protocol with schema extraction
-    let points = parse_multiple_lines(data, &state.config.schema);
-    debug!("Parsed {} points", points.len());
-
-    if points.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            "No valid points to write".to_string(),
-        );
-    }
-
-    // Track series cardinality (batch operation, in-memory cache only)
-    state.series_tracker.track_points(db, &points).await;
-
-    let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::new();
-    for point in points {
-        let schema = point.service.clone();
-        let key = (schema, point.measurement.clone());
-        grouped.entry(key).or_default().push(point);
-    }
-
-    // Add to cache and register catalog.schema
-    for ((schema, measurement), points) in grouped {
-        debug!(
-            "Adding {} points for catalog={}, schema={}, table={}",
-            points.len(),
-            db,
-            schema,
-            measurement
-        );
-
-        // Ensure catalog.schema is registered in query engine
-        if let Err(e) = state.query_engine.ensure_schema(db, &schema).await {
-            warn!("Failed to register schema {}.{}: {}", db, schema, e);
+    // STEP 2: Parse and ingest to cache (using shared helper function)
+    match ingest_line_protocol_to_cache(
+        db,
+        data,
+        &state.cache,
+        Some(&state.series_tracker),
+        Some(&state.query_engine),
+        &state.config.schema,
+    )
+    .await
+    {
+        Ok(count) => {
+            debug!("Added {} points to cache", count);
+            (StatusCode::OK, "Data added to cache\n".to_string())
         }
-
-        // P0: Return 503 if cache is full
-        if let Err(e) = state
-            .cache
-            .add_points(db, &schema, &measurement, points)
-            .await
-        {
+        Err(e) if e.contains("Cache error") => {
             error!("Cache write failed: {}", e);
-            return (
+            (
                 StatusCode::SERVICE_UNAVAILABLE,
                 format!("Cache full, try again later: {}\n", e),
-            );
+            )
         }
+        Err(e) => (StatusCode::BAD_REQUEST, e),
     }
-
-    (StatusCode::OK, "Data added to cache\n".to_string())
 }
 
 async fn log_request(req: Request) -> impl IntoResponse {
