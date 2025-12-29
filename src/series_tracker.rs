@@ -50,6 +50,8 @@ pub struct SeriesTracker {
     pending_writes: PendingWrites,
     /// Schema configuration for extracting service name
     schema_config: Arc<SchemaConfig>,
+    /// Number of days to keep in cache
+    cache_retention_days: u32,
 }
 
 impl SeriesTracker {
@@ -131,12 +133,13 @@ impl SeriesTracker {
 }
 
 impl SeriesTracker {
-    pub fn new(data_dir: &str, schema_config: Arc<SchemaConfig>) -> Self {
+    pub fn new(data_dir: &str, schema_config: Arc<SchemaConfig>, cache_retention_days: u32) -> Self {
         let tracker = SeriesTracker {
             data_dir: data_dir.to_string(),
             daily_caches: Arc::new(RwLock::new(Vec::new())),
             pending_writes: Arc::new(RwLock::new(HashMap::new())),
             schema_config,
+            cache_retention_days,
         };
 
         // Clean up any leftover temp files from previous crashes
@@ -383,13 +386,13 @@ impl SeriesTracker {
         hasher.finish()
     }
 
-    /// Evict old daily caches (keep only latest 2 days)
+    /// Evict old daily caches (keep only latest N days based on config)
     async fn evict_old_daily_caches(&self) {
         let today = chrono::Utc::now()
             .date_naive()
             .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
             .num_days() as i32;
-        let cutoff_date = today - 2;
+        let cutoff_date = today - self.cache_retention_days as i32;
 
         let mut caches = self.daily_caches.write().await;
         let before_count = caches.len();
@@ -415,10 +418,10 @@ impl SeriesTracker {
         let evicted = before_count - caches.len();
         if evicted > 0 {
             info!(
-                "Series cache retention: evicted {} old daily cache(s), retained {} (cutoff: {} days ago)",
+                "Series cache retention: evicted {} old daily cache(s), retained {} (keeping {} days)",
                 evicted,
                 caches.len(),
-                today - cutoff_date
+                self.cache_retention_days
             );
         }
     }
@@ -658,8 +661,7 @@ impl SeriesTracker {
         Ok(result)
     }
 
-    /// Load existing stats into cache on startup
-    #[allow(dead_code)]
+    /// Load existing stats into cache on startup (only latest N days based on config)
     pub async fn load_cache(&self, db: &str) -> Result<(), String> {
         let parquet_files = self.get_all_parquet_files(db)?;
 
@@ -667,10 +669,18 @@ impl SeriesTracker {
             return Ok(());
         }
 
+        // Calculate cutoff date - only load latest N days
+        let today = chrono::Utc::now()
+            .date_naive()
+            .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days() as i32;
+        let cutoff_date = today - self.cache_retention_days as i32;
+
         use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
         let mut loaded_count = 0;
         let mut loaded_by_date: HashMap<i32, usize> = HashMap::new();
+        let mut skipped_count = 0;
 
         for file_path in parquet_files {
             if std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0) == 0 {
@@ -719,6 +729,17 @@ impl SeriesTracker {
             // Extract date from partition path (date=YYYY-MM-DD)
             let date = Self::extract_date_from_path(&file_path);
 
+            // Skip files older than retention period
+            if date < cutoff_date {
+                skipped_count += 1;
+                debug!(
+                    "Skipping old partition {} (older than {} days)",
+                    file_path.display(),
+                    self.cache_retention_days
+                );
+                continue;
+            }
+
             // Get or create cache for this date
             let day_cache = self.get_or_create_day_cache(date).await;
             let mut day_cache_write = day_cache.write().await;
@@ -755,12 +776,14 @@ impl SeriesTracker {
             }
         }
 
-        if loaded_count > 0 {
+        if loaded_count > 0 || skipped_count > 0 {
             info!(
-                "Loaded {} series into cache for database '{}' across {} day(s)",
+                "Loaded {} series into cache for database '{}' across {} day(s) (skipped {} old partition(s), keeping {} days)",
                 loaded_count,
                 db,
-                loaded_by_date.len()
+                loaded_by_date.len(),
+                skipped_count,
+                self.cache_retention_days
             );
             for (date, count) in loaded_by_date {
                 debug!("  Date {}: {} series", date, count);
@@ -803,7 +826,7 @@ mod tests {
             default_name: "default".to_string(),
             prefix_numeric: true,
         });
-        let tracker = SeriesTracker::new("./test_data", schema_config);
+        let tracker = SeriesTracker::new("./test_data", schema_config, 2);
 
         // Same tags in different order should produce same hash
         let mut tags1 = HashMap::new();
@@ -830,7 +853,7 @@ mod tests {
             default_name: "default".to_string(),
             prefix_numeric: true,
         });
-        let tracker = SeriesTracker::new("./test_data", schema_config);
+        let tracker = SeriesTracker::new("./test_data", schema_config, 2);
 
         // Different service should produce same hash if other tags are same
         let mut tags1 = HashMap::new();

@@ -164,7 +164,33 @@ async fn main() {
     let series_tracker = Arc::new(SeriesTracker::new(
         &config.storage.data_dir,
         Arc::new(config.schema.clone()),
+        config.series_tracker.cache_retention_days,
     ));
+
+    // Load existing series cache from disk (latest N days only)
+    info!("Loading series cache from disk...");
+    match db_manager.list_databases() {
+        Ok(databases) => {
+            for db in databases {
+                // Skip system directory
+                if db == config.storage.system_dir {
+                    continue;
+                }
+                match series_tracker.load_cache(&db).await {
+                    Ok(()) => {
+                        debug!("Series cache loaded for database '{}'", db);
+                    }
+                    Err(e) => {
+                        warn!("Failed to load series cache for database '{}': {}", db, e);
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            warn!("Failed to list databases for cache loading: {}", e);
+        }
+    }
+
     Arc::clone(&series_tracker).start_background_flush(config.series_tracker.flush_interval_secs);
 
     info!("Initializing retention manager");
