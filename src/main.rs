@@ -261,11 +261,16 @@ async fn main() {
                     info!("WAL recovery: replayed {} data write entries", count);
 
                     // Flush recovered data to Parquet immediately to ensure durability
-                    // This also cleans up old WAL files via rotate_and_delete_old_wal()
                     info!("Flushing recovered data to Parquet for durability...");
                     match cache.flush().await {
                         Ok(files) => {
                             info!("Recovery flush complete: {} file(s) written", files);
+
+                            // Now that data is safe in Parquet, clean up old replayed WAL files
+                            if let Err(e) = wal_arc.cleanup_old_data_wal_files().await {
+                                warn!("Failed to cleanup old WAL files after recovery: {}", e);
+                                // Don't fail startup, cleanup will happen on next cycle
+                            }
                         }
                         Err(e) => {
                             error!("Recovery flush failed: {}", e);

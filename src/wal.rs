@@ -467,9 +467,47 @@ impl Wal {
         // NOTE: Do NOT delete old WAL files here!
         // The replayed data is now in cache (volatile), but not yet in Parquet (durable).
         // If we crash again before flush → data would be lost.
-        // Old WAL files will be cleaned up by rotate_and_delete_old_wal() after the first flush.
+        // Old WAL files will be cleaned up after successful flush to Parquet.
 
         Ok(count)
+    }
+
+    /// Clean up old data WAL files after recovery flush
+    /// Deletes all data WAL files except the current active one
+    /// Called after recovered data has been safely flushed to Parquet
+    pub async fn cleanup_old_data_wal_files(&self) -> Result<(), String> {
+        let current_data_path = {
+            let writer = self.data_writer.lock().await;
+            writer.path.clone()
+        };
+
+        let files = self.list_wal_files("data")?;
+        let mut deleted = 0;
+
+        for file_path in files {
+            // Skip the current active file
+            if file_path == current_data_path {
+                debug!("Keeping active WAL file: {}", file_path.display());
+                continue;
+            }
+
+            // Delete old replayed file (data is now safe in Parquet)
+            match fs::remove_file(&file_path) {
+                Ok(_) => {
+                    info!("Deleted old WAL file (data in Parquet): {}", file_path.display());
+                    deleted += 1;
+                }
+                Err(e) => {
+                    warn!("Failed to delete old WAL file {}: {}", file_path.display(), e);
+                }
+            }
+        }
+
+        if deleted > 0 {
+            info!("Cleaned up {} old WAL files after recovery", deleted);
+        }
+
+        Ok(())
     }
 
     /// Replay all series tracking entries
