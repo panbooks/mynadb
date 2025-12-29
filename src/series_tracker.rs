@@ -20,12 +20,12 @@ const SYSTEM_CATALOG: &str = "_system";
 const SERIES_STATS_SCHEMA: &str = "pmc";
 
 /// Series record for batching
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-struct SeriesRecord {
-    service: String,
-    metric: String,
-    hash: u64,
-    date: i32, // Date32: days since Unix epoch
+#[derive(Clone, Debug, Hash, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SeriesRecord {
+    pub service: String,
+    pub metric: String,
+    pub hash: u64,
+    pub date: i32, // Date32: days since Unix epoch
 }
 
 /// Single day's cache entry with per-database deduplication

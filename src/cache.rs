@@ -1,5 +1,6 @@
 use crate::line_protocol::{format_date32_as_partition, Point};
 use crate::parquet_writer::ParquetWriter;
+use crate::wal::Wal;
 use arrow::array::{RecordBatch, StringArray, TimestampNanosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use std::collections::HashMap;
@@ -30,10 +31,16 @@ pub struct DataCache {
     max_size_bytes: usize,
     // Notify channel for size-based flush trigger
     flush_notify: Arc<Notify>,
+    // WAL for durability (optional)
+    wal: Option<Arc<Wal>>,
 }
 
 impl DataCache {
     pub fn with_max_size(data_dir: &str, max_size_mb: u64) -> Self {
+        Self::with_max_size_and_wal(data_dir, max_size_mb, None)
+    }
+
+    pub fn with_max_size_and_wal(data_dir: &str, max_size_mb: u64, wal: Option<Arc<Wal>>) -> Self {
         let cache = Arc::new(Mutex::new(HashMap::new()));
         let writer = Arc::new(ParquetWriter::new(data_dir));
         let max_size_bytes = (max_size_mb as usize) * 1024 * 1024;
@@ -44,6 +51,7 @@ impl DataCache {
             cache_size_bytes: Arc::new(AtomicUsize::new(0)),
             max_size_bytes,
             flush_notify: Arc::new(Notify::new()),
+            wal,
         }
     }
 
@@ -267,6 +275,19 @@ impl DataCache {
             flushed_size / 1024 / 1024,
             elapsed
         );
+
+        // Rotate WAL and delete old file after successful flush
+        // This ensures only unflushed data remains in WAL (prevents duplicate replay)
+        if let Some(ref wal) = self.wal {
+            debug!("Rotating and cleaning up WAL after successful flush");
+            if let Err(e) = wal.rotate_and_delete_old_wal().await {
+                warn!("Failed to rotate WAL after flush: {}", e);
+                // Don't fail the flush operation, just log warning
+            } else {
+                info!("WAL rotated - old WAL deleted, only unflushed data remains");
+            }
+        }
+
         Ok(files_written)
     }
 

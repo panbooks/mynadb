@@ -14,6 +14,7 @@ pub struct Config {
     pub series_tracker: SeriesTrackerConfig,
     pub logging: LoggingConfig,
     pub retention: RetentionConfig,
+    pub wal: WalConfig,
 }
 
 /// Server configuration
@@ -185,6 +186,30 @@ pub struct RetentionConfig {
     pub exclude_tables: Vec<String>,
 }
 
+/// Write-Ahead Log (WAL) configuration for durability
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalConfig {
+    /// Enable WAL for data writes and series tracking
+    #[serde(default = "default_wal_enabled")]
+    pub enabled: bool,
+
+    /// Sync to disk after each write (true=durable, false=faster)
+    #[serde(default = "default_wal_sync_on_write")]
+    pub sync_on_write: bool,
+
+    /// Rotate WAL file when it exceeds this size (MB)
+    #[serde(default = "default_wal_rotate_size_mb")]
+    pub rotate_size_mb: u64,
+
+    /// Background cleanup interval in seconds
+    #[serde(default = "default_wal_cleanup_interval_secs")]
+    pub cleanup_interval_secs: u64,
+
+    /// Retention period for WAL files in hours (files older than this can be deleted)
+    #[serde(default = "default_wal_retention_hours")]
+    pub retention_hours: u64,
+}
+
 // Default value functions
 fn default_http_host() -> String {
     "0.0.0.0".to_string()
@@ -322,6 +347,26 @@ fn default_retention_exclude_tables() -> Vec<String> {
     vec![]
 }
 
+fn default_wal_enabled() -> bool {
+    true
+}
+
+fn default_wal_sync_on_write() -> bool {
+    true // Default to durable mode
+}
+
+fn default_wal_rotate_size_mb() -> u64 {
+    64
+}
+
+fn default_wal_cleanup_interval_secs() -> u64 {
+    3600 // 1 hour
+}
+
+fn default_wal_retention_hours() -> u64 {
+    24 // Keep WAL files for 24 hours
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -374,6 +419,13 @@ impl Default for Config {
                 interval_secs: default_retention_interval_secs(),
                 exclude_databases: default_retention_exclude_databases(),
                 exclude_tables: default_retention_exclude_tables(),
+            },
+            wal: WalConfig {
+                enabled: default_wal_enabled(),
+                sync_on_write: default_wal_sync_on_write(),
+                rotate_size_mb: default_wal_rotate_size_mb(),
+                cleanup_interval_secs: default_wal_cleanup_interval_secs(),
+                retention_hours: default_wal_retention_hours(),
             },
         }
     }

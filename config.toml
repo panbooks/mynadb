@@ -94,3 +94,19 @@ interval_secs = 3600  # 1 hour
 
 # Tables to exclude from automatic retention (optional, format: "catalog.schema.table")
 # exclude_tables = ["mydb.default.important_metrics"]
+
+[wal]
+# Enable Write-Ahead Log for durability
+enabled = true
+
+# Sync to disk after each write (true=durable but slower, false=faster but may lose data on crash)
+sync_on_write = true
+
+# Rotate WAL file when it exceeds this size (MB)
+rotate_size_mb = 64
+
+# Background cleanup interval in seconds
+cleanup_interval_secs = 3600  # 1 hour
+
+# Retention period for WAL files in hours (files older than this can be deleted after successful flush)
+retention_hours = 24
