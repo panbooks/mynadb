@@ -127,6 +127,10 @@ pub struct SeriesTrackerConfig {
     /// Series stats directory name
     #[serde(default = "default_series_stats_dir")]
     pub stats_dir: String,
+
+    /// Number of days to keep in cache (and load on startup)
+    #[serde(default = "default_series_cache_retention_days")]
+    pub cache_retention_days: u32,
 }
 
 /// Logging configuration
@@ -258,6 +262,10 @@ fn default_series_stats_dir() -> String {
     "pmc".to_string()
 }
 
+fn default_series_cache_retention_days() -> u32 {
+    2
+}
+
 fn default_log_level() -> String {
     "info".to_string()
 }
@@ -350,6 +358,7 @@ impl Default for Config {
             series_tracker: SeriesTrackerConfig {
                 flush_interval_secs: default_series_flush_interval(),
                 stats_dir: default_series_stats_dir(),
+                cache_retention_days: default_series_cache_retention_days(),
             },
             logging: LoggingConfig {
                 level: default_log_level(),

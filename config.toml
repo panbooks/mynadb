@@ -57,6 +57,9 @@ flush_interval_secs = 60
 # Series stats directory name
 stats_dir = "series_stats"
 
+# Number of days to keep in cache (and load on startup)
+cache_retention_days = 2
+
 [logging]
 # Log level: trace, debug, info, warn, error
 level = "info"
