@@ -75,3 +75,19 @@ max_files = 30
 
 # Enable JSON formatted logs (default: false for human-readable format)
 json_format = false
+
+[retention]
+# Enable automatic retention checks
+enabled = true
+
+# Default retention period in days (partitions older than this will be deleted)
+default_days = 7
+
+# Background retention check interval in seconds
+interval_secs = 3600  # 1 hour
+
+# Databases to exclude from automatic retention (optional)
+# exclude_databases = ["_system"]
+
+# Tables to exclude from automatic retention (optional, format: "catalog.schema.table")
+# exclude_tables = ["mydb.default.important_metrics"]

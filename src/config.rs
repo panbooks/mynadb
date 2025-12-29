@@ -13,6 +13,7 @@ pub struct Config {
     pub compaction: CompactionConfig,
     pub series_tracker: SeriesTrackerConfig,
     pub logging: LoggingConfig,
+    pub retention: RetentionConfig,
 }
 
 /// Server configuration
@@ -156,6 +157,30 @@ pub struct LoggingConfig {
     pub json_format: bool,
 }
 
+/// Retention policy configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetentionConfig {
+    /// Enable background retention checks
+    #[serde(default = "default_retention_enabled")]
+    pub enabled: bool,
+
+    /// Default retention period in days (partitions older than this will be deleted)
+    #[serde(default = "default_retention_days")]
+    pub default_days: u32,
+
+    /// Background retention check interval in seconds (0 = disabled)
+    #[serde(default = "default_retention_interval_secs")]
+    pub interval_secs: u64,
+
+    /// Databases to exclude from automatic retention (optional)
+    #[serde(default = "default_retention_exclude_databases")]
+    pub exclude_databases: Vec<String>,
+
+    /// Tables to exclude from automatic retention (optional, format: "catalog.schema.table")
+    #[serde(default = "default_retention_exclude_tables")]
+    pub exclude_tables: Vec<String>,
+}
+
 // Default value functions
 fn default_http_host() -> String {
     "0.0.0.0".to_string()
@@ -269,6 +294,26 @@ fn default_schema_prefix_numeric() -> bool {
     true
 }
 
+fn default_retention_enabled() -> bool {
+    false
+}
+
+fn default_retention_days() -> u32 {
+    7
+}
+
+fn default_retention_interval_secs() -> u64 {
+    3600 // 1 hour
+}
+
+fn default_retention_exclude_databases() -> Vec<String> {
+    vec![]
+}
+
+fn default_retention_exclude_tables() -> Vec<String> {
+    vec![]
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -313,6 +358,13 @@ impl Default for Config {
                 rotation: default_log_rotation(),
                 max_files: default_log_max_files(),
                 json_format: default_log_json(),
+            },
+            retention: RetentionConfig {
+                enabled: default_retention_enabled(),
+                default_days: default_retention_days(),
+                interval_secs: default_retention_interval_secs(),
+                exclude_databases: default_retention_exclude_databases(),
+                exclude_tables: default_retention_exclude_tables(),
             },
         }
     }

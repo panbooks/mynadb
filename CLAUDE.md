@@ -65,6 +65,7 @@ Schema naming: Numeric service tags are prefixed with `svc_` (e.g., `service=1` 
 | Cache | `cache.rs` | In-memory buffering, background flush to Parquet |
 | Query Engine | `query_engine.rs` | DataFusion SQL execution, table auto-registration |
 | Compactor | `compactor.rs` | LSM-tree style multi-level compaction |
+| Retention Manager | `retention_manager.rs` | Automatic deletion of old partitions |
 | Series Tracker | `series_tracker.rs` | Cardinality tracking per database |
 | Line Protocol | `line_protocol.rs` | InfluxDB line protocol parser |
 | Parquet Writer | `parquet_writer.rs` | Arrow to Parquet file I/O |
@@ -92,6 +93,11 @@ flush_interval_secs = 30
 [compaction]
 min_files = 4
 max_level = 5
+
+[retention]
+enabled = true           # Enable automatic retention
+default_days = 7         # Delete partitions older than 7 days
+interval_secs = 3600     # Check every hour
 ```
 
 ## Code Standards
@@ -112,7 +118,50 @@ max_level = 5
 | `/stats` | GET | Cache statistics |
 | `/tables/:db` | GET | List tables |
 | `/schema/:db/:table` | GET | Get table schema |
+| `/partitions/:catalog/:schema/:table` | GET | List partitions |
+| `/partitions/:catalog/:schema/:table/:date` | DELETE | Delete specific partition |
+| `/retention/:catalog/:schema/:table` | POST | Delete old partitions (body: `{older_than_days: N}` or `{before_date: "YYYY-MM-DD"}`) |
 | `/health` | GET | Health check |
+
+## Retention Policy
+
+Stats Service automatically deletes old date-partitioned data to manage disk space.
+
+### Configuration
+
+```toml
+[retention]
+enabled = true                    # Enable background retention checks
+default_days = 7                  # Delete partitions older than 7 days
+interval_secs = 3600              # Check every hour
+exclude_databases = ["_system"]   # Databases to skip (optional)
+exclude_tables = ["mydb.default.important"]  # Tables to skip (optional)
+```
+
+### How It Works
+
+1. Background task runs every `interval_secs`
+2. Scans all catalogs → schemas → tables in `data_dir`
+3. For each table, discovers date partitions (`date=YYYY-MM-DD/`)
+4. Deletes partitions older than `default_days`
+5. Skips excluded databases and tables
+6. Logs deletion statistics (partitions deleted, bytes freed)
+
+### Manual Retention
+
+Use the API to manually trigger retention for specific tables:
+
+```bash
+# Delete partitions older than 30 days
+curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"older_than_days": 30}'
+
+# Delete partitions before specific date
+curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"before_date": "2024-01-01"}'
+```
 
 ## Query Syntax
 

@@ -8,6 +8,7 @@ mod logger;
 mod mysql_service;
 mod parquet_writer;
 mod query_engine;
+mod retention_manager;
 mod series_tracker;
 
 use axum::{
@@ -26,6 +27,7 @@ use flight_service::StatsFlightService;
 use mysql_service::MysqlService;
 use line_protocol::parse_multiple_lines;
 use query_engine::QueryEngine;
+use retention_manager::RetentionManager;
 use serde::{Deserialize, Serialize};
 use series_tracker::SeriesTracker;
 use std::collections::HashMap;
@@ -165,6 +167,19 @@ async fn main() {
     ));
     Arc::clone(&series_tracker).start_background_flush(config.series_tracker.flush_interval_secs);
 
+    info!("Initializing retention manager");
+    let retention_manager = Arc::new(RetentionManager::new(
+        Arc::clone(&db_manager),
+        &config.storage.data_dir,
+        &config.storage.system_dir,
+    ));
+
+    // Start background retention if enabled
+    if config.retention.enabled && config.retention.interval_secs > 0 {
+        Arc::clone(&retention_manager)
+            .start_background_retention(config.retention.clone());
+    }
+
     let state = AppState {
         cache,
         query_engine,
@@ -252,6 +267,14 @@ async fn main() {
         );
     } else {
         info!("Background compaction: disabled");
+    }
+    if config.retention.enabled && config.retention.interval_secs > 0 {
+        info!(
+            "Background retention: enabled (interval: {}s, retention: {} days)",
+            config.retention.interval_secs, config.retention.default_days
+        );
+    } else {
+        info!("Background retention: disabled");
     }
 
     // Start Arrow Flight server
