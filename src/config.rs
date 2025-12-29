@@ -352,7 +352,7 @@ fn default_wal_enabled() -> bool {
 }
 
 fn default_wal_sync_on_write() -> bool {
-    true // Default to durable mode
+    false // Default to durable mode
 }
 
 fn default_wal_rotate_size_mb() -> u64 {
@@ -360,7 +360,7 @@ fn default_wal_rotate_size_mb() -> u64 {
 }
 
 fn default_wal_cleanup_interval_secs() -> u64 {
-    3600 // 1 hour
+    300 // 5 minutes - more frequent cleanup to prevent empty file accumulation
 }
 
 fn default_wal_retention_hours() -> u64 {
