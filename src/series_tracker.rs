@@ -28,10 +28,11 @@ struct SeriesRecord {
     date: i32, // Date32: days since Unix epoch
 }
 
-/// Single day's cache entry
+/// Single day's cache entry with per-database deduplication
 struct DailyCache {
     date: i32,
-    cache: Arc<RwLock<HashSet<u64>>>,
+    /// Cache per database: db_name -> series hashes
+    cache: Arc<RwLock<HashMap<String, HashSet<u64>>>>,
 }
 
 /// Type alias for daily caches: vector of daily caches
@@ -239,7 +240,7 @@ impl SeriesTracker {
     }
 
     /// Get or create cache for a specific date
-    async fn get_or_create_day_cache(&self, date: i32) -> Arc<RwLock<HashSet<u64>>> {
+    async fn get_or_create_day_cache(&self, date: i32) -> Arc<RwLock<HashMap<String, HashSet<u64>>>> {
         // Fast path: try read lock first
         {
             let caches = self.daily_caches.read().await;
@@ -255,7 +256,7 @@ impl SeriesTracker {
             return Arc::clone(&daily_cache.cache);
         }
 
-        let new_cache = Arc::new(RwLock::new(HashSet::new()));
+        let new_cache = Arc::new(RwLock::new(HashMap::new()));
         caches.push(DailyCache {
             date,
             cache: Arc::clone(&new_cache),
@@ -284,17 +285,19 @@ impl SeriesTracker {
             let day_cache = self.get_or_create_day_cache(date).await;
             let mut new_records = Vec::new();
 
-            // First pass: identify new series for this date
+            // First pass: identify new series for this date and database
             for point in date_points {
                 let service = self.extract_service_name(&point.tags);
                 let tag_hash = self.calculate_tag_hash(&point.tags);
                 let series_hash = Self::calculate_series_hash(&service, &point.measurement, tag_hash);
 
-                // Check if already tracked for this date
+                // Check if already tracked for this date and database
                 {
                     let cache = day_cache.read().await;
-                    if cache.contains(&series_hash) {
-                        continue;
+                    if let Some(db_cache) = cache.get(db) {
+                        if db_cache.contains(&series_hash) {
+                            continue;
+                        }
                     }
                 }
 
@@ -313,12 +316,14 @@ impl SeriesTracker {
                 continue;
             }
 
-            // Batch insert into day cache (single write lock)
+            // Batch insert into day cache for this database (single write lock)
             let mut actually_new = Vec::new();
             {
                 let mut cache = day_cache.write().await;
+                let db_cache = cache.entry(db.to_string()).or_insert_with(HashSet::new);
+
                 for (series_hash, record) in new_records {
-                    if cache.insert(series_hash) {
+                    if db_cache.insert(series_hash) {
                         actually_new.push(record);
                     }
                 }
@@ -397,7 +402,7 @@ impl SeriesTracker {
         let mut caches = self.daily_caches.write().await;
         let before_count = caches.len();
 
-        // Retain only caches for dates >= cutoff (latest 2 days)
+        // Retain only caches for dates >= cutoff
         caches.retain(|daily_cache| {
             if daily_cache.date >= cutoff_date {
                 true
@@ -405,10 +410,13 @@ impl SeriesTracker {
                 // Log evicted cache info
                 let cache_read = daily_cache.cache.try_read();
                 if let Ok(cache_read) = cache_read {
+                    let total_entries: usize = cache_read.values().map(|s| s.len()).sum();
+                    let db_count = cache_read.len();
                     debug!(
-                        "Evicting cache for date {} ({} entries)",
+                        "Evicting cache for date {} ({} databases, {} total entries)",
                         daily_cache.date,
-                        cache_read.len()
+                        db_count,
+                        total_entries
                     );
                 }
                 false
@@ -744,6 +752,11 @@ impl SeriesTracker {
             let day_cache = self.get_or_create_day_cache(date).await;
             let mut day_cache_write = day_cache.write().await;
 
+            // Get or create cache for this database within the day cache
+            let db_cache = day_cache_write
+                .entry(db.to_string())
+                .or_insert_with(HashSet::new);
+
             while let Some(Ok(batch)) = reader.next() {
                 let service_col = batch
                     .column(0)
@@ -768,7 +781,7 @@ impl SeriesTracker {
 
                     let series_hash = Self::calculate_series_hash(service, metric, tag_hash);
 
-                    if day_cache_write.insert(series_hash) {
+                    if db_cache.insert(series_hash) {
                         loaded_count += 1;
                         *loaded_by_date.entry(date).or_insert(0) += 1;
                     }
