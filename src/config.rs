@@ -116,6 +116,18 @@ pub struct CompactionConfig {
     /// Background compaction interval in seconds (0 = disabled)
     #[serde(default = "default_compaction_interval_secs")]
     pub interval_secs: u64,
+
+    /// Age-based consolidation: merge all files if partition older than this (hours)
+    #[serde(default = "default_compaction_stable_age_hours")]
+    pub stable_age_hours: u64,
+
+    /// Minimum files required to trigger age-based merge
+    #[serde(default = "default_compaction_min_files_for_age_merge")]
+    pub min_files_for_age_merge: usize,
+
+    /// Maximum single file size in MB (split if larger)
+    #[serde(default = "default_compaction_max_single_file_size_mb")]
+    pub max_single_file_size_mb: u64,
 }
 
 /// Series tracker configuration
@@ -319,7 +331,19 @@ fn default_compaction_max_level() -> u32 {
 }
 
 fn default_compaction_interval_secs() -> u64 {
-    60 // 5 min
+    60 // 1 min
+}
+
+fn default_compaction_stable_age_hours() -> u64 {
+    12 // Merge all files if partition older than 12 hours
+}
+
+fn default_compaction_min_files_for_age_merge() -> usize {
+    2 // Need at least 2 files to merge
+}
+
+fn default_compaction_max_single_file_size_mb() -> u64 {
+    2048 // 2GB max single file size
 }
 
 fn default_series_flush_interval() -> u64 {
@@ -454,6 +478,9 @@ impl Default for Config {
                 target_file_size_mb: default_compaction_target_file_size_mb(),
                 max_level: default_compaction_max_level(),
                 interval_secs: default_compaction_interval_secs(),
+                stable_age_hours: default_compaction_stable_age_hours(),
+                min_files_for_age_merge: default_compaction_min_files_for_age_merge(),
+                max_single_file_size_mb: default_compaction_max_single_file_size_mb(),
             },
             series_tracker: SeriesTrackerConfig {
                 flush_interval_secs: default_series_flush_interval(),
