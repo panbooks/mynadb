@@ -663,7 +663,7 @@ impl Compactor {
             compaction_happened = true;
         }
 
-        // Step 2: Major compactions (L1 → L2, L2 → L3, L3 → L4)
+        // Step 2: Major compactions (L1 → L2, L2 → L3, L3 → L4, L4 → L4)
         // Refresh file list after L0 compaction
         let file_infos_updated = self.list_parquet_file_infos(&table_path)?;
 
@@ -674,13 +674,23 @@ impl Compactor {
                 .cloned()
                 .collect();
 
-            if level_files.len() >= config.major_min_files && current_level < config.max_level {
-                info!(
-                    "Major compaction: {} L{} files → L{}",
-                    level_files.len(),
-                    current_level,
-                    current_level + 1
-                );
+            // Allow compaction at all levels including max_level (to reduce file count)
+            if level_files.len() >= config.major_min_files {
+                if current_level < config.max_level {
+                    info!(
+                        "Major compaction: {} L{} files → L{}",
+                        level_files.len(),
+                        current_level,
+                        current_level + 1
+                    );
+                } else {
+                    info!(
+                        "Max-level compaction: {} L{} files → L{} (same level)",
+                        level_files.len(),
+                        current_level,
+                        current_level
+                    );
+                }
 
                 let rows = self
                     .compact_level_files(&table_path, &level_files, current_level, config)
@@ -806,7 +816,7 @@ impl Compactor {
             compaction_happened = true;
         }
 
-        // Step 2: Major compactions (L1 → L2, L2 → L3, L3 → L4)
+        // Step 2: Major compactions (L1 → L2, L2 → L3, L3 → L4, L4 → L4)
         // Refresh file list after L0 compaction
         let file_infos_updated = self.list_parquet_file_infos(&partition_path)?;
 
@@ -817,13 +827,23 @@ impl Compactor {
                 .cloned()
                 .collect();
 
-            if level_files.len() >= config.major_min_files && current_level < config.max_level {
-                info!(
-                    "Major compaction: {} L{} files → L{}",
-                    level_files.len(),
-                    current_level,
-                    current_level + 1
-                );
+            // Allow compaction at all levels including max_level (to reduce file count)
+            if level_files.len() >= config.major_min_files {
+                if current_level < config.max_level {
+                    info!(
+                        "Major compaction: {} L{} files → L{}",
+                        level_files.len(),
+                        current_level,
+                        current_level + 1
+                    );
+                } else {
+                    info!(
+                        "Max-level compaction: {} L{} files → L{} (same level)",
+                        level_files.len(),
+                        current_level,
+                        current_level
+                    );
+                }
 
                 let rows = self
                     .compact_level_files(&partition_path, &level_files, current_level, config)
@@ -867,6 +887,7 @@ impl Compactor {
     }
 
     /// Compact files at a specific level to the next level
+    /// If at max_level, compacts within the same level to reduce file count
     /// Returns the total number of rows compacted
     async fn compact_level_files(
         &self,
@@ -879,7 +900,13 @@ impl Compactor {
             return Ok(0);
         }
 
-        let next_level = current_level + 1;
+        // At max_level, compact within same level; otherwise, compact to next level
+        let target_level = if current_level >= config.max_level {
+            current_level // Stay at max level
+        } else {
+            current_level + 1 // Promote to next level
+        };
+
         let mut total_rows = 0;
 
         // Group files by size to avoid exceeding target file size
@@ -903,27 +930,42 @@ impl Compactor {
             let rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
             total_rows += rows;
 
-            // Create compacted file at next level
+            // Create compacted file at target level
             let timestamp = chrono::Utc::now().timestamp_millis();
             let compacted_filename = format!(
                 "{}/{}{}{}{}{}",
-                partition_path, LEVEL_PREFIX, next_level, LEVEL_SEPARATOR, timestamp, PARQUET_EXT
+                partition_path, LEVEL_PREFIX, target_level, LEVEL_SEPARATOR, timestamp, PARQUET_EXT
             );
 
             self.write_compacted_file(&compacted_filename, batches)?;
 
-            info!(
-                "Created L{} file: {} ({} rows from {} L{} files)",
-                next_level,
-                Path::new(&compacted_filename)
-                    .file_name()
-                    .unwrap()
-                    .to_str()
-                    .unwrap(),
-                rows,
-                group.len(),
-                current_level
-            );
+            if target_level == current_level {
+                info!(
+                    "Created L{} file: {} ({} rows from {} L{} files) [max-level compaction]",
+                    target_level,
+                    Path::new(&compacted_filename)
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap(),
+                    rows,
+                    group.len(),
+                    current_level
+                );
+            } else {
+                info!(
+                    "Created L{} file: {} ({} rows from {} L{} files)",
+                    target_level,
+                    Path::new(&compacted_filename)
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap(),
+                    rows,
+                    group.len(),
+                    current_level
+                );
+            }
 
             // Delete old files after successful write
             for file in &paths {

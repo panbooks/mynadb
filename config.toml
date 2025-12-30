@@ -36,13 +36,10 @@ max_size_mb = 4096
 
 [compaction]
 # Minimum number of files to trigger compaction
-min_files = 4
-
-# Maximum file size in MB before compaction
-max_file_size_mb = 100
+min_files = 5
 
 # Target file size in MB after compaction
-target_file_size_mb = 500
+target_file_size_mb = 200
 
 # Maximum compaction level
 max_level = 5
