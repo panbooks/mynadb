@@ -316,7 +316,7 @@ fn default_compaction_min_files() -> usize {
 }
 
 fn default_compaction_major_min_files() -> usize {
-    2
+    3
 }
 
 fn default_compaction_target_file_size_mb() -> u64 {
