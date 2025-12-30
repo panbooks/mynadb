@@ -1,5 +1,6 @@
-use crate::config::SchemaConfig;
+use crate::config::{SchemaConfig, SeriesTrackerConfig};
 use crate::line_protocol::{format_date32_as_partition, Point};
+use crate::series_dedup::{BloomConfig, StrategyManager};
 use arrow::array::UInt64Array;
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -28,16 +29,6 @@ pub struct SeriesRecord {
     pub date: i32, // Date32: days since Unix epoch
 }
 
-/// Single day's cache entry with per-database deduplication
-struct DailyCache {
-    date: i32,
-    /// Cache per database: db_name -> series hashes
-    cache: Arc<RwLock<HashMap<String, HashSet<u64>>>>,
-}
-
-/// Type alias for daily caches: vector of daily caches
-type DailyCaches = Arc<RwLock<Vec<DailyCache>>>;
-
 /// Type alias for pending writes buffer: (db, date) -> records
 type PendingWrites = Arc<RwLock<HashMap<(String, i32), HashSet<SeriesRecord>>>>;
 
@@ -45,8 +36,8 @@ type PendingWrites = Arc<RwLock<HashMap<(String, i32), HashSet<SeriesRecord>>>>;
 /// Tracks unique series by service, metric, and tag combination hash
 pub struct SeriesTracker {
     data_dir: String,
-    /// In-memory cache per day: vector of (date, cache) entries
-    daily_caches: DailyCaches,
+    /// Strategy manager for per-database deduplication
+    strategy_manager: Arc<StrategyManager>,
     /// Pending writes buffer per database and date partition: (db, date) -> records
     pending_writes: PendingWrites,
     /// Schema configuration for extracting service name
@@ -134,10 +125,46 @@ impl SeriesTracker {
 }
 
 impl SeriesTracker {
-    pub fn new(data_dir: &str, schema_config: Arc<SchemaConfig>, cache_retention_days: u32) -> Self {
+    pub fn new(
+        data_dir: &str,
+        schema_config: Arc<SchemaConfig>,
+        cache_retention_days: u32,
+        tracker_config: &SeriesTrackerConfig,
+    ) -> Self {
+        // Create strategy manager with per-database strategies
+        let bloom_custom = tracker_config
+            .bloom_custom
+            .iter()
+            .map(|c| {
+                (
+                    c.database.clone(),
+                    BloomConfig {
+                        expected_series_per_day: c.expected_series_per_day,
+                        false_positive_rate: c.false_positive_rate,
+                    },
+                )
+            })
+            .collect();
+
+        let strategy_manager = Arc::new(StrategyManager::new(
+            &tracker_config.default_strategy,
+            tracker_config.bloom_databases.clone(),
+            BloomConfig {
+                expected_series_per_day: tracker_config.bloom.expected_series_per_day,
+                false_positive_rate: tracker_config.bloom.false_positive_rate,
+            },
+            bloom_custom,
+        ));
+
+        info!(
+            "SeriesTracker initialized (default strategy: {}, bloom databases: {})",
+            tracker_config.default_strategy,
+            tracker_config.bloom_databases.len()
+        );
+
         let tracker = SeriesTracker {
             data_dir: data_dir.to_string(),
-            daily_caches: Arc::new(RwLock::new(Vec::new())),
+            strategy_manager,
             pending_writes: Arc::new(RwLock::new(HashMap::new())),
             schema_config,
             cache_retention_days,
@@ -239,39 +266,26 @@ impl SeriesTracker {
         hasher.finish()
     }
 
-    /// Get or create cache for a specific date
-    async fn get_or_create_day_cache(&self, date: i32) -> Arc<RwLock<HashMap<String, HashSet<u64>>>> {
-        // Fast path: try read lock first
-        {
-            let caches = self.daily_caches.read().await;
-            if let Some(daily_cache) = caches.iter().find(|dc| dc.date == date) {
-                return Arc::clone(&daily_cache.cache);
-            }
-        }
-
-        // Slow path: create new cache with write lock
-        let mut caches = self.daily_caches.write().await;
-        // Double-check in case another thread created it
-        if let Some(daily_cache) = caches.iter().find(|dc| dc.date == date) {
-            return Arc::clone(&daily_cache.cache);
-        }
-
-        let new_cache = Arc::new(RwLock::new(HashMap::new()));
-        caches.push(DailyCache {
-            date,
-            cache: Arc::clone(&new_cache),
-        });
-        new_cache
+    /// Get the cutoff date for cache retention (days since Unix epoch)
+    fn get_cutoff_date(&self) -> i32 {
+        let today = chrono::Utc::now()
+            .date_naive()
+            .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days() as i32;
+        today - self.cache_retention_days as i32
     }
 
     /// Track multiple points in batch (more efficient than individual track_point calls)
-    /// This method minimizes lock contention by batching cache and pending writes operations
+    /// This method minimizes lock contention by batching strategy lookups and pending writes operations
     pub async fn track_points(&self, db: &str, points: &[Point]) {
         if points.is_empty() {
             return;
         }
 
-        // Group points by date for efficient cache access
+        // Get or create strategy for this database
+        let strategy = self.strategy_manager.get_or_create_strategy(db).await;
+
+        // Group points by date for efficient strategy access
         let mut points_by_date: HashMap<i32, Vec<&Point>> = HashMap::new();
         for point in points {
             points_by_date
@@ -280,62 +294,39 @@ impl SeriesTracker {
                 .push(point);
         }
 
-        // Process each date's points
+        // Process each date's points with strategy
         for (date, date_points) in points_by_date {
-            let day_cache = self.get_or_create_day_cache(date).await;
+            let mut strategy_guard = strategy.write().await;
             let mut new_records = Vec::new();
 
-            // First pass: identify new series for this date and database
+            // Check each point against the strategy
             for point in date_points {
                 let tag_hash = self.calculate_tag_hash(&point.tags);
                 let series_hash = Self::calculate_series_hash(&point.service, &point.measurement, tag_hash);
 
                 // Check if already tracked for this date and database
-                {
-                    let cache = day_cache.read().await;
-                    if let Some(db_cache) = cache.get(db) {
-                        if db_cache.contains(&series_hash) {
-                            continue;
-                        }
-                    }
-                }
-
-                new_records.push((
-                    series_hash,
-                    SeriesRecord {
+                if !strategy_guard.contains(db, date, series_hash) {
+                    strategy_guard.insert(db, date, series_hash);
+                    new_records.push(SeriesRecord {
                         service: point.service.clone(),
                         metric: point.measurement.clone(),
                         hash: tag_hash,
                         date,
-                    },
-                ));
-            }
-
-            if new_records.is_empty() {
-                continue;
-            }
-
-            // Batch insert into day cache for this database (single write lock)
-            let mut actually_new = Vec::new();
-            {
-                let mut cache = day_cache.write().await;
-                let db_cache = cache.entry(db.to_string()).or_insert_with(HashSet::new);
-
-                for (series_hash, record) in new_records {
-                    if db_cache.insert(series_hash) {
-                        actually_new.push(record);
-                    }
+                    });
                 }
             }
 
+            // Release strategy lock before acquiring pending writes lock
+            drop(strategy_guard);
+
             // Batch insert into pending writes
-            if !actually_new.is_empty() {
+            if !new_records.is_empty() {
                 let mut pending = self.pending_writes.write().await;
                 let key = (db.to_string(), date);
                 pending
                     .entry(key)
                     .or_insert_with(HashSet::new)
-                    .extend(actually_new);
+                    .extend(new_records);
             }
         }
     }
@@ -376,45 +367,16 @@ impl SeriesTracker {
 
     /// Evict old daily caches (keep only latest N days based on config)
     async fn evict_old_daily_caches(&self) {
-        let today = chrono::Utc::now()
-            .date_naive()
-            .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
-            .num_days() as i32;
-        let cutoff_date = today - self.cache_retention_days as i32;
+        let cutoff_date = self.get_cutoff_date();
 
-        let mut caches = self.daily_caches.write().await;
-        let before_count = caches.len();
+        // Clear old data from all strategies
+        self.strategy_manager.clear_before_date(cutoff_date).await;
 
-        // Retain only caches for dates >= cutoff
-        caches.retain(|daily_cache| {
-            if daily_cache.date >= cutoff_date {
-                true
-            } else {
-                // Log evicted cache info
-                let cache_read = daily_cache.cache.try_read();
-                if let Ok(cache_read) = cache_read {
-                    let total_entries: usize = cache_read.values().map(|s| s.len()).sum();
-                    let db_count = cache_read.len();
-                    debug!(
-                        "Evicting cache for date {} ({} databases, {} total entries)",
-                        daily_cache.date,
-                        db_count,
-                        total_entries
-                    );
-                }
-                false
-            }
-        });
-
-        let evicted = before_count - caches.len();
-        if evicted > 0 {
-            info!(
-                "Series cache retention: evicted {} old daily cache(s), retained {} (keeping {} days)",
-                evicted,
-                caches.len(),
-                self.cache_retention_days
-            );
-        }
+        debug!(
+            "Series cache retention: cleared data older than {} days (cutoff date: {})",
+            self.cache_retention_days,
+            cutoff_date
+        );
     }
 
     /// Flush all pending writes for all databases
@@ -661,11 +623,10 @@ impl SeriesTracker {
         }
 
         // Calculate cutoff date - only load latest N days
-        let today = chrono::Utc::now()
-            .date_naive()
-            .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
-            .num_days() as i32;
-        let cutoff_date = today - self.cache_retention_days as i32;
+        let cutoff_date = self.get_cutoff_date();
+
+        // Get or create strategy for this database
+        let strategy = self.strategy_manager.get_or_create_strategy(db).await;
 
         use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -731,14 +692,8 @@ impl SeriesTracker {
                 continue;
             }
 
-            // Get or create cache for this date
-            let day_cache = self.get_or_create_day_cache(date).await;
-            let mut day_cache_write = day_cache.write().await;
-
-            // Get or create cache for this database within the day cache
-            let db_cache = day_cache_write
-                .entry(db.to_string())
-                .or_insert_with(HashSet::new);
+            // Load data into strategy
+            let mut strategy_guard = strategy.write().await;
 
             while let Some(Ok(batch)) = reader.next() {
                 let service_col = batch
@@ -764,12 +719,17 @@ impl SeriesTracker {
 
                     let series_hash = Self::calculate_series_hash(service, metric, tag_hash);
 
-                    if db_cache.insert(series_hash) {
+                    // Insert into strategy (strategy handles deduplication internally)
+                    if !strategy_guard.contains(db, date, series_hash) {
+                        strategy_guard.insert(db, date, series_hash);
                         loaded_count += 1;
                         *loaded_by_date.entry(date).or_insert(0) += 1;
                     }
                 }
             }
+
+            // Release lock after processing this file
+            drop(strategy_guard);
         }
 
         if loaded_count > 0 || skipped_count > 0 {
@@ -816,13 +776,25 @@ mod tests {
 
     #[test]
     fn test_tag_hash() {
-        use crate::config::SchemaConfig;
+        use crate::config::{BloomConfig as ConfigBloomConfig, BloomDatabaseConfig, SchemaConfig, SeriesTrackerConfig};
         let schema_config = Arc::new(SchemaConfig {
             tag_keys: vec!["service".to_string()],
             default_name: "default".to_string(),
             prefix_numeric: true,
         });
-        let tracker = SeriesTracker::new("./test_data", schema_config, 2);
+        let tracker_config = SeriesTrackerConfig {
+            flush_interval_secs: 60,
+            stats_dir: "pmc".to_string(),
+            cache_retention_days: 2,
+            default_strategy: "hashset".to_string(),
+            bloom_databases: vec![],
+            bloom: ConfigBloomConfig {
+                expected_series_per_day: 1_000_000_000,
+                false_positive_rate: 0.01,
+            },
+            bloom_custom: vec![],
+        };
+        let tracker = SeriesTracker::new("./test_data", schema_config, 2, &tracker_config);
 
         // Same tags in different order should produce same hash
         let mut tags1 = HashMap::new();
@@ -843,13 +815,25 @@ mod tests {
 
     #[test]
     fn test_tag_hash_excludes_service() {
-        use crate::config::SchemaConfig;
+        use crate::config::{BloomConfig as ConfigBloomConfig, BloomDatabaseConfig, SchemaConfig, SeriesTrackerConfig};
         let schema_config = Arc::new(SchemaConfig {
             tag_keys: vec!["service".to_string()],
             default_name: "default".to_string(),
             prefix_numeric: true,
         });
-        let tracker = SeriesTracker::new("./test_data", schema_config, 2);
+        let tracker_config = SeriesTrackerConfig {
+            flush_interval_secs: 60,
+            stats_dir: "pmc".to_string(),
+            cache_retention_days: 2,
+            default_strategy: "hashset".to_string(),
+            bloom_databases: vec![],
+            bloom: ConfigBloomConfig {
+                expected_series_per_day: 1_000_000_000,
+                false_positive_rate: 0.01,
+            },
+            bloom_custom: vec![],
+        };
+        let tracker = SeriesTracker::new("./test_data", schema_config, 2, &tracker_config);
 
         // Different service should produce same hash if other tags are same
         let mut tags1 = HashMap::new();

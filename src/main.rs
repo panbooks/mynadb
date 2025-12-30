@@ -9,6 +9,7 @@ mod mysql_service;
 mod parquet_writer;
 mod query_engine;
 mod retention_manager;
+mod series_dedup;
 mod series_tracker;
 mod wal;
 
@@ -190,6 +191,7 @@ async fn main() {
         &config.storage.data_dir,
         Arc::new(config.schema.clone()),
         config.series_tracker.cache_retention_days,
+        &config.series_tracker,
     ));
 
     // Load existing series cache from disk (latest N days only)
