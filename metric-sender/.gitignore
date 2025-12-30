@@ -1,0 +1,14 @@
+# Binaries
+metric-sender
+metric-sender-*
+*.exe
+
+# Go build cache
+*.test
+*.out
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
