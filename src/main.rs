@@ -181,6 +181,9 @@ async fn main() {
             max_file_size: config.compaction.max_file_size_mb * 1024 * 1024,
             target_file_size: config.compaction.target_file_size_mb * 1024 * 1024,
             max_level: config.compaction.max_level,
+            stable_age_hours: config.compaction.stable_age_hours,
+            min_files_for_age_merge: config.compaction.min_files_for_age_merge,
+            max_single_file_size_mb: config.compaction.max_single_file_size_mb,
         };
         Arc::clone(&compactor)
             .start_background_compaction(config.compaction.interval_secs, compaction_config);
@@ -990,6 +993,9 @@ async fn compact_handler(
         max_file_size: state.config.compaction.max_file_size_mb * 1024 * 1024,
         target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
         max_level: state.config.compaction.max_level,
+        stable_age_hours: state.config.compaction.stable_age_hours,
+        min_files_for_age_merge: state.config.compaction.min_files_for_age_merge,
+        max_single_file_size_mb: state.config.compaction.max_single_file_size_mb,
     };
 
     match state.compactor.compact_catalog(&catalog, &config).await {
@@ -1058,6 +1064,9 @@ async fn compact_table_handler(
         max_file_size: state.config.compaction.max_file_size_mb * 1024 * 1024,
         target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
         max_level: state.config.compaction.max_level,
+        stable_age_hours: state.config.compaction.stable_age_hours,
+        min_files_for_age_merge: state.config.compaction.min_files_for_age_merge,
+        max_single_file_size_mb: state.config.compaction.max_single_file_size_mb,
     };
 
     match state
@@ -1139,6 +1148,9 @@ async fn compact_partition_handler(
         max_file_size: state.config.compaction.max_file_size_mb * 1024 * 1024,
         target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
         max_level: state.config.compaction.max_level,
+        stable_age_hours: state.config.compaction.stable_age_hours,
+        min_files_for_age_merge: state.config.compaction.min_files_for_age_merge,
+        max_single_file_size_mb: state.config.compaction.max_single_file_size_mb,
     };
 
     match state

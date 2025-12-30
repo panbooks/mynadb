@@ -54,6 +54,12 @@ pub struct CompactionConfig {
     pub target_file_size: u64,
     /// Maximum compaction level (0-4: L0, L1, L2, L3, L4)
     pub max_level: u32,
+    /// Age-based consolidation: merge all files if partition older than this (hours)
+    pub stable_age_hours: u64,
+    /// Minimum files required to trigger age-based merge
+    pub min_files_for_age_merge: usize,
+    /// Maximum single file size in MB (split if larger)
+    pub max_single_file_size_mb: u64,
 }
 
 impl Default for CompactionConfig {
@@ -64,6 +70,9 @@ impl Default for CompactionConfig {
             max_file_size: DEFAULT_MAX_FILE_SIZE_MB * MB_TO_BYTES,
             target_file_size: DEFAULT_TARGET_FILE_SIZE_MB * MB_TO_BYTES,
             max_level: DEFAULT_MAX_LEVEL,
+            stable_age_hours: 12, // Default: 12 hours
+            min_files_for_age_merge: 2,
+            max_single_file_size_mb: 2048, // 2GB
         }
     }
 }
@@ -89,6 +98,7 @@ struct ParquetFileInfo {
     size: u64,
     level: u32,
     timestamp: i64,
+    modified_time: std::time::SystemTime,
 }
 
 impl ParquetFileInfo {
@@ -96,6 +106,9 @@ impl ParquetFileInfo {
         let metadata = fs::metadata(&path).map_err(|e| format!("Failed to get metadata: {}", e))?;
 
         let size = metadata.len();
+        let modified_time = metadata
+            .modified()
+            .map_err(|e| format!("Failed to get modified time: {}", e))?;
 
         // Parse filename: L0_1703251234567.parquet or 1703251234567.parquet (legacy)
         let filename = path
@@ -133,6 +146,7 @@ impl ParquetFileInfo {
             size,
             level,
             timestamp,
+            modified_time,
         })
     }
 }
@@ -344,6 +358,137 @@ impl Compactor {
         Ok(false)
     }
 
+    /// Get partition age based on oldest file modification time
+    fn get_partition_age(&self, files: &[ParquetFileInfo]) -> Result<std::time::Duration, String> {
+        if files.is_empty() {
+            return Err("No files in partition".to_string());
+        }
+
+        // Find the most recently modified file (newest file determines partition age)
+        let newest_modified = files
+            .iter()
+            .map(|f| f.modified_time)
+            .max()
+            .ok_or("Failed to find newest file")?;
+
+        std::time::SystemTime::now()
+            .duration_since(newest_modified)
+            .map_err(|e| format!("Failed to calculate partition age: {}", e))
+    }
+
+    /// Merge all files in a partition into a single file
+    /// Returns CompactionResult if merge was performed, None if skipped
+    async fn merge_all_to_one_file(
+        &self,
+        partition_path: &str,
+        files: &[ParquetFileInfo],
+        config: &CompactionConfig,
+    ) -> Result<Option<CompactionResult>, String> {
+        if files.is_empty() {
+            return Ok(None);
+        }
+
+        let total_size: u64 = files.iter().map(|f| f.size).sum();
+        let max_size = config.max_single_file_size_mb * MB_TO_BYTES;
+
+        info!(
+            "Age-based consolidation: merging {} files ({}MB) into one file",
+            files.len(),
+            total_size / MB_TO_BYTES
+        );
+
+        // Read all files
+        let paths: Vec<PathBuf> = files.iter().map(|f| f.path.clone()).collect();
+        let batches = self.read_parquet_files(&paths)?;
+        let total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+
+        // Check if result would be too large for a single file
+        if total_size > max_size {
+            warn!(
+                "Total size {}MB exceeds max single file size {}MB, will split into multiple files",
+                total_size / MB_TO_BYTES,
+                config.max_single_file_size_mb
+            );
+
+            // Calculate number of output files needed
+            let num_files = ((total_size as f64 / max_size as f64).ceil() as usize).max(1);
+            let rows_per_file = (total_rows / num_files).max(1);
+
+            // Split batches into chunks
+            let mut current_rows = 0;
+            let mut current_chunk = Vec::new();
+            let mut file_idx = 0;
+
+            for batch in batches {
+                current_chunk.push(batch.clone());
+                current_rows += batch.num_rows();
+
+                if current_rows >= rows_per_file && file_idx < num_files - 1 {
+                    // Write this chunk
+                    let timestamp = chrono::Utc::now().timestamp_millis();
+                    let output_filename = format!(
+                        "{}/L0_FINAL_PART{}_{}.parquet",
+                        partition_path, file_idx, timestamp
+                    );
+                    self.write_compacted_file(&output_filename, current_chunk.clone())?;
+                    info!("Created consolidated file part {}: {}", file_idx, output_filename);
+
+                    // Reset for next chunk
+                    current_chunk.clear();
+                    current_rows = 0;
+                    file_idx += 1;
+                }
+            }
+
+            // Write remaining rows
+            if !current_chunk.is_empty() {
+                let timestamp = chrono::Utc::now().timestamp_millis();
+                let output_filename = format!(
+                    "{}/L0_FINAL_PART{}_{}.parquet",
+                    partition_path, file_idx, timestamp
+                );
+                self.write_compacted_file(&output_filename, current_chunk)?;
+                info!("Created consolidated file part {}: {}", file_idx, output_filename);
+            }
+        } else {
+            // Single file output
+            let timestamp = chrono::Utc::now().timestamp_millis();
+            let output_filename = format!("{}/L0_FINAL_{}.parquet", partition_path, timestamp);
+
+            self.write_compacted_file(&output_filename, batches)?;
+
+            info!(
+                "Created consolidated file: {} ({} rows, {}MB)",
+                output_filename,
+                total_rows,
+                total_size / MB_TO_BYTES
+            );
+        }
+
+        // Delete old files after successful write
+        for file in &paths {
+            if let Err(e) = fs::remove_file(file) {
+                warn!("Failed to delete {}: {}", file.display(), e);
+            } else {
+                debug!("Deleted: {}", file.display());
+            }
+        }
+
+        Ok(Some(CompactionResult {
+            catalog: String::new(), // Will be filled by caller
+            schema: String::new(),
+            table: String::new(),
+            date_partition: String::new(),
+            l0_files_before: files.iter().filter(|f| f.level == 0).count(),
+            l0_files_after: 0, // Will be recalculated by caller if needed
+            files_before: files.len(),
+            files_after: 0, // Will be recalculated by caller if needed
+            bytes_before: total_size,
+            bytes_after: total_size, // Same data, just reorganized
+            rows_compacted: total_rows,
+        }))
+    }
+
     /// Compact a non-partitioned table (e.g., pmc)
     async fn compact_non_partitioned_table(
         &self,
@@ -397,6 +542,84 @@ impl Compactor {
             total_bytes_before as f64 / 1024.0 / 1024.0
         );
 
+        // ========== AGE-BASED CONSOLIDATION ==========
+        // Check table age and apply one-file policy if old enough
+        match self.get_partition_age(&file_infos) {
+            Ok(age) => {
+                let age_threshold_secs = config.stable_age_hours * 3600;
+                let age_secs = age.as_secs();
+
+                if age_secs > age_threshold_secs
+                    && file_infos.len() >= config.min_files_for_age_merge
+                {
+                    info!(
+                        "Non-partitioned table {}.{}.{} is {}h old (threshold: {}h), applying ONE-FILE consolidation ({} files)",
+                        catalog,
+                        schema,
+                        table,
+                        age_secs / 3600,
+                        config.stable_age_hours,
+                        file_infos.len()
+                    );
+
+                    // Use age-based consolidation instead of traditional LSM
+                    match self
+                        .merge_all_to_one_file(&table_path, &file_infos, config)
+                        .await
+                    {
+                        Ok(Some(mut result)) => {
+                            // Fill in catalog/schema/table info
+                            result.catalog = catalog.to_string();
+                            result.schema = schema.to_string();
+                            result.table = table.to_string();
+                            result.date_partition = "[non-partitioned]".to_string();
+
+                            // Recalculate after stats
+                            let file_infos_after = self.list_parquet_file_infos(&table_path)?;
+                            result.files_after = file_infos_after.len();
+                            result.l0_files_after =
+                                file_infos_after.iter().filter(|f| f.level == 0).count();
+                            let total_bytes_after: u64 =
+                                file_infos_after.iter().map(|f| f.size).sum();
+                            result.bytes_after = total_bytes_after;
+
+                            info!(
+                                "Age-based consolidation complete: {}.{}.{}: {} → {} files, {:.2} MB → {:.2} MB in {:?}",
+                                catalog,
+                                schema,
+                                table,
+                                total_files_before,
+                                result.files_after,
+                                total_bytes_before as f64 / 1024.0 / 1024.0,
+                                total_bytes_after as f64 / 1024.0 / 1024.0,
+                                start.elapsed()
+                            );
+
+                            return Ok(Some(result));
+                        }
+                        Ok(None) => {
+                            debug!("Age-based consolidation returned no result");
+                        }
+                        Err(e) => {
+                            warn!("Age-based consolidation failed: {}, falling back to LSM", e);
+                        }
+                    }
+                } else {
+                    debug!(
+                        "Table age {}h (threshold: {}h), files {} (min: {}), using traditional LSM",
+                        age_secs / 3600,
+                        config.stable_age_hours,
+                        file_infos.len(),
+                        config.min_files_for_age_merge
+                    );
+                }
+            }
+            Err(e) => {
+                debug!("Could not determine table age: {}, using traditional LSM", e);
+            }
+        }
+
+        // ========== TRADITIONAL LSM COMPACTION ==========
         // Perform multi-level compaction
         let mut total_rows = 0;
         let mut compaction_happened = false;
@@ -540,6 +763,86 @@ impl Compactor {
             total_bytes_before as f64 / 1024.0 / 1024.0
         );
 
+        // ========== AGE-BASED CONSOLIDATION ==========
+        // Check partition age and apply one-file policy if old enough
+        match self.get_partition_age(&file_infos) {
+            Ok(age) => {
+                let age_threshold_secs = config.stable_age_hours * 3600;
+                let age_secs = age.as_secs();
+
+                if age_secs > age_threshold_secs
+                    && file_infos.len() >= config.min_files_for_age_merge
+                {
+                    info!(
+                        "Partition {}.{}.{}/{} is {}h old (threshold: {}h), applying ONE-FILE consolidation ({} files)",
+                        catalog,
+                        schema,
+                        table,
+                        date_partition,
+                        age_secs / 3600,
+                        config.stable_age_hours,
+                        file_infos.len()
+                    );
+
+                    // Use age-based consolidation instead of traditional LSM
+                    match self
+                        .merge_all_to_one_file(&partition_path, &file_infos, config)
+                        .await
+                    {
+                        Ok(Some(mut result)) => {
+                            // Fill in catalog/schema/table info
+                            result.catalog = catalog.to_string();
+                            result.schema = schema.to_string();
+                            result.table = table.to_string();
+                            result.date_partition = date_partition.to_string();
+
+                            // Recalculate after stats
+                            let file_infos_after = self.list_parquet_file_infos(&partition_path)?;
+                            result.files_after = file_infos_after.len();
+                            result.l0_files_after =
+                                file_infos_after.iter().filter(|f| f.level == 0).count();
+                            let total_bytes_after: u64 =
+                                file_infos_after.iter().map(|f| f.size).sum();
+                            result.bytes_after = total_bytes_after;
+
+                            info!(
+                                "Age-based consolidation complete: {}.{}.{}/{}: {} → {} files, {:.2} MB → {:.2} MB in {:?}",
+                                catalog,
+                                schema,
+                                table,
+                                date_partition,
+                                total_files_before,
+                                result.files_after,
+                                total_bytes_before as f64 / 1024.0 / 1024.0,
+                                total_bytes_after as f64 / 1024.0 / 1024.0,
+                                start.elapsed()
+                            );
+
+                            return Ok(Some(result));
+                        }
+                        Ok(None) => {
+                            debug!("Age-based consolidation returned no result");
+                        }
+                        Err(e) => {
+                            warn!("Age-based consolidation failed: {}, falling back to LSM", e);
+                        }
+                    }
+                } else {
+                    debug!(
+                        "Partition age {}h (threshold: {}h), files {} (min: {}), using traditional LSM",
+                        age_secs / 3600,
+                        config.stable_age_hours,
+                        file_infos.len(),
+                        config.min_files_for_age_merge
+                    );
+                }
+            }
+            Err(e) => {
+                debug!("Could not determine partition age: {}, using traditional LSM", e);
+            }
+        }
+
+        // ========== TRADITIONAL LSM COMPACTION ==========
         // Perform multi-level compaction
         let mut total_rows = 0;
         let mut compaction_happened = false;
