@@ -191,6 +191,11 @@ All test scripts are in `scripts/`:
 | `test_compaction_multilevel.sh` | Compaction | Multi-level L0→L1→L2... |
 | `test_compaction_nonpartitioned.sh` | Compaction | Non-partitioned tables |
 | `test_compaction_aggressive.sh` | Compaction | Lower threshold compaction |
+| `test_compaction_dual_strategy.sh` | Compaction | **NEW:** Comprehensive dual strategy test (LSM + Full) |
+| `test_compaction_quick.sh` | Compaction | **NEW:** Quick validation of both strategies |
+| `test_full_compaction_now.sh` | Compaction | **NEW:** Force full compaction at current hour |
 | `test_series_stats.sh` | Series Stats | Cardinality tracking |
 | `test_comprehensive.sh` | Comprehensive | Full test with queries |
+
+See `scripts/README_COMPACTION_TESTS.md` for detailed compaction testing documentation.
 
