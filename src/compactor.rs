@@ -392,7 +392,7 @@ impl Compactor {
             }
 
             let catalog = match catalog_entry.file_name().to_str() {
-                Some(name) if !name.starts_with('.') && !name.starts_with('_') => name.to_string(),
+                Some(name) if !name.starts_with('.') => name.to_string(),
                 _ => continue,
             };
 
@@ -408,7 +408,7 @@ impl Compactor {
                 }
 
                 let schema = match schema_entry.file_name().to_str() {
-                    Some(name) if !name.starts_with('.') && !name.starts_with('_') => name.to_string(),
+                    Some(name) if !name.starts_with('.') => name.to_string(),
                     _ => continue,
                 };
 
@@ -472,6 +472,7 @@ impl Compactor {
     }
 
     /// Full compact a single partition
+    /// Filters out files >= full_compaction_target_size to reduce I/O
     async fn full_compact_partition(
         &self,
         catalog: &str,
@@ -483,79 +484,118 @@ impl Compactor {
     ) -> Result<Option<CompactionResult>, String> {
         let start = Instant::now();
 
-        // List all parquet files
-        let files: Vec<PathBuf> = fs::read_dir(partition_path)
+        // List all parquet files with their sizes
+        let all_files: Vec<(PathBuf, u64)> = fs::read_dir(partition_path)
             .map_err(|e| format!("Failed to read partition: {}", e))?
             .filter_map(|e| e.ok())
             .filter(|e| {
                 e.path().is_file()
                     && e.path().extension().and_then(|s| s.to_str()) == Some("parquet")
             })
-            .map(|e| e.path())
+            .filter_map(|e| {
+                let path = e.path();
+                fs::metadata(&path).ok().map(|m| (path, m.len()))
+            })
             .collect();
 
-        if files.len() < 2 {
+        if all_files.len() < 2 {
             debug!(
                 "Partition {}/{}/{}/{} has {} file(s), skipping",
                 catalog,
                 schema,
                 table,
                 partition_name,
-                files.len()
+                all_files.len()
             );
             return Ok(None);
         }
 
-        let files_before = files.len();
-        let bytes_before: u64 = files
-            .iter()
-            .filter_map(|f| fs::metadata(f).ok())
-            .map(|m| m.len())
-            .sum();
+        let files_before = all_files.len();
+        let bytes_before: u64 = all_files.iter().map(|(_, size)| size).sum();
 
-        // Check if partition is too large (> 200MB)
-        if bytes_before > config.full_compaction_target_size {
+        // Filter out files >= full_compaction_target_size to reduce I/O
+        // Already-large files don't need to be merged
+        let compactable_files: Vec<(PathBuf, u64)> = all_files
+            .iter()
+            .filter(|(_, size)| *size < config.full_compaction_target_size)
+            .cloned()
+            .collect();
+
+        let oversized_files: Vec<(PathBuf, u64)> = all_files
+            .iter()
+            .filter(|(_, size)| *size >= config.full_compaction_target_size)
+            .cloned()
+            .collect();
+
+        let filtered_count = oversized_files.len();
+        if filtered_count > 0 {
+            let oversized_bytes: u64 = oversized_files.iter().map(|(_, size)| size).sum();
             debug!(
-                "Partition {}/{}/{}/{} size {:.2} MB exceeds target {:.2} MB, skipping full compaction",
+                "Filtered out {} oversized files ({:.2} MB) in partition {}/{}/{}/{}",
+                filtered_count,
+                oversized_bytes as f64 / MB_TO_BYTES as f64,
+                catalog,
+                schema,
+                table,
+                partition_name
+            );
+        }
+
+        // If no compactable files or only 1 compactable file, skip
+        if compactable_files.len() < 2 {
+            debug!(
+                "Partition {}/{}/{}/{}: {} compactable file(s) (< 2), skipping full compaction",
                 catalog,
                 schema,
                 table,
                 partition_name,
-                bytes_before as f64 / MB_TO_BYTES as f64,
-                config.full_compaction_target_size as f64 / MB_TO_BYTES as f64
+                compactable_files.len()
             );
             return Ok(None);
         }
 
+        let compactable_bytes: u64 = compactable_files.iter().map(|(_, size)| size).sum();
+
         info!(
-            "Full compaction: {}/{}/{}/{} ({} files, {:.2} MB)",
+            "Full compaction: {}/{}/{}/{} ({} files, {:.2} MB total, compacting {} files/{:.2} MB, {} oversized files skipped)",
             catalog,
             schema,
             table,
             partition_name,
             files_before,
-            bytes_before as f64 / MB_TO_BYTES as f64
+            bytes_before as f64 / MB_TO_BYTES as f64,
+            compactable_files.len(),
+            compactable_bytes as f64 / MB_TO_BYTES as f64,
+            filtered_count
         );
 
-        // Read all files
-        let batches = self.read_parquet_files(&files)?;
+        // Extract just the paths for reading
+        let files_to_compact: Vec<PathBuf> = compactable_files.iter().map(|(p, _)| p.clone()).collect();
+
+        // Read compactable files
+        let batches = self.read_parquet_files(&files_to_compact)?;
         let total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
 
-        // Write single consolidated file
+        // Write consolidated file
         let timestamp = chrono::Utc::now().timestamp_millis();
         let output = partition_path.join(format!("FULL_{}.parquet", timestamp));
 
         self.write_compacted_file(output.to_str().unwrap(), batches)?;
 
+        let output_size = fs::metadata(&output)
+            .map(|m| m.len())
+            .unwrap_or(compactable_bytes);
+
         info!(
-            "Created: {} ({} rows, {:.2} MB)",
+            "Created: {} ({} rows, {:.2} MB from {:.2} MB)",
             output.display(),
             total_rows,
-            bytes_before as f64 / MB_TO_BYTES as f64
+            output_size as f64 / MB_TO_BYTES as f64,
+            compactable_bytes as f64 / MB_TO_BYTES as f64
         );
 
-        // Delete old files
-        for file in &files {
+        // Delete old compacted files (keep oversized files)
+        for (file, _) in &compactable_files {
             if let Err(e) = fs::remove_file(file) {
                 warn!("Failed to delete {}: {}", file.display(), e);
             } else {
@@ -563,14 +603,20 @@ impl Compactor {
             }
         }
 
+        let files_after = 1 + filtered_count; // 1 new FULL file + oversized files remaining
+
         info!(
-            "Full compaction complete: {}/{}/{}/{}: {} → 1 file, {:.2} MB in {:?}",
+            "Full compaction complete: {}/{}/{}/{}: {} → {} files ({} compacted, {} oversized kept), {:.2} MB → {:.2} MB in {:?}",
             catalog,
             schema,
             table,
             partition_name,
             files_before,
+            files_after,
+            compactable_files.len(),
+            filtered_count,
             bytes_before as f64 / MB_TO_BYTES as f64,
+            (output_size + oversized_files.iter().map(|(_, s)| s).sum::<u64>()) as f64 / MB_TO_BYTES as f64,
             start.elapsed()
         );
 
@@ -582,9 +628,9 @@ impl Compactor {
             l0_files_before: files_before,
             l0_files_after: 0,
             files_before,
-            files_after: 1,
+            files_after,
             bytes_before,
-            bytes_after: bytes_before,
+            bytes_after: output_size + oversized_files.iter().map(|(_, s)| s).sum::<u64>(),
             rows_compacted: total_rows,
         }))
     }
@@ -627,7 +673,10 @@ impl Compactor {
         });
 
         let total_files_before = file_infos.len();
-        let l0_files_before = file_infos.iter().filter(|f| f.level == 0).count();
+        let l0_files_before = file_infos
+            .iter()
+            .filter(|f| f.level == 0 && f.size < config.target_file_size)
+            .count();
 
         // Calculate total size
         let total_bytes_before: u64 = file_infos.iter().map(|f| f.size).sum();
@@ -668,27 +717,48 @@ impl Compactor {
         let file_infos_updated = self.list_parquet_file_infos(&table_path)?;
 
         for current_level in 1..=config.max_level {
-            let level_files: Vec<_> = file_infos_updated
+            // Get all files at this level
+            let all_level_files: Vec<_> = file_infos_updated
                 .iter()
                 .filter(|f| f.level == current_level)
                 .cloned()
                 .collect();
 
+            // Filter out files >= target_file_size to reduce I/O
+            // Already-large files don't need recompaction
+            let level_files: Vec<_> = all_level_files
+                .iter()
+                .filter(|f| f.size < config.target_file_size)
+                .cloned()
+                .collect();
+
+            let filtered_count = all_level_files.len() - level_files.len();
+            if filtered_count > 0 {
+                debug!(
+                    "Filtered out {} oversized files at L{} (>= {:.2} MB)",
+                    filtered_count,
+                    current_level,
+                    config.target_file_size as f64 / 1024.0 / 1024.0
+                );
+            }
+
             // Allow compaction at all levels including max_level (to reduce file count)
             if level_files.len() >= config.major_min_files {
                 if current_level < config.max_level {
                     info!(
-                        "Major compaction: {} L{} files → L{}",
+                        "Major compaction: {} L{} files → L{} ({} oversized files skipped)",
                         level_files.len(),
                         current_level,
-                        current_level + 1
+                        current_level + 1,
+                        filtered_count
                     );
                 } else {
                     info!(
-                        "Max-level compaction: {} L{} files → L{} (same level)",
+                        "Max-level compaction: {} L{} files → L{} (same level, {} oversized files skipped)",
                         level_files.len(),
                         current_level,
-                        current_level
+                        current_level,
+                        filtered_count
                     );
                 }
 
@@ -821,27 +891,48 @@ impl Compactor {
         let file_infos_updated = self.list_parquet_file_infos(&partition_path)?;
 
         for current_level in 1..=config.max_level {
-            let level_files: Vec<_> = file_infos_updated
+            // Get all files at this level
+            let all_level_files: Vec<_> = file_infos_updated
                 .iter()
                 .filter(|f| f.level == current_level)
                 .cloned()
                 .collect();
 
+            // Filter out files >= target_file_size to reduce I/O
+            // Already-large files don't need recompaction
+            let level_files: Vec<_> = all_level_files
+                .iter()
+                .filter(|f| f.size < config.target_file_size)
+                .cloned()
+                .collect();
+
+            let filtered_count = all_level_files.len() - level_files.len();
+            if filtered_count > 0 {
+                debug!(
+                    "Filtered out {} oversized files at L{} (>= {:.2} MB)",
+                    filtered_count,
+                    current_level,
+                    config.target_file_size as f64 / 1024.0 / 1024.0
+                );
+            }
+
             // Allow compaction at all levels including max_level (to reduce file count)
             if level_files.len() >= config.major_min_files {
                 if current_level < config.max_level {
                     info!(
-                        "Major compaction: {} L{} files → L{}",
+                        "Major compaction: {} L{} files → L{} ({} oversized files skipped)",
                         level_files.len(),
                         current_level,
-                        current_level + 1
+                        current_level + 1,
+                        filtered_count
                     );
                 } else {
                     info!(
-                        "Max-level compaction: {} L{} files → L{} (same level)",
+                        "Max-level compaction: {} L{} files → L{} (same level, {} oversized files skipped)",
                         level_files.len(),
                         current_level,
-                        current_level
+                        current_level,
+                        filtered_count
                     );
                 }
 
@@ -1320,7 +1411,7 @@ impl Compactor {
                         if path.is_dir() {
                             if let Some(catalog_name) = path.file_name().and_then(|n| n.to_str()) {
                                 // Skip hidden directories
-                                if catalog_name.starts_with('.') || catalog_name.starts_with('_') {
+                                if catalog_name.starts_with('.') {
                                     continue;
                                 }
 
