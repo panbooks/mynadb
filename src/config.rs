@@ -132,6 +132,49 @@ pub struct SeriesTrackerConfig {
     /// Number of days to keep in cache (and load on startup)
     #[serde(default = "default_series_cache_retention_days")]
     pub cache_retention_days: u32,
+
+    /// Default deduplication strategy: "hashset" or "bloom"
+    #[serde(default = "default_dedup_strategy")]
+    pub default_strategy: String,
+
+    /// Databases that use bloom filter (supports wildcards like "prod_*")
+    #[serde(default)]
+    pub bloom_databases: Vec<String>,
+
+    /// Default bloom filter settings
+    #[serde(default)]
+    pub bloom: BloomConfig,
+
+    /// Per-database bloom filter customization
+    #[serde(default)]
+    pub bloom_custom: Vec<BloomDatabaseConfig>,
+}
+
+/// Bloom filter configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BloomConfig {
+    #[serde(default = "default_bloom_expected_series")]
+    pub expected_series_per_day: usize,
+
+    #[serde(default = "default_bloom_fp_rate")]
+    pub false_positive_rate: f64,
+}
+
+impl Default for BloomConfig {
+    fn default() -> Self {
+        Self {
+            expected_series_per_day: default_bloom_expected_series(),
+            false_positive_rate: default_bloom_fp_rate(),
+        }
+    }
+}
+
+/// Per-database bloom filter customization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BloomDatabaseConfig {
+    pub database: String,
+    pub expected_series_per_day: usize,
+    pub false_positive_rate: f64,
 }
 
 /// Logging configuration
@@ -291,6 +334,18 @@ fn default_series_cache_retention_days() -> u32 {
     2
 }
 
+fn default_dedup_strategy() -> String {
+    "hashset".to_string()
+}
+
+fn default_bloom_expected_series() -> usize {
+    1_000_000_000 // 1 billion series per day
+}
+
+fn default_bloom_fp_rate() -> f64 {
+    0.01 // 1% false positive rate
+}
+
 fn default_log_level() -> String {
     "info".to_string()
 }
@@ -404,6 +459,10 @@ impl Default for Config {
                 flush_interval_secs: default_series_flush_interval(),
                 stats_dir: default_series_stats_dir(),
                 cache_retention_days: default_series_cache_retention_days(),
+                default_strategy: default_dedup_strategy(),
+                bloom_databases: vec![],
+                bloom: BloomConfig::default(),
+                bloom_custom: vec![],
             },
             logging: LoggingConfig {
                 level: default_log_level(),

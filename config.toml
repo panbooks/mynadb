@@ -55,10 +55,36 @@ interval_secs = 70
 flush_interval_secs = 60
 
 # Series stats directory name
-stats_dir = "series_stats"
+stats_dir = "pmc"
 
 # Number of days to keep in cache (and load on startup)
 cache_retention_days = 2
+
+# Default deduplication strategy: "hashset" or "bloom"
+# - hashset: Exact deduplication, ~24 bytes per series (best for < 100M series)
+# - bloom: Probabilistic deduplication, ~1.4 bytes per series (best for > 100M series)
+default_strategy = "hashset"
+
+# Databases that use bloom filter (supports wildcards)
+# Example: ["production", "metrics_*", "monitoring"]
+bloom_databases = ["arch_monitor_roc", "arch_monitor_rec"]
+
+# Default bloom filter configuration (for all bloom databases)
+[series_tracker.bloom]
+expected_series_per_day = 1000000000  # 1 billion
+false_positive_rate = 0.01            # 1% (lower = more accurate but more memory)
+
+# Per-database bloom filter customization (optional)
+# Allows fine-tuning for databases with different cardinality
+[[series_tracker.bloom_custom]]
+database = "arch_monitor_roc"
+expected_series_per_day = 2000000000  # 5 billion series
+false_positive_rate = 0.005           # 0.5% (more accurate)
+
+ [[series_tracker.bloom_custom]]
+ database = "arch_monitor_rec"
+ expected_series_per_day = 10000000000 # 10 billion series
+ false_positive_rate = 0.01
 
 [logging]
 # Log level: trace, debug, info, warn, error

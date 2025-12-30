@@ -24,6 +24,8 @@ memory,host=host04 usage=90.0'
 echo -e "\n\n=== Test 6: Write with text service name ==="
 curl -X POST http://localhost:7000/write/mydb -d 'cpu,service=production,hostname=prod01 cnt=100i'
 
+sleep 10
+
 echo -e "\n\n=== Flushing cache to disk... ==="
 curl -X POST http://localhost:7000/flush
 echo ""
