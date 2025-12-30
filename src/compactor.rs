@@ -4,6 +4,7 @@ use arrow::array::{
 };
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Schema};
+use chrono::Timelike;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
@@ -23,7 +24,6 @@ const PARQUET_EXT: &str = ".parquet";
 // Default compaction thresholds
 const DEFAULT_MIN_FILES: usize = 5;
 const DEFAULT_MAJOR_MIN_FILES: usize = 4; // Minimum files for L1+ compaction
-const DEFAULT_MAX_FILE_SIZE_MB: u64 = 100;
 const DEFAULT_TARGET_FILE_SIZE_MB: u64 = 500;
 const DEFAULT_MAX_LEVEL: u32 = 4; // L0, L1, L2, L3, L4
 const MB_TO_BYTES: u64 = 1024 * 1024;
@@ -47,19 +47,19 @@ pub struct CompactionConfig {
     pub min_files: usize,
     /// Minimum number of files at L1+ to trigger major compaction (L1 → L2, L2 → L3, etc.)
     pub major_min_files: usize,
-    /// Maximum file size in bytes before compaction (default: 100MB)
-    #[allow(dead_code)]
-    pub max_file_size: u64,
-    /// Target file size after compaction (default: 500MB)
+    /// Target file size after compaction (default: 500MB) for LSM compaction
     pub target_file_size: u64,
     /// Maximum compaction level (0-4: L0, L1, L2, L3, L4)
     pub max_level: u32,
-    /// Age-based consolidation: merge all files if partition older than this (hours)
-    pub stable_age_hours: u64,
-    /// Minimum files required to trigger age-based merge
-    pub min_files_for_age_merge: usize,
-    /// Maximum single file size in MB (split if larger)
-    pub max_single_file_size_mb: u64,
+
+    // Full compaction settings (date-based)
+    /// Enable full compaction for yesterday's partitions
+    pub full_compaction_enabled: bool,
+    /// Hour to run full compaction (0-23, default: 1 for 01:00)
+    pub full_compaction_hour: u32,
+    /// Target file size for full compaction in bytes (default: 200MB)
+    /// Partitions larger than this will be skipped
+    pub full_compaction_target_size: u64,
 }
 
 impl Default for CompactionConfig {
@@ -67,12 +67,11 @@ impl Default for CompactionConfig {
         CompactionConfig {
             min_files: DEFAULT_MIN_FILES,
             major_min_files: DEFAULT_MAJOR_MIN_FILES,
-            max_file_size: DEFAULT_MAX_FILE_SIZE_MB * MB_TO_BYTES,
             target_file_size: DEFAULT_TARGET_FILE_SIZE_MB * MB_TO_BYTES,
             max_level: DEFAULT_MAX_LEVEL,
-            stable_age_hours: 12, // Default: 12 hours
-            min_files_for_age_merge: 2,
-            max_single_file_size_mb: 2048, // 2GB
+            full_compaction_enabled: true,
+            full_compaction_hour: 1, // 01:00
+            full_compaction_target_size: 200 * MB_TO_BYTES, // 200MB
         }
     }
 }
@@ -98,7 +97,6 @@ struct ParquetFileInfo {
     size: u64,
     level: u32,
     timestamp: i64,
-    modified_time: std::time::SystemTime,
 }
 
 impl ParquetFileInfo {
@@ -106,9 +104,6 @@ impl ParquetFileInfo {
         let metadata = fs::metadata(&path).map_err(|e| format!("Failed to get metadata: {}", e))?;
 
         let size = metadata.len();
-        let modified_time = metadata
-            .modified()
-            .map_err(|e| format!("Failed to get modified time: {}", e))?;
 
         // Parse filename: L0_1703251234567.parquet or 1703251234567.parquet (legacy)
         let filename = path
@@ -146,7 +141,6 @@ impl ParquetFileInfo {
             size,
             level,
             timestamp,
-            modified_time,
         })
     }
 }
@@ -358,115 +352,210 @@ impl Compactor {
         Ok(false)
     }
 
-    /// Get partition age based on oldest file modification time
-    fn get_partition_age(&self, files: &[ParquetFileInfo]) -> Result<std::time::Duration, String> {
-        if files.is_empty() {
-            return Err("No files in partition".to_string());
+    /// Full compaction for yesterday's partitions (date-based, no metadata overhead)
+    pub async fn full_compact_yesterday(
+        &self,
+        config: &CompactionConfig,
+    ) -> Result<Vec<CompactionResult>, String> {
+        if !config.full_compaction_enabled {
+            return Ok(Vec::new());
         }
 
-        // Find the most recently modified file (newest file determines partition age)
-        let newest_modified = files
-            .iter()
-            .map(|f| f.modified_time)
-            .max()
-            .ok_or("Failed to find newest file")?;
+        let now = chrono::Local::now();
+        let current_hour = now.hour();
 
-        std::time::SystemTime::now()
-            .duration_since(newest_modified)
-            .map_err(|e| format!("Failed to calculate partition age: {}", e))
+        // Only run at configured hour (default: 01:00)
+        if current_hour != config.full_compaction_hour {
+            return Ok(Vec::new());
+        }
+
+        // Calculate yesterday's date
+        let yesterday = (now - chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        let yesterday_partition = format!("date={}", yesterday);
+
+        info!(
+            "Starting full compaction for yesterday: {} (hour {})",
+            yesterday_partition, current_hour
+        );
+
+        let mut results = Vec::new();
+
+        // Scan all catalogs
+        let catalog_entries = fs::read_dir(&self.data_dir)
+            .map_err(|e| format!("Failed to read data dir: {}", e))?;
+
+        for catalog_entry in catalog_entries.flatten() {
+            if !catalog_entry.path().is_dir() {
+                continue;
+            }
+
+            let catalog = match catalog_entry.file_name().to_str() {
+                Some(name) if !name.starts_with('.') && !name.starts_with('_') => name.to_string(),
+                _ => continue,
+            };
+
+            // Scan schemas
+            let schema_entries = match fs::read_dir(&catalog_entry.path()) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            for schema_entry in schema_entries.flatten() {
+                if !schema_entry.path().is_dir() {
+                    continue;
+                }
+
+                let schema = match schema_entry.file_name().to_str() {
+                    Some(name) if !name.starts_with('.') && !name.starts_with('_') => name.to_string(),
+                    _ => continue,
+                };
+
+                // Scan tables
+                let table_entries = match fs::read_dir(&schema_entry.path()) {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+
+                for table_entry in table_entries.flatten() {
+                    if !table_entry.path().is_dir() {
+                        continue;
+                    }
+
+                    let table = match table_entry.file_name().to_str() {
+                        Some(name) => name.to_string(),
+                        None => continue,
+                    };
+
+                    // Check if yesterday's partition exists
+                    let partition_path = table_entry.path().join(&yesterday_partition);
+
+                    if !partition_path.exists() {
+                        continue;
+                    }
+
+                    // Full compact this partition
+                    match self
+                        .full_compact_partition(
+                            &catalog,
+                            &schema,
+                            &table,
+                            &yesterday_partition,
+                            &partition_path,
+                            config,
+                        )
+                        .await
+                    {
+                        Ok(Some(result)) => results.push(result),
+                        Ok(None) => {}
+                        Err(e) => {
+                            warn!(
+                                "Failed to full compact {}/{}/{}/{}: {}",
+                                catalog, schema, table, yesterday_partition, e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        if !results.is_empty() {
+            info!(
+                "Full compaction complete for {}: {} partitions compacted",
+                yesterday_partition,
+                results.len()
+            );
+        }
+
+        Ok(results)
     }
 
-    /// Merge all files in a partition into a single file
-    /// Returns CompactionResult if merge was performed, None if skipped
-    async fn merge_all_to_one_file(
+    /// Full compact a single partition
+    async fn full_compact_partition(
         &self,
-        partition_path: &str,
-        files: &[ParquetFileInfo],
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        partition_name: &str,
+        partition_path: &Path,
         config: &CompactionConfig,
     ) -> Result<Option<CompactionResult>, String> {
-        if files.is_empty() {
+        let start = Instant::now();
+
+        // List all parquet files
+        let files: Vec<PathBuf> = fs::read_dir(partition_path)
+            .map_err(|e| format!("Failed to read partition: {}", e))?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path().is_file()
+                    && e.path().extension().and_then(|s| s.to_str()) == Some("parquet")
+            })
+            .map(|e| e.path())
+            .collect();
+
+        if files.len() < 2 {
+            debug!(
+                "Partition {}/{}/{}/{} has {} file(s), skipping",
+                catalog,
+                schema,
+                table,
+                partition_name,
+                files.len()
+            );
             return Ok(None);
         }
 
-        let total_size: u64 = files.iter().map(|f| f.size).sum();
-        let max_size = config.max_single_file_size_mb * MB_TO_BYTES;
+        let files_before = files.len();
+        let bytes_before: u64 = files
+            .iter()
+            .filter_map(|f| fs::metadata(f).ok())
+            .map(|m| m.len())
+            .sum();
+
+        // Check if partition is too large (> 200MB)
+        if bytes_before > config.full_compaction_target_size {
+            debug!(
+                "Partition {}/{}/{}/{} size {:.2} MB exceeds target {:.2} MB, skipping full compaction",
+                catalog,
+                schema,
+                table,
+                partition_name,
+                bytes_before as f64 / MB_TO_BYTES as f64,
+                config.full_compaction_target_size as f64 / MB_TO_BYTES as f64
+            );
+            return Ok(None);
+        }
 
         info!(
-            "Age-based consolidation: merging {} files ({}MB) into one file",
-            files.len(),
-            total_size / MB_TO_BYTES
+            "Full compaction: {}/{}/{}/{} ({} files, {:.2} MB)",
+            catalog,
+            schema,
+            table,
+            partition_name,
+            files_before,
+            bytes_before as f64 / MB_TO_BYTES as f64
         );
 
         // Read all files
-        let paths: Vec<PathBuf> = files.iter().map(|f| f.path.clone()).collect();
-        let batches = self.read_parquet_files(&paths)?;
+        let batches = self.read_parquet_files(&files)?;
         let total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
 
-        // Check if result would be too large for a single file
-        if total_size > max_size {
-            warn!(
-                "Total size {}MB exceeds max single file size {}MB, will split into multiple files",
-                total_size / MB_TO_BYTES,
-                config.max_single_file_size_mb
-            );
+        // Write single consolidated file
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let output = partition_path.join(format!("FULL_{}.parquet", timestamp));
 
-            // Calculate number of output files needed
-            let num_files = ((total_size as f64 / max_size as f64).ceil() as usize).max(1);
-            let rows_per_file = (total_rows / num_files).max(1);
+        self.write_compacted_file(output.to_str().unwrap(), batches)?;
 
-            // Split batches into chunks
-            let mut current_rows = 0;
-            let mut current_chunk = Vec::new();
-            let mut file_idx = 0;
+        info!(
+            "Created: {} ({} rows, {:.2} MB)",
+            output.display(),
+            total_rows,
+            bytes_before as f64 / MB_TO_BYTES as f64
+        );
 
-            for batch in batches {
-                current_chunk.push(batch.clone());
-                current_rows += batch.num_rows();
-
-                if current_rows >= rows_per_file && file_idx < num_files - 1 {
-                    // Write this chunk
-                    let timestamp = chrono::Utc::now().timestamp_millis();
-                    let output_filename = format!(
-                        "{}/L0_FINAL_PART{}_{}.parquet",
-                        partition_path, file_idx, timestamp
-                    );
-                    self.write_compacted_file(&output_filename, current_chunk.clone())?;
-                    info!("Created consolidated file part {}: {}", file_idx, output_filename);
-
-                    // Reset for next chunk
-                    current_chunk.clear();
-                    current_rows = 0;
-                    file_idx += 1;
-                }
-            }
-
-            // Write remaining rows
-            if !current_chunk.is_empty() {
-                let timestamp = chrono::Utc::now().timestamp_millis();
-                let output_filename = format!(
-                    "{}/L0_FINAL_PART{}_{}.parquet",
-                    partition_path, file_idx, timestamp
-                );
-                self.write_compacted_file(&output_filename, current_chunk)?;
-                info!("Created consolidated file part {}: {}", file_idx, output_filename);
-            }
-        } else {
-            // Single file output
-            let timestamp = chrono::Utc::now().timestamp_millis();
-            let output_filename = format!("{}/L0_FINAL_{}.parquet", partition_path, timestamp);
-
-            self.write_compacted_file(&output_filename, batches)?;
-
-            info!(
-                "Created consolidated file: {} ({} rows, {}MB)",
-                output_filename,
-                total_rows,
-                total_size / MB_TO_BYTES
-            );
-        }
-
-        // Delete old files after successful write
-        for file in &paths {
+        // Delete old files
+        for file in &files {
             if let Err(e) = fs::remove_file(file) {
                 warn!("Failed to delete {}: {}", file.display(), e);
             } else {
@@ -474,17 +563,28 @@ impl Compactor {
             }
         }
 
+        info!(
+            "Full compaction complete: {}/{}/{}/{}: {} → 1 file, {:.2} MB in {:?}",
+            catalog,
+            schema,
+            table,
+            partition_name,
+            files_before,
+            bytes_before as f64 / MB_TO_BYTES as f64,
+            start.elapsed()
+        );
+
         Ok(Some(CompactionResult {
-            catalog: String::new(), // Will be filled by caller
-            schema: String::new(),
-            table: String::new(),
-            date_partition: String::new(),
-            l0_files_before: files.iter().filter(|f| f.level == 0).count(),
-            l0_files_after: 0, // Will be recalculated by caller if needed
-            files_before: files.len(),
-            files_after: 0, // Will be recalculated by caller if needed
-            bytes_before: total_size,
-            bytes_after: total_size, // Same data, just reorganized
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            date_partition: partition_name.to_string(),
+            l0_files_before: files_before,
+            l0_files_after: 0,
+            files_before,
+            files_after: 1,
+            bytes_before,
+            bytes_after: bytes_before,
             rows_compacted: total_rows,
         }))
     }
@@ -542,84 +642,6 @@ impl Compactor {
             total_bytes_before as f64 / 1024.0 / 1024.0
         );
 
-        // ========== AGE-BASED CONSOLIDATION ==========
-        // Check table age and apply one-file policy if old enough
-        match self.get_partition_age(&file_infos) {
-            Ok(age) => {
-                let age_threshold_secs = config.stable_age_hours * 3600;
-                let age_secs = age.as_secs();
-
-                if age_secs > age_threshold_secs
-                    && file_infos.len() >= config.min_files_for_age_merge
-                {
-                    info!(
-                        "Non-partitioned table {}.{}.{} is {}h old (threshold: {}h), applying ONE-FILE consolidation ({} files)",
-                        catalog,
-                        schema,
-                        table,
-                        age_secs / 3600,
-                        config.stable_age_hours,
-                        file_infos.len()
-                    );
-
-                    // Use age-based consolidation instead of traditional LSM
-                    match self
-                        .merge_all_to_one_file(&table_path, &file_infos, config)
-                        .await
-                    {
-                        Ok(Some(mut result)) => {
-                            // Fill in catalog/schema/table info
-                            result.catalog = catalog.to_string();
-                            result.schema = schema.to_string();
-                            result.table = table.to_string();
-                            result.date_partition = "[non-partitioned]".to_string();
-
-                            // Recalculate after stats
-                            let file_infos_after = self.list_parquet_file_infos(&table_path)?;
-                            result.files_after = file_infos_after.len();
-                            result.l0_files_after =
-                                file_infos_after.iter().filter(|f| f.level == 0).count();
-                            let total_bytes_after: u64 =
-                                file_infos_after.iter().map(|f| f.size).sum();
-                            result.bytes_after = total_bytes_after;
-
-                            info!(
-                                "Age-based consolidation complete: {}.{}.{}: {} → {} files, {:.2} MB → {:.2} MB in {:?}",
-                                catalog,
-                                schema,
-                                table,
-                                total_files_before,
-                                result.files_after,
-                                total_bytes_before as f64 / 1024.0 / 1024.0,
-                                total_bytes_after as f64 / 1024.0 / 1024.0,
-                                start.elapsed()
-                            );
-
-                            return Ok(Some(result));
-                        }
-                        Ok(None) => {
-                            debug!("Age-based consolidation returned no result");
-                        }
-                        Err(e) => {
-                            warn!("Age-based consolidation failed: {}, falling back to LSM", e);
-                        }
-                    }
-                } else {
-                    debug!(
-                        "Table age {}h (threshold: {}h), files {} (min: {}), using traditional LSM",
-                        age_secs / 3600,
-                        config.stable_age_hours,
-                        file_infos.len(),
-                        config.min_files_for_age_merge
-                    );
-                }
-            }
-            Err(e) => {
-                debug!("Could not determine table age: {}, using traditional LSM", e);
-            }
-        }
-
-        // ========== TRADITIONAL LSM COMPACTION ==========
         // Perform multi-level compaction
         let mut total_rows = 0;
         let mut compaction_happened = false;
@@ -763,86 +785,6 @@ impl Compactor {
             total_bytes_before as f64 / 1024.0 / 1024.0
         );
 
-        // ========== AGE-BASED CONSOLIDATION ==========
-        // Check partition age and apply one-file policy if old enough
-        match self.get_partition_age(&file_infos) {
-            Ok(age) => {
-                let age_threshold_secs = config.stable_age_hours * 3600;
-                let age_secs = age.as_secs();
-
-                if age_secs > age_threshold_secs
-                    && file_infos.len() >= config.min_files_for_age_merge
-                {
-                    info!(
-                        "Partition {}.{}.{}/{} is {}h old (threshold: {}h), applying ONE-FILE consolidation ({} files)",
-                        catalog,
-                        schema,
-                        table,
-                        date_partition,
-                        age_secs / 3600,
-                        config.stable_age_hours,
-                        file_infos.len()
-                    );
-
-                    // Use age-based consolidation instead of traditional LSM
-                    match self
-                        .merge_all_to_one_file(&partition_path, &file_infos, config)
-                        .await
-                    {
-                        Ok(Some(mut result)) => {
-                            // Fill in catalog/schema/table info
-                            result.catalog = catalog.to_string();
-                            result.schema = schema.to_string();
-                            result.table = table.to_string();
-                            result.date_partition = date_partition.to_string();
-
-                            // Recalculate after stats
-                            let file_infos_after = self.list_parquet_file_infos(&partition_path)?;
-                            result.files_after = file_infos_after.len();
-                            result.l0_files_after =
-                                file_infos_after.iter().filter(|f| f.level == 0).count();
-                            let total_bytes_after: u64 =
-                                file_infos_after.iter().map(|f| f.size).sum();
-                            result.bytes_after = total_bytes_after;
-
-                            info!(
-                                "Age-based consolidation complete: {}.{}.{}/{}: {} → {} files, {:.2} MB → {:.2} MB in {:?}",
-                                catalog,
-                                schema,
-                                table,
-                                date_partition,
-                                total_files_before,
-                                result.files_after,
-                                total_bytes_before as f64 / 1024.0 / 1024.0,
-                                total_bytes_after as f64 / 1024.0 / 1024.0,
-                                start.elapsed()
-                            );
-
-                            return Ok(Some(result));
-                        }
-                        Ok(None) => {
-                            debug!("Age-based consolidation returned no result");
-                        }
-                        Err(e) => {
-                            warn!("Age-based consolidation failed: {}, falling back to LSM", e);
-                        }
-                    }
-                } else {
-                    debug!(
-                        "Partition age {}h (threshold: {}h), files {} (min: {}), using traditional LSM",
-                        age_secs / 3600,
-                        config.stable_age_hours,
-                        file_infos.len(),
-                        config.min_files_for_age_merge
-                    );
-                }
-            }
-            Err(e) => {
-                debug!("Could not determine partition age: {}, using traditional LSM", e);
-            }
-        }
-
-        // ========== TRADITIONAL LSM COMPACTION ==========
         // Perform multi-level compaction
         let mut total_rows = 0;
         let mut compaction_happened = false;
@@ -1311,8 +1253,9 @@ impl Compactor {
         Ok(())
     }
 
-    /// Start background compaction task for all catalogs
-    pub fn start_background_compaction(
+    /// Start background LSM compaction task for all catalogs
+    /// This runs frequently (e.g., every 60s) to keep L0 files under control
+    pub fn start_background_lsm_compaction(
         self: Arc<Self>,
         interval_secs: u64,
         config: CompactionConfig,
@@ -1321,49 +1264,97 @@ impl Compactor {
             let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
 
             info!(
-                "Background compaction started: every {} seconds",
+                "Background LSM compaction started: every {} seconds",
                 interval_secs
             );
 
             loop {
                 ticker.tick().await;
 
-                // Get all catalogs in data directory
+                // LSM compaction for all catalogs (active partitions)
                 if let Ok(entries) = fs::read_dir(&self.data_dir) {
                     for entry in entries.flatten() {
                         let path = entry.path();
                         if path.is_dir() {
                             if let Some(catalog_name) = path.file_name().and_then(|n| n.to_str()) {
-                                // Skip hidden directories and series_stats
-                                if catalog_name.starts_with('.') {
+                                // Skip hidden directories
+                                if catalog_name.starts_with('.') || catalog_name.starts_with('_') {
                                     continue;
                                 }
 
-                                // Compact this catalog
+                                // LSM compaction for this catalog
                                 match self.compact_catalog(catalog_name, &config).await {
                                     Ok(results) => {
                                         if !results.is_empty() {
-                                            info!("Background compaction [{}]: {} partition(s) compacted",
-                                                catalog_name, results.len());
-                                            for result in results {
-                                                info!(
-                                                    "{}.{}.{}/{}: L0 {} -> {}, Total {} -> {} files",
-                                                    result.catalog, result.schema, result.table, result.date_partition,
-                                                    result.l0_files_before, result.l0_files_after,
-                                                    result.files_before, result.files_after
-                                                );
-                                            }
+                                            info!(
+                                                "LSM compaction [{}]: {} partition(s)",
+                                                catalog_name,
+                                                results.len()
+                                            );
                                         }
                                     }
                                     Err(e) => {
                                         error!(
-                                            "Background compaction error for '{}': {}",
+                                            "LSM compaction error for '{}': {}",
                                             catalog_name, e
                                         );
                                     }
                                 }
                             }
                         }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Start background full compaction task for yesterday's partitions
+    /// This runs hourly but only acts at the configured hour (default: 01:00)
+    pub fn start_background_full_compaction(
+        self: Arc<Self>,
+        interval_secs: u64,
+        config: CompactionConfig,
+    ) {
+        if !config.full_compaction_enabled {
+            info!("Full compaction is disabled");
+            return;
+        }
+
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
+
+            info!(
+                "Background full compaction started: every {} seconds (acts at hour {})",
+                interval_secs, config.full_compaction_hour
+            );
+
+            loop {
+                ticker.tick().await;
+
+                // Full compaction for yesterday (only acts at configured hour)
+                match self.full_compact_yesterday(&config).await {
+                    Ok(results) => {
+                        if !results.is_empty() {
+                            info!(
+                                "Full compaction: {} partitions compacted",
+                                results.len()
+                            );
+                            for result in &results {
+                                info!(
+                                    "{}.{}.{}/{}: {} → {} files, {:.2} MB",
+                                    result.catalog,
+                                    result.schema,
+                                    result.table,
+                                    result.date_partition,
+                                    result.files_before,
+                                    result.files_after,
+                                    result.bytes_before as f64 / 1024.0 / 1024.0
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Full compaction error: {}", e);
                     }
                 }
             }

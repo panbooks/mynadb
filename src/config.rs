@@ -101,11 +101,7 @@ pub struct CompactionConfig {
     #[serde(default = "default_compaction_major_min_files")]
     pub major_min_files: usize,
 
-    /// Maximum file size in MB before compaction
-    #[serde(default = "default_compaction_max_file_size_mb")]
-    pub max_file_size_mb: u64,
-
-    /// Target file size in MB after compaction
+    /// Target file size in MB after LSM compaction
     #[serde(default = "default_compaction_target_file_size_mb")]
     pub target_file_size_mb: u64,
 
@@ -113,21 +109,26 @@ pub struct CompactionConfig {
     #[serde(default = "default_compaction_max_level")]
     pub max_level: u32,
 
-    /// Background compaction interval in seconds (0 = disabled)
+    /// Background LSM compaction interval in seconds (0 = disabled)
     #[serde(default = "default_compaction_interval_secs")]
     pub interval_secs: u64,
 
-    /// Age-based consolidation: merge all files if partition older than this (hours)
-    #[serde(default = "default_compaction_stable_age_hours")]
-    pub stable_age_hours: u64,
+    /// Enable full compaction for yesterday's partitions (date-based)
+    #[serde(default = "default_full_compaction_enabled")]
+    pub full_compaction_enabled: bool,
 
-    /// Minimum files required to trigger age-based merge
-    #[serde(default = "default_compaction_min_files_for_age_merge")]
-    pub min_files_for_age_merge: usize,
+    /// Hour to run full compaction (0-23, default: 1 for 01:00)
+    #[serde(default = "default_full_compaction_hour")]
+    pub full_compaction_hour: u32,
 
-    /// Maximum single file size in MB (split if larger)
-    #[serde(default = "default_compaction_max_single_file_size_mb")]
-    pub max_single_file_size_mb: u64,
+    /// Full compaction check interval in seconds (default: 3600 = 1 hour)
+    #[serde(default = "default_full_compaction_interval_secs")]
+    pub full_compaction_interval_secs: u64,
+
+    /// Target file size for full compaction in MB (default: 200MB)
+    /// Partitions larger than this will be skipped
+    #[serde(default = "default_full_compaction_target_size_mb")]
+    pub full_compaction_target_size_mb: u64,
 }
 
 /// Series tracker configuration
@@ -318,12 +319,8 @@ fn default_compaction_major_min_files() -> usize {
     4
 }
 
-fn default_compaction_max_file_size_mb() -> u64 {
-    100
-}
-
 fn default_compaction_target_file_size_mb() -> u64 {
-    500
+    200
 }
 
 fn default_compaction_max_level() -> u32 {
@@ -331,19 +328,23 @@ fn default_compaction_max_level() -> u32 {
 }
 
 fn default_compaction_interval_secs() -> u64 {
-    60 // 1 min
+    60 // LSM compaction every 60 seconds
 }
 
-fn default_compaction_stable_age_hours() -> u64 {
-    12 // Merge all files if partition older than 12 hours
+fn default_full_compaction_enabled() -> bool {
+    true
 }
 
-fn default_compaction_min_files_for_age_merge() -> usize {
-    2 // Need at least 2 files to merge
+fn default_full_compaction_hour() -> u32 {
+    1 // 01:00
 }
 
-fn default_compaction_max_single_file_size_mb() -> u64 {
-    2048 // 2GB max single file size
+fn default_full_compaction_interval_secs() -> u64 {
+    3600 // Check every hour (1 hour)
+}
+
+fn default_full_compaction_target_size_mb() -> u64 {
+    200 // 200MB
 }
 
 fn default_series_flush_interval() -> u64 {
@@ -474,13 +475,13 @@ impl Default for Config {
             compaction: CompactionConfig {
                 min_files: default_compaction_min_files(),
                 major_min_files: default_compaction_major_min_files(),
-                max_file_size_mb: default_compaction_max_file_size_mb(),
                 target_file_size_mb: default_compaction_target_file_size_mb(),
                 max_level: default_compaction_max_level(),
                 interval_secs: default_compaction_interval_secs(),
-                stable_age_hours: default_compaction_stable_age_hours(),
-                min_files_for_age_merge: default_compaction_min_files_for_age_merge(),
-                max_single_file_size_mb: default_compaction_max_single_file_size_mb(),
+                full_compaction_enabled: default_full_compaction_enabled(),
+                full_compaction_hour: default_full_compaction_hour(),
+                full_compaction_interval_secs: default_full_compaction_interval_secs(),
+                full_compaction_target_size_mb: default_full_compaction_target_size_mb(),
             },
             series_tracker: SeriesTrackerConfig {
                 flush_interval_secs: default_series_flush_interval(),

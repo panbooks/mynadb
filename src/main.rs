@@ -174,19 +174,31 @@ async fn main() {
     let compactor = Arc::new(Compactor::new(&config.storage.data_dir));
 
     // Start background compaction if enabled
+    // Start background compaction tasks
+    let compaction_config = compactor::CompactionConfig {
+        min_files: config.compaction.min_files,
+        major_min_files: config.compaction.major_min_files,
+        target_file_size: config.compaction.target_file_size_mb * 1024 * 1024,
+        max_level: config.compaction.max_level,
+        full_compaction_enabled: config.compaction.full_compaction_enabled,
+        full_compaction_hour: config.compaction.full_compaction_hour,
+        full_compaction_target_size: config.compaction.full_compaction_target_size_mb * 1024 * 1024,
+    };
+
+    // Start LSM compaction (every 60s by default)
     if config.compaction.interval_secs > 0 {
-        let compaction_config = compactor::CompactionConfig {
-            min_files: config.compaction.min_files,
-            major_min_files: config.compaction.major_min_files,
-            max_file_size: config.compaction.max_file_size_mb * 1024 * 1024,
-            target_file_size: config.compaction.target_file_size_mb * 1024 * 1024,
-            max_level: config.compaction.max_level,
-            stable_age_hours: config.compaction.stable_age_hours,
-            min_files_for_age_merge: config.compaction.min_files_for_age_merge,
-            max_single_file_size_mb: config.compaction.max_single_file_size_mb,
-        };
-        Arc::clone(&compactor)
-            .start_background_compaction(config.compaction.interval_secs, compaction_config);
+        Arc::clone(&compactor).start_background_lsm_compaction(
+            config.compaction.interval_secs,
+            compaction_config.clone(),
+        );
+    }
+
+    // Start full compaction (every 1 hour by default)
+    if config.compaction.full_compaction_enabled && config.compaction.full_compaction_interval_secs > 0 {
+        Arc::clone(&compactor).start_background_full_compaction(
+            config.compaction.full_compaction_interval_secs,
+            compaction_config,
+        );
     }
 
     info!("Initializing series tracker");
@@ -990,12 +1002,11 @@ async fn compact_handler(
     let config = compactor::CompactionConfig {
         min_files: state.config.compaction.min_files,
         major_min_files: state.config.compaction.major_min_files,
-        max_file_size: state.config.compaction.max_file_size_mb * 1024 * 1024,
         target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
         max_level: state.config.compaction.max_level,
-        stable_age_hours: state.config.compaction.stable_age_hours,
-        min_files_for_age_merge: state.config.compaction.min_files_for_age_merge,
-        max_single_file_size_mb: state.config.compaction.max_single_file_size_mb,
+        full_compaction_enabled: state.config.compaction.full_compaction_enabled,
+        full_compaction_hour: state.config.compaction.full_compaction_hour,
+        full_compaction_target_size: state.config.compaction.full_compaction_target_size_mb * 1024 * 1024,
     };
 
     match state.compactor.compact_catalog(&catalog, &config).await {
@@ -1061,12 +1072,11 @@ async fn compact_table_handler(
     let config = compactor::CompactionConfig {
         min_files: state.config.compaction.min_files,
         major_min_files: state.config.compaction.major_min_files,
-        max_file_size: state.config.compaction.max_file_size_mb * 1024 * 1024,
         target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
         max_level: state.config.compaction.max_level,
-        stable_age_hours: state.config.compaction.stable_age_hours,
-        min_files_for_age_merge: state.config.compaction.min_files_for_age_merge,
-        max_single_file_size_mb: state.config.compaction.max_single_file_size_mb,
+        full_compaction_enabled: state.config.compaction.full_compaction_enabled,
+        full_compaction_hour: state.config.compaction.full_compaction_hour,
+        full_compaction_target_size: state.config.compaction.full_compaction_target_size_mb * 1024 * 1024,
     };
 
     match state
@@ -1145,12 +1155,11 @@ async fn compact_partition_handler(
     let config = compactor::CompactionConfig {
         min_files: state.config.compaction.min_files,
         major_min_files: state.config.compaction.major_min_files,
-        max_file_size: state.config.compaction.max_file_size_mb * 1024 * 1024,
         target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
         max_level: state.config.compaction.max_level,
-        stable_age_hours: state.config.compaction.stable_age_hours,
-        min_files_for_age_merge: state.config.compaction.min_files_for_age_merge,
-        max_single_file_size_mb: state.config.compaction.max_single_file_size_mb,
+        full_compaction_enabled: state.config.compaction.full_compaction_enabled,
+        full_compaction_hour: state.config.compaction.full_compaction_hour,
+        full_compaction_target_size: state.config.compaction.full_compaction_target_size_mb * 1024 * 1024,
     };
 
     match state
