@@ -10,12 +10,37 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/BurntSushi/toml"
 )
 
-const (
-	statsServiceURL = "http://localhost:7000"
-	systemDatabase  = "_system"
-)
+// Config holds the application configuration
+type Config struct {
+	URL             string `toml:"url"`
+	Database        string `toml:"database"`
+	IntervalMinutes int    `toml:"interval_minutes"`
+}
+
+// loadConfig loads configuration from config.toml with default values
+func loadConfig(configPath string) (*Config, error) {
+	// Default configuration
+	config := &Config{
+		URL:             "http://localhost:7000",
+		Database:        "_system",
+		IntervalMinutes: 5,
+	}
+
+	// If config file exists, load it
+	if _, err := os.Stat(configPath); err == nil {
+		if _, err := toml.DecodeFile(configPath, config); err != nil {
+			return nil, fmt.Errorf("failed to parse config file: %w", err)
+		}
+	} else {
+		fmt.Printf("Config file not found at %s, using defaults\n", configPath)
+	}
+
+	return config, nil
+}
 
 // SchemasResponse is the response from /databases/_system/schemas
 type SchemasResponse struct {
@@ -42,26 +67,35 @@ type SeriesMetric struct {
 }
 
 func main() {
+	// Load configuration
+	config, err := loadConfig("config.toml")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Setup signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// Create ticker for 5-minute intervals
-	ticker := time.NewTicker(5 * time.Minute)
+	// Create ticker with configured interval
+	interval := time.Duration(config.IntervalMinutes) * time.Minute
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	fmt.Printf("Metric sender started. Running every 5 minutes.\n")
-	fmt.Printf("Database: %s\n", systemDatabase)
+	fmt.Printf("Metric sender started. Running every %d minutes.\n", config.IntervalMinutes)
+	fmt.Printf("URL: %s\n", config.URL)
+	fmt.Printf("Database: %s\n", config.Database)
 	fmt.Printf("Press Ctrl+C to stop.\n\n")
 
 	// Run immediately on start
-	runQuery()
+	runQuery(config)
 
 	// Run on ticker
 	for {
 		select {
 		case <-ticker.C:
-			runQuery()
+			runQuery(config)
 		case sig := <-sigChan:
 			fmt.Printf("\n\nReceived signal %v. Shutting down gracefully...\n", sig)
 			return
@@ -69,24 +103,24 @@ func main() {
 	}
 }
 
-func runQuery() {
+func runQuery(config *Config) {
 	// Get current date and time
 	now := time.Now()
 	currentDate := now.Format("2006-01-02")
 	currentTime := now.Format("2006-01-02 15:04:05")
 
 	fmt.Printf("=== %s ===\n", currentTime)
-	fmt.Printf("Step 1: Discovering schemas from %s...\n", systemDatabase)
+	fmt.Printf("Step 1: Discovering schemas from %s...\n", config.Database)
 
 	// Step 1: Get all schemas
-	schemas, err := getAllSchemas()
+	schemas, err := getAllSchemas(config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error getting schemas: %v\n\n", err)
 		return
 	}
 
 	if len(schemas) == 0 {
-		fmt.Printf("No schemas found in %s\n\n", systemDatabase)
+		fmt.Printf("No schemas found in %s\n\n", config.Database)
 		return
 	}
 
@@ -101,7 +135,7 @@ func runQuery() {
 		fmt.Printf("Step 2: Getting tables for schema '%s'...\n", schema)
 
 		// Get tables for this schema
-		tables, err := getTablesForSchema(schema)
+		tables, err := getTablesForSchema(config, schema)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Error getting tables for schema '%s': %v\n", schema, err)
 			continue
@@ -117,17 +151,17 @@ func runQuery() {
 
 		// Step 3: Query each table
 		for _, table := range tables {
-			fullTableName := fmt.Sprintf("%s.%s.%s", systemDatabase, schema, table)
+			fullTableName := fmt.Sprintf("%s.%s.%s", config.Database, schema, table)
 			fmt.Printf("  Step 3: Querying %s...\n", fullTableName)
 
 			// Build SQL query
 			sqlQuery := fmt.Sprintf(
 				"select service, metric, count(*) as c from %s.%s.%s where date = '%s' group by service, metric",
-				systemDatabase, schema, table, currentDate,
+				config.Database, schema, table, currentDate,
 			)
 
 			// Query this table
-			metrics, err := queryStatsService(sqlQuery)
+			metrics, err := queryStatsService(config, sqlQuery)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "    Error querying %s: %v\n", fullTableName, err)
 				continue
@@ -150,12 +184,12 @@ func runQuery() {
 
 	fmt.Printf("\nDone. Scraped %d series metrics from %d schemas (%d tables) for date %s, used: %s\n",
 		totalMetrics, len(schemas), totalTables, currentDate, time.Since(now))
-	fmt.Printf("Next run in 5 minutes...\n\n")
+	fmt.Printf("Next run in %d minutes...\n\n", config.IntervalMinutes)
 }
 
-func getAllSchemas() ([]string, error) {
+func getAllSchemas(config *Config) ([]string, error) {
 	// GET /databases/_system/schemas
-	url := fmt.Sprintf("%s/databases/%s/schemas", statsServiceURL, systemDatabase)
+	url := fmt.Sprintf("%s/databases/%s/schemas", config.URL, config.Database)
 
 	resp, err := http.Get(url)
 	if err != nil {
@@ -183,10 +217,10 @@ func getAllSchemas() ([]string, error) {
 	return response.Schemas, nil
 }
 
-func getTablesForSchema(schema string) ([]string, error) {
+func getTablesForSchema(config *Config, schema string) ([]string, error) {
 	// GET /databases/_system/schemas/{schema}/tables
 	url := fmt.Sprintf("%s/databases/%s/schemas/%s/tables",
-		statsServiceURL, systemDatabase, url.PathEscape(schema))
+		config.URL, config.Database, url.PathEscape(schema))
 
 	resp, err := http.Get(url)
 	if err != nil {
@@ -214,13 +248,13 @@ func getTablesForSchema(schema string) ([]string, error) {
 	return response.Tables, nil
 }
 
-func queryStatsService(sqlQuery string) ([]SeriesMetric, error) {
+func queryStatsService(config *Config, sqlQuery string) ([]SeriesMetric, error) {
 	// URL encode the SQL query
 	params := url.Values{}
 	params.Add("sql", sqlQuery)
 
 	// Build full URL: /query/_system
-	fullURL := fmt.Sprintf("%s/query/%s?%s", statsServiceURL, systemDatabase, params.Encode())
+	fullURL := fmt.Sprintf("%s/query/%s?%s", config.URL, config.Database, params.Encode())
 
 	// Make HTTP GET request
 	resp, err := http.Get(fullURL)
