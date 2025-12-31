@@ -440,9 +440,17 @@ impl QueryEngine {
         (parts, table_ref.to_string())
     }
 
-    /// Quote an identifier if it contains special characters (like dots)
+    /// Quote an identifier if it contains special characters or mixed case
+    /// DataFusion requires quotes for:
+    /// - Case-sensitive identifiers (any uppercase letters)
+    /// - Identifiers with special characters (dots, hyphens, spaces)
     fn quote_identifier(ident: &str) -> String {
-        if ident.contains('.') || ident.contains('-') || ident.contains(' ') {
+        let needs_quoting = ident.contains('.')
+            || ident.contains('-')
+            || ident.contains(' ')
+            || ident.chars().any(|c| c.is_uppercase()); // Preserve case-sensitive names
+
+        if needs_quoting {
             format!("\"{}\"", ident)
         } else {
             ident.to_string()
@@ -949,5 +957,42 @@ mod tests {
         // Fully qualified with quoted table
         let (parts, _) = QueryEngine::parse_table_reference(r#"testdb.default."cat.transaction""#);
         assert_eq!(parts, vec!["testdb", "default", "cat.transaction"]);
+    }
+
+    #[test]
+    fn test_quote_identifier_case_sensitive() {
+        // Case-sensitive identifiers (with uppercase) should be quoted
+        assert_eq!(
+            QueryEngine::quote_identifier("TestDiskUsage"),
+            r#""TestDiskUsage""#
+        );
+        assert_eq!(
+            QueryEngine::quote_identifier("Executor.ActiveThread"),
+            r#""Executor.ActiveThread""#
+        );
+
+        // All lowercase - no quotes needed
+        assert_eq!(QueryEngine::quote_identifier("cpu"), "cpu");
+
+        // Special chars - needs quotes
+        assert_eq!(QueryEngine::quote_identifier("test-api"), r#""test-api""#);
+    }
+
+    #[test]
+    fn test_qualify_case_sensitive_table() {
+        let engine = QueryEngine::new("./data");
+
+        // Case-sensitive table name should be quoted in output
+        let sql = r#"SELECT * FROM test-api."TestDiskUsage" LIMIT 2"#;
+        let result = engine.qualify_table_names(sql, "_system");
+        assert_eq!(
+            result,
+            r#"SELECT * FROM _system."test-api"."TestDiskUsage" LIMIT 2"#
+        );
+
+        // Partially qualified with case-sensitive table
+        let sql2 = r#"SELECT * FROM "TestDiskUsage""#;
+        let result2 = engine.qualify_table_names(sql2, "_system");
+        assert_eq!(result2, r#"SELECT * FROM _system.default."TestDiskUsage""#);
     }
 }
