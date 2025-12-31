@@ -1,25 +1,27 @@
 # Metric Sender
 
-A Go script that continuously scrapes series count metrics from stats-service every 5 minutes and outputs them in line protocol format.
+A Go script that continuously scrapes series count metrics from stats-service at configurable intervals and outputs them in line protocol format.
 
 ## Overview
 
-This tool runs as a daemon that queries the stats-service every 5 minutes to get series counts grouped by service and metric, then outputs them in a format suitable for ingestion into time series databases.
+This tool runs as a daemon that queries the stats-service at regular intervals (default: every 5 minutes) to get series counts grouped by service and metric, then outputs them in a format suitable for ingestion into time series databases.
 
 ## What It Does
 
-1. Runs continuously with a 5-minute ticker
-2. Queries `http://localhost:7000/query/_system` on each tick
-3. Runs SQL: `SELECT service, metric, count(*) FROM pmc.benchmark WHERE date = 'YYYY-MM-DD' GROUP BY service, metric`
-4. Uses current date automatically
-5. Outputs metrics in line protocol format
-6. Handles graceful shutdown on Ctrl+C or SIGTERM
+1. Loads configuration from `config.toml` (or uses defaults)
+2. Runs continuously with a configurable ticker (default: 5 minutes)
+3. Queries the configured stats-service URL and database on each tick
+4. Discovers all schemas and tables in the database automatically
+5. Runs SQL queries to count series grouped by service and metric
+6. Uses current date automatically
+7. Outputs metrics in line protocol format
+8. Handles graceful shutdown on Ctrl+C or SIGTERM
 
 ## Prerequisites
 
 - Go 1.21 or higher
-- Stats-service running on `http://localhost:7000`
-- Table `pmc.arch_monitor_roc` with data for current date
+- Stats-service running (default: `http://localhost:7000`)
+- Database with series stats data (default: `_system`)
 
 ## Installation
 
@@ -100,27 +102,70 @@ Received signal interrupt. Shutting down gracefully...
 
 ## Configuration
 
-Edit constants in `main.go`:
+Configuration is managed via `config.toml` in the same directory as the binary. If the file doesn't exist, the application uses default values.
 
-```go
-const (
-    statsServiceURL = "http://localhost:7000/query/_system"
-    database        = "pmc"
-    schema          = "arch_monitor_roc"
-)
+### config.toml
+
+```toml
+# Stats Service URL
+url = "http://localhost:7000"
+
+# Database to query (usually "_system" for series stats)
+database = "_system"
+
+# Scraping interval in minutes
+interval_minutes = 5
+```
+
+### Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `url` | string | `http://localhost:7000` | Stats service base URL |
+| `database` | string | `_system` | Database to query (catalog name) |
+| `interval_minutes` | int | `5` | How often to scrape metrics (in minutes) |
+
+### Using Default Configuration
+
+If `config.toml` is not found, the application will print a message and use default values:
+
+```
+Config file not found at config.toml, using defaults
+Metric sender started. Running every 5 minutes.
+URL: http://localhost:7000
+Database: _system
 ```
 
 ## Customization
 
-### Query Different Table
+### Query Different Database
 
-Change `database` and `schema` constants:
+Edit `config.toml` to change which database to query:
 
-```go
-const (
-    database = "mydb"
-    schema   = "myschema"
-)
+```toml
+url = "http://localhost:7000"
+database = "mydb"  # Change from "_system" to your database
+interval_minutes = 5
+```
+
+### Change Scraping Interval
+
+Edit `config.toml` to run more or less frequently:
+
+```toml
+url = "http://localhost:7000"
+database = "_system"
+interval_minutes = 1  # Run every minute instead of every 5 minutes
+```
+
+### Use Remote Stats Service
+
+Edit `config.toml` to connect to a remote instance:
+
+```toml
+url = "http://192.168.1.100:7000"  # Remote server
+database = "_system"
+interval_minutes = 5
 ```
 
 ### Query Different Date

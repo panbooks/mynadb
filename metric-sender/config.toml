@@ -1,0 +1,10 @@
+# Metric Sender Configuration
+
+# Stats Service URL
+url = "http://localhost:7000"
+
+# Database to query (usually "_system" for series stats)
+database = "_system"
+
+# Scraping interval in minutes
+interval_minutes = 5
