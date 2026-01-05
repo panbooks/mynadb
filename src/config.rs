@@ -133,7 +133,7 @@ pub struct CompactionConfig {
     #[serde(default = "default_full_compaction_enabled")]
     pub full_compaction_enabled: bool,
 
-    /// Hour to run full compaction (0-23, default: 1 for 01:00)
+    /// Hour to run full compaction (0-23, default: 3 for 03:00)
     #[serde(default = "default_full_compaction_hour")]
     pub full_compaction_hour: u32,
 
@@ -352,7 +352,7 @@ fn default_full_compaction_enabled() -> bool {
 }
 
 fn default_full_compaction_hour() -> u32 {
-    1 // 01:00
+    3 // 03:00
 }
 
 fn default_full_compaction_interval_secs() -> u64 {
