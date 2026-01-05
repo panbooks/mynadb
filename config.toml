@@ -56,6 +56,30 @@ max_level = 5
 # Interval seconds
 interval_secs = 70
 
+# Rate limiting settings (prevents I/O saturation during compaction)
+
+# Maximum concurrent compaction operations (0 = unlimited, default: 4)
+# Limits number of partitions that can be compacted in parallel
+# Lower values reduce resource usage but slow down compaction
+max_concurrent_compactions = 4
+
+# Maximum memory budget for compaction in MB (0 = unlimited, default: 2048 = 2GB)
+# Prevents OOM by limiting total memory used for compaction buffers
+# Set based on available RAM: recommended 10-20% of total memory
+max_memory_mb = 2048
+
+# Read rate limit in MB/sec (0 = unlimited, default: 0)
+# Throttles parquet file reads to prevent I/O saturation
+# Useful on shared storage or when queries compete with compaction
+# Example: 100 MB/s = read_rate_limit_mb_per_sec = 100
+read_rate_limit_mb_per_sec = 0
+
+# Write rate limit in MB/sec (0 = unlimited, default: 0)
+# Throttles parquet file writes to prevent I/O saturation
+# Less critical than read limiting (writes are buffered)
+# Example: 100 MB/s = write_rate_limit_mb_per_sec = 100
+write_rate_limit_mb_per_sec = 0
+
 [series_tracker]
 # Track-only mode: only track series cardinality, skip data ingestion (default: false)
 # When enabled, writes only update series stats without storing data to disk
