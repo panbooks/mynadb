@@ -5,6 +5,7 @@ use arrow::array::{
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Schema};
 use chrono::Timelike;
+use futures::stream::{FuturesUnordered, StreamExt};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
@@ -249,6 +250,7 @@ impl Compactor {
     }
 
     /// Compact all tables in a catalog
+    /// Now runs tables in parallel (up to max_concurrent_compactions)
     pub async fn compact_catalog(
         &self,
         catalog: &str,
@@ -260,7 +262,8 @@ impl Compactor {
             return Err(format!("Catalog '{}' does not exist", catalog));
         }
 
-        let mut results = Vec::new();
+        // Phase 1: Collect all tables that need compaction
+        let mut tables_to_compact: Vec<(String, String)> = Vec::new();
 
         // List all schemas (subdirectories under catalog)
         let schema_entries = fs::read_dir(&catalog_path)
@@ -277,7 +280,7 @@ impl Compactor {
             }
 
             let schema_name = match schema_path.file_name().and_then(|n| n.to_str()) {
-                Some(name) => name,
+                Some(name) => name.to_string(),
                 None => continue,
             };
 
@@ -309,18 +312,45 @@ impl Compactor {
                 }
 
                 if let Some(table_name) = table_path.file_name().and_then(|n| n.to_str()) {
-                    match self
-                        .compact_table_all_partitions(catalog, schema_name, table_name, config)
-                        .await
-                    {
-                        Ok(table_results) => results.extend(table_results),
-                        Err(e) => {
-                            warn!(
-                                "Failed to compact {}/{}/{}: {}",
-                                catalog, schema_name, table_name, e
-                            );
-                        }
-                    }
+                    tables_to_compact.push((schema_name.clone(), table_name.to_string()));
+                }
+            }
+        }
+
+        if tables_to_compact.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        debug!(
+            "Catalog {}: found {} tables for compaction (max {} concurrent)",
+            catalog,
+            tables_to_compact.len(),
+            config.max_concurrent_compactions
+        );
+
+        // Phase 2: Process tables concurrently using FuturesUnordered
+        let mut tasks = FuturesUnordered::new();
+
+        for (schema_name, table_name) in tables_to_compact {
+            // Clone strings to move into the future
+            let catalog_owned = catalog.to_string();
+            let schema_owned = schema_name.clone();
+            let table_owned = table_name.clone();
+            let config_clone = config.clone();
+
+            let future = async move {
+                self.compact_table_all_partitions(&catalog_owned, &schema_owned, &table_owned, &config_clone).await
+            };
+            tasks.push(future);
+        }
+
+        // Collect results as they complete
+        let mut results = Vec::new();
+        while let Some(result) = tasks.next().await {
+            match result {
+                Ok(table_results) => results.extend(table_results),
+                Err(e) => {
+                    warn!("Table compaction failed: {}", e);
                 }
             }
         }
@@ -329,6 +359,7 @@ impl Compactor {
     }
 
     /// Compact all partitions in a table (or the table itself if not partitioned)
+    /// Runs sequentially within a table since most tables only have 1-2 active partitions
     pub async fn compact_table_all_partitions(
         &self,
         catalog: &str,
@@ -348,7 +379,8 @@ impl Compactor {
         let has_partitions = self.has_partitions(&table_path)?;
 
         if has_partitions {
-            // Partitioned table: compact each partition separately
+            // Partitioned table: compact each partition separately (sequentially)
+            // Most tables only have 1-2 active partitions (today + maybe yesterday)
             let entries = fs::read_dir(&table_path)
                 .map_err(|e| format!("Failed to read table directory: {}", e))?;
 
@@ -427,6 +459,7 @@ impl Compactor {
     }
 
     /// Full compaction for yesterday's partitions (date-based, no metadata overhead)
+    /// Now runs partitions in parallel (up to max_concurrent_compactions)
     pub async fn full_compact_yesterday(
         &self,
         config: &CompactionConfig,
@@ -454,7 +487,8 @@ impl Compactor {
             yesterday_partition, current_hour
         );
 
-        let mut results = Vec::new();
+        // Phase 1: Collect all partitions that need compaction
+        let mut partitions_to_compact: Vec<(String, String, String, PathBuf)> = Vec::new();
 
         // Scan all catalogs
         let catalog_entries = fs::read_dir(&self.data_dir)
@@ -509,27 +543,80 @@ impl Compactor {
                         continue;
                     }
 
-                    // Full compact this partition
-                    match self
-                        .full_compact_partition(
-                            &catalog,
-                            &schema,
-                            &table,
-                            &yesterday_partition,
-                            &partition_path,
-                            config,
-                        )
-                        .await
-                    {
-                        Ok(Some(result)) => results.push(result),
-                        Ok(None) => {}
-                        Err(e) => {
-                            warn!(
-                                "Failed to full compact {}/{}/{}/{}: {}",
-                                catalog, schema, table, yesterday_partition, e
-                            );
-                        }
-                    }
+                    // Add to compaction queue
+                    partitions_to_compact.push((
+                        catalog.clone(),
+                        schema.clone(),
+                        table.clone(),
+                        partition_path,
+                    ));
+                }
+            }
+        }
+
+        if partitions_to_compact.is_empty() {
+            debug!("No partitions found for full compaction on {}", yesterday_partition);
+            return Ok(Vec::new());
+        }
+
+        info!(
+            "Found {} partitions for full compaction (max {} concurrent)",
+            partitions_to_compact.len(),
+            config.max_concurrent_compactions
+        );
+
+        // Phase 2: Process partitions concurrently using FuturesUnordered
+        let mut tasks = FuturesUnordered::new();
+
+        for (catalog, schema, table, partition_path) in partitions_to_compact {
+            // Clone strings to move into the future
+            let catalog_owned = catalog.clone();
+            let schema_owned = schema.clone();
+            let table_owned = table.clone();
+            let partition_name_owned = yesterday_partition.clone();
+            let partition_path_owned = partition_path.clone();
+            let config_clone = config.clone();
+
+            let future = async move {
+                self.full_compact_partition(
+                    &catalog_owned,
+                    &schema_owned,
+                    &table_owned,
+                    &partition_name_owned,
+                    &partition_path_owned,
+                    &config_clone,
+                ).await
+            };
+            tasks.push(future);
+        }
+
+        // Collect results as they complete
+        let mut results = Vec::new();
+        let mut completed = 0;
+        let total = tasks.len();
+
+        while let Some(result) = tasks.next().await {
+            completed += 1;
+            match result {
+                Ok(Some(r)) => {
+                    info!(
+                        "Full compaction [{}/{}]: {}.{}.{}/{} → {} files, {:.2} MB",
+                        completed,
+                        total,
+                        r.catalog,
+                        r.schema,
+                        r.table,
+                        r.date_partition,
+                        r.files_after,
+                        r.bytes_after as f64 / (1024.0 * 1024.0)
+                    );
+                    results.push(r);
+                }
+                Ok(None) => {
+                    debug!("Full compaction [{}/{}]: skipped (no work needed)", completed, total);
+                }
+                Err(e) => {
+                    warn!("Full compaction [{}/{}]: failed - {}", completed, total, e);
                 }
             }
         }
@@ -556,6 +643,13 @@ impl Compactor {
         partition_path: &Path,
         config: &CompactionConfig,
     ) -> Result<Option<CompactionResult>, String> {
+        // Acquire semaphore permit if concurrent limiting is enabled
+        let _permit = if let Some(ref semaphore) = self.compaction_semaphore {
+            Some(semaphore.acquire().await.map_err(|e| format!("Failed to acquire semaphore: {}", e))?)
+        } else {
+            None
+        };
+
         let start = Instant::now();
 
         // List all parquet files with their sizes
