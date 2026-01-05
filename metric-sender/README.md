@@ -124,6 +124,48 @@ interval_minutes = 5
 | `url` | string | `http://localhost:7000` | Stats service base URL |
 | `database` | string | `_system` | Database to query (catalog name) |
 | `interval_minutes` | int | `5` | How often to scrape metrics (in minutes) |
+| `connect_timeout_secs` | int | `10` | TCP connection timeout in seconds |
+| `read_timeout_secs` | int | `30` | HTTP read timeout in seconds |
+| `max_retries` | int | `3` | Maximum retry attempts on failure |
+| `retry_delay_secs` | int | `2` | Base delay between retries (exponential backoff) |
+
+### HTTP Client Settings
+
+The metric-sender includes robust retry and timeout configuration for reliable operation:
+
+- **`connect_timeout_secs`**: TCP connection timeout in seconds (default: 10)
+  - Controls how long to wait when establishing a connection to the stats-service
+  - Prevents hanging on network issues or firewall problems
+
+- **`read_timeout_secs`**: HTTP read timeout in seconds (default: 30)
+  - Controls the overall HTTP request timeout
+  - Allows time for slow queries without hanging indefinitely
+
+- **`max_retries`**: Maximum number of retry attempts on failure (default: 3)
+  - Automatically retries failed requests up to this many times
+  - Helps handle transient network issues and temporary service unavailability
+
+- **`retry_delay_secs`**: Base delay between retries in seconds (default: 2)
+  - Uses exponential backoff: `delay = retry_delay_secs × attempt_number`
+  - Example with default value: attempt 1 = 2s, attempt 2 = 4s, attempt 3 = 6s
+  - Prevents overwhelming the server during recovery
+
+### Retry Behavior
+
+The retry logic is intelligent and efficient:
+
+- ✅ **Retries on**: Network errors, connection failures, 5xx server errors
+- ❌ **Does NOT retry on**: 4xx client errors (immediate failure)
+- 📈 **Uses exponential backoff** to prevent server overload
+- 📝 **Logs each retry attempt** for debugging and monitoring
+
+Example retry log output:
+```
+Request failed (attempt 1): connection refused
+Retry attempt 1/3 for URL: http://localhost:7000/databases/_system/schemas
+Request failed (attempt 2): connection refused
+Retry attempt 2/3 for URL: http://localhost:7000/databases/_system/schemas
+```
 
 ### Using Default Configuration
 

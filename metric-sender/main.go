@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +21,12 @@ type Config struct {
 	URL             string `toml:"url"`
 	Database        string `toml:"database"`
 	IntervalMinutes int    `toml:"interval_minutes"`
+
+	// HTTP client configuration
+	ConnectTimeoutSecs int `toml:"connect_timeout_secs"` // Default: 10
+	ReadTimeoutSecs    int `toml:"read_timeout_secs"`    // Default: 30
+	MaxRetries         int `toml:"max_retries"`          // Default: 3
+	RetryDelaySecs     int `toml:"retry_delay_secs"`     // Default: 2
 }
 
 // loadConfig loads configuration from config.toml with default values
@@ -39,7 +47,75 @@ func loadConfig(configPath string) (*Config, error) {
 		fmt.Printf("Config file not found at %s, using defaults\n", configPath)
 	}
 
+	// Set default values for HTTP client configuration if not specified
+	if config.ConnectTimeoutSecs == 0 {
+		config.ConnectTimeoutSecs = 10
+	}
+	if config.ReadTimeoutSecs == 0 {
+		config.ReadTimeoutSecs = 30
+	}
+	if config.MaxRetries == 0 {
+		config.MaxRetries = 3
+	}
+	if config.RetryDelaySecs == 0 {
+		config.RetryDelaySecs = 2
+	}
+
 	return config, nil
+}
+
+// createHTTPClient creates an HTTP client with configured timeouts
+func createHTTPClient(config *Config) *http.Client {
+	connectTimeout := time.Duration(config.ConnectTimeoutSecs) * time.Second
+	readTimeout := time.Duration(config.ReadTimeoutSecs) * time.Second
+
+	return &http.Client{
+		Timeout: readTimeout, // Overall request timeout
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout: connectTimeout, // Connection timeout
+			}).DialContext,
+			TLSHandshakeTimeout:   connectTimeout,
+			ResponseHeaderTimeout: readTimeout,
+		},
+	}
+}
+
+// doRequestWithRetry performs an HTTP GET request with retry logic
+func doRequestWithRetry(client *http.Client, url string, maxRetries int, retryDelay time.Duration) (*http.Response, error) {
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("Retry attempt %d/%d for URL: %s", attempt, maxRetries, url)
+			time.Sleep(retryDelay * time.Duration(attempt)) // Exponential backoff
+		}
+
+		resp, err := client.Get(url)
+
+		// Success - return immediately
+		if err == nil && resp.StatusCode == 200 {
+			return resp, nil
+		}
+
+		// Store error for potential retry
+		if err != nil {
+			lastErr = err
+			log.Printf("Request failed (attempt %d): %v", attempt+1, err)
+		} else {
+			// Non-200 status code
+			resp.Body.Close()
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			log.Printf("Request returned status %d (attempt %d)", resp.StatusCode, attempt+1)
+		}
+
+		// Don't retry on client errors (4xx)
+		if resp != nil && resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return nil, lastErr
+		}
+	}
+
+	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
 }
 
 // SchemasResponse is the response from /databases/_system/schemas
@@ -104,6 +180,9 @@ func main() {
 }
 
 func runQuery(config *Config) {
+	// Create HTTP client with configured timeouts (reuse for efficiency)
+	client := createHTTPClient(config)
+
 	// Get current date and time
 	now := time.Now()
 	currentDate := now.Format("2006-01-02")
@@ -113,7 +192,7 @@ func runQuery(config *Config) {
 	fmt.Printf("Step 1: Discovering schemas from %s...\n", config.Database)
 
 	// Step 1: Get all schemas
-	schemas, err := getAllSchemas(config)
+	schemas, err := getAllSchemas(config, client)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error getting schemas: %v\n\n", err)
 		return
@@ -135,7 +214,7 @@ func runQuery(config *Config) {
 		fmt.Printf("Step 2: Getting tables for schema '%s'...\n", schema)
 
 		// Get tables for this schema
-		tables, err := getTablesForSchema(config, schema)
+		tables, err := getTablesForSchema(config, client, schema)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Error getting tables for schema '%s': %v\n", schema, err)
 			continue
@@ -161,7 +240,7 @@ func runQuery(config *Config) {
 			)
 
 			// Query this table
-			metrics, err := queryStatsService(config, sqlQuery)
+			metrics, err := queryStatsService(config, client, sqlQuery)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "    Error querying %s: %v\n", fullTableName, err)
 				continue
@@ -187,20 +266,16 @@ func runQuery(config *Config) {
 	fmt.Printf("Next run in %d minutes...\n\n", config.IntervalMinutes)
 }
 
-func getAllSchemas(config *Config) ([]string, error) {
+func getAllSchemas(config *Config, client *http.Client) ([]string, error) {
 	// GET /databases/_system/schemas
 	url := fmt.Sprintf("%s/databases/%s/schemas", config.URL, config.Database)
 
-	resp, err := http.Get(url)
+	retryDelay := time.Duration(config.RetryDelaySecs) * time.Second
+	resp, err := doRequestWithRetry(client, url, config.MaxRetries, retryDelay)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-	}
 
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
@@ -217,21 +292,17 @@ func getAllSchemas(config *Config) ([]string, error) {
 	return response.Schemas, nil
 }
 
-func getTablesForSchema(config *Config, schema string) ([]string, error) {
+func getTablesForSchema(config *Config, client *http.Client, schema string) ([]string, error) {
 	// GET /databases/_system/schemas/{schema}/tables
 	url := fmt.Sprintf("%s/databases/%s/schemas/%s/tables",
 		config.URL, config.Database, url.PathEscape(schema))
 
-	resp, err := http.Get(url)
+	retryDelay := time.Duration(config.RetryDelaySecs) * time.Second
+	resp, err := doRequestWithRetry(client, url, config.MaxRetries, retryDelay)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-	}
 
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
@@ -248,7 +319,7 @@ func getTablesForSchema(config *Config, schema string) ([]string, error) {
 	return response.Tables, nil
 }
 
-func queryStatsService(config *Config, sqlQuery string) ([]SeriesMetric, error) {
+func queryStatsService(config *Config, client *http.Client, sqlQuery string) ([]SeriesMetric, error) {
 	// URL encode the SQL query
 	params := url.Values{}
 	params.Add("sql", sqlQuery)
@@ -256,17 +327,13 @@ func queryStatsService(config *Config, sqlQuery string) ([]SeriesMetric, error) 
 	// Build full URL: /query/_system
 	fullURL := fmt.Sprintf("%s/query/%s?%s", config.URL, config.Database, params.Encode())
 
-	// Make HTTP GET request
-	resp, err := http.Get(fullURL)
+	// Make HTTP GET request with retry
+	retryDelay := time.Duration(config.RetryDelaySecs) * time.Second
+	resp, err := doRequestWithRetry(client, fullURL, config.MaxRetries, retryDelay)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-	}
 
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
