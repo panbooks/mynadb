@@ -57,6 +57,11 @@ max_level = 5
 interval_secs = 70
 
 [series_tracker]
+# Track-only mode: only track series cardinality, skip data ingestion (default: false)
+# When enabled, writes only update series stats without storing data to disk
+# Useful for monitoring cardinality without the storage overhead
+track_only = false
+
 # Background flush interval in seconds
 flush_interval_secs = 60
 

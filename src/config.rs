@@ -150,6 +150,11 @@ pub struct CompactionConfig {
 /// Series tracker configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SeriesTrackerConfig {
+    /// Track-only mode: only track series cardinality, skip data ingestion
+    /// When enabled, writes only update series stats without storing data
+    #[serde(default = "default_series_track_only")]
+    pub track_only: bool,
+
     /// Background flush interval in seconds
     #[serde(default = "default_series_flush_interval")]
     pub flush_interval_secs: u64,
@@ -363,6 +368,10 @@ fn default_full_compaction_target_size_mb() -> u64 {
     200 // 200MB
 }
 
+fn default_series_track_only() -> bool {
+    false
+}
+
 fn default_series_flush_interval() -> u64 {
     60
 }
@@ -505,6 +514,7 @@ impl Default for Config {
                 full_compaction_target_size_mb: default_full_compaction_target_size_mb(),
             },
             series_tracker: SeriesTrackerConfig {
+                track_only: default_series_track_only(),
                 flush_interval_secs: default_series_flush_interval(),
                 stats_dir: default_series_stats_dir(),
                 cache_retention_days: default_series_cache_retention_days(),
