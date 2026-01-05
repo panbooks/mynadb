@@ -11,10 +11,13 @@ use parquet::file::properties::WriterProperties;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, error, info, warn};
+
+use crate::rate_limiter::RateLimiter;
 
 // Compaction constants
 const LEVEL_PREFIX: char = 'L';
@@ -39,6 +42,16 @@ pub struct Compactor {
     data_dir: String,
     /// Lock to prevent concurrent compaction and read/write operations
     locks: CompactionLocks,
+    /// Semaphore to limit concurrent compaction operations
+    compaction_semaphore: Option<Arc<Semaphore>>,
+    /// Current memory usage in bytes (atomic for thread-safe updates)
+    current_memory_bytes: Arc<AtomicU64>,
+    /// Maximum memory budget in bytes (0 = unlimited)
+    max_memory_bytes: u64,
+    /// Read rate limiter (None = unlimited)
+    read_rate_limiter: Option<Arc<RateLimiter>>,
+    /// Write rate limiter (None = unlimited)
+    write_rate_limiter: Option<Arc<RateLimiter>>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +73,16 @@ pub struct CompactionConfig {
     /// Target file size for full compaction in bytes (default: 200MB)
     /// Partitions larger than this will be skipped
     pub full_compaction_target_size: u64,
+
+    // Rate limiting settings
+    /// Maximum concurrent compaction operations (0 = unlimited)
+    pub max_concurrent_compactions: usize,
+    /// Maximum memory budget in bytes (0 = unlimited)
+    pub max_memory_bytes: u64,
+    /// Read rate limit in bytes/sec (0 = unlimited)
+    pub read_rate_limit_bytes_per_sec: u64,
+    /// Write rate limit in bytes/sec (0 = unlimited)
+    pub write_rate_limit_bytes_per_sec: u64,
 }
 
 impl Default for CompactionConfig {
@@ -72,6 +95,28 @@ impl Default for CompactionConfig {
             full_compaction_enabled: true,
             full_compaction_hour: 1, // 01:00
             full_compaction_target_size: 200 * MB_TO_BYTES, // 200MB
+            max_concurrent_compactions: 4,
+            max_memory_bytes: 2048 * MB_TO_BYTES, // 2GB
+            read_rate_limit_bytes_per_sec: 0, // Unlimited
+            write_rate_limit_bytes_per_sec: 0, // Unlimited
+        }
+    }
+}
+
+impl From<&crate::config::CompactionConfig> for CompactionConfig {
+    fn from(config: &crate::config::CompactionConfig) -> Self {
+        CompactionConfig {
+            min_files: config.min_files,
+            major_min_files: config.major_min_files,
+            target_file_size: config.target_file_size_mb * MB_TO_BYTES,
+            max_level: config.max_level,
+            full_compaction_enabled: config.full_compaction_enabled,
+            full_compaction_hour: config.full_compaction_hour,
+            full_compaction_target_size: config.full_compaction_target_size_mb * MB_TO_BYTES,
+            max_concurrent_compactions: config.max_concurrent_compactions,
+            max_memory_bytes: config.max_memory_mb * MB_TO_BYTES,
+            read_rate_limit_bytes_per_sec: config.read_rate_limit_mb_per_sec * MB_TO_BYTES,
+            write_rate_limit_bytes_per_sec: config.write_rate_limit_mb_per_sec * MB_TO_BYTES,
         }
     }
 }
@@ -147,9 +192,38 @@ impl ParquetFileInfo {
 
 impl Compactor {
     pub fn new(data_dir: &str) -> Self {
+        Self::with_config(data_dir, &CompactionConfig::default())
+    }
+
+    pub fn with_config(data_dir: &str, config: &CompactionConfig) -> Self {
+        // Create semaphore if max_concurrent_compactions > 0
+        let compaction_semaphore = if config.max_concurrent_compactions > 0 {
+            Some(Arc::new(Semaphore::new(config.max_concurrent_compactions)))
+        } else {
+            None
+        };
+
+        // Create rate limiters if configured
+        let read_rate_limiter = if config.read_rate_limit_bytes_per_sec > 0 {
+            Some(Arc::new(RateLimiter::new(config.read_rate_limit_bytes_per_sec)))
+        } else {
+            None
+        };
+
+        let write_rate_limiter = if config.write_rate_limit_bytes_per_sec > 0 {
+            Some(Arc::new(RateLimiter::new(config.write_rate_limit_bytes_per_sec)))
+        } else {
+            None
+        };
+
         Compactor {
             data_dir: data_dir.to_string(),
             locks: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            compaction_semaphore,
+            current_memory_bytes: Arc::new(AtomicU64::new(0)),
+            max_memory_bytes: config.max_memory_bytes,
+            read_rate_limiter,
+            write_rate_limiter,
         }
     }
 
@@ -573,14 +647,14 @@ impl Compactor {
         let files_to_compact: Vec<PathBuf> = compactable_files.iter().map(|(p, _)| p.clone()).collect();
 
         // Read compactable files
-        let batches = self.read_parquet_files(&files_to_compact)?;
+        let batches = self.read_parquet_files(&files_to_compact).await?;
         let total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
 
         // Write consolidated file
         let timestamp = chrono::Utc::now().timestamp_millis();
         let output = partition_path.join(format!("FULL_{}.parquet", timestamp));
 
-        self.write_compacted_file(output.to_str().unwrap(), batches)?;
+        self.write_compacted_file(output.to_str().unwrap(), batches).await?;
 
         let output_size = fs::metadata(&output)
             .map(|m| m.len())
@@ -643,6 +717,13 @@ impl Compactor {
         table: &str,
         config: &CompactionConfig,
     ) -> Result<Option<CompactionResult>, String> {
+        // Acquire semaphore permit if concurrent limiting is enabled
+        let _permit = if let Some(ref semaphore) = self.compaction_semaphore {
+            Some(semaphore.acquire().await.map_err(|e| format!("Failed to acquire semaphore: {}", e))?)
+        } else {
+            None
+        };
+
         // Use empty string as partition identifier for non-partitioned tables
         let partition_id = "";
         let start = Instant::now();
@@ -817,6 +898,13 @@ impl Compactor {
         date_partition: &str,
         config: &CompactionConfig,
     ) -> Result<Option<CompactionResult>, String> {
+        // Acquire semaphore permit if concurrent limiting is enabled
+        let _permit = if let Some(ref semaphore) = self.compaction_semaphore {
+            Some(semaphore.acquire().await.map_err(|e| format!("Failed to acquire semaphore: {}", e))?)
+        } else {
+            None
+        };
+
         // Acquire lock to prevent concurrent operations on this partition
         let lock = self.get_lock(catalog, schema, table, date_partition).await;
         let _guard = lock.lock().await;
@@ -1017,7 +1105,7 @@ impl Compactor {
             );
 
             let paths: Vec<PathBuf> = group.iter().map(|f| f.path.clone()).collect();
-            let batches = self.read_parquet_files(&paths)?;
+            let batches = self.read_parquet_files(&paths).await?;
             let rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
             total_rows += rows;
 
@@ -1028,7 +1116,7 @@ impl Compactor {
                 partition_path, LEVEL_PREFIX, target_level, LEVEL_SEPARATOR, timestamp, PARQUET_EXT
             );
 
-            self.write_compacted_file(&compacted_filename, batches)?;
+            self.write_compacted_file(&compacted_filename, batches).await?;
 
             if target_level == current_level {
                 info!(
@@ -1125,10 +1213,28 @@ impl Compactor {
     }
 
     /// Read all batches from multiple parquet files
-    fn read_parquet_files(&self, files: &[PathBuf]) -> Result<Vec<RecordBatch>, String> {
+    async fn read_parquet_files(&self, files: &[PathBuf]) -> Result<Vec<RecordBatch>, String> {
         let mut all_batches = Vec::new();
+        let mut total_bytes_read = 0u64;
 
         for file_path in files {
+            let file_size = fs::metadata(file_path)
+                .map(|m| m.len())
+                .unwrap_or(0);
+
+            // Check memory budget before reading
+            if self.max_memory_bytes > 0 {
+                let current_memory = self.current_memory_bytes.load(Ordering::Relaxed);
+                if current_memory + file_size > self.max_memory_bytes {
+                    return Err(format!(
+                        "Memory budget exceeded: current={} MB, file={} MB, max={} MB",
+                        current_memory / (1024 * 1024),
+                        file_size / (1024 * 1024),
+                        self.max_memory_bytes / (1024 * 1024)
+                    ));
+                }
+            }
+
             let file = File::open(file_path)
                 .map_err(|e| format!("Failed to open file {}: {}", file_path.display(), e))?;
 
@@ -1141,9 +1247,24 @@ impl Compactor {
 
             for batch_result in reader {
                 let batch = batch_result.map_err(|e| format!("Failed to read batch: {}", e))?;
+
+                // Calculate batch size (approximate)
+                let batch_bytes = batch.get_array_memory_size() as u64;
+
+                // Update memory tracking
+                self.current_memory_bytes.fetch_add(batch_bytes, Ordering::Relaxed);
+                total_bytes_read += batch_bytes;
+
+                // Apply read rate limiting
+                if let Some(ref limiter) = self.read_rate_limiter {
+                    limiter.wait_for_bytes(batch_bytes as usize).await;
+                }
+
                 all_batches.push(batch);
             }
         }
+
+        debug!("Read {} batches ({} MB)", all_batches.len(), total_bytes_read / (1024 * 1024));
 
         // Merge schemas and align batches if there are schema conflicts
         if all_batches.len() > 1 {
@@ -1356,7 +1477,7 @@ impl Compactor {
     }
 
     /// Write compacted batches to a new file
-    fn write_compacted_file(
+    async fn write_compacted_file(
         &self,
         filename: &str,
         batches: Vec<RecordBatch>,
@@ -1373,15 +1494,38 @@ impl Compactor {
         let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
             .map_err(|e| format!("Failed to create writer: {}", e))?;
 
+        let mut total_bytes_written = 0u64;
+        let mut total_bytes_freed = 0u64;
+
         for batch in batches {
+            // Calculate batch size before writing (for memory tracking)
+            let batch_bytes = batch.get_array_memory_size() as u64;
+
             writer
                 .write(&batch)
                 .map_err(|e| format!("Failed to write batch: {}", e))?;
+
+            total_bytes_written += batch_bytes;
+
+            // Apply write rate limiting
+            if let Some(ref limiter) = self.write_rate_limiter {
+                limiter.wait_for_bytes(batch_bytes as usize).await;
+            }
+
+            // Free memory after writing (batch will be dropped)
+            self.current_memory_bytes.fetch_sub(batch_bytes, Ordering::Relaxed);
+            total_bytes_freed += batch_bytes;
         }
 
         writer
             .close()
             .map_err(|e| format!("Failed to close writer: {}", e))?;
+
+        debug!(
+            "Wrote {} MB, freed {} MB memory",
+            total_bytes_written / (1024 * 1024),
+            total_bytes_freed / (1024 * 1024)
+        );
 
         Ok(())
     }

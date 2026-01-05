@@ -8,6 +8,7 @@ mod logger;
 mod mysql_service;
 mod parquet_writer;
 mod query_engine;
+mod rate_limiter;
 mod retention_manager;
 mod series_dedup;
 mod series_tracker;
@@ -209,19 +210,9 @@ async fn main() {
     let db_manager = Arc::new(DatabaseManager::new(&config.storage.data_dir));
 
     info!("Initializing compactor");
-    let compactor = Arc::new(Compactor::new(&config.storage.data_dir));
-
-    // Start background compaction if enabled
-    // Start background compaction tasks
-    let compaction_config = compactor::CompactionConfig {
-        min_files: config.compaction.min_files,
-        major_min_files: config.compaction.major_min_files,
-        target_file_size: config.compaction.target_file_size_mb * 1024 * 1024,
-        max_level: config.compaction.max_level,
-        full_compaction_enabled: config.compaction.full_compaction_enabled,
-        full_compaction_hour: config.compaction.full_compaction_hour,
-        full_compaction_target_size: config.compaction.full_compaction_target_size_mb * 1024 * 1024,
-    };
+    // Convert config to compactor's internal config (includes rate limiting settings)
+    let compaction_config = compactor::CompactionConfig::from(&config.compaction);
+    let compactor = Arc::new(Compactor::with_config(&config.storage.data_dir, &compaction_config));
 
     // Start LSM compaction (every 60s by default)
     if config.compaction.interval_secs > 0 {
@@ -1073,15 +1064,7 @@ async fn compact_handler(
     info!("Compact Catalog Request: catalog={}", catalog);
 
     // Convert config to compactor's CompactionConfig
-    let config = compactor::CompactionConfig {
-        min_files: state.config.compaction.min_files,
-        major_min_files: state.config.compaction.major_min_files,
-        target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
-        max_level: state.config.compaction.max_level,
-        full_compaction_enabled: state.config.compaction.full_compaction_enabled,
-        full_compaction_hour: state.config.compaction.full_compaction_hour,
-        full_compaction_target_size: state.config.compaction.full_compaction_target_size_mb * 1024 * 1024,
-    };
+    let config = compactor::CompactionConfig::from(&state.config.compaction);
 
     match state.compactor.compact_catalog(&catalog, &config).await {
         Ok(results) => {
@@ -1143,15 +1126,7 @@ async fn compact_table_handler(
     );
 
     // Convert config to compactor's CompactionConfig
-    let config = compactor::CompactionConfig {
-        min_files: state.config.compaction.min_files,
-        major_min_files: state.config.compaction.major_min_files,
-        target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
-        max_level: state.config.compaction.max_level,
-        full_compaction_enabled: state.config.compaction.full_compaction_enabled,
-        full_compaction_hour: state.config.compaction.full_compaction_hour,
-        full_compaction_target_size: state.config.compaction.full_compaction_target_size_mb * 1024 * 1024,
-    };
+    let config = compactor::CompactionConfig::from(&state.config.compaction);
 
     match state
         .compactor
@@ -1226,15 +1201,7 @@ async fn compact_partition_handler(
     };
 
     // Convert config to compactor's CompactionConfig
-    let config = compactor::CompactionConfig {
-        min_files: state.config.compaction.min_files,
-        major_min_files: state.config.compaction.major_min_files,
-        target_file_size: state.config.compaction.target_file_size_mb * 1024 * 1024,
-        max_level: state.config.compaction.max_level,
-        full_compaction_enabled: state.config.compaction.full_compaction_enabled,
-        full_compaction_hour: state.config.compaction.full_compaction_hour,
-        full_compaction_target_size: state.config.compaction.full_compaction_target_size_mb * 1024 * 1024,
-    };
+    let config = compactor::CompactionConfig::from(&state.config.compaction);
 
     match state
         .compactor
