@@ -41,6 +41,9 @@ HTTP GET /query/:db or Arrow Flight → QueryEngine (DataFusion) → Parquet Fil
 
 ### Storage Structure (Catalog/Schema/Table)
 
+The storage structure depends on the `schema.strategy` configuration:
+
+**Strategy 1: ServiceAsSchema (default)**
 ```
 data/
 └── {catalog}/              # Database name from URI /write/{db}
@@ -54,7 +57,24 @@ data/
             └── {catalog}.parquet
 ```
 
-Schema naming: Numeric service tags are prefixed with `svc_` (e.g., `service=1` → `svc_1`). Text values remain unchanged. No service tag → `default` schema.
+**Strategy 2: ServiceAsTable**
+```
+data/
+└── {catalog}/              # Database name from URI /write/{db}
+    ├── default/            # Fixed schema name
+    │   └── {table}/        # Extracted from "service" tag (or "default")
+    │       ├── L0_*.parquet    # Recent writes
+    │       └── ...
+    └── _system/
+        └── series_stats/
+            └── {catalog}.parquet
+```
+
+**Naming Rules:**
+- Numeric service tags are prefixed with `service_` (e.g., `service=1` → `service_1`)
+- Text values remain unchanged
+- No service tag → uses `default_name` from config
+- In ServiceAsTable mode, measurement name is stored as a `measurement` tag
 
 ### Core Modules
 
@@ -83,9 +103,10 @@ flight_port = 7001
 data_dir = "/data0/stats/data"
 
 [schema]
-tag_keys = ["MONITOR.service", "hierarchy_2", "service"]  # Tags to extract schema from
+strategy = "service_as_schema"  # "service_as_schema" (default) or "service_as_table"
+tag_keys = ["MONITOR.service", "hierarchy_2", "service"]  # Tags to extract service from
 default_name = "default"
-prefix_numeric = true  # "1" → "svc_1"
+prefix_numeric = true  # "1" → "service_1"
 
 [cache]
 flush_interval_secs = 30
@@ -99,6 +120,70 @@ enabled = true           # Enable automatic retention
 default_days = 7         # Delete partitions older than 7 days
 interval_secs = 3600     # Check every hour
 ```
+
+## Schema/Table Naming Strategies
+
+Stats Service supports two strategies for mapping InfluxDB line protocol to catalog.schema.table structure:
+
+### Strategy 1: ServiceAsSchema (Default)
+
+**Configuration:**
+```toml
+[schema]
+strategy = "service_as_schema"
+```
+
+**Behavior:**
+- Service tag value → Schema name
+- Measurement name → Table name
+- Direct mapping from InfluxDB semantics
+
+**Example:**
+```bash
+# Line Protocol
+cpu,service=1,host=server01 usage=23.5
+
+# Storage Path
+data/mydb/service_1/cpu/
+
+# SQL Query
+SELECT * FROM mydb.service_1.cpu
+```
+
+**Use Case:** Multiple services, each with multiple measurements. Each service gets its own schema.
+
+### Strategy 2: ServiceAsTable
+
+**Configuration:**
+```toml
+[schema]
+strategy = "service_as_table"
+```
+
+**Behavior:**
+- Fixed schema name (from `default_name` config)
+- Service tag value → Table name
+- Measurement name → Stored as `measurement` tag in data
+
+**Example:**
+```bash
+# Line Protocol
+cpu,service=1,host=server01 usage=23.5
+
+# Storage Path
+data/mydb/default/service_1/
+
+# SQL Query
+SELECT * FROM mydb.default.service_1 WHERE measurement = 'cpu'
+```
+
+**Use Case:** Service-centric view where each service is a separate table. Query by measurement using the `measurement` tag.
+
+**Important Notes:**
+- The `tag_keys` configuration works for both strategies (extracts service value)
+- Numeric service values are prefixed with `service_` when `prefix_numeric = true`
+- When service tag is missing, uses `default_name` for both schema and table
+- In ServiceAsTable mode, original measurement name is preserved as a tag column
 
 ## Code Standards
 
@@ -165,15 +250,30 @@ curl -X POST http://localhost:7000/retention/mydb/default/cpu \
 
 ## Query Syntax
 
+Query syntax depends on the schema/table strategy:
+
+**ServiceAsSchema Mode:**
 ```sql
 -- Fully qualified: catalog.schema.table
-SELECT * FROM mydb.svc_1.cpu
+SELECT * FROM mydb.service_1.cpu
 
 -- Schema.table (auto-prefixes catalog)
-SELECT * FROM svc_1.cpu
+SELECT * FROM service_1.cpu
 
 -- Simple name (auto-prefixes catalog.default.)
 SELECT * FROM cpu
+```
+
+**ServiceAsTable Mode:**
+```sql
+-- Fully qualified: catalog.schema.table
+SELECT * FROM mydb.default.service_1
+
+-- Schema.table (auto-prefixes catalog)
+SELECT * FROM default.service_1
+
+-- Filter by measurement tag
+SELECT * FROM mydb.default.service_1 WHERE measurement = 'cpu'
 ```
 
 ## Test Scripts

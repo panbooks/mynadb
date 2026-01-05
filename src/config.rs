@@ -61,9 +61,25 @@ pub struct StorageConfig {
     pub system_dir: String,
 }
 
+/// Schema/Table naming strategy
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaTableStrategy {
+    /// Current: service tag → schema, measurement → table
+    ServiceAsSchema,
+    /// New: "default" → schema, service tag → table
+    ServiceAsTable,
+}
+
 /// Schema extraction configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaConfig {
+    /// Schema/Table naming strategy
+    /// - ServiceAsSchema: service tag → schema, measurement → table (default)
+    /// - ServiceAsTable: "default" → schema, service tag → table
+    #[serde(default = "default_schema_strategy")]
+    pub strategy: SchemaTableStrategy,
+
     /// Tag keys to extract schema from (default: ["service"])
     /// The first matching tag key will be used as the schema
     #[serde(default = "default_schema_tag_keys")]
@@ -407,6 +423,10 @@ fn default_schema_prefix_numeric() -> bool {
     true
 }
 
+fn default_schema_strategy() -> SchemaTableStrategy {
+    SchemaTableStrategy::ServiceAsSchema
+}
+
 fn default_retention_enabled() -> bool {
     false
 }
@@ -464,6 +484,7 @@ impl Default for Config {
                 system_dir: default_system_dir(),
             },
             schema: SchemaConfig {
+                strategy: default_schema_strategy(),
                 tag_keys: default_schema_tag_keys(),
                 default_name: default_schema_name(),
                 prefix_numeric: default_schema_prefix_numeric(),
