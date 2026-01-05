@@ -258,6 +258,7 @@ async fn main() {
                         Some(&series_tracker_for_recovery),
                         Some(&query_engine_for_recovery),
                         &config_for_recovery.schema,
+                        &config_for_recovery.series_tracker,
                     ))
                 }) {
                     Ok(count) => {
@@ -777,6 +778,7 @@ async fn ingest_line_protocol_to_cache(
     series_tracker: Option<&SeriesTracker>,
     query_engine: Option<&Arc<QueryEngine>>,
     schema_config: &config::SchemaConfig,
+    series_tracker_config: &config::SeriesTrackerConfig,
 ) -> Result<usize, String> {
     // Parse line protocol
     let points = parse_multiple_lines(line_protocol, schema_config);
@@ -790,6 +792,15 @@ async fn ingest_line_protocol_to_cache(
     // Track series cardinality (if tracker provided)
     if let Some(tracker) = series_tracker {
         tracker.track_points(db, &points).await;
+    }
+
+    // If track_only mode is enabled, skip data ingestion
+    if series_tracker_config.track_only {
+        debug!(
+            "Track-only mode enabled: skipping ingestion of {} points for database={}",
+            point_count, db
+        );
+        return Ok(point_count);
     }
 
     // Group by schema and table based on strategy
@@ -970,6 +981,7 @@ async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCod
         Some(&state.series_tracker),
         Some(&state.query_engine),
         &state.config.schema,
+        &state.config.series_tracker,
     )
     .await
     {

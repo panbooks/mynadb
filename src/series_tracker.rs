@@ -785,6 +785,7 @@ mod tests {
             prefix_numeric: true,
         });
         let tracker_config = SeriesTrackerConfig {
+            track_only: false,
             flush_interval_secs: 60,
             stats_dir: "pmc".to_string(),
             cache_retention_days: 2,
@@ -825,6 +826,7 @@ mod tests {
             prefix_numeric: true,
         });
         let tracker_config = SeriesTrackerConfig {
+            track_only: false,
             flush_interval_secs: 60,
             stats_dir: "pmc".to_string(),
             cache_retention_days: 2,
