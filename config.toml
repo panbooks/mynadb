@@ -63,9 +63,10 @@ interval_secs = 70
 # Lower values reduce resource usage but slow down compaction
 max_concurrent_compactions = 4
 
-# Maximum memory budget for compaction in MB (0 = unlimited, default: 2048 = 2GB)
-# Prevents OOM by limiting total memory used for compaction buffers
-# Set based on available RAM: recommended 10-20% of total memory
+# Maximum memory budget for compaction in MB (DEPRECATED - no longer used)
+# Memory usage is now controlled solely by max_concurrent_compactions
+# Each concurrent compaction uses memory proportional to the data being processed
+# Adjust max_concurrent_compactions based on available RAM
 max_memory_mb = 2048
 
 # Read rate limit in MB/sec (0 = unlimited, default: 0)
