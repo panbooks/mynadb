@@ -1,7 +1,11 @@
 [package]
 name = "stats"
-version = "0.1.0"
+version = "0.2.8"
 edition = "2021"
+
+[[bin]]
+name = "tsdb-stats"
+path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

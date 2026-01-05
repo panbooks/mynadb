@@ -15,15 +15,17 @@ else
   version=$(git rev-parse --short HEAD)
 fi
 
-archive="dist.${version}.gz"
+archive="dist.tar"
 
 cargo build --release
 
-rm -rf dist
+rm -rf dist dist.tar
 mkdir -p dist
 
-cp -f target/release/stats dist/
+cp -f target/release/tsdb-stats dist/
 cp -f config.toml dist/
+cp -f deploy.sh dist/
+cp -f tsdb-stats.service dist/
 
 rm -f "${archive}"
 tar czf "${archive}" dist/

@@ -1,0 +1,26 @@
+[Unit]
+Description=TSDB Stats Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/tsdb-stats
+ExecStart=/opt/tsdb-stats/tsdb-stats
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tsdb-stats
+
+# Performance and security settings
+LimitNOFILE=655360
+LimitNPROC=40960
+
+# Restart policy
+StartLimitInterval=60s
+StartLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target
