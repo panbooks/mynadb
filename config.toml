@@ -111,7 +111,7 @@ file_prefix = "stats-service"
 rotation = "daily"
 
 # Maximum number of log files to keep
-max_files = 30
+max_files = 10
 
 # Enable JSON formatted logs (default: false for human-readable format)
 json_format = false
