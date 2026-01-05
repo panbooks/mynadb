@@ -772,12 +772,14 @@ pub struct SeriesStats {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::SchemaTableStrategy;
     use super::*;
 
     #[test]
     fn test_tag_hash() {
         use crate::config::{BloomConfig as ConfigBloomConfig, BloomDatabaseConfig, SchemaConfig, SeriesTrackerConfig};
         let schema_config = Arc::new(SchemaConfig {
+            strategy: SchemaTableStrategy::ServiceAsSchema,
             tag_keys: vec!["service".to_string()],
             default_name: "default".to_string(),
             prefix_numeric: true,
@@ -817,6 +819,7 @@ mod tests {
     fn test_tag_hash_excludes_service() {
         use crate::config::{BloomConfig as ConfigBloomConfig, BloomDatabaseConfig, SchemaConfig, SeriesTrackerConfig};
         let schema_config = Arc::new(SchemaConfig {
+            strategy: SchemaTableStrategy::ServiceAsSchema,
             tag_keys: vec!["service".to_string()],
             default_name: "default".to_string(),
             prefix_numeric: true,

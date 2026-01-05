@@ -792,22 +792,32 @@ async fn ingest_line_protocol_to_cache(
         tracker.track_points(db, &points).await;
     }
 
-    // Group by schema and measurement
+    // Group by schema and table based on strategy
     let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::new();
     for point in points {
-        let schema = point.service.clone();
-        let key = (schema, point.measurement.clone());
+        let (schema, table) = match schema_config.strategy {
+            config::SchemaTableStrategy::ServiceAsSchema => {
+                // Current behavior: service → schema, measurement → table
+                (point.service.clone(), point.measurement.clone())
+            }
+            config::SchemaTableStrategy::ServiceAsTable => {
+                // New behavior: "default" → schema, service → table
+                (schema_config.default_name.clone(), point.service.clone())
+            }
+        };
+
+        let key = (schema, table);
         grouped.entry(key).or_default().push(point);
     }
 
     // Add to cache and register catalog.schema
-    for ((schema, measurement), points) in grouped {
+    for ((schema, table), points) in grouped {
         debug!(
-            "Adding {} points for catalog={}, schema={}, table={}",
+            "Adding {} points for database={}, schema={}, table={}",
             points.len(),
             db,
             schema,
-            measurement
+            table
         );
 
         // Ensure catalog.schema is registered in query engine (if provided)
@@ -819,7 +829,7 @@ async fn ingest_line_protocol_to_cache(
 
         // Add to cache
         cache
-            .add_points(db, &schema, &measurement, points)
+            .add_points(db, &schema, &table, points)
             .await
             .map_err(|e| format!("Cache error: {}", e))?;
     }

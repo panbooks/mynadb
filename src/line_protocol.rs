@@ -126,10 +126,12 @@ pub fn parse_multiple_lines(data: &str, schema_config: &SchemaConfig) -> Vec<Poi
 
 #[cfg(test)]
 mod tests {
+    use crate::config::SchemaTableStrategy;
     use super::*;
 
     fn get_test_schema_config() -> SchemaConfig {
         SchemaConfig {
+            strategy: SchemaTableStrategy::ServiceAsSchema,
             tag_keys: vec!["service".to_string()],
             default_name: "default".to_string(),
             prefix_numeric: true,
