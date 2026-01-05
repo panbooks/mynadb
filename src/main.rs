@@ -21,7 +21,7 @@ use axum::{
     Json, Router,
 };
 use cache::DataCache;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use compactor::Compactor;
 use config::Config;
 use database_manager::DatabaseManager;
@@ -37,15 +37,45 @@ use std::sync::Arc;
 use tonic::transport::Server;
 use tracing::{debug, error, info, warn};
 
+/// Version information compiled at build time
+pub mod version {
+    pub const GIT_VERSION: &str = env!("GIT_VERSION");
+    pub const GIT_HASH: &str = env!("GIT_HASH");
+    pub const GIT_COMMIT_DATE: &str = env!("GIT_COMMIT_DATE");
+    pub const BUILD_TIME: &str = env!("BUILD_TIME");
+    pub const RUSTC_VERSION: &str = env!("RUSTC_VERSION");
+    pub const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+    pub fn print_version() {
+        println!("Stats Service");
+        println!("  Version:       {}", GIT_VERSION);
+        println!("  Git Hash:      {}", GIT_HASH);
+        println!("  Commit Date:   {}", GIT_COMMIT_DATE);
+        println!("  Build Time:    {}", BUILD_TIME);
+        println!("  Cargo Version: {}", CARGO_VERSION);
+        println!("  Rust Version:  {}", RUSTC_VERSION);
+    }
+}
+
 /// Stats Service - Time series database with Arrow Flight API
 #[derive(Parser, Debug)]
 #[command(name = "stats-service")]
-#[command(version = "0.1.0")]
+#[command(version = env!("GIT_VERSION"))]
 #[command(about = "Time series database with Arrow Flight API", long_about = None)]
 struct Cli {
     /// Path to configuration file
     #[arg(short = 'c', long = "config", default_value = "config.toml")]
     config: String,
+
+    /// Subcommand to execute
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Show version information
+    Version,
 }
 
 #[derive(Clone)]
@@ -96,6 +126,12 @@ async fn main() {
     // Parse command line arguments
     let cli = Cli::parse();
 
+    // Handle subcommands
+    if let Some(Commands::Version) = cli.command {
+        version::print_version();
+        return;
+    }
+
     // Load configuration (CLI arg takes precedence over env var)
     let config_path = cli.config;
     let config = Arc::new(Config::load_or_default(&config_path));
@@ -109,6 +145,8 @@ async fn main() {
     // Welcome messages (only these go to stdout)
     welcome!("═══════════════════════════════════════════════════════");
     welcome!("  📊 Stats Service - Time Series Stats Database");
+    welcome!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
+    welcome!("  Built: {}", env!("BUILD_TIME"));
     welcome!("═══════════════════════════════════════════════════════");
     welcome!("");
     welcome!("🚀 Starting server...");
@@ -365,6 +403,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(home))
         .route("/health", get(health))
+        .route("/version", get(version_handler))
         // Write endpoints
         .route("/write/:db", post(write_handler))
         .route("/write", post(write_handler_query_param)) // InfluxDB-compatible
@@ -668,6 +707,19 @@ async fn delete_table_handler(
 
 async fn health() -> &'static str {
     "OK"
+}
+
+/// GET /version - Return version information as JSON
+async fn version_handler() -> impl IntoResponse {
+    let version_info = serde_json::json!({
+        "version": env!("GIT_VERSION"),
+        "git_hash": env!("GIT_HASH"),
+        "git_commit_date": env!("GIT_COMMIT_DATE"),
+        "build_time": env!("BUILD_TIME"),
+        "cargo_version": env!("CARGO_PKG_VERSION"),
+        "rustc_version": env!("RUSTC_VERSION"),
+    });
+    (StatusCode::OK, Json(version_info))
 }
 
 async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
