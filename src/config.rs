@@ -152,11 +152,6 @@ pub struct CompactionConfig {
     #[serde(default = "default_compaction_max_concurrent")]
     pub max_concurrent_compactions: usize,
 
-    /// Maximum memory budget for compaction in MB (0 = unlimited, default: 10240 = 10GB)
-    /// Prevents OOM by limiting total memory used for compaction buffers
-    #[serde(default = "default_compaction_max_memory_mb")]
-    pub max_memory_mb: u64,
-
     /// Read rate limit in MB/sec (0 = unlimited, default: 200)
     /// Throttles parquet file reads to prevent I/O saturation
     #[serde(default = "default_compaction_read_rate_limit")]
@@ -393,10 +388,6 @@ fn default_compaction_max_concurrent() -> usize {
     8 // Max 8 concurrent compaction operations
 }
 
-fn default_compaction_max_memory_mb() -> u64 {
-    10240 // 10GB max memory budget for compaction
-}
-
 fn default_compaction_read_rate_limit() -> u64 {
     200
 }
@@ -550,7 +541,6 @@ impl Default for Config {
                 full_compaction_interval_secs: default_full_compaction_interval_secs(),
                 full_compaction_target_size_mb: default_full_compaction_target_size_mb(),
                 max_concurrent_compactions: default_compaction_max_concurrent(),
-                max_memory_mb: default_compaction_max_memory_mb(),
                 read_rate_limit_mb_per_sec: default_compaction_read_rate_limit(),
                 write_rate_limit_mb_per_sec: default_compaction_write_rate_limit(),
             },
