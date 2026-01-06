@@ -173,3 +173,19 @@ cleanup_interval_secs = 3600  # 1 hour
 
 # Retention period for WAL files in hours (files older than this can be deleted after successful flush)
 retention_hours = 24
+
+[auth]
+# Enable HTTP Basic Authentication (default: false)
+# When enabled, all write and query endpoints require authentication
+enabled = false
+
+# Username for basic authentication
+username = "admin"
+
+# Password for basic authentication (stored in plaintext in config file)
+# IMPORTANT: Use strong passwords and protect this config file (chmod 600)
+password = "admin2026"
+
+# Endpoints that are always public (even if auth is enabled)
+# Health and stats endpoints are public by default
+public_endpoints = ["/health", "/stats"]
