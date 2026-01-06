@@ -1,4 +1,4 @@
-use crate::config::{SchemaConfig, SeriesTrackerConfig};
+use crate::config::{SchemaConfig, SeriesTrackerConfig, StorageConfig};
 use crate::line_protocol::{format_date32_as_partition, Point};
 use crate::series_dedup::{BloomConfig, StrategyManager};
 use arrow::array::UInt64Array;
@@ -128,10 +128,8 @@ impl SeriesTracker {
 
 impl SeriesTracker {
     pub fn new(
-        data_dir: &str,
-        system_dir: &str,
-        schema_config: Arc<SchemaConfig>,
-        cache_retention_days: u32,
+        storage_config: &StorageConfig,
+        schema_config: &SchemaConfig,
         tracker_config: &SeriesTrackerConfig,
     ) -> Self {
         // Create strategy manager with per-database strategies
@@ -166,12 +164,12 @@ impl SeriesTracker {
         );
 
         let tracker = SeriesTracker {
-            data_dir: data_dir.to_string(),
-            system_dir: system_dir.to_string(),
+            data_dir: storage_config.data_dir.clone(),
+            system_dir: storage_config.system_dir.clone(),
             strategy_manager,
             pending_writes: Arc::new(RwLock::new(HashMap::new())),
-            schema_config,
-            cache_retention_days,
+            schema_config: Arc::new(schema_config.clone()),
+            cache_retention_days: tracker_config.cache_retention_days,
             system_tags: tracker_config.system_tags.clone(),
         };
 
@@ -843,18 +841,22 @@ pub struct SeriesStats {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::SchemaTableStrategy;
     use super::*;
+    use crate::config::SchemaTableStrategy;
 
     #[test]
     fn test_tag_hash() {
-        use crate::config::{BloomConfig as ConfigBloomConfig, BloomDatabaseConfig, SchemaConfig, SeriesTrackerConfig};
-        let schema_config = Arc::new(SchemaConfig {
+        use crate::config::{BloomConfig as ConfigBloomConfig, SchemaConfig, SeriesTrackerConfig, StorageConfig};
+        let storage_config = StorageConfig {
+            data_dir: "./test_data".to_string(),
+            system_dir: "_system".to_string(),
+        };
+        let schema_config = SchemaConfig {
             strategy: SchemaTableStrategy::ServiceAsSchema,
             tag_keys: vec!["service".to_string()],
             default_name: "default".to_string(),
             prefix_numeric: true,
-        });
+        };
         let tracker_config = SeriesTrackerConfig {
             track_only: false,
             flush_interval_secs: 60,
@@ -868,7 +870,7 @@ mod tests {
             },
             bloom_custom: vec![],
         };
-        let tracker = SeriesTracker::new("./test_data", "_system", schema_config, 2, &tracker_config);
+        let tracker = SeriesTracker::new(&storage_config, &schema_config, &tracker_config);
 
         // Same tags in different order should produce same hash
         let mut tags1 = HashMap::new();
@@ -889,13 +891,17 @@ mod tests {
 
     #[test]
     fn test_tag_hash_excludes_service() {
-        use crate::config::{BloomConfig as ConfigBloomConfig, BloomDatabaseConfig, SchemaConfig, SeriesTrackerConfig};
-        let schema_config = Arc::new(SchemaConfig {
+        use crate::config::{BloomConfig as ConfigBloomConfig, SchemaConfig, SeriesTrackerConfig, StorageConfig};
+        let storage_config = StorageConfig {
+            data_dir: "./test_data".to_string(),
+            system_dir: "_system".to_string(),
+        };
+        let schema_config = SchemaConfig {
             strategy: SchemaTableStrategy::ServiceAsSchema,
             tag_keys: vec!["service".to_string()],
             default_name: "default".to_string(),
             prefix_numeric: true,
-        });
+        };
         let tracker_config = SeriesTrackerConfig {
             track_only: false,
             flush_interval_secs: 60,
@@ -909,7 +915,7 @@ mod tests {
             },
             bloom_custom: vec![],
         };
-        let tracker = SeriesTracker::new("./test_data", "_system", schema_config, 2, &tracker_config);
+        let tracker = SeriesTracker::new(&storage_config, &schema_config, &tracker_config);
 
         // Different service should produce same hash if other tags are same
         let mut tags1 = HashMap::new();
