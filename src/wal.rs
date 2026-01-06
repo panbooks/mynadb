@@ -2,6 +2,7 @@ use crate::series_tracker::SeriesRecord;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
@@ -209,6 +210,8 @@ pub struct Wal {
     data_writer: Arc<Mutex<WalWriter>>,
     series_writer: Arc<Mutex<WalWriter>>,
     rotate_size_bytes: u64,
+    /// Sequence counter to ensure unique filenames even within the same millisecond
+    sequence: AtomicU64,
 }
 
 impl Wal {
@@ -220,9 +223,12 @@ impl Wal {
 
         let rotate_size_bytes = rotate_size_mb * 1024 * 1024;
 
+        // Initialize sequence counter
+        let sequence = AtomicU64::new(0);
+
         // Create initial WAL files
-        let data_file = Self::create_wal_file(wal_path, "data")?;
-        let series_file = Self::create_wal_file(wal_path, "series")?;
+        let data_file = Self::create_wal_file_with_seq(wal_path, "data", &sequence)?;
+        let series_file = Self::create_wal_file_with_seq(wal_path, "series", &sequence)?;
 
         let data_writer = Arc::new(Mutex::new(
             WalWriter::new(data_file, sync_on_write)
@@ -241,17 +247,25 @@ impl Wal {
             data_writer,
             series_writer,
             rotate_size_bytes,
+            sequence,
         })
     }
 
-    fn create_wal_file(dir: &Path, prefix: &str) -> Result<PathBuf, String> {
+    fn create_wal_file_with_seq(dir: &Path, prefix: &str, sequence: &AtomicU64) -> Result<PathBuf, String> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_secs();
+            .as_millis();
 
-        let filename = format!("{}_{}.wal", prefix, timestamp);
+        // Fetch and increment sequence to ensure uniqueness even within same millisecond
+        let seq = sequence.fetch_add(1, Ordering::Relaxed);
+
+        let filename = format!("{}_{}_{}.wal", prefix, timestamp, seq);
         Ok(dir.join(filename))
+    }
+
+    fn create_wal_file(&self, prefix: &str) -> Result<PathBuf, String> {
+        Self::create_wal_file_with_seq(&self.wal_dir, prefix, &self.sequence)
     }
 
     /// Log a data write operation
@@ -310,11 +324,20 @@ impl Wal {
         Ok(())
     }
 
-    /// Rotate data WAL file and delete the old one (post-flush cleanup)
+    /// Rotate data WAL file and delete all old ones (post-flush cleanup)
     /// This ensures only unflushed data remains in WAL directory
+    ///
+    /// IMPORTANT: This method deletes ALL old data WAL files, not just the one being rotated.
+    /// This handles high write throughput where multiple WAL files accumulate between flushes.
+    /// Safe because:
+    /// 1. Called only after successful cache flush to Parquet
+    /// 2. Background flush starts after WAL recovery completes (no race condition)
+    /// 3. All data in old WAL files is now durable in Parquet
     pub async fn rotate_and_delete_old_wal(&self) -> Result<(), String> {
-        let new_file = Self::create_wal_file(&self.wal_dir, "data")?;
-        let old_file = {
+        let new_file = self.create_wal_file("data")?;
+
+        // First rotate to new file
+        {
             let mut writer = self.data_writer.lock().await;
 
             // Flush current file
@@ -322,26 +345,45 @@ impl Wal {
                 .flush()
                 .map_err(|e| format!("Failed to flush before rotation: {}", e))?;
 
-            let old_path = writer.path.clone();
-
-            info!("Rotating data WAL: {} -> {}", old_path.display(), new_file.display());
+            info!("Rotating data WAL: {} -> {}", writer.path.display(), new_file.display());
 
             // Create new writer
             *writer = WalWriter::new(new_file, writer.sync_on_write)
                 .map_err(|e| format!("Failed to create new WAL writer: {}", e))?;
+        }
 
-            old_path
+        // Now delete ALL old data WAL files (not just the one we rotated)
+        // This handles high write throughput where multiple WAL files accumulate between flushes
+        let current_data_path = {
+            let writer = self.data_writer.lock().await;
+            writer.path.clone()
         };
 
-        // Delete old WAL file (contains only flushed data)
-        match fs::remove_file(&old_file) {
-            Ok(_) => {
-                info!("Deleted old WAL file after flush: {}", old_file.display());
+        let files = self.list_wal_files("data")?;
+        let mut deleted = 0;
+
+        for file_path in files {
+            // Skip the current active file
+            if file_path == current_data_path {
+                debug!("Keeping active WAL file: {}", file_path.display());
+                continue;
             }
-            Err(e) => {
-                warn!("Failed to delete old WAL file {}: {}", old_file.display(), e);
-                // Don't fail - rotation succeeded, deletion is best-effort
+
+            // Delete old file (data is now flushed to Parquet)
+            match fs::remove_file(&file_path) {
+                Ok(_) => {
+                    info!("Deleted old WAL file after flush: {}", file_path.display());
+                    deleted += 1;
+                }
+                Err(e) => {
+                    warn!("Failed to delete old WAL file {}: {}", file_path.display(), e);
+                    // Don't fail - rotation succeeded, deletion is best-effort
+                }
             }
+        }
+
+        if deleted > 0 {
+            info!("Cleaned up {} old data WAL file(s) after flush", deleted);
         }
 
         // Also clean up any empty WAL files immediately to prevent accumulation
@@ -408,7 +450,7 @@ impl Wal {
 
     /// Rotate data WAL file (public for post-flush rotation)
     pub async fn rotate_data_wal(&self) -> Result<(), String> {
-        let new_file = Self::create_wal_file(&self.wal_dir, "data")?;
+        let new_file = self.create_wal_file("data")?;
         let mut writer = self.data_writer.lock().await;
 
         // Flush current file
@@ -427,7 +469,7 @@ impl Wal {
 
     /// Rotate series WAL file
     async fn rotate_series_wal(&self) -> Result<(), String> {
-        let new_file = Self::create_wal_file(&self.wal_dir, "series")?;
+        let new_file = self.create_wal_file("series")?;
         let mut writer = self.series_writer.lock().await;
 
         // Flush current file
@@ -600,11 +642,12 @@ impl Wal {
 
     /// Clean up old WAL files
     pub async fn cleanup_old_files(&self, retention_hours: u64) -> Result<usize, String> {
-        let now = SystemTime::now()
+        let now_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let cutoff = now - (retention_hours * 3600);
+        let cutoff_secs = now_secs - (retention_hours * 3600);
+        let cutoff_millis = (cutoff_secs * 1000) as u128;
 
         let mut deleted = 0;
 
@@ -644,9 +687,19 @@ impl Wal {
                             true
                         } else {
                             // Delete old files based on retention policy
-                            if let Some(timestamp_str) = filename.split('_').nth(1).and_then(|s| s.strip_suffix(".wal")) {
-                                if let Ok(file_timestamp) = timestamp_str.parse::<u64>() {
-                                    if file_timestamp < cutoff {
+                            // Parse filename: data_1767670539.wal (old seconds format)
+                            //             or: data_1767670539000.wal (old milliseconds format)
+                            //             or: data_1767670539000_0.wal (new format with sequence)
+                            let parts: Vec<&str> = filename.split('_').collect();
+                            if parts.len() >= 2 {
+                                // Get timestamp (second element)
+                                let timestamp_str = parts[1].trim_end_matches(".wal");
+                                if let Ok(file_timestamp) = timestamp_str.parse::<u128>() {
+                                    // Handle both old and new timestamp formats
+                                    // Old seconds: ~1767670539 (10 digits)
+                                    // Old/new milliseconds: ~1767670539000 (13 digits)
+                                    let is_old = file_timestamp < cutoff_millis;
+                                    if is_old {
                                         debug!("Deleting old WAL file: {}", path.display());
                                         true
                                     } else {
