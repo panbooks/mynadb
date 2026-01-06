@@ -349,7 +349,7 @@ fn default_mysql_host() -> String {
 }
 
 fn default_mysql_port() -> u16 {
-    7003
+    7002
 }
 
 fn default_mysql_enabled() -> bool {

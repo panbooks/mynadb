@@ -7,7 +7,7 @@ set -e
 
 # Configuration
 MYSQL_HOST="127.0.0.1"
-MYSQL_PORT="7003"  # Use non-standard port to avoid conflicts
+MYSQL_PORT="7002"  # Use non-standard port to avoid conflicts
 HTTP_PORT="7000"
 DATA_DIR="./data_mysql_test"
 CONFIG_FILE="./config_mysql_test.toml"
@@ -59,7 +59,7 @@ create_config() {
 http_host = "0.0.0.0"
 http_port = $HTTP_PORT
 flight_host = "0.0.0.0"
-flight_port = 7002
+flight_port = 7001
 mysql_host = "0.0.0.0"
 mysql_port = $MYSQL_PORT
 mysql_enabled = true
