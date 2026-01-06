@@ -15,6 +15,7 @@ pub struct Config {
     pub logging: LoggingConfig,
     pub retention: RetentionConfig,
     pub wal: WalConfig,
+    pub auth: AuthConfig,
 }
 
 /// Server configuration
@@ -304,6 +305,26 @@ pub struct WalConfig {
     pub retention_hours: u64,
 }
 
+/// Authentication configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthConfig {
+    /// Enable authentication (default: false for backward compatibility)
+    #[serde(default = "default_auth_enabled")]
+    pub enabled: bool,
+
+    /// Username for basic authentication
+    #[serde(default = "default_auth_username")]
+    pub username: String,
+
+    /// Password for basic authentication (plaintext in config)
+    #[serde(default = "default_auth_password")]
+    pub password: String,
+
+    /// Endpoints that are always public (even if auth is enabled)
+    #[serde(default = "default_auth_public_endpoints")]
+    pub public_endpoints: Vec<String>,
+}
+
 // Default value functions
 fn default_http_host() -> String {
     "0.0.0.0".to_string()
@@ -509,6 +530,25 @@ fn default_wal_retention_hours() -> u64 {
     24 // Keep WAL files for 24 hours
 }
 
+fn default_auth_enabled() -> bool {
+    false // Disabled by default for backward compatibility
+}
+
+fn default_auth_username() -> String {
+    "admin".to_string()
+}
+
+fn default_auth_password() -> String {
+    "".to_string() // Empty by default, must be set if auth is enabled
+}
+
+fn default_auth_public_endpoints() -> Vec<String> {
+    vec![
+        "/health".to_string(),
+        "/stats".to_string(),
+    ]
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -580,6 +620,12 @@ impl Default for Config {
                 rotate_size_mb: default_wal_rotate_size_mb(),
                 cleanup_interval_secs: default_wal_cleanup_interval_secs(),
                 retention_hours: default_wal_retention_hours(),
+            },
+            auth: AuthConfig {
+                enabled: default_auth_enabled(),
+                username: default_auth_username(),
+                password: default_auth_password(),
+                public_endpoints: default_auth_public_endpoints(),
             },
         }
     }

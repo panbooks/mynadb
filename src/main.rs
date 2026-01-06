@@ -1,3 +1,4 @@
+mod auth;
 mod cache;
 mod compactor;
 mod config;
@@ -429,6 +430,14 @@ async fn main() {
         wal,
     };
 
+    // Initialize authentication middleware
+    let auth_middleware = Arc::new(auth::AuthMiddleware::new(Arc::new(config.auth.clone())));
+    info!(
+        "Authentication: {} (username: {})",
+        if config.auth.enabled { "ENABLED" } else { "DISABLED" },
+        config.auth.username
+    );
+
     let app = Router::new()
         .route("/", get(home))
         .route("/health", get(health))
@@ -484,7 +493,9 @@ async fn main() {
         // Series cardinality tracking
         .route("/pmc/:db", get(series_stats_handler))
         .fallback(log_request)
-        .with_state(state.clone());
+        .with_state(state.clone())
+        .layer(axum::middleware::from_fn(auth::auth_middleware_fn))
+        .layer(axum::Extension(auth_middleware));
 
     // Start HTTP server
     let http_addr = config.http_addr();
