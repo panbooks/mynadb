@@ -19,7 +19,7 @@ archive="dist.tar"
 
 cargo build --release
 
-rm -rf dist dist.tar
+rm -rf dist.tar
 mkdir -p dist
 
 cp -f target/release/tsdb-stats dist/
