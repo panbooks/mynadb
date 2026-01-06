@@ -39,8 +39,6 @@ pub struct SeriesTracker {
     strategy_manager: Arc<StrategyManager>,
     /// Pending writes buffer per schema, database and date: (schema, db, date) -> records
     pending_writes: PendingWrites,
-    /// Schema configuration for extracting service name
-    schema_config: Arc<SchemaConfig>,
     /// Number of days to keep in cache
     cache_retention_days: u32,
     /// System tags to exclude for UMC calculation (from config)
@@ -129,7 +127,6 @@ impl SeriesTracker {
 impl SeriesTracker {
     pub fn new(
         storage_config: &StorageConfig,
-        schema_config: &SchemaConfig,
         tracker_config: &SeriesTrackerConfig,
     ) -> Self {
         // Create strategy manager with per-database strategies
@@ -168,7 +165,6 @@ impl SeriesTracker {
             system_dir: storage_config.system_dir.clone(),
             strategy_manager,
             pending_writes: Arc::new(RwLock::new(HashMap::new())),
-            schema_config: Arc::new(schema_config.clone()),
             cache_retention_days: tracker_config.cache_retention_days,
             system_tags: tracker_config.system_tags.clone(),
         };
@@ -362,26 +358,15 @@ impl SeriesTracker {
         }
     }
 
-    fn extract_service_key(&self, tags: &HashMap<String, String>) -> Option<&str> {
-        self.schema_config
-            .tag_keys
-            .iter()
-            .find(|tag_key| tags.contains_key(*tag_key))
-            .map(|s| s.as_str())
-    }
-
-    /// Calculate PMC (Physical Metric Count) hash: excludes only service tag
-    /// This tracks ALL physical series including system tags
+    /// Calculate PMC (Physical Metric Count) hash: includes ALL tags
+    /// This tracks ALL physical series including service tags and system tags
     fn calculate_pmc_hash(&self, tags: &HashMap<String, String>) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
-        let service_key = self.extract_service_key(tags);
-
-        // Filter out service tag and sort the rest
+        // Include ALL tags - sort for stable hashing
         let mut filtered_tags: Vec<(&str, &str)> = tags
             .iter()
-            .filter(|(key, _)| Some(key.as_str()) != service_key)
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
 
@@ -397,23 +382,17 @@ impl SeriesTracker {
         hasher.finish()
     }
 
-    /// Calculate UMC (User Metric Count) hash: excludes service tag AND system tags
+    /// Calculate UMC (User Metric Count) hash: excludes only system tags
     /// This tracks user-visible series cardinality (without system-added tags)
     fn calculate_umc_hash(&self, tags: &HashMap<String, String>) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
-        let service_key = self.extract_service_key(tags);
-
-        // Filter out service tag AND system tags, then sort
+        // Filter out system tags only, then sort
         let mut filtered_tags: Vec<(&str, &str)> = tags
             .iter()
             .filter(|(key, _)| {
-                // Exclude service tag
-                if Some(key.as_str()) == service_key {
-                    return false;
-                }
-                // Exclude system tags
+                // Exclude system tags only
                 !self.system_tags.contains(key)
             })
             .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -842,20 +821,13 @@ pub struct SeriesStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::SchemaTableStrategy;
 
     #[test]
     fn test_tag_hash() {
-        use crate::config::{BloomConfig as ConfigBloomConfig, SchemaConfig, SeriesTrackerConfig, StorageConfig};
+        use crate::config::{BloomConfig as ConfigBloomConfig, SeriesTrackerConfig, StorageConfig};
         let storage_config = StorageConfig {
             data_dir: "./test_data".to_string(),
             system_dir: "_system".to_string(),
-        };
-        let schema_config = SchemaConfig {
-            strategy: SchemaTableStrategy::ServiceAsSchema,
-            tag_keys: vec!["service".to_string()],
-            default_name: "default".to_string(),
-            prefix_numeric: true,
         };
         let tracker_config = SeriesTrackerConfig {
             track_only: false,
@@ -870,7 +842,7 @@ mod tests {
             },
             bloom_custom: vec![],
         };
-        let tracker = SeriesTracker::new(&storage_config, &schema_config, &tracker_config);
+        let tracker = SeriesTracker::new(&storage_config, &tracker_config);
 
         // Same tags in different order should produce same hash
         let mut tags1 = HashMap::new();
@@ -890,17 +862,11 @@ mod tests {
     }
 
     #[test]
-    fn test_tag_hash_excludes_service() {
-        use crate::config::{BloomConfig as ConfigBloomConfig, SchemaConfig, SeriesTrackerConfig, StorageConfig};
+    fn test_pmc_includes_all_tags() {
+        use crate::config::{BloomConfig as ConfigBloomConfig, SeriesTrackerConfig, StorageConfig};
         let storage_config = StorageConfig {
             data_dir: "./test_data".to_string(),
             system_dir: "_system".to_string(),
-        };
-        let schema_config = SchemaConfig {
-            strategy: SchemaTableStrategy::ServiceAsSchema,
-            tag_keys: vec!["service".to_string()],
-            default_name: "default".to_string(),
-            prefix_numeric: true,
         };
         let tracker_config = SeriesTrackerConfig {
             track_only: false,
@@ -915,9 +881,9 @@ mod tests {
             },
             bloom_custom: vec![],
         };
-        let tracker = SeriesTracker::new(&storage_config, &schema_config, &tracker_config);
+        let tracker = SeriesTracker::new(&storage_config, &tracker_config);
 
-        // Different service should produce same hash if other tags are same
+        // PMC includes ALL tags - different service should produce different hash
         let mut tags1 = HashMap::new();
         tags1.insert("host".to_string(), "server1".to_string());
         tags1.insert("service".to_string(), "api".to_string());
@@ -929,6 +895,6 @@ mod tests {
         let hash1 = tracker.calculate_pmc_hash(&tags1);
         let hash2 = tracker.calculate_pmc_hash(&tags2);
 
-        assert_eq!(hash1, hash2, "service tag should not affect hash");
+        assert_ne!(hash1, hash2, "PMC should include all tags - different service produces different hash");
     }
 }

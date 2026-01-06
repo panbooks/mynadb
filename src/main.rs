@@ -237,7 +237,6 @@ async fn main() {
     info!("Initializing series tracker");
     let series_tracker = Arc::new(SeriesTracker::new(
         &config.storage,
-        &config.schema,
         &config.series_tracker,
     ));
 
