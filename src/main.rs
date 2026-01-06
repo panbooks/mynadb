@@ -199,9 +199,8 @@ async fn main() {
         config.cache.max_size_mb,
         wal.as_ref().map(Arc::clone),
     );
-    cache
-        .clone()
-        .start_background_flush(config.cache.flush_interval_secs);
+    // NOTE: Background flush is started AFTER WAL recovery to prevent race condition
+    // where flush could delete WAL files that haven't been replayed yet
 
     info!("Initializing query engine");
     let query_engine = Arc::new(QueryEngine::new(&config.storage.data_dir));
@@ -333,7 +332,16 @@ async fn main() {
                 // Don't fail startup, but log the error
             }
         }
+    } else {
+        info!("WAL disabled, skipping recovery");
     }
+
+    // Start background flush AFTER WAL recovery completes
+    // This prevents race condition where flush deletes unreplayed WAL files during recovery
+    info!("Starting background cache flush task (interval: {}s)", config.cache.flush_interval_secs);
+    cache
+        .clone()
+        .start_background_flush(config.cache.flush_interval_secs);
 
     info!("Initializing retention manager");
     let retention_manager = Arc::new(RetentionManager::new(
