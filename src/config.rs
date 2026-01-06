@@ -364,10 +364,6 @@ fn default_system_dir() -> String {
     "_system".to_string()
 }
 
-fn default_series_stats_schema() -> String {
-    "pmc".to_string()
-}
-
 fn default_cache_flush_interval() -> u64 {
     30
 }
