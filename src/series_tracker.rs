@@ -25,61 +25,63 @@ pub struct SeriesRecord {
     pub date: i32, // Date32: days since Unix epoch
 }
 
-/// Type alias for pending writes buffer: (db, date) -> records
-type PendingWrites = Arc<RwLock<HashMap<(String, i32), HashSet<SeriesRecord>>>>;
+/// Type alias for pending writes buffer: (schema, db, date) -> records
+type PendingWrites = Arc<RwLock<HashMap<(String, String, i32), HashSet<SeriesRecord>>>>;
 
 /// Series tracker for monitoring metric cardinality
 /// Tracks unique series by service, metric, and tag combination hash
+/// Supports dual tracking: PMC (physical) and UMC (user view without system tags)
 pub struct SeriesTracker {
     data_dir: String,
     /// System catalog directory name (from config)
     system_dir: String,
-    /// Series stats schema name (from config)
-    series_stats_schema: String,
     /// Strategy manager for per-database deduplication
     strategy_manager: Arc<StrategyManager>,
-    /// Pending writes buffer per database and date partition: (db, date) -> records
+    /// Pending writes buffer per schema, database and date: (schema, db, date) -> records
     pending_writes: PendingWrites,
     /// Schema configuration for extracting service name
     schema_config: Arc<SchemaConfig>,
     /// Number of days to keep in cache
     cache_retention_days: u32,
+    /// System tags to exclude for UMC calculation (from config)
+    system_tags: Vec<String>,
 }
 
 impl SeriesTracker {
-    /// Get the series stats schema directory path ({system_dir}/{series_stats_schema}/)
-    fn get_stats_schema_dir(&self) -> PathBuf {
+    /// Get the series stats schema directory path ({system_dir}/{schema}/)
+    /// schema is "pmc" or "umc"
+    fn get_stats_schema_dir(&self, schema: &str) -> PathBuf {
         Path::new(&self.data_dir)
             .join(&self.system_dir)
-            .join(&self.series_stats_schema)
+            .join(schema)
     }
 
-    /// Get the table directory path for a database (_system/pmc/{db}/)
-    fn get_table_dir(&self, db: &str) -> PathBuf {
-        self.get_stats_schema_dir().join(db)
+    /// Get the table directory path for a schema and database (_system/{schema}/{db}/)
+    fn get_table_dir(&self, schema: &str, db: &str) -> PathBuf {
+        self.get_stats_schema_dir(schema).join(db)
     }
 
-    /// Get the partition directory path for a database and date
-    /// Format: _system/pmc/{db}/date=YYYY-MM-DD/
-    fn get_partition_dir(&self, db: &str, date: i32) -> PathBuf {
+    /// Get the partition directory path for a schema, database and date
+    /// Format: _system/{schema}/{db}/date=YYYY-MM-DD/
+    fn get_partition_dir(&self, schema: &str, db: &str, date: i32) -> PathBuf {
         let date_partition = format_date32_as_partition(date);
-        self.get_table_dir(db).join(date_partition)
+        self.get_table_dir(schema, db).join(date_partition)
     }
 
-    /// Get the parquet file path for a database table with date partition
-    /// Format: _system/pmc/{db}/date=YYYY-MM-DD/L0_{timestamp}.parquet
-    fn get_parquet_file_path(&self, db: &str, date: i32) -> PathBuf {
+    /// Get the parquet file path for a schema and database table with date partition
+    /// Format: _system/{schema}/{db}/date=YYYY-MM-DD/L0_{timestamp}.parquet
+    fn get_parquet_file_path(&self, schema: &str, db: &str, date: i32) -> PathBuf {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        self.get_partition_dir(db, date)
+        self.get_partition_dir(schema, db, date)
             .join(format!("L0_{}.parquet", timestamp))
     }
 
-    /// Get all parquet files for a database table (searches all date partitions)
-    fn get_all_parquet_files(&self, db: &str) -> Result<Vec<PathBuf>, String> {
-        let table_dir = self.get_table_dir(db);
+    /// Get all parquet files for a schema and database table (searches all date partitions)
+    fn get_all_parquet_files(&self, schema: &str, db: &str) -> Result<Vec<PathBuf>, String> {
+        let table_dir = self.get_table_dir(schema, db);
 
         if !table_dir.exists() {
             return Ok(Vec::new());
@@ -166,11 +168,11 @@ impl SeriesTracker {
         let tracker = SeriesTracker {
             data_dir: data_dir.to_string(),
             system_dir: system_dir.to_string(),
-            series_stats_schema: tracker_config.stats_schema.clone(),
             strategy_manager,
             pending_writes: Arc::new(RwLock::new(HashMap::new())),
             schema_config,
             cache_retention_days,
+            system_tags: tracker_config.system_tags.clone(),
         };
 
         // Clean up any leftover temp files from previous crashes
@@ -181,39 +183,42 @@ impl SeriesTracker {
 
     /// Clean up temporary files left from previous crashes
     fn cleanup_temp_files(&self) {
-        let stats_schema_dir = self.get_stats_schema_dir();
+        // Clean both PMC and UMC schemas
+        for schema in ["pmc", "umc"] {
+            let stats_schema_dir = self.get_stats_schema_dir(schema);
 
-        let Ok(table_dirs) = std::fs::read_dir(&stats_schema_dir) else {
-            return;
-        };
-
-        for table in table_dirs.flatten() {
-            let path = table.path();
-            if !path.is_dir() {
-                continue;
-            }
-
-            let Ok(files) = std::fs::read_dir(&path) else {
+            let Ok(table_dirs) = std::fs::read_dir(&stats_schema_dir) else {
                 continue;
             };
 
-            for file in files.flatten() {
-                let file_path = file.path();
-
-                if file_path.extension().and_then(|ext| ext.to_str()) != Some("tmp") {
+            for table in table_dirs.flatten() {
+                let path = table.path();
+                if !path.is_dir() {
                     continue;
                 }
 
-                match std::fs::remove_file(&file_path) {
-                    Ok(_) => {
-                        info!("Cleaned up leftover temp file: {}", file_path.display());
+                let Ok(files) = std::fs::read_dir(&path) else {
+                    continue;
+                };
+
+                for file in files.flatten() {
+                    let file_path = file.path();
+
+                    if file_path.extension().and_then(|ext| ext.to_str()) != Some("tmp") {
+                        continue;
                     }
-                    Err(e) => {
-                        warn!(
-                            "Failed to cleanup temp file '{}': {}",
-                            file_path.display(),
-                            e
-                        );
+
+                    match std::fs::remove_file(&file_path) {
+                        Ok(_) => {
+                            info!("Cleaned up leftover temp file: {}", file_path.display());
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to cleanup temp file '{}': {}",
+                                file_path.display(),
+                                e
+                            );
+                        }
                     }
                 }
             }
@@ -280,6 +285,7 @@ impl SeriesTracker {
 
     /// Track multiple points in batch (more efficient than individual track_point calls)
     /// This method minimizes lock contention by batching strategy lookups and pending writes operations
+    /// Tracks both PMC (physical metric count) and UMC (user metric count) independently
     pub async fn track_points(&self, db: &str, points: &[Point]) {
         if points.is_empty() {
             return;
@@ -300,20 +306,35 @@ impl SeriesTracker {
         // Process each date's points with strategy
         for (date, date_points) in points_by_date {
             let mut strategy_guard = strategy.write().await;
-            let mut new_records = Vec::new();
+            let mut pmc_new_records = Vec::new();
+            let mut umc_new_records = Vec::new();
 
-            // Check each point against the strategy
+            // Check each point against the strategy for both PMC and UMC
             for point in date_points {
-                let tag_hash = self.calculate_tag_hash(&point.tags);
-                let series_hash = Self::calculate_series_hash(&point.service, &point.measurement, tag_hash);
+                // Track PMC (Physical Metric Count) - includes all tags
+                let pmc_tag_hash = self.calculate_pmc_hash(&point.tags);
+                let pmc_series_hash = Self::calculate_series_hash(&point.service, &point.measurement, pmc_tag_hash);
 
-                // Check if already tracked for this date and database
-                if !strategy_guard.contains(db, date, series_hash) {
-                    strategy_guard.insert(db, date, series_hash);
-                    new_records.push(SeriesRecord {
+                if !strategy_guard.contains("pmc", db, date, pmc_series_hash) {
+                    strategy_guard.insert("pmc", db, date, pmc_series_hash);
+                    pmc_new_records.push(SeriesRecord {
                         service: point.service.clone(),
                         metric: point.measurement.clone(),
-                        hash: tag_hash,
+                        hash: pmc_tag_hash,
+                        date,
+                    });
+                }
+
+                // Track UMC (User Metric Count) - excludes system tags
+                let umc_tag_hash = self.calculate_umc_hash(&point.tags);
+                let umc_series_hash = Self::calculate_series_hash(&point.service, &point.measurement, umc_tag_hash);
+
+                if !strategy_guard.contains("umc", db, date, umc_series_hash) {
+                    strategy_guard.insert("umc", db, date, umc_series_hash);
+                    umc_new_records.push(SeriesRecord {
+                        service: point.service.clone(),
+                        metric: point.measurement.clone(),
+                        hash: umc_tag_hash,
                         date,
                     });
                 }
@@ -322,14 +343,23 @@ impl SeriesTracker {
             // Release strategy lock before acquiring pending writes lock
             drop(strategy_guard);
 
-            // Batch insert into pending writes
-            if !new_records.is_empty() {
-                let mut pending = self.pending_writes.write().await;
-                let key = (db.to_string(), date);
+            // Batch insert into pending writes (separate keys for PMC and UMC)
+            let mut pending = self.pending_writes.write().await;
+
+            if !pmc_new_records.is_empty() {
+                let key = ("pmc".to_string(), db.to_string(), date);
                 pending
                     .entry(key)
                     .or_insert_with(HashSet::new)
-                    .extend(new_records);
+                    .extend(pmc_new_records);
+            }
+
+            if !umc_new_records.is_empty() {
+                let key = ("umc".to_string(), db.to_string(), date);
+                pending
+                    .entry(key)
+                    .or_insert_with(HashSet::new)
+                    .extend(umc_new_records);
             }
         }
     }
@@ -342,17 +372,52 @@ impl SeriesTracker {
             .map(|s| s.as_str())
     }
 
-    /// Calculate hash of tags excluding MONITOR.service
-    fn calculate_tag_hash(&self, tags: &HashMap<String, String>) -> u64 {
+    /// Calculate PMC (Physical Metric Count) hash: excludes only service tag
+    /// This tracks ALL physical series including system tags
+    fn calculate_pmc_hash(&self, tags: &HashMap<String, String>) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
         let service_key = self.extract_service_key(tags);
 
-        // Filter out MONITOR.service and sort the rest
+        // Filter out service tag and sort the rest
         let mut filtered_tags: Vec<(&str, &str)> = tags
             .iter()
             .filter(|(key, _)| Some(key.as_str()) != service_key)
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        filtered_tags.sort();
+
+        // Create a stable hash from sorted tags
+        let mut hasher = DefaultHasher::new();
+        for (key, value) in filtered_tags {
+            key.hash(&mut hasher);
+            value.hash(&mut hasher);
+        }
+
+        hasher.finish()
+    }
+
+    /// Calculate UMC (User Metric Count) hash: excludes service tag AND system tags
+    /// This tracks user-visible series cardinality (without system-added tags)
+    fn calculate_umc_hash(&self, tags: &HashMap<String, String>) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let service_key = self.extract_service_key(tags);
+
+        // Filter out service tag AND system tags, then sort
+        let mut filtered_tags: Vec<(&str, &str)> = tags
+            .iter()
+            .filter(|(key, _)| {
+                // Exclude service tag
+                if Some(key.as_str()) == service_key {
+                    return false;
+                }
+                // Exclude system tags
+                !self.system_tags.contains(key)
+            })
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
 
@@ -382,7 +447,7 @@ impl SeriesTracker {
         );
     }
 
-    /// Flush all pending writes for all databases
+    /// Flush all pending writes for all databases (both PMC and UMC)
     pub async fn flush_all(&self) -> Result<usize, String> {
         let mut pending = self.pending_writes.write().await;
 
@@ -391,23 +456,24 @@ impl SeriesTracker {
         }
 
         let mut flushed_count = 0;
-        for ((db, date), records) in pending.drain() {
+        for ((schema, db, date), records) in pending.drain() {
             if !records.is_empty() {
                 let date_partition = format_date32_as_partition(date);
                 debug!(
-                    "Flushing {} series records for database '{}' partition '{}'",
+                    "Flushing {} series records for schema '{}', database '{}' partition '{}'",
                     records.len(),
+                    schema,
                     db,
                     date_partition
                 );
-                match self.flush_database_partition(&db, date, records).await {
+                match self.flush_database_partition(&schema, &db, date, records).await {
                     Ok(()) => {
                         flushed_count += 1;
                     }
                     Err(e) => {
                         error!(
-                            "Failed to flush database '{}' partition '{}': {}",
-                            db, date_partition, e
+                            "Failed to flush schema '{}', database '{}' partition '{}': {}",
+                            schema, db, date_partition, e
                         );
                     }
                 }
@@ -417,18 +483,19 @@ impl SeriesTracker {
         Ok(flushed_count)
     }
 
-    /// Flush pending writes for a specific database partition (append-only write to new parquet file)
+    /// Flush pending writes for a specific schema and database partition (append-only write to new parquet file)
     async fn flush_database_partition(
         &self,
+        schema: &str,
         db: &str,
         date: i32,
         new_records: HashSet<SeriesRecord>,
     ) -> Result<(), String> {
-        let partition_dir = self.get_partition_dir(db, date);
+        let partition_dir = self.get_partition_dir(schema, db, date);
         std::fs::create_dir_all(&partition_dir)
             .map_err(|e| format!("Failed to create partition directory: {}", e))?;
 
-        let file_path = self.get_parquet_file_path(db, date);
+        let file_path = self.get_parquet_file_path(schema, db, date);
 
         // Note: date is NOT in schema - it's a Hive partition column (date=YYYY-MM-DD in path)
         let schema = Arc::new(Schema::new(vec![
@@ -502,9 +569,9 @@ impl SeriesTracker {
         Ok(())
     }
 
-    /// Get series count statistics grouped by service
-    pub async fn get_series_stats(&self, db: &str) -> Result<HashMap<String, SeriesStats>, String> {
-        let parquet_files = self.get_all_parquet_files(db)?;
+    /// Get series count statistics grouped by service for a specific schema
+    pub async fn get_series_stats(&self, schema: &str, db: &str) -> Result<HashMap<String, SeriesStats>, String> {
+        let parquet_files = self.get_all_parquet_files(schema, db)?;
 
         if parquet_files.is_empty() {
             return Ok(HashMap::new());
@@ -618,8 +685,8 @@ impl SeriesTracker {
     }
 
     /// Load existing stats into cache on startup (only latest N days based on config)
-    pub async fn load_cache(&self, db: &str) -> Result<(), String> {
-        let parquet_files = self.get_all_parquet_files(db)?;
+    pub async fn load_cache(&self, schema: &str, db: &str) -> Result<(), String> {
+        let parquet_files = self.get_all_parquet_files(schema, db)?;
 
         if parquet_files.is_empty() {
             return Ok(());
@@ -723,8 +790,8 @@ impl SeriesTracker {
                     let series_hash = Self::calculate_series_hash(service, metric, tag_hash);
 
                     // Insert into strategy (strategy handles deduplication internally)
-                    if !strategy_guard.contains(db, date, series_hash) {
-                        strategy_guard.insert(db, date, series_hash);
+                    if !strategy_guard.contains(schema, db, date, series_hash) {
+                        strategy_guard.insert(schema, db, date, series_hash);
                         loaded_count += 1;
                         *loaded_by_date.entry(date).or_insert(0) += 1;
                     }
@@ -737,8 +804,9 @@ impl SeriesTracker {
 
         if loaded_count > 0 || skipped_count > 0 {
             info!(
-                "Loaded {} series into cache for database '{}' across {} day(s) (skipped {} old partition(s), keeping {} days)",
+                "Loaded {} series into cache for schema '{}', database '{}' across {} day(s) (skipped {} old partition(s), keeping {} days)",
                 loaded_count,
+                schema,
                 db,
                 loaded_by_date.len(),
                 skipped_count,
@@ -790,7 +858,7 @@ mod tests {
         let tracker_config = SeriesTrackerConfig {
             track_only: false,
             flush_interval_secs: 60,
-            stats_schema: "pmc".to_string(),
+            system_tags: vec![],
             cache_retention_days: 2,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
@@ -813,8 +881,8 @@ mod tests {
         tags2.insert("service".to_string(), "api".to_string());
         tags2.insert("host".to_string(), "server1".to_string());
 
-        let hash1 = tracker.calculate_tag_hash(&tags1);
-        let hash2 = tracker.calculate_tag_hash(&tags2);
+        let hash1 = tracker.calculate_pmc_hash(&tags1);
+        let hash2 = tracker.calculate_pmc_hash(&tags2);
 
         assert_eq!(hash1, hash2, "Same tags should produce same hash");
     }
@@ -831,7 +899,7 @@ mod tests {
         let tracker_config = SeriesTrackerConfig {
             track_only: false,
             flush_interval_secs: 60,
-            stats_schema: "pmc".to_string(),
+            system_tags: vec![],
             cache_retention_days: 2,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
@@ -852,8 +920,8 @@ mod tests {
         tags2.insert("host".to_string(), "server1".to_string());
         tags2.insert("service".to_string(), "web".to_string());
 
-        let hash1 = tracker.calculate_tag_hash(&tags1);
-        let hash2 = tracker.calculate_tag_hash(&tags2);
+        let hash1 = tracker.calculate_pmc_hash(&tags1);
+        let hash2 = tracker.calculate_pmc_hash(&tags2);
 
         assert_eq!(hash1, hash2, "service tag should not affect hash");
     }

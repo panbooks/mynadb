@@ -84,9 +84,18 @@ track_only = false
 # Background flush interval in seconds
 flush_interval_secs = 60
 
-# Series stats schema name
-# Series stats are stored in: {data_dir}/{system_dir}/{stats_schema}/{table}/
-stats_schema = "pmc"
+# System tags to exclude for UMC (User Metric Count) calculation
+# PMC (Physical Metric Count) includes all tags
+# UMC excludes service tags + these system tags for user-visible cardinality
+system_tags = [
+    "MONITOR.ip",
+    "MONITOR.endpoint",
+    "MONITOR.hostName",
+    "MONITOR.hostIP",
+    "MONITOR.set",
+    "MONITOR.dc",
+    "MONITOR.dr"
+]
 
 # Number of days to keep in cache (and load on startup)
 cache_retention_days = 2

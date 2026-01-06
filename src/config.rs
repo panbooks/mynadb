@@ -176,10 +176,12 @@ pub struct SeriesTrackerConfig {
     #[serde(default = "default_series_flush_interval")]
     pub flush_interval_secs: u64,
 
-    /// Series stats schema name
-    /// Series stats are stored in: {data_dir}/{system_dir}/{stats_schema}/{table}/
-    #[serde(default = "default_series_stats_dir")]
-    pub stats_schema: String,
+    /// System tags to exclude for UMC (user metric count) calculation
+    /// These tags are excluded when calculating UMC hash
+    /// PMC (physical metric count) includes all tags
+    /// Examples: ["MONITOR.ip", "MONITOR.hostName", "MONITOR.hostIP"]
+    #[serde(default)]
+    pub system_tags: Vec<String>,
 
     /// Number of days to keep in cache (and load on startup)
     #[serde(default = "default_series_cache_retention_days")]
@@ -430,10 +432,6 @@ fn default_series_flush_interval() -> u64 {
     60
 }
 
-fn default_series_stats_dir() -> String {
-    "pmc".to_string()
-}
-
 fn default_series_cache_retention_days() -> u32 {
     2
 }
@@ -592,7 +590,7 @@ impl Default for Config {
             series_tracker: SeriesTrackerConfig {
                 track_only: default_series_track_only(),
                 flush_interval_secs: default_series_flush_interval(),
-                stats_schema: default_series_stats_dir(),
+                system_tags: vec![],
                 cache_retention_days: default_series_cache_retention_days(),
                 default_strategy: default_dedup_strategy(),
                 bloom_databases: vec![],
