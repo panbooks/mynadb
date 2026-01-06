@@ -16,10 +16,6 @@ use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
 
-// System catalog/schema constants (catalog.schema.table format)
-const SYSTEM_CATALOG: &str = "_system";
-const SERIES_STATS_SCHEMA: &str = "pmc";
-
 /// Series record for batching
 #[derive(Clone, Debug, Hash, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SeriesRecord {
@@ -36,6 +32,10 @@ type PendingWrites = Arc<RwLock<HashMap<(String, i32), HashSet<SeriesRecord>>>>;
 /// Tracks unique series by service, metric, and tag combination hash
 pub struct SeriesTracker {
     data_dir: String,
+    /// System catalog directory name (from config)
+    system_dir: String,
+    /// Series stats schema name (from config)
+    series_stats_schema: String,
     /// Strategy manager for per-database deduplication
     strategy_manager: Arc<StrategyManager>,
     /// Pending writes buffer per database and date partition: (db, date) -> records
@@ -47,11 +47,11 @@ pub struct SeriesTracker {
 }
 
 impl SeriesTracker {
-    /// Get the series stats schema directory path (_system/pmc/)
+    /// Get the series stats schema directory path ({system_dir}/{series_stats_schema}/)
     fn get_stats_schema_dir(&self) -> PathBuf {
         Path::new(&self.data_dir)
-            .join(SYSTEM_CATALOG)
-            .join(SERIES_STATS_SCHEMA)
+            .join(&self.system_dir)
+            .join(&self.series_stats_schema)
     }
 
     /// Get the table directory path for a database (_system/pmc/{db}/)
@@ -127,6 +127,7 @@ impl SeriesTracker {
 impl SeriesTracker {
     pub fn new(
         data_dir: &str,
+        system_dir: &str,
         schema_config: Arc<SchemaConfig>,
         cache_retention_days: u32,
         tracker_config: &SeriesTrackerConfig,
@@ -164,6 +165,8 @@ impl SeriesTracker {
 
         let tracker = SeriesTracker {
             data_dir: data_dir.to_string(),
+            system_dir: system_dir.to_string(),
+            series_stats_schema: tracker_config.stats_schema.clone(),
             strategy_manager,
             pending_writes: Arc::new(RwLock::new(HashMap::new())),
             schema_config,
@@ -787,7 +790,7 @@ mod tests {
         let tracker_config = SeriesTrackerConfig {
             track_only: false,
             flush_interval_secs: 60,
-            stats_dir: "pmc".to_string(),
+            stats_schema: "pmc".to_string(),
             cache_retention_days: 2,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
@@ -797,7 +800,7 @@ mod tests {
             },
             bloom_custom: vec![],
         };
-        let tracker = SeriesTracker::new("./test_data", schema_config, 2, &tracker_config);
+        let tracker = SeriesTracker::new("./test_data", "_system", schema_config, 2, &tracker_config);
 
         // Same tags in different order should produce same hash
         let mut tags1 = HashMap::new();
@@ -828,7 +831,7 @@ mod tests {
         let tracker_config = SeriesTrackerConfig {
             track_only: false,
             flush_interval_secs: 60,
-            stats_dir: "pmc".to_string(),
+            stats_schema: "pmc".to_string(),
             cache_retention_days: 2,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
@@ -838,7 +841,7 @@ mod tests {
             },
             bloom_custom: vec![],
         };
-        let tracker = SeriesTracker::new("./test_data", schema_config, 2, &tracker_config);
+        let tracker = SeriesTracker::new("./test_data", "_system", schema_config, 2, &tracker_config);
 
         // Different service should produce same hash if other tags are same
         let mut tags1 = HashMap::new();

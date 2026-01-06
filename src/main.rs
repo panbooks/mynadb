@@ -236,18 +236,19 @@ async fn main() {
     info!("Initializing series tracker");
     let series_tracker = Arc::new(SeriesTracker::new(
         &config.storage.data_dir,
+        &config.storage.system_dir,
         Arc::new(config.schema.clone()),
         config.series_tracker.cache_retention_days,
         &config.series_tracker,
     ));
 
     // Load existing series cache from disk (latest N days only)
-    // Series stats are stored in: _system/pmc/{table}/date=YYYY-MM-DD/*.parquet
-    // We need to list all tables under _system/pmc/ and load each one
+    // Series stats are stored in: {system_dir}/{stats_schema}/{table}/date=YYYY-MM-DD/*.parquet
+    // We need to list all tables under {system_dir}/{stats_schema}/ and load each one
     info!("Loading series cache from disk...");
     let stats_schema_dir = std::path::Path::new(&config.storage.data_dir)
-        .join(&config.storage.system_dir)  // "_system"
-        .join("pmc");  // series stats schema
+        .join(&config.storage.system_dir)
+        .join(&config.series_tracker.stats_schema);
 
     if stats_schema_dir.exists() {
         match std::fs::read_dir(&stats_schema_dir) {
