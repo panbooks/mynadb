@@ -244,38 +244,41 @@ async fn main() {
     ));
 
     // Load existing series cache from disk (latest N days only)
-    // Series stats are stored in: {system_dir}/{stats_schema}/{table}/date=YYYY-MM-DD/*.parquet
-    // We need to list all tables under {system_dir}/{stats_schema}/ and load each one
-    info!("Loading series cache from disk...");
-    let stats_schema_dir = std::path::Path::new(&config.storage.data_dir)
-        .join(&config.storage.system_dir)
-        .join(&config.series_tracker.stats_schema);
+    // Series stats are stored in: {system_dir}/{schema}/{table}/date=YYYY-MM-DD/*.parquet
+    // We load both PMC (physical metric count) and UMC (user metric count) schemas
+    info!("Loading series cache from disk (PMC and UMC)...");
 
-    if stats_schema_dir.exists() {
-        match std::fs::read_dir(&stats_schema_dir) {
-            Ok(entries) => {
-                for entry in entries.flatten() {
-                    if entry.path().is_dir() {
-                        if let Some(table_name) = entry.file_name().to_str() {
-                            debug!("Loading series cache for table '{}'", table_name);
-                            match series_tracker.load_cache(table_name).await {
-                                Ok(()) => {
-                                    debug!("Series cache loaded for table '{}'", table_name);
-                                }
-                                Err(e) => {
-                                    warn!("Failed to load series cache for table '{}': {}", table_name, e);
+    for schema in ["pmc", "umc"] {
+        let stats_schema_dir = std::path::Path::new(&config.storage.data_dir)
+            .join(&config.storage.system_dir)
+            .join(schema);
+
+        if stats_schema_dir.exists() {
+            match std::fs::read_dir(&stats_schema_dir) {
+                Ok(entries) => {
+                    for entry in entries.flatten() {
+                        if entry.path().is_dir() {
+                            if let Some(table_name) = entry.file_name().to_str() {
+                                debug!("Loading series cache for schema '{}', table '{}'", schema, table_name);
+                                match series_tracker.load_cache(schema, table_name).await {
+                                    Ok(()) => {
+                                        debug!("Series cache loaded for schema '{}', table '{}'", schema, table_name);
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to load series cache for schema '{}', table '{}': {}", schema, table_name, e);
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                Err(e) => {
+                    warn!("Failed to read stats schema directory for '{}': {}", schema, e);
+                }
             }
-            Err(e) => {
-                warn!("Failed to read stats schema directory {}: {}", stats_schema_dir.display(), e);
-            }
+        } else {
+            debug!("Stats schema directory does not exist yet for '{}': {}", schema, stats_schema_dir.display());
         }
-    } else {
-        debug!("Stats schema directory does not exist yet: {}", stats_schema_dir.display());
     }
 
     Arc::clone(&series_tracker).start_background_flush(config.series_tracker.flush_interval_secs);
@@ -1303,7 +1306,9 @@ async fn series_stats_handler(
 ) -> impl IntoResponse {
     debug!("Series Stats Request: db={}", db);
 
-    match state.series_tracker.get_series_stats(&db).await {
+    // Default to PMC (physical metric count) for backward compatibility
+    // TODO: Add query parameter to select PMC or UMC
+    match state.series_tracker.get_series_stats("pmc", &db).await {
         Ok(stats) => {
             if stats.is_empty() {
                 return (

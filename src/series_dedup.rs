@@ -22,13 +22,13 @@ impl Default for BloomConfig {
 }
 
 /// Strategy for deduplicating series hashes
-/// Each strategy tracks which series have been seen per (database, date) pair
+/// Each strategy tracks which series have been seen per (schema, database, date) tuple
 pub trait DeduplicationStrategy: Send + Sync {
-    /// Check if series hash exists for given database and date
-    fn contains(&self, db: &str, date: i32, series_hash: u64) -> bool;
+    /// Check if series hash exists for given schema, database and date
+    fn contains(&self, schema: &str, db: &str, date: i32, series_hash: u64) -> bool;
 
-    /// Insert series hash for given database and date
-    fn insert(&mut self, db: &str, date: i32, series_hash: u64);
+    /// Insert series hash for given schema, database and date
+    fn insert(&mut self, schema: &str, db: &str, date: i32, series_hash: u64);
 
     /// Clear data before given date (for cache retention)
     fn clear_before_date(&mut self, cutoff_date: i32);
@@ -55,8 +55,8 @@ impl Clone for Box<dyn DeduplicationStrategy> {
 /// Memory: ~24 bytes per series
 #[derive(Clone)]
 pub struct HashSetStrategy {
-    /// Map: (date, db) -> HashSet<series_hash>
-    cache: HashMap<(i32, String), HashSet<u64>>,
+    /// Map: (schema, date, db) -> HashSet<series_hash>
+    cache: HashMap<(String, i32, String), HashSet<u64>>,
 }
 
 impl HashSetStrategy {
@@ -68,22 +68,22 @@ impl HashSetStrategy {
 }
 
 impl DeduplicationStrategy for HashSetStrategy {
-    fn contains(&self, db: &str, date: i32, series_hash: u64) -> bool {
+    fn contains(&self, schema: &str, db: &str, date: i32, series_hash: u64) -> bool {
         self.cache
-            .get(&(date, db.to_string()))
+            .get(&(schema.to_string(), date, db.to_string()))
             .map(|set| set.contains(&series_hash))
             .unwrap_or(false)
     }
 
-    fn insert(&mut self, db: &str, date: i32, series_hash: u64) {
+    fn insert(&mut self, schema: &str, db: &str, date: i32, series_hash: u64) {
         self.cache
-            .entry((date, db.to_string()))
+            .entry((schema.to_string(), date, db.to_string()))
             .or_insert_with(HashSet::new)
             .insert(series_hash);
     }
 
     fn clear_before_date(&mut self, cutoff_date: i32) {
-        self.cache.retain(|(date, _), _| *date >= cutoff_date);
+        self.cache.retain(|(_, date, _), _| *date >= cutoff_date);
     }
 
     fn memory_bytes(&self) -> usize {
@@ -110,8 +110,8 @@ impl DeduplicationStrategy for HashSetStrategy {
 /// Trade-off: ~1% false positive rate (might skip ~1% of NEW series)
 #[derive(Clone)]
 pub struct BloomFilterStrategy {
-    /// Map: (date, db) -> Bloom<u64>
-    filters: HashMap<(i32, String), Bloom<u64>>,
+    /// Map: (schema, date, db) -> Bloom<u64>
+    filters: HashMap<(String, i32, String), Bloom<u64>>,
     expected_items: usize,
     false_positive_rate: f64,
 }
@@ -125,9 +125,9 @@ impl BloomFilterStrategy {
         }
     }
 
-    fn get_or_create_filter(&mut self, date: i32, db: &str) -> &mut Bloom<u64> {
+    fn get_or_create_filter(&mut self, schema: &str, date: i32, db: &str) -> &mut Bloom<u64> {
         self.filters
-            .entry((date, db.to_string()))
+            .entry((schema.to_string(), date, db.to_string()))
             .or_insert_with(|| {
                 Bloom::new_for_fp_rate(self.expected_items, self.false_positive_rate)
             })
@@ -135,20 +135,20 @@ impl BloomFilterStrategy {
 }
 
 impl DeduplicationStrategy for BloomFilterStrategy {
-    fn contains(&self, db: &str, date: i32, series_hash: u64) -> bool {
+    fn contains(&self, schema: &str, db: &str, date: i32, series_hash: u64) -> bool {
         self.filters
-            .get(&(date, db.to_string()))
+            .get(&(schema.to_string(), date, db.to_string()))
             .map(|bloom| bloom.check(&series_hash))
             .unwrap_or(false)
     }
 
-    fn insert(&mut self, db: &str, date: i32, series_hash: u64) {
-        let bloom = self.get_or_create_filter(date, db);
+    fn insert(&mut self, schema: &str, db: &str, date: i32, series_hash: u64) {
+        let bloom = self.get_or_create_filter(schema, date, db);
         bloom.set(&series_hash);
     }
 
     fn clear_before_date(&mut self, cutoff_date: i32) {
-        self.filters.retain(|(date, _), _| *date >= cutoff_date);
+        self.filters.retain(|(_, date, _), _| *date >= cutoff_date);
     }
 
     fn memory_bytes(&self) -> usize {
@@ -336,20 +336,23 @@ mod tests {
         let mut strategy = HashSetStrategy::new();
 
         // Insert some hashes
-        strategy.insert("db1", 100, 12345);
-        strategy.insert("db1", 100, 67890);
-        strategy.insert("db2", 100, 12345);
+        strategy.insert("pmc", "db1", 100, 12345);
+        strategy.insert("pmc", "db1", 100, 67890);
+        strategy.insert("umc", "db2", 100, 12345);
 
         // Check contains
-        assert!(strategy.contains("db1", 100, 12345));
-        assert!(strategy.contains("db1", 100, 67890));
-        assert!(strategy.contains("db2", 100, 12345));
-        assert!(!strategy.contains("db1", 100, 99999));
-        assert!(!strategy.contains("db1", 101, 12345));
+        assert!(strategy.contains("pmc", "db1", 100, 12345));
+        assert!(strategy.contains("pmc", "db1", 100, 67890));
+        assert!(strategy.contains("umc", "db2", 100, 12345));
+        assert!(!strategy.contains("pmc", "db1", 100, 99999));
+        assert!(!strategy.contains("pmc", "db1", 101, 12345));
+
+        // Different schema should not match
+        assert!(!strategy.contains("umc", "db1", 100, 12345));
 
         // Clear old data
         strategy.clear_before_date(101);
-        assert!(!strategy.contains("db1", 100, 12345));
+        assert!(!strategy.contains("pmc", "db1", 100, 12345));
     }
 
     #[test]
@@ -357,12 +360,12 @@ mod tests {
         let mut strategy = BloomFilterStrategy::new(1000, 0.01);
 
         // Insert some hashes
-        strategy.insert("db1", 100, 12345);
-        strategy.insert("db1", 100, 67890);
+        strategy.insert("pmc", "db1", 100, 12345);
+        strategy.insert("pmc", "db1", 100, 67890);
 
         // Check contains (should be true for inserted items)
-        assert!(strategy.contains("db1", 100, 12345));
-        assert!(strategy.contains("db1", 100, 67890));
+        assert!(strategy.contains("pmc", "db1", 100, 12345));
+        assert!(strategy.contains("pmc", "db1", 100, 67890));
 
         // May have false positives, but no false negatives
         // So we can't reliably test for non-existence
