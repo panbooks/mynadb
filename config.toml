@@ -11,7 +11,7 @@ flight_port = 7001
 # Data directory path (use absolute path in production)
 data_dir = "/data0/stats/data"
 
-# System directory name for metadata
+# System directory name (for metadata like series stats, retention exclusions)
 system_dir = "_system"
 
 [schema]
@@ -90,8 +90,9 @@ track_only = false
 # Background flush interval in seconds
 flush_interval_secs = 60
 
-# Series stats directory name
-stats_dir = "pmc"
+# Series stats schema name
+# Series stats are stored in: {data_dir}/{system_dir}/{stats_schema}/{table}/
+stats_schema = "pmc"
 
 # Number of days to keep in cache (and load on startup)
 cache_retention_days = 2
@@ -165,7 +166,7 @@ enabled = true
 sync_on_write = true
 
 # Rotate WAL file when it exceeds this size (MB)
-rotate_size_mb = 64
+rotate_size_mb = 128
 
 # Background cleanup interval in seconds
 cleanup_interval_secs = 3600  # 1 hour

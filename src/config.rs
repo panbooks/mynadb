@@ -56,7 +56,7 @@ pub struct StorageConfig {
     #[serde(default = "default_data_dir")]
     pub data_dir: String,
 
-    /// System directory name (for metadata)
+    /// System directory name (for metadata like series stats, retention exclusions)
     #[serde(default = "default_system_dir")]
     pub system_dir: String,
 }
@@ -175,9 +175,10 @@ pub struct SeriesTrackerConfig {
     #[serde(default = "default_series_flush_interval")]
     pub flush_interval_secs: u64,
 
-    /// Series stats directory name
+    /// Series stats schema name
+    /// Series stats are stored in: {data_dir}/{system_dir}/{stats_schema}/{table}/
     #[serde(default = "default_series_stats_dir")]
-    pub stats_dir: String,
+    pub stats_schema: String,
 
     /// Number of days to keep in cache (and load on startup)
     #[serde(default = "default_series_cache_retention_days")]
@@ -338,6 +339,10 @@ fn default_data_dir() -> String {
 
 fn default_system_dir() -> String {
     "_system".to_string()
+}
+
+fn default_series_stats_schema() -> String {
+    "pmc".to_string()
 }
 
 fn default_cache_flush_interval() -> u64 {
@@ -547,7 +552,7 @@ impl Default for Config {
             series_tracker: SeriesTrackerConfig {
                 track_only: default_series_track_only(),
                 flush_interval_secs: default_series_flush_interval(),
-                stats_dir: default_series_stats_dir(),
+                stats_schema: default_series_stats_dir(),
                 cache_retention_days: default_series_cache_retention_days(),
                 default_strategy: default_dedup_strategy(),
                 bloom_databases: vec![],
