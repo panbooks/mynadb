@@ -266,6 +266,8 @@ async fn main() {
     // WAL Recovery: Now that cache and series_tracker are initialized, replay unflushed writes
     if let Some(ref wal_arc) = wal {
         info!("Starting WAL recovery - replaying unflushed writes...");
+        welcome!("");
+        welcome!("🔄 Replaying WAL files...");
 
         // Prepare references for recovery closure
         let cache_for_recovery = cache.clone();
@@ -305,12 +307,15 @@ async fn main() {
             Ok(count) => {
                 if count > 0 {
                     info!("WAL recovery: replayed {} data write entries", count);
+                    welcome!("   Replayed {} data entries", count);
 
                     // Flush recovered data to Parquet immediately to ensure durability
                     info!("Flushing recovered data to Parquet for durability...");
+                    welcome!("   Flushing recovered data to Parquet...");
                     match cache.flush().await {
                         Ok(files) => {
                             info!("Recovery flush complete: {} file(s) written", files);
+                            welcome!("   ✅ Recovery complete: {} Parquet file(s) written", files);
 
                             // Now that data is safe in Parquet, clean up old replayed WAL files
                             if let Err(e) = wal_arc.cleanup_old_data_wal_files().await {
@@ -320,20 +325,25 @@ async fn main() {
                         }
                         Err(e) => {
                             error!("Recovery flush failed: {}", e);
+                            welcome!("   ⚠️  Recovery flush failed: {}", e);
                             // Don't fail startup, but old WAL files will remain until next flush
                         }
                     }
                 } else {
                     info!("WAL recovery: no data writes to replay");
+                    welcome!("   ✅ No WAL entries to replay");
                 }
             }
             Err(e) => {
                 error!("WAL recovery failed: {}", e);
+                welcome!("   ⚠️  WAL recovery failed: {}", e);
                 // Don't fail startup, but log the error
             }
         }
     } else {
         info!("WAL disabled, skipping recovery");
+        welcome!("");
+        welcome!("ℹ️  WAL disabled, skipping recovery");
     }
 
     // Start background flush AFTER WAL recovery completes
@@ -494,6 +504,7 @@ async fn main() {
 
     let flight_server = tokio::spawn(async move {
         info!("Arrow Flight server starting on {}", flight_addr);
+        welcome!("✅ Arrow Flight server started successfully!");
         Server::builder()
             .add_service(flight_service.into_server())
             .serve(flight_addr)
@@ -511,6 +522,7 @@ async fn main() {
         let mysql_addr = config.mysql_addr();
         Some(tokio::task::spawn_blocking(move || {
             info!("MySQL server starting on {}", mysql_addr);
+            welcome!("✅ MySQL server started successfully!");
             if let Err(e) = mysql_service.run(&mysql_addr) {
                 error!("MySQL server error: {}", e);
             }
@@ -523,7 +535,7 @@ async fn main() {
     let http_addr_display = http_addr.clone();
     let http_server = tokio::spawn(async move {
         info!("HTTP server starting on {}", http_addr_display);
-        welcome!("✅ Server started successfully!");
+        welcome!("✅ HTTP server started successfully!");
         welcome!("═══════════════════════════════════════════════════════");
         axum::serve(http_listener, app).await.unwrap();
     });
