@@ -212,6 +212,8 @@ pub struct Wal {
     rotate_size_bytes: u64,
     /// Sequence counter to ensure unique filenames even within the same millisecond
     sequence: AtomicU64,
+    /// Recovery mode flag - prevents WAL deletion during startup recovery
+    recovery_mode: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Wal {
@@ -248,6 +250,7 @@ impl Wal {
             series_writer,
             rotate_size_bytes,
             sequence,
+            recovery_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -266,6 +269,21 @@ impl Wal {
 
     fn create_wal_file(&self, prefix: &str) -> Result<PathBuf, String> {
         Self::create_wal_file_with_seq(&self.wal_dir, prefix, &self.sequence)
+    }
+
+    /// Set recovery mode (true during WAL replay at startup)
+    pub fn set_recovery_mode(&self, enabled: bool) {
+        self.recovery_mode.store(enabled, std::sync::atomic::Ordering::Relaxed);
+        if enabled {
+            info!("WAL recovery mode: ENABLED (WAL files will not be deleted during recovery)");
+        } else {
+            info!("WAL recovery mode: DISABLED (normal operation)");
+        }
+    }
+
+    /// Check if in recovery mode
+    pub fn is_recovery_mode(&self) -> bool {
+        self.recovery_mode.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Log a data write operation
@@ -329,10 +347,7 @@ impl Wal {
     ///
     /// IMPORTANT: This method deletes ALL old data WAL files, not just the one being rotated.
     /// This handles high write throughput where multiple WAL files accumulate between flushes.
-    /// Safe because:
-    /// 1. Called only after successful cache flush to Parquet
-    /// 2. Background flush starts after WAL recovery completes (no race condition)
-    /// 3. All data in old WAL files is now durable in Parquet
+    /// During recovery mode, rotation happens but deletion is skipped.
     pub async fn rotate_and_delete_old_wal(&self) -> Result<(), String> {
         let new_file = self.create_wal_file("data")?;
 
@@ -350,6 +365,12 @@ impl Wal {
             // Create new writer
             *writer = WalWriter::new(new_file, writer.sync_on_write)
                 .map_err(|e| format!("Failed to create new WAL writer: {}", e))?;
+        }
+
+        // Skip deletion if in recovery mode (WAL files needed for potential re-replay)
+        if self.is_recovery_mode() {
+            debug!("Recovery mode active: skipping WAL file deletion after flush");
+            return Ok(());
         }
 
         // Now delete ALL old data WAL files (not just the one we rotated)

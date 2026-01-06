@@ -199,8 +199,12 @@ async fn main() {
         config.cache.max_size_mb,
         wal.as_ref().map(Arc::clone),
     );
-    // NOTE: Background flush is started AFTER WAL recovery to prevent race condition
-    // where flush could delete WAL files that haven't been replayed yet
+
+    // Start background flush early so cache threshold notifications work during recovery
+    // Recovery mode flag prevents premature WAL deletion during replay
+    cache
+        .clone()
+        .start_background_flush(config.cache.flush_interval_secs);
 
     info!("Initializing query engine");
     let query_engine = Arc::new(QueryEngine::new(&config.storage.data_dir));
@@ -269,6 +273,10 @@ async fn main() {
         welcome!("");
         welcome!("🔄 Replaying WAL files...");
 
+        // Enable recovery mode to prevent WAL deletion during replay
+        // Background flush task is already running and will handle cache threshold automatically
+        wal_arc.set_recovery_mode(true);
+
         // Prepare references for recovery closure
         let cache_for_recovery = cache.clone();
         let series_tracker_for_recovery = Arc::clone(&series_tracker);
@@ -317,7 +325,8 @@ async fn main() {
                             info!("Recovery flush complete: {} file(s) written", files);
                             welcome!("   ✅ Recovery complete: {} Parquet file(s) written", files);
 
-                            // Now that data is safe in Parquet, clean up old replayed WAL files
+                            // Disable recovery mode and clean up old replayed WAL files
+                            wal_arc.set_recovery_mode(false);
                             if let Err(e) = wal_arc.cleanup_old_data_wal_files().await {
                                 warn!("Failed to cleanup old WAL files after recovery: {}", e);
                                 // Don't fail startup, cleanup will happen on next cycle
@@ -326,17 +335,23 @@ async fn main() {
                         Err(e) => {
                             error!("Recovery flush failed: {}", e);
                             welcome!("   ⚠️  Recovery flush failed: {}", e);
+                            // Disable recovery mode even on flush failure
+                            wal_arc.set_recovery_mode(false);
                             // Don't fail startup, but old WAL files will remain until next flush
                         }
                     }
                 } else {
                     info!("WAL recovery: no data writes to replay");
                     welcome!("   ✅ No WAL entries to replay");
+                    // Disable recovery mode
+                    wal_arc.set_recovery_mode(false);
                 }
             }
             Err(e) => {
                 error!("WAL recovery failed: {}", e);
                 welcome!("   ⚠️  WAL recovery failed: {}", e);
+                // Disable recovery mode even on error
+                wal_arc.set_recovery_mode(false);
                 // Don't fail startup, but log the error
             }
         }
@@ -345,13 +360,6 @@ async fn main() {
         welcome!("");
         welcome!("ℹ️  WAL disabled, skipping recovery");
     }
-
-    // Start background flush AFTER WAL recovery completes
-    // This prevents race condition where flush deletes unreplayed WAL files during recovery
-    info!("Starting background cache flush task (interval: {}s)", config.cache.flush_interval_secs);
-    cache
-        .clone()
-        .start_background_flush(config.cache.flush_interval_secs);
 
     info!("Initializing retention manager");
     let retention_manager = Arc::new(RetentionManager::new(
