@@ -242,27 +242,38 @@ async fn main() {
     ));
 
     // Load existing series cache from disk (latest N days only)
+    // Series stats are stored in: _system/pmc/{table}/date=YYYY-MM-DD/*.parquet
+    // We need to list all tables under _system/pmc/ and load each one
     info!("Loading series cache from disk...");
-    match db_manager.list_databases() {
-        Ok(databases) => {
-            for db in databases {
-                // only load _system directory
-                if db != config.storage.system_dir {
-                    continue;
-                }
-                match series_tracker.load_cache(&db).await {
-                    Ok(()) => {
-                        debug!("Series cache loaded for database '{}'", db);
-                    }
-                    Err(e) => {
-                        warn!("Failed to load series cache for database '{}': {}", db, e);
+    let stats_schema_dir = std::path::Path::new(&config.storage.data_dir)
+        .join(&config.storage.system_dir)  // "_system"
+        .join("pmc");  // series stats schema
+
+    if stats_schema_dir.exists() {
+        match std::fs::read_dir(&stats_schema_dir) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    if entry.path().is_dir() {
+                        if let Some(table_name) = entry.file_name().to_str() {
+                            debug!("Loading series cache for table '{}'", table_name);
+                            match series_tracker.load_cache(table_name).await {
+                                Ok(()) => {
+                                    debug!("Series cache loaded for table '{}'", table_name);
+                                }
+                                Err(e) => {
+                                    warn!("Failed to load series cache for table '{}': {}", table_name, e);
+                                }
+                            }
+                        }
                     }
                 }
             }
+            Err(e) => {
+                warn!("Failed to read stats schema directory {}: {}", stats_schema_dir.display(), e);
+            }
         }
-        Err(e) => {
-            warn!("Failed to list databases for cache loading: {}", e);
-        }
+    } else {
+        debug!("Stats schema directory does not exist yet: {}", stats_schema_dir.display());
     }
 
     Arc::clone(&series_tracker).start_background_flush(config.series_tracker.flush_interval_secs);
