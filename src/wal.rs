@@ -312,36 +312,6 @@ impl Wal {
         Ok(())
     }
 
-    /// Log series tracking operation
-    pub async fn log_series_track(&self, db: &str, records: &[SeriesRecord]) -> Result<(), String> {
-        // Serialize records using bincode
-        let payload = bincode::serialize(records)
-            .map_err(|e| format!("Failed to serialize series records: {}", e))?;
-
-        let entry = WalEntry {
-            timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos() as u64,
-            entry_type: EntryType::SeriesTrack,
-            db_name: db.to_string(),
-            payload,
-        };
-
-        let mut writer = self.series_writer.lock().await;
-        writer
-            .append(&entry)
-            .map_err(|e| format!("Failed to write to WAL: {}", e))?;
-
-        // Check if rotation is needed
-        if writer.size() >= self.rotate_size_bytes {
-            drop(writer); // Release lock before rotating
-            self.rotate_series_wal().await?;
-        }
-
-        Ok(())
-    }
-
     /// Rotate data WAL file and delete all old ones (post-flush cleanup)
     /// This ensures only unflushed data remains in WAL directory
     ///

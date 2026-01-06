@@ -1,4 +1,4 @@
-use crate::config::{SchemaConfig, SeriesTrackerConfig, StorageConfig};
+use crate::config::{SeriesTrackerConfig, StorageConfig};
 use crate::line_protocol::{format_date32_as_partition, Point};
 use crate::series_dedup::{BloomConfig, StrategyManager};
 use arrow::array::UInt64Array;
@@ -15,6 +15,12 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
+
+/// PMC schema name: Physical Metric Count (includes all tags)
+pub const SCHEMA_PMC: &str = "pmc";
+
+/// UMC schema name: User Metric Count (excludes system tags)
+pub const SCHEMA_UMC: &str = "umc";
 
 /// Series record for batching
 #[derive(Clone, Debug, Hash, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -47,7 +53,7 @@ pub struct SeriesTracker {
 
 impl SeriesTracker {
     /// Get the series stats schema directory path ({system_dir}/{schema}/)
-    /// schema is "pmc" or "umc"
+    /// schema is SCHEMA_PMC or SCHEMA_UMC
     fn get_stats_schema_dir(&self, schema: &str) -> PathBuf {
         Path::new(&self.data_dir)
             .join(&self.system_dir)
@@ -178,7 +184,7 @@ impl SeriesTracker {
     /// Clean up temporary files left from previous crashes
     fn cleanup_temp_files(&self) {
         // Clean both PMC and UMC schemas
-        for schema in ["pmc", "umc"] {
+        for schema in [SCHEMA_PMC, SCHEMA_UMC] {
             let stats_schema_dir = self.get_stats_schema_dir(schema);
 
             let Ok(table_dirs) = std::fs::read_dir(&stats_schema_dir) else {
@@ -309,8 +315,8 @@ impl SeriesTracker {
                 let pmc_tag_hash = self.calculate_pmc_hash(&point.tags);
                 let pmc_series_hash = Self::calculate_series_hash(&point.service, &point.measurement, pmc_tag_hash);
 
-                if !strategy_guard.contains("pmc", db, date, pmc_series_hash) {
-                    strategy_guard.insert("pmc", db, date, pmc_series_hash);
+                if !strategy_guard.contains(SCHEMA_PMC, db, date, pmc_series_hash) {
+                    strategy_guard.insert(SCHEMA_PMC, db, date, pmc_series_hash);
                     pmc_new_records.push(SeriesRecord {
                         service: point.service.clone(),
                         metric: point.measurement.clone(),
@@ -323,8 +329,8 @@ impl SeriesTracker {
                 let umc_tag_hash = self.calculate_umc_hash(&point.tags);
                 let umc_series_hash = Self::calculate_series_hash(&point.service, &point.measurement, umc_tag_hash);
 
-                if !strategy_guard.contains("umc", db, date, umc_series_hash) {
-                    strategy_guard.insert("umc", db, date, umc_series_hash);
+                if !strategy_guard.contains(SCHEMA_UMC, db, date, umc_series_hash) {
+                    strategy_guard.insert(SCHEMA_UMC, db, date, umc_series_hash);
                     umc_new_records.push(SeriesRecord {
                         service: point.service.clone(),
                         metric: point.measurement.clone(),
@@ -341,7 +347,7 @@ impl SeriesTracker {
             let mut pending = self.pending_writes.write().await;
 
             if !pmc_new_records.is_empty() {
-                let key = ("pmc".to_string(), db.to_string(), date);
+                let key = (SCHEMA_PMC.to_string(), db.to_string(), date);
                 pending
                     .entry(key)
                     .or_insert_with(HashSet::new)
@@ -349,7 +355,7 @@ impl SeriesTracker {
             }
 
             if !umc_new_records.is_empty() {
-                let key = ("umc".to_string(), db.to_string(), date);
+                let key = (SCHEMA_UMC.to_string(), db.to_string(), date);
                 pending
                     .entry(key)
                     .or_insert_with(HashSet::new)

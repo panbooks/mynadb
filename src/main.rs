@@ -33,7 +33,7 @@ use line_protocol::parse_multiple_lines;
 use query_engine::QueryEngine;
 use retention_manager::RetentionManager;
 use serde::{Deserialize, Serialize};
-use series_tracker::SeriesTracker;
+use series_tracker::{SeriesTracker, SCHEMA_PMC, SCHEMA_UMC};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::transport::Server;
@@ -245,7 +245,7 @@ async fn main() {
     // We load both PMC (physical metric count) and UMC (user metric count) schemas
     info!("Loading series cache from disk (PMC and UMC)...");
 
-    for schema in ["pmc", "umc"] {
+    for schema in [SCHEMA_PMC, SCHEMA_UMC] {
         let stats_schema_dir = std::path::Path::new(&config.storage.data_dir)
             .join(&config.storage.system_dir)
             .join(schema);
@@ -1305,7 +1305,7 @@ async fn series_stats_handler(
 
     // Default to PMC (physical metric count) for backward compatibility
     // TODO: Add query parameter to select PMC or UMC
-    match state.series_tracker.get_series_stats("pmc", &db).await {
+    match state.series_tracker.get_series_stats(SCHEMA_PMC, &db).await {
         Ok(stats) => {
             if stats.is_empty() {
                 return (
