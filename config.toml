@@ -58,16 +58,10 @@ interval_secs = 70
 
 # Rate limiting settings (prevents I/O saturation during compaction)
 
-# Maximum concurrent compaction operations (0 = unlimited, default: 4)
+# Maximum concurrent compaction operations (0 = unlimited, default: 8)
 # Limits number of partitions that can be compacted in parallel
 # Lower values reduce resource usage but slow down compaction
-max_concurrent_compactions = 4
-
-# Maximum memory budget for compaction in MB (DEPRECATED - no longer used)
-# Memory usage is now controlled solely by max_concurrent_compactions
-# Each concurrent compaction uses memory proportional to the data being processed
-# Adjust max_concurrent_compactions based on available RAM
-max_memory_mb = 2048
+max_concurrent_compactions = 8
 
 # Read rate limit in MB/sec (0 = unlimited, default: 0)
 # Throttles parquet file reads to prevent I/O saturation
