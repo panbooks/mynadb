@@ -34,6 +34,56 @@ impl AuthMiddleware {
         })
     }
 
+    /// Validate credentials (username and password)
+    fn validate_credentials(&self, username: &str, password: &str) -> bool {
+        if username == self.config.username && password == self.config.password {
+            debug!("Authentication successful for user: {}", username);
+            true
+        } else {
+            warn!("Authentication failed: invalid credentials");
+            false
+        }
+    }
+
+    /// Extract and validate credentials from query parameters (u and p)
+    fn validate_query_auth(&self, query: Option<&str>) -> bool {
+        let query_str = match query {
+            Some(q) => q,
+            None => return false,
+        };
+
+        let mut username: Option<String> = None;
+        let mut password: Option<String> = None;
+
+        // Parse query parameters manually to extract u and p
+        for param in query_str.split('&') {
+            if let Some((key, value)) = param.split_once('=') {
+                match key {
+                    "u" => {
+                        // URL decode username
+                        username = urlencoding::decode(value).ok().map(|s| s.into_owned());
+                    }
+                    "p" => {
+                        // URL decode password
+                        password = urlencoding::decode(value).ok().map(|s| s.into_owned());
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        match (username, password) {
+            (Some(u), Some(p)) => {
+                debug!("Attempting authentication via query parameters (user: {})", u);
+                self.validate_credentials(&u, &p)
+            }
+            _ => {
+                debug!("Missing u or p query parameter");
+                false
+            }
+        }
+    }
+
     /// Extract and validate Basic Auth credentials from headers
     fn validate_basic_auth(&self, headers: &HeaderMap) -> bool {
         let auth_header = match headers.get("authorization") {
@@ -86,13 +136,7 @@ impl AuthMiddleware {
         let (username, password) = (parts[0], parts[1]);
 
         // Validate credentials
-        if username == self.config.username && password == self.config.password {
-            debug!("Authentication successful for user: {}", username);
-            true
-        } else {
-            warn!("Authentication failed: invalid credentials");
-            false
-        }
+        self.validate_credentials(username, password)
     }
 
     /// Middleware function to check authentication
@@ -110,15 +154,23 @@ impl AuthMiddleware {
             return next.run(req).await;
         }
 
-        // Validate authentication
-        if self.validate_basic_auth(req.headers()) {
+        // Try query parameter authentication first (u and p parameters)
+        let query = req.uri().query();
+        let auth_valid = if self.validate_query_auth(query) {
+            true
+        } else {
+            // Fall back to Basic Auth header
+            self.validate_basic_auth(req.headers())
+        };
+
+        if auth_valid {
             next.run(req).await
         } else {
             // Return 401 Unauthorized
             (
                 StatusCode::UNAUTHORIZED,
                 [("WWW-Authenticate", "Basic realm=\"Stats Service\"")],
-                "Authentication required. Please provide valid credentials.",
+                "Authentication required. Please provide valid credentials via Authorization header or u/p query parameters.",
             )
                 .into_response()
         }

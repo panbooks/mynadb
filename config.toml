@@ -180,7 +180,7 @@ retention_hours = 24
 [auth]
 # Enable HTTP Basic Authentication (default: false)
 # When enabled, all write and query endpoints require authentication
-enabled = false
+enabled = true
 
 # Username for basic authentication
 username = "admin"
