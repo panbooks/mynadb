@@ -191,7 +191,8 @@ pub struct StrategyManager {
     bloom_custom: HashMap<String, BloomConfig>,
 
     /// Active strategies per database (lazy-initialized)
-    strategies: Arc<RwLock<HashMap<String, Box<dyn DeduplicationStrategy>>>>,
+    /// Stores Arc<RwLock> to share the same strategy instance across all callers
+    strategies: RwLock<HashMap<String, Arc<RwLock<Box<dyn DeduplicationStrategy>>>>>,
 }
 
 impl StrategyManager {
@@ -214,7 +215,7 @@ impl StrategyManager {
             bloom_patterns,
             bloom_config,
             bloom_custom,
-            strategies: Arc::new(RwLock::new(HashMap::new())),
+            strategies: RwLock::new(HashMap::new()),
         }
     }
 
@@ -232,33 +233,38 @@ impl StrategyManager {
     }
 
     /// Get or create strategy for a database
+    /// Returns a cloned Arc that shares the same underlying strategy instance
     pub async fn get_or_create_strategy(&self, db: &str) -> Arc<RwLock<Box<dyn DeduplicationStrategy>>> {
         // Quick check with read lock
         {
             let strategies = self.strategies.read().await;
-            if let Some(_) = strategies.get(db) {
-                // Strategy exists, but we can't return it from read lock
-                // Fall through to get it with proper Arc wrapping
+            if let Some(strategy) = strategies.get(db) {
+                // Strategy exists, return a clone of the Arc (shares same instance)
+                return Arc::clone(strategy);
             }
         }
 
         // Get or create with write lock
         let mut strategies = self.strategies.write().await;
 
-        if !strategies.contains_key(db) {
-            let strategy = self.create_strategy(db);
-            info!(
-                "Created {} strategy for database '{}' (estimated memory: {:.2}MB)",
-                strategy.name(),
-                db,
-                strategy.memory_bytes() as f64 / 1024.0 / 1024.0
-            );
-            strategies.insert(db.to_string(), strategy);
+        // Double-check after acquiring write lock (another thread might have created it)
+        if let Some(strategy) = strategies.get(db) {
+            return Arc::clone(strategy);
         }
 
-        // Return wrapped reference
-        let strategy = strategies.get(db).unwrap();
-        Arc::new(RwLock::new(strategy.clone_box()))
+        // Create new strategy and wrap in Arc<RwLock>
+        let strategy = self.create_strategy(db);
+        info!(
+            "Created {} strategy for database '{}' (estimated memory: {:.2}MB)",
+            strategy.name(),
+            db,
+            strategy.memory_bytes() as f64 / 1024.0 / 1024.0
+        );
+
+        let strategy_arc = Arc::new(RwLock::new(strategy));
+        strategies.insert(db.to_string(), Arc::clone(&strategy_arc));
+
+        strategy_arc
     }
 
     /// Create strategy for a database
@@ -288,31 +294,39 @@ impl StrategyManager {
     /// Get total memory usage across all databases
     pub async fn total_memory_bytes(&self) -> usize {
         let strategies = self.strategies.read().await;
-        strategies.values().map(|s| s.memory_bytes()).sum()
+        let mut total = 0;
+        for strategy_arc in strategies.values() {
+            let strategy = strategy_arc.read().await;
+            total += strategy.memory_bytes();
+        }
+        total
     }
 
     /// Get statistics per database
     pub async fn get_stats(&self) -> HashMap<String, StrategyStats> {
         let strategies = self.strategies.read().await;
-        strategies
-            .iter()
-            .map(|(db, strategy)| {
-                (
-                    db.clone(),
-                    StrategyStats {
-                        strategy_type: strategy.name().to_string(),
-                        memory_bytes: strategy.memory_bytes(),
-                        memory_mb: strategy.memory_bytes() as f64 / 1024.0 / 1024.0,
-                    },
-                )
-            })
-            .collect()
+        let mut stats = HashMap::new();
+
+        for (db, strategy_arc) in strategies.iter() {
+            let strategy = strategy_arc.read().await;
+            stats.insert(
+                db.clone(),
+                StrategyStats {
+                    strategy_type: strategy.name().to_string(),
+                    memory_bytes: strategy.memory_bytes(),
+                    memory_mb: strategy.memory_bytes() as f64 / 1024.0 / 1024.0,
+                },
+            );
+        }
+
+        stats
     }
 
     /// Clear old data from all strategies (for cache retention)
     pub async fn clear_before_date(&self, cutoff_date: i32) {
-        let mut strategies = self.strategies.write().await;
-        for strategy in strategies.values_mut() {
+        let strategies = self.strategies.read().await;
+        for strategy_arc in strategies.values() {
+            let mut strategy = strategy_arc.write().await;
             strategy.clear_before_date(cutoff_date);
         }
         debug!("Cleared strategy data before date {}", cutoff_date);
@@ -391,5 +405,229 @@ mod tests {
         // Bloom for wildcard match
         let strat3 = manager.get_or_create_strategy("metrics_us").await;
         assert_eq!(strat3.read().await.name(), "bloom_filter");
+    }
+
+    #[tokio::test]
+    async fn test_strategy_manager_returns_same_instance() {
+        let manager = Arc::new(StrategyManager::new(
+            "hashset",
+            vec![],
+            BloomConfig::default(),
+            HashMap::new(),
+        ));
+
+        // Get strategy twice for the same database
+        let strat1 = manager.get_or_create_strategy("testdb").await;
+        let strat2 = manager.get_or_create_strategy("testdb").await;
+
+        // Verify they point to the same underlying instance (Arc pointer equality)
+        assert!(Arc::ptr_eq(&strat1, &strat2), "Multiple calls should return the same Arc instance");
+
+        // Insert into one
+        {
+            let mut s1 = strat1.write().await;
+            s1.insert("pmc", "testdb", 100, 12345);
+        }
+
+        // Should be visible in the other (they share the same instance)
+        {
+            let s2 = strat2.read().await;
+            assert!(s2.contains("pmc", "testdb", 100, 12345), "Updates should be visible across all Arc clones");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_strategy_access() {
+        use tokio::task;
+
+        let manager = Arc::new(StrategyManager::new(
+            "hashset",
+            vec![],
+            BloomConfig::default(),
+            HashMap::new(),
+        ));
+
+        // Spawn multiple concurrent tasks that all access the same database strategy
+        let mut handles = vec![];
+
+        for i in 0..10 {
+            let manager_clone = Arc::clone(&manager);
+            let handle = task::spawn(async move {
+                let strategy = manager_clone.get_or_create_strategy("concurrent_db").await;
+                let mut strat = strategy.write().await;
+
+                // Each task inserts a unique hash
+                strat.insert("pmc", "concurrent_db", 100, 1000 + i);
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all tasks to complete
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Verify all insertions are visible in the shared strategy
+        let strategy = manager.get_or_create_strategy("concurrent_db").await;
+        let strat = strategy.read().await;
+
+        for i in 0..10 {
+            assert!(
+                strat.contains("pmc", "concurrent_db", 100, 1000 + i),
+                "Hash {} should be present after concurrent insert", 1000 + i
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_deduplication_prevents_duplicates() {
+        use tokio::task;
+
+        let manager = Arc::new(StrategyManager::new(
+            "hashset",
+            vec![],
+            BloomConfig::default(),
+            HashMap::new(),
+        ));
+
+        // Spawn multiple concurrent tasks that all try to insert the SAME hash
+        let mut handles = vec![];
+        let duplicate_count = Arc::new(tokio::sync::Mutex::new(0u32));
+
+        for _ in 0..20 {
+            let manager_clone = Arc::clone(&manager);
+            let dup_count = Arc::clone(&duplicate_count);
+
+            let handle = task::spawn(async move {
+                let strategy = manager_clone.get_or_create_strategy("dedup_test").await;
+
+                // Try to insert the same hash (simulating duplicate series)
+                let mut strat = strategy.write().await;
+
+                // Check if it already exists
+                if !strat.contains("umc", "dedup_test", 100, 99999) {
+                    strat.insert("umc", "dedup_test", 100, 99999);
+
+                    // This simulates creating a new series record
+                    let mut count = dup_count.lock().await;
+                    *count += 1;
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all tasks to complete
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Only ONE task should have successfully inserted the hash (no duplicates)
+        let final_count = *duplicate_count.lock().await;
+        assert_eq!(
+            final_count, 1,
+            "Only 1 insertion should succeed, but got {} (indicates duplicate detection failed)",
+            final_count
+        );
+
+        // Verify the hash exists exactly once
+        let strategy = manager.get_or_create_strategy("dedup_test").await;
+        let strat = strategy.read().await;
+        assert!(strat.contains("umc", "dedup_test", 100, 99999));
+    }
+
+    #[tokio::test]
+    async fn test_schema_isolation_pmc_vs_umc() {
+        let manager = Arc::new(StrategyManager::new(
+            "hashset",
+            vec![],
+            BloomConfig::default(),
+            HashMap::new(),
+        ));
+
+        let strategy = manager.get_or_create_strategy("isolation_test").await;
+
+        // Insert same hash for both PMC and UMC schemas
+        {
+            let mut strat = strategy.write().await;
+            strat.insert("pmc", "isolation_test", 100, 77777);
+            strat.insert("umc", "isolation_test", 100, 77777);
+        }
+
+        // Verify isolation: PMC and UMC are tracked separately
+        {
+            let strat = strategy.read().await;
+            assert!(strat.contains("pmc", "isolation_test", 100, 77777));
+            assert!(strat.contains("umc", "isolation_test", 100, 77777));
+
+            // Insert new hash only in PMC
+        }
+
+        {
+            let mut strat = strategy.write().await;
+            strat.insert("pmc", "isolation_test", 100, 88888);
+        }
+
+        {
+            let strat = strategy.read().await;
+            assert!(strat.contains("pmc", "isolation_test", 100, 88888));
+            assert!(!strat.contains("umc", "isolation_test", 100, 88888),
+                "UMC should not contain hash that was only inserted into PMC");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bloom_filter_concurrent_access() {
+        use tokio::task;
+
+        let manager = Arc::new(StrategyManager::new(
+            "bloom",
+            vec!["*".to_string()], // Use bloom for all databases
+            BloomConfig {
+                expected_series_per_day: 10000,
+                false_positive_rate: 0.01,
+            },
+            HashMap::new(),
+        ));
+
+        // Spawn concurrent tasks using bloom filter
+        let mut handles = vec![];
+
+        for i in 0..50 {
+            let manager_clone = Arc::clone(&manager);
+            let handle = task::spawn(async move {
+                let strategy = manager_clone.get_or_create_strategy("bloom_db").await;
+                let mut strat = strategy.write().await;
+
+                // Each task inserts multiple hashes
+                for j in 0..10 {
+                    strat.insert("pmc", "bloom_db", 100, (i * 10 + j) as u64);
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all tasks
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Verify insertions
+        let strategy = manager.get_or_create_strategy("bloom_db").await;
+        let strat = strategy.read().await;
+
+        assert_eq!(strat.name(), "bloom_filter");
+
+        // Check that most hashes are found (bloom filter may have false positives, but no false negatives)
+        let mut found_count = 0;
+        for i in 0..50 {
+            for j in 0..10 {
+                if strat.contains("pmc", "bloom_db", 100, (i * 10 + j) as u64) {
+                    found_count += 1;
+                }
+            }
+        }
+
+        // All 500 hashes should be found (bloom filters have no false negatives)
+        assert_eq!(found_count, 500, "Bloom filter should find all inserted hashes (no false negatives)");
     }
 }
