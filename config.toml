@@ -98,7 +98,7 @@ system_tags = [
 ]
 
 # Number of days to keep in cache (and load on startup)
-cache_retention_days = 2
+cache_retention_days = 1
 
 # Default deduplication strategy: "hashset" or "bloom"
 # - hashset: Exact deduplication, ~24 bytes per series (best for < 100M series)
@@ -111,19 +111,19 @@ bloom_databases = ["arch_monitor_roc", "arch_monitor_rec"]
 
 # Default bloom filter configuration (for all bloom databases)
 [series_tracker.bloom]
-expected_series_per_day = 1000000000  # 1 billion
+expected_series_per_day = 100000000  # 100 million
 false_positive_rate = 0.01            # 1% (lower = more accurate but more memory)
 
 # Per-database bloom filter customization (optional)
 # Allows fine-tuning for databases with different cardinality
 [[series_tracker.bloom_custom]]
 database = "arch_monitor_roc"
-expected_series_per_day = 2000000000  # 5 billion series
-false_positive_rate = 0.005           # 0.5% (more accurate)
+expected_series_per_day = 2000000000  # 2 billion series
+false_positive_rate = 0.01           # 1% (more accurate)
 
  [[series_tracker.bloom_custom]]
  database = "arch_monitor_rec"
- expected_series_per_day = 10000000000 # 10 billion series
+ expected_series_per_day = 5000000000 # 5 billion series
  false_positive_rate = 0.01
 
 [logging]
@@ -191,4 +191,4 @@ password = "admin2026"
 
 # Endpoints that are always public (even if auth is enabled)
 # Health and stats endpoints are public by default
-public_endpoints = ["/health", "/stats"]
+public_endpoints = ["/health", "/stats", "/memory"]
