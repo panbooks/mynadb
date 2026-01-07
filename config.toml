@@ -223,4 +223,4 @@ password = "admin2026"
 
 # Endpoints that are always public (even if auth is enabled)
 # Health and stats endpoints are public by default
-public_endpoints = ["/health", "/stats", "/memory"]
+public_endpoints = ["/health", "/stats", "/memory", "/debug/heap", "/debug/cpu", "/debug/profile/heap", "/debug/profile/cpu"]

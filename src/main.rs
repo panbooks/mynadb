@@ -14,6 +14,7 @@ mod retention_manager;
 mod series_dedup;
 mod series_tracker;
 mod wal;
+mod profiling;
 
 use axum::{
     extract::{Path, Query as AxumQuery, Request, State},
@@ -121,6 +122,27 @@ struct RetentionRequest {
     /// Delete partitions older than N days
     #[serde(default)]
     older_than_days: Option<u32>,
+}
+
+fn default_profile_duration() -> u64 {
+    10
+}
+
+fn default_profile_format() -> String {
+    "protobuf".to_string()
+}
+
+#[derive(Deserialize)]
+struct ProfileParams {
+    /// Profile duration in seconds (default: 10)
+    #[serde(default = "default_profile_duration")]
+    duration: u64,
+    /// Output format: protobuf, flamegraph, text (default: protobuf)
+    #[serde(default = "default_profile_format")]
+    format: String,
+    /// Add Content-Disposition header for download (default: false)
+    #[serde(default)]
+    download: bool,
 }
 
 #[tokio::main]
@@ -449,6 +471,11 @@ async fn main() {
         .route("/stats", get(stats_handler))
         .route("/memory", get(memory_handler))
         .route("/flush", post(flush_handler))
+        // Profiling endpoints
+        .route("/debug/heap", get(heap_profile_handler))
+        .route("/debug/cpu", get(cpu_profile_handler))
+        .route("/debug/profile/heap", get(heap_profile_handler))
+        .route("/debug/profile/cpu", get(cpu_profile_handler))
         // Query endpoints
         .route("/query/:db", get(query_handler))
         .route("/query/:db", post(query_handler_post))
@@ -616,8 +643,16 @@ async fn home() -> &'static str {
        GET    /schema/:db/:table      - Get table schema\n\n\
      Cache Management:\n\
        GET    /stats                  - Cache statistics\n\
+       GET    /memory                 - Memory usage breakdown\n\
        POST   /flush                  - Flush cache to disk\n\
        GET    /health                 - Health check\n\n\
+     Profiling (pprof-compatible):\n\
+       GET    /debug/heap?duration=10&format=protobuf  - Heap allocation profile\n\
+       GET    /debug/cpu?duration=10&format=protobuf   - CPU profile\n\
+       Query parameters:\n\
+         duration - Profile duration in seconds (default: 10, max: 300)\n\
+         format   - Output format: protobuf, flamegraph, text (default: protobuf)\n\
+         download - Add Content-Disposition header (default: false)\n\n\
      Compaction:\n\
        POST   /compact/:catalog       - Compact all tables in catalog\n\
        POST   /compact/:catalog/:schema/:table - Compact all partitions in table\n\
@@ -875,6 +910,170 @@ async fn flush_handler(State(state): State<AppState>) -> impl IntoResponse {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Flush error: {}", e),
             )
+        }
+    }
+}
+
+async fn heap_profile_handler(
+    AxumQuery(params): AxumQuery<ProfileParams>,
+) -> impl IntoResponse {
+    use axum::response::Response;
+    use axum::body::Body;
+    use axum::http::header;
+
+    info!("Heap Profile Request: duration={}s, format={}", params.duration, params.format);
+
+    // Validate duration (max 300 seconds = 5 minutes)
+    if params.duration > 300 {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from("Duration too long (max 300 seconds)"))
+            .unwrap();
+    }
+
+    if params.duration == 0 {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from("Duration must be greater than 0"))
+            .unwrap();
+    }
+
+    // Parse format
+    let format = match profiling::ProfileFormat::from_str(&params.format) {
+        Ok(f) => f,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(Body::from(e))
+                .unwrap();
+        }
+    };
+
+    let download = params.download;
+
+    // Generate profile in a blocking task to avoid blocking the async runtime
+    let profile_result = tokio::task::spawn_blocking(move || {
+        profiling::generate_heap_profile(params.duration, format)
+    })
+    .await;
+
+    match profile_result {
+        Ok(Ok(data)) => {
+            let mut response = Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, format.content_type());
+
+            if download {
+                let filename = format!("heap_profile_{}.{}",
+                    chrono::Utc::now().format("%Y%m%d_%H%M%S"),
+                    format.file_extension());
+                response = response.header(header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}\"", filename));
+            }
+
+            info!("Heap profile generated successfully: {} bytes", data.len());
+            response.body(Body::from(data)).unwrap()
+        }
+        Ok(Err(e)) => {
+            error!("Failed to generate heap profile: {}", e);
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(Body::from(format!("Failed to generate profile: {}", e)))
+                .unwrap()
+        }
+        Err(e) => {
+            error!("Profile task panicked: {}", e);
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(Body::from("Profile task failed"))
+                .unwrap()
+        }
+    }
+}
+
+async fn cpu_profile_handler(
+    AxumQuery(params): AxumQuery<ProfileParams>,
+) -> impl IntoResponse {
+    use axum::response::Response;
+    use axum::body::Body;
+    use axum::http::header;
+
+    info!("CPU Profile Request: duration={}s, format={}", params.duration, params.format);
+
+    // Validate duration (max 300 seconds = 5 minutes)
+    if params.duration > 300 {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from("Duration too long (max 300 seconds)"))
+            .unwrap();
+    }
+
+    if params.duration == 0 {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from("Duration must be greater than 0"))
+            .unwrap();
+    }
+
+    // Parse format
+    let format = match profiling::ProfileFormat::from_str(&params.format) {
+        Ok(f) => f,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(Body::from(e))
+                .unwrap();
+        }
+    };
+
+    let download = params.download;
+
+    // Generate profile in a blocking task to avoid blocking the async runtime
+    let profile_result = tokio::task::spawn_blocking(move || {
+        profiling::generate_cpu_profile(params.duration, format)
+    })
+    .await;
+
+    match profile_result {
+        Ok(Ok(data)) => {
+            let mut response = Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, format.content_type());
+
+            if download {
+                let filename = format!("cpu_profile_{}.{}",
+                    chrono::Utc::now().format("%Y%m%d_%H%M%S"),
+                    format.file_extension());
+                response = response.header(header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}\"", filename));
+            }
+
+            info!("CPU profile generated successfully: {} bytes", data.len());
+            response.body(Body::from(data)).unwrap()
+        }
+        Ok(Err(e)) => {
+            error!("Failed to generate CPU profile: {}", e);
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(Body::from(format!("Failed to generate profile: {}", e)))
+                .unwrap()
+        }
+        Err(e) => {
+            error!("Profile task panicked: {}", e);
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(Body::from("Profile task failed"))
+                .unwrap()
         }
     }
 }
