@@ -93,11 +93,6 @@ impl RateLimiter {
     pub async fn available_tokens(&self) -> f64 {
         *self.tokens.lock().await
     }
-
-    /// Get rate limit in bytes per second
-    pub fn bytes_per_sec(&self) -> u64 {
-        self.bytes_per_sec
-    }
 }
 
 #[cfg(test)]

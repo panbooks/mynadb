@@ -458,25 +458,6 @@ impl Wal {
         Ok(())
     }
 
-    /// Rotate series WAL file
-    async fn rotate_series_wal(&self) -> Result<(), String> {
-        let new_file = self.create_wal_file("series")?;
-        let mut writer = self.series_writer.lock().await;
-
-        // Flush current file
-        writer
-            .flush()
-            .map_err(|e| format!("Failed to flush before rotation: {}", e))?;
-
-        info!("Rotating series WAL: {} -> {}", writer.path.display(), new_file.display());
-
-        // Create new writer
-        *writer = WalWriter::new(new_file, writer.sync_on_write)
-            .map_err(|e| format!("Failed to create new WAL writer: {}", e))?;
-
-        Ok(())
-    }
-
     /// Replay all data write entries
     pub async fn replay_data_writes<F>(&self, mut callback: F) -> Result<usize, String>
     where
