@@ -14,9 +14,6 @@ use tracing::{debug, error, info, warn};
 /// Cache key: (catalog/database, schema/service, table/measurement, date)
 type CacheKey = (String, String, String, i32);
 
-/// Default max cache size: 4GB (in MB for config compatibility)
-const DEFAULT_MAX_SIZE_MB: u64 = 4096;
-
 /// Flush threshold percentage (trigger flush at 80% capacity)
 const FLUSH_THRESHOLD_PERCENT: usize = 80;
 
@@ -36,10 +33,6 @@ pub struct DataCache {
 }
 
 impl DataCache {
-    pub fn with_max_size(data_dir: &str, max_size_mb: u64) -> Self {
-        Self::with_max_size_and_wal(data_dir, max_size_mb, None)
-    }
-
     pub fn with_max_size_and_wal(data_dir: &str, max_size_mb: u64, wal: Option<Arc<Wal>>) -> Self {
         let cache = Arc::new(Mutex::new(HashMap::new()));
         let writer = Arc::new(ParquetWriter::new(data_dir));
@@ -53,21 +46,6 @@ impl DataCache {
             flush_notify: Arc::new(Notify::new()),
             wal,
         }
-    }
-
-    /// Get current cache size in bytes
-    pub fn current_size_bytes(&self) -> usize {
-        self.cache_size_bytes.load(Ordering::Relaxed)
-    }
-
-    /// Get maximum cache size in bytes
-    pub fn max_size_bytes(&self) -> usize {
-        self.max_size_bytes
-    }
-
-    /// Check if cache has capacity for additional bytes
-    pub fn has_capacity(&self, additional_bytes: usize) -> bool {
-        self.current_size_bytes() + additional_bytes <= self.max_size_bytes
     }
 
     /// Add points to the in-memory cache as RecordBatch

@@ -183,10 +183,6 @@ impl ParquetFileInfo {
 }
 
 impl Compactor {
-    pub fn new(data_dir: &str) -> Self {
-        Self::with_config(data_dir, &CompactionConfig::default())
-    }
-
     pub fn with_config(data_dir: &str, config: &CompactionConfig) -> Self {
         // Create semaphore if max_concurrent_compactions > 0
         let compaction_semaphore = if config.max_concurrent_compactions > 0 {
