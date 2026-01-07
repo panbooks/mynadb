@@ -1,6 +1,5 @@
 use crate::config::AuthConfig;
 use axum::{
-    body::Body,
     extract::Request,
     http::{HeaderMap, StatusCode},
     middleware::Next,

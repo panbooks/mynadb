@@ -175,8 +175,8 @@ enum StrategyType {
     Bloom,
 }
 
-/// Manages deduplication strategies per database
-/// Allows different databases to use different strategies based on cardinality
+/// Manages deduplication strategies per database and schema
+/// Allows different databases and schemas to use different strategies based on cardinality
 pub struct StrategyManager {
     /// Default strategy type for databases not explicitly configured
     default_strategy: StrategyType,
@@ -187,11 +187,13 @@ pub struct StrategyManager {
     /// Default bloom configuration
     bloom_config: BloomConfig,
 
-    /// Per-database bloom customization
-    bloom_custom: HashMap<String, BloomConfig>,
+    /// Per-database and per-schema bloom customization
+    /// Key: (database, schema) where schema can be "pmc", "umc", or "" for all schemas
+    bloom_custom: HashMap<(String, String), BloomConfig>,
 
-    /// Active strategies per database (lazy-initialized)
+    /// Active strategies per (database, schema) pair (lazy-initialized)
     /// Stores Arc<RwLock> to share the same strategy instance across all callers
+    /// Key: "database:schema" format
     strategies: RwLock<HashMap<String, Arc<RwLock<Box<dyn DeduplicationStrategy>>>>>,
 }
 
@@ -200,7 +202,7 @@ impl StrategyManager {
         default_strategy: &str,
         bloom_databases: Vec<String>,
         bloom_config: BloomConfig,
-        bloom_custom: HashMap<String, BloomConfig>,
+        bloom_custom: HashMap<(String, String), BloomConfig>,
     ) -> Self {
         let bloom_patterns = bloom_databases
             .iter()
@@ -232,13 +234,15 @@ impl StrategyManager {
         self.default_strategy.clone()
     }
 
-    /// Get or create strategy for a database
+    /// Get or create strategy for a database and schema
     /// Returns a cloned Arc that shares the same underlying strategy instance
-    pub async fn get_or_create_strategy(&self, db: &str) -> Arc<RwLock<Box<dyn DeduplicationStrategy>>> {
+    pub async fn get_or_create_strategy(&self, db: &str, schema: &str) -> Arc<RwLock<Box<dyn DeduplicationStrategy>>> {
+        let key = format!("{}:{}", db, schema);
+
         // Quick check with read lock
         {
             let strategies = self.strategies.read().await;
-            if let Some(strategy) = strategies.get(db) {
+            if let Some(strategy) = strategies.get(&key) {
                 // Strategy exists, return a clone of the Arc (shares same instance)
                 return Arc::clone(strategy);
             }
@@ -248,39 +252,42 @@ impl StrategyManager {
         let mut strategies = self.strategies.write().await;
 
         // Double-check after acquiring write lock (another thread might have created it)
-        if let Some(strategy) = strategies.get(db) {
+        if let Some(strategy) = strategies.get(&key) {
             return Arc::clone(strategy);
         }
 
         // Create new strategy and wrap in Arc<RwLock>
-        let strategy = self.create_strategy(db);
+        let strategy = self.create_strategy(db, schema);
         info!(
-            "Created {} strategy for database '{}' (estimated memory: {:.2}MB)",
+            "Created {} strategy for '{}.{}' (estimated memory: {:.2}MB)",
             strategy.name(),
             db,
+            schema,
             strategy.memory_bytes() as f64 / 1024.0 / 1024.0
         );
 
         let strategy_arc = Arc::new(RwLock::new(strategy));
-        strategies.insert(db.to_string(), Arc::clone(&strategy_arc));
+        strategies.insert(key, Arc::clone(&strategy_arc));
 
         strategy_arc
     }
 
-    /// Create strategy for a database
-    fn create_strategy(&self, db: &str) -> Box<dyn DeduplicationStrategy> {
+    /// Create strategy for a database and schema
+    fn create_strategy(&self, db: &str, schema: &str) -> Box<dyn DeduplicationStrategy> {
         match self.get_strategy_type(db) {
             StrategyType::HashSet => {
-                debug!("Using HashSet strategy for database '{}'", db);
+                debug!("Using HashSet strategy for '{}.{}'", db, schema);
                 Box::new(HashSetStrategy::new())
             }
             StrategyType::Bloom => {
-                // Check for custom config
-                let config = self.bloom_custom.get(db).unwrap_or(&self.bloom_config);
+                // Check for schema-specific config first, then database config, then default
+                let config = self.bloom_custom.get(&(db.to_string(), schema.to_string()))
+                    .or_else(|| self.bloom_custom.get(&(db.to_string(), String::new())))
+                    .unwrap_or(&self.bloom_config);
 
                 debug!(
-                    "Using Bloom filter strategy for database '{}' (expected: {}, FP rate: {})",
-                    db, config.expected_series_per_day, config.false_positive_rate
+                    "Using Bloom filter strategy for '{}.{}' (expected: {}, FP rate: {})",
+                    db, schema, config.expected_series_per_day, config.false_positive_rate
                 );
 
                 Box::new(BloomFilterStrategy::new(
@@ -395,15 +402,15 @@ mod tests {
         );
 
         // HashSet for normal database
-        let strat1 = manager.get_or_create_strategy("dev").await;
+        let strat1 = manager.get_or_create_strategy("dev", "test").await;
         assert_eq!(strat1.read().await.name(), "hashset");
 
         // Bloom for exact match
-        let strat2 = manager.get_or_create_strategy("production").await;
+        let strat2 = manager.get_or_create_strategy("production", "test").await;
         assert_eq!(strat2.read().await.name(), "bloom_filter");
 
         // Bloom for wildcard match
-        let strat3 = manager.get_or_create_strategy("metrics_us").await;
+        let strat3 = manager.get_or_create_strategy("metrics_us", "test").await;
         assert_eq!(strat3.read().await.name(), "bloom_filter");
     }
 
@@ -417,8 +424,8 @@ mod tests {
         ));
 
         // Get strategy twice for the same database
-        let strat1 = manager.get_or_create_strategy("testdb").await;
-        let strat2 = manager.get_or_create_strategy("testdb").await;
+        let strat1 = manager.get_or_create_strategy("testdb", "test").await;
+        let strat2 = manager.get_or_create_strategy("testdb", "test").await;
 
         // Verify they point to the same underlying instance (Arc pointer equality)
         assert!(Arc::ptr_eq(&strat1, &strat2), "Multiple calls should return the same Arc instance");
@@ -453,7 +460,7 @@ mod tests {
         for i in 0..10 {
             let manager_clone = Arc::clone(&manager);
             let handle = task::spawn(async move {
-                let strategy = manager_clone.get_or_create_strategy("concurrent_db").await;
+                let strategy = manager_clone.get_or_create_strategy("concurrent_db", "test").await;
                 let mut strat = strategy.write().await;
 
                 // Each task inserts a unique hash
@@ -468,7 +475,7 @@ mod tests {
         }
 
         // Verify all insertions are visible in the shared strategy
-        let strategy = manager.get_or_create_strategy("concurrent_db").await;
+        let strategy = manager.get_or_create_strategy("concurrent_db", "test").await;
         let strat = strategy.read().await;
 
         for i in 0..10 {
@@ -499,7 +506,7 @@ mod tests {
             let dup_count = Arc::clone(&duplicate_count);
 
             let handle = task::spawn(async move {
-                let strategy = manager_clone.get_or_create_strategy("dedup_test").await;
+                let strategy = manager_clone.get_or_create_strategy("dedup_test", "test").await;
 
                 // Try to insert the same hash (simulating duplicate series)
                 let mut strat = strategy.write().await;
@@ -530,7 +537,7 @@ mod tests {
         );
 
         // Verify the hash exists exactly once
-        let strategy = manager.get_or_create_strategy("dedup_test").await;
+        let strategy = manager.get_or_create_strategy("dedup_test", "test").await;
         let strat = strategy.read().await;
         assert!(strat.contains("umc", "dedup_test", 100, 99999));
     }
@@ -544,7 +551,7 @@ mod tests {
             HashMap::new(),
         ));
 
-        let strategy = manager.get_or_create_strategy("isolation_test").await;
+        let strategy = manager.get_or_create_strategy("isolation_test", "test").await;
 
         // Insert same hash for both PMC and UMC schemas
         {
@@ -595,7 +602,7 @@ mod tests {
         for i in 0..50 {
             let manager_clone = Arc::clone(&manager);
             let handle = task::spawn(async move {
-                let strategy = manager_clone.get_or_create_strategy("bloom_db").await;
+                let strategy = manager_clone.get_or_create_strategy("bloom_db", "test").await;
                 let mut strat = strategy.write().await;
 
                 // Each task inserts multiple hashes
@@ -612,7 +619,7 @@ mod tests {
         }
 
         // Verify insertions
-        let strategy = manager.get_or_create_strategy("bloom_db").await;
+        let strategy = manager.get_or_create_strategy("bloom_db", "test").await;
         let strat = strategy.read().await;
 
         assert_eq!(strat.name(), "bloom_filter");

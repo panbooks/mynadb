@@ -116,15 +116,47 @@ false_positive_rate = 0.01            # 1% (lower = more accurate but more memor
 
 # Per-database bloom filter customization (optional)
 # Allows fine-tuning for databases with different cardinality
+# Can optionally specify 'schema = "pmc"' or 'schema = "umc"' to configure schemas separately
+# PMC (Physical Metric Count) includes ALL tags → higher cardinality
+# UMC (User Metric Count) excludes system tags → lower cardinality
+
+# Example 1: Database-wide config (applies to both PMC and UMC)
+#[[series_tracker.bloom_custom]]
+#database = "arch_monitor_roc"
+#expected_series_per_day = 2000000000  # 2 billion series
+#false_positive_rate = 0.01           # 1%
+
+# Example 2: Schema-specific config (different settings for PMC vs UMC)
+# [[series_tracker.bloom_custom]]
+# database = "arch_monitor_roc"
+# schema = "pmc"                       # PMC: includes all tags
+# expected_series_per_day = 2000000000 # Higher cardinality
+# false_positive_rate = 0.01
+#
+
 [[series_tracker.bloom_custom]]
 database = "arch_monitor_roc"
+schema = "pmc"
 expected_series_per_day = 2000000000  # 2 billion series
-false_positive_rate = 0.01           # 1% (more accurate)
+false_positive_rate = 0.01           # 1%
 
- [[series_tracker.bloom_custom]]
- database = "arch_monitor_rec"
- expected_series_per_day = 5000000000 # 5 billion series
- false_positive_rate = 0.01
+[[series_tracker.bloom_custom]]
+database = "arch_monitor_roc"
+schema = "umc"                       # UMC: excludes system tags
+expected_series_per_day = 500000000  # Lower cardinality, 500 million series
+false_positive_rate = 0.01
+
+[[series_tracker.bloom_custom]]
+database = "arch_monitor_rec"
+schema = "pmc"
+expected_series_per_day = 5000000000 # 5 billion series
+false_positive_rate = 0.01
+
+[[series_tracker.bloom_custom]]
+database = "arch_monitor_rec"
+schema = "umc"
+expected_series_per_day = 1000000000 # 1 billion series
+false_positive_rate = 0.01
 
 [logging]
 # Log level: trace, debug, info, warn, error
@@ -180,7 +212,7 @@ retention_hours = 24
 [auth]
 # Enable HTTP Basic Authentication (default: false)
 # When enabled, all write and query endpoints require authentication
-enabled = true
+enabled = false
 
 # Username for basic authentication
 username = "admin"
