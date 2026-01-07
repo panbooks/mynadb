@@ -227,6 +227,9 @@ impl Default for BloomConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BloomDatabaseConfig {
     pub database: String,
+    /// Optional schema filter (pmc or umc). If not specified, applies to all schemas.
+    #[serde(default)]
+    pub schema: Option<String>,
     pub expected_series_per_day: usize,
     pub false_positive_rate: f64,
 }

@@ -135,13 +135,15 @@ impl SeriesTracker {
         storage_config: &StorageConfig,
         tracker_config: &SeriesTrackerConfig,
     ) -> Self {
-        // Create strategy manager with per-database strategies
+        // Create strategy manager with per-database/schema strategies
+        // Key is (database, schema) where schema can be empty string for database-wide config
         let bloom_custom = tracker_config
             .bloom_custom
             .iter()
             .map(|c| {
+                let schema = c.schema.as_deref().unwrap_or("");
                 (
-                    c.database.clone(),
+                    (c.database.clone(), schema.to_string()),
                     BloomConfig {
                         expected_series_per_day: c.expected_series_per_day,
                         false_positive_rate: c.false_positive_rate,
@@ -291,8 +293,9 @@ impl SeriesTracker {
             return;
         }
 
-        // Get or create strategy for this database
-        let strategy = self.strategy_manager.get_or_create_strategy(db).await;
+        // Get or create separate strategies for PMC and UMC (different cardinalities)
+        let pmc_strategy = self.strategy_manager.get_or_create_strategy(db, SCHEMA_PMC).await;
+        let umc_strategy = self.strategy_manager.get_or_create_strategy(db, SCHEMA_UMC).await;
 
         // Group points by date for efficient strategy access
         let mut points_by_date: HashMap<i32, Vec<&Point>> = HashMap::new();
@@ -305,7 +308,8 @@ impl SeriesTracker {
 
         // Process each date's points with strategy
         for (date, date_points) in points_by_date {
-            let mut strategy_guard = strategy.write().await;
+            let mut pmc_strategy_guard = pmc_strategy.write().await;
+            let mut umc_strategy_guard = umc_strategy.write().await;
             let mut pmc_new_records = Vec::new();
             let mut umc_new_records = Vec::new();
 
@@ -315,8 +319,8 @@ impl SeriesTracker {
                 let pmc_tag_hash = self.calculate_pmc_hash(&point.tags);
                 let pmc_series_hash = Self::calculate_series_hash(&point.service, &point.measurement, pmc_tag_hash);
 
-                if !strategy_guard.contains(SCHEMA_PMC, db, date, pmc_series_hash) {
-                    strategy_guard.insert(SCHEMA_PMC, db, date, pmc_series_hash);
+                if !pmc_strategy_guard.contains(SCHEMA_PMC, db, date, pmc_series_hash) {
+                    pmc_strategy_guard.insert(SCHEMA_PMC, db, date, pmc_series_hash);
                     pmc_new_records.push(SeriesRecord {
                         service: point.service.clone(),
                         metric: point.measurement.clone(),
@@ -329,8 +333,8 @@ impl SeriesTracker {
                 let umc_tag_hash = self.calculate_umc_hash(&point.tags);
                 let umc_series_hash = Self::calculate_series_hash(&point.service, &point.measurement, umc_tag_hash);
 
-                if !strategy_guard.contains(SCHEMA_UMC, db, date, umc_series_hash) {
-                    strategy_guard.insert(SCHEMA_UMC, db, date, umc_series_hash);
+                if !umc_strategy_guard.contains(SCHEMA_UMC, db, date, umc_series_hash) {
+                    umc_strategy_guard.insert(SCHEMA_UMC, db, date, umc_series_hash);
                     umc_new_records.push(SeriesRecord {
                         service: point.service.clone(),
                         metric: point.measurement.clone(),
@@ -340,8 +344,9 @@ impl SeriesTracker {
                 }
             }
 
-            // Release strategy lock before acquiring pending writes lock
-            drop(strategy_guard);
+            // Release strategy locks before acquiring pending writes lock
+            drop(pmc_strategy_guard);
+            drop(umc_strategy_guard);
 
             // Batch insert into pending writes (separate keys for PMC and UMC)
             let mut pending = self.pending_writes.write().await;
@@ -678,8 +683,8 @@ impl SeriesTracker {
         // Calculate cutoff date - only load latest N days
         let cutoff_date = self.get_cutoff_date();
 
-        // Get or create strategy for this database
-        let strategy = self.strategy_manager.get_or_create_strategy(db).await;
+        // Get or create strategy for this database and schema
+        let strategy = self.strategy_manager.get_or_create_strategy(db, schema).await;
 
         use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 

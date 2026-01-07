@@ -169,6 +169,38 @@ false_positive_rate = 0.02            # Increased from 0.01
 
 **Savings:** ~70% (from 59GB to ~18GB)
 
+**Option D: Schema-Specific Configuration (NEW)**
+
+Configure different bloom filter settings for PMC vs UMC schemas since they have different cardinalities:
+- **PMC (Physical Metric Count)**: includes ALL tags → higher cardinality
+- **UMC (User Metric Count)**: excludes system tags → lower cardinality
+
+```toml
+[series_tracker]
+cache_retention_days = 1
+
+# PMC has higher cardinality (includes all tags)
+[[series_tracker.bloom_custom]]
+database = "arch_monitor_roc"
+schema = "pmc"
+expected_series_per_day = 2000000000  # 2 billion
+false_positive_rate = 0.01
+
+# UMC has lower cardinality (excludes system tags)
+[[series_tracker.bloom_custom]]
+database = "arch_monitor_roc"
+schema = "umc"
+expected_series_per_day = 500000000   # 500 million (25% of PMC)
+false_positive_rate = 0.01
+```
+
+**Benefits:**
+- Right-size memory allocation per schema
+- Avoid over-allocating for UMC
+- PMC: 2.75 GB per day
+- UMC: 0.69 GB per day
+- Total: 3.44 GB × 1 day = **~3.4 GB** (instead of 5.5 GB if both use 2B)
+
 ### Strategy 2: Switch to HashSet
 
 For databases with < 100M series/day, HashSet is more memory-efficient:
