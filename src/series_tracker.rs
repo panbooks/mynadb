@@ -903,4 +903,533 @@ mod tests {
 
         assert_ne!(hash1, hash2, "PMC should include all tags - different service produces different hash");
     }
+
+    #[test]
+    fn test_umc_excludes_system_tags() {
+        use crate::config::{BloomConfig as ConfigBloomConfig, SeriesTrackerConfig, StorageConfig};
+        let storage_config = StorageConfig {
+            data_dir: "./test_data".to_string(),
+            system_dir: "_system".to_string(),
+        };
+        let tracker_config = SeriesTrackerConfig {
+            track_only: false,
+            flush_interval_secs: 60,
+            system_tags: vec!["MONITOR.ip".to_string(), "MONITOR.hostName".to_string()],
+            cache_retention_days: 2,
+            default_strategy: "hashset".to_string(),
+            bloom_databases: vec![],
+            bloom: ConfigBloomConfig {
+                expected_series_per_day: 1_000_000_000,
+                false_positive_rate: 0.01,
+            },
+            bloom_custom: vec![],
+        };
+        let tracker = SeriesTracker::new(&storage_config, &tracker_config);
+
+        // UMC should exclude system tags
+        let mut tags1 = HashMap::new();
+        tags1.insert("host".to_string(), "server1".to_string());
+        tags1.insert("MONITOR.ip".to_string(), "192.168.1.1".to_string());
+        tags1.insert("MONITOR.hostName".to_string(), "host1".to_string());
+
+        let mut tags2 = HashMap::new();
+        tags2.insert("host".to_string(), "server1".to_string());
+        tags2.insert("MONITOR.ip".to_string(), "192.168.1.2".to_string()); // Different IP
+        tags2.insert("MONITOR.hostName".to_string(), "host2".to_string()); // Different hostname
+
+        let umc_hash1 = tracker.calculate_umc_hash(&tags1);
+        let umc_hash2 = tracker.calculate_umc_hash(&tags2);
+
+        // UMC hashes should be the same (system tags excluded)
+        assert_eq!(umc_hash1, umc_hash2, "UMC should exclude system tags - same user tags should produce same hash");
+
+        // PMC hashes should be different (includes all tags)
+        let pmc_hash1 = tracker.calculate_pmc_hash(&tags1);
+        let pmc_hash2 = tracker.calculate_pmc_hash(&tags2);
+        assert_ne!(pmc_hash1, pmc_hash2, "PMC should include all tags - different system tags should produce different hash");
+    }
+
+    #[test]
+    fn test_umc_and_pmc_different_when_system_tags_present() {
+        use crate::config::{BloomConfig as ConfigBloomConfig, SeriesTrackerConfig, StorageConfig};
+        let storage_config = StorageConfig {
+            data_dir: "./test_data".to_string(),
+            system_dir: "_system".to_string(),
+        };
+        let tracker_config = SeriesTrackerConfig {
+            track_only: false,
+            flush_interval_secs: 60,
+            system_tags: vec!["MONITOR.ip".to_string()],
+            cache_retention_days: 2,
+            default_strategy: "hashset".to_string(),
+            bloom_databases: vec![],
+            bloom: ConfigBloomConfig {
+                expected_series_per_day: 1_000_000_000,
+                false_positive_rate: 0.01,
+            },
+            bloom_custom: vec![],
+        };
+        let tracker = SeriesTracker::new(&storage_config, &tracker_config);
+
+        let mut tags = HashMap::new();
+        tags.insert("host".to_string(), "server1".to_string());
+        tags.insert("MONITOR.ip".to_string(), "192.168.1.1".to_string());
+
+        let umc_hash = tracker.calculate_umc_hash(&tags);
+        let pmc_hash = tracker.calculate_pmc_hash(&tags);
+
+        assert_ne!(umc_hash, pmc_hash, "UMC and PMC should produce different hashes when system tags are present");
+    }
+
+    #[test]
+    fn test_umc_stable_hash_order() {
+        use crate::config::{BloomConfig as ConfigBloomConfig, SeriesTrackerConfig, StorageConfig};
+        let storage_config = StorageConfig {
+            data_dir: "./test_data".to_string(),
+            system_dir: "_system".to_string(),
+        };
+        let tracker_config = SeriesTrackerConfig {
+            track_only: false,
+            flush_interval_secs: 60,
+            system_tags: vec!["MONITOR.ip".to_string()],
+            cache_retention_days: 2,
+            default_strategy: "hashset".to_string(),
+            bloom_databases: vec![],
+            bloom: ConfigBloomConfig {
+                expected_series_per_day: 1_000_000_000,
+                false_positive_rate: 0.01,
+            },
+            bloom_custom: vec![],
+        };
+        let tracker = SeriesTracker::new(&storage_config, &tracker_config);
+
+        // UMC hash should be stable regardless of tag insertion order
+        let mut tags1 = HashMap::new();
+        tags1.insert("host".to_string(), "server1".to_string());
+        tags1.insert("region".to_string(), "us-west".to_string());
+        tags1.insert("MONITOR.ip".to_string(), "192.168.1.1".to_string());
+
+        let mut tags2 = HashMap::new();
+        tags2.insert("region".to_string(), "us-west".to_string());
+        tags2.insert("MONITOR.ip".to_string(), "192.168.1.1".to_string());
+        tags2.insert("host".to_string(), "server1".to_string());
+
+        let hash1 = tracker.calculate_umc_hash(&tags1);
+        let hash2 = tracker.calculate_umc_hash(&tags2);
+
+        assert_eq!(hash1, hash2, "UMC hash should be stable regardless of tag order");
+    }
+
+    #[tokio::test]
+    async fn test_track_points_basic() {
+        use crate::config::{BloomConfig as ConfigBloomConfig, SeriesTrackerConfig, StorageConfig};
+        use chrono::Utc;
+
+        let storage_config = StorageConfig {
+            data_dir: "./test_data_track".to_string(),
+            system_dir: "_system".to_string(),
+        };
+        let tracker_config = SeriesTrackerConfig {
+            track_only: false,
+            flush_interval_secs: 60,
+            system_tags: vec!["MONITOR.ip".to_string()],
+            cache_retention_days: 2,
+            default_strategy: "hashset".to_string(),
+            bloom_databases: vec![],
+            bloom: ConfigBloomConfig {
+                expected_series_per_day: 1_000_000_000,
+                false_positive_rate: 0.01,
+            },
+            bloom_custom: vec![],
+        };
+        let tracker = Arc::new(SeriesTracker::new(&storage_config, &tracker_config));
+
+        let today = Utc::now()
+            .date_naive()
+            .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days() as i32;
+
+        let mut tags = HashMap::new();
+        tags.insert("host".to_string(), "server1".to_string());
+        tags.insert("MONITOR.ip".to_string(), "192.168.1.1".to_string());
+
+        let points = vec![
+            Point {
+                measurement: "cpu".to_string(),
+                tags: tags.clone(),
+                timestamp: Some(1234567890),
+                date: today,
+                service: "test_service".to_string(),
+            },
+        ];
+
+        tracker.track_points("testdb", &points).await;
+
+        // Verify pending writes exist
+        let pending = tracker.pending_writes.read().await;
+        assert!(pending.len() > 0, "Should have pending writes");
+
+        // Clean up
+        let _ = std::fs::remove_dir_all("./test_data_track");
+    }
+
+    #[tokio::test]
+    async fn test_track_points_deduplication() {
+        use crate::config::{BloomConfig as ConfigBloomConfig, SeriesTrackerConfig, StorageConfig};
+        use chrono::Utc;
+
+        let storage_config = StorageConfig {
+            data_dir: "./test_data_dedup".to_string(),
+            system_dir: "_system".to_string(),
+        };
+        let tracker_config = SeriesTrackerConfig {
+            track_only: false,
+            flush_interval_secs: 60,
+            system_tags: vec!["MONITOR.ip".to_string()],
+            cache_retention_days: 2,
+            default_strategy: "hashset".to_string(),
+            bloom_databases: vec![],
+            bloom: ConfigBloomConfig {
+                expected_series_per_day: 1_000_000_000,
+                false_positive_rate: 0.01,
+            },
+            bloom_custom: vec![],
+        };
+        let tracker = Arc::new(SeriesTracker::new(&storage_config, &tracker_config));
+
+        let today = Utc::now()
+            .date_naive()
+            .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days() as i32;
+
+        let mut tags = HashMap::new();
+        tags.insert("host".to_string(), "server1".to_string());
+        tags.insert("MONITOR.ip".to_string(), "192.168.1.1".to_string());
+
+        // Track the same point twice
+        let points = vec![
+            Point {
+                measurement: "cpu".to_string(),
+                tags: tags.clone(),
+                timestamp: Some(1234567890),
+                date: today,
+                service: "test_service".to_string(),
+            },
+        ];
+
+        tracker.track_points("testdb", &points).await;
+        tracker.track_points("testdb", &points).await; // Duplicate
+
+        // Check pending writes - should only have one unique record
+        let pending = tracker.pending_writes.read().await;
+
+        for ((schema, db, _date), records) in pending.iter() {
+            if schema == "umc" && db == "testdb" {
+                // Should have exactly 1 unique record despite 2 track_points calls
+                assert_eq!(records.len(), 1, "Deduplication should prevent duplicate records");
+            }
+        }
+
+        // Clean up
+        let _ = std::fs::remove_dir_all("./test_data_dedup");
+    }
+
+    #[tokio::test]
+    async fn test_track_points_pmc_umc_independence() {
+        use crate::config::{BloomConfig as ConfigBloomConfig, SeriesTrackerConfig, StorageConfig};
+        use chrono::Utc;
+
+        let storage_config = StorageConfig {
+            data_dir: "./test_data_independence".to_string(),
+            system_dir: "_system".to_string(),
+        };
+        let tracker_config = SeriesTrackerConfig {
+            track_only: false,
+            flush_interval_secs: 60,
+            system_tags: vec!["MONITOR.ip".to_string()],
+            cache_retention_days: 2,
+            default_strategy: "hashset".to_string(),
+            bloom_databases: vec![],
+            bloom: ConfigBloomConfig {
+                expected_series_per_day: 1_000_000_000,
+                false_positive_rate: 0.01,
+            },
+            bloom_custom: vec![],
+        };
+        let tracker = Arc::new(SeriesTracker::new(&storage_config, &tracker_config));
+
+        let today = Utc::now()
+            .date_naive()
+            .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days() as i32;
+
+        // Create two points with same user tags but different system tags
+        let mut tags1 = HashMap::new();
+        tags1.insert("host".to_string(), "server1".to_string());
+        tags1.insert("MONITOR.ip".to_string(), "192.168.1.1".to_string());
+
+        let mut tags2 = HashMap::new();
+        tags2.insert("host".to_string(), "server1".to_string());
+        tags2.insert("MONITOR.ip".to_string(), "192.168.1.2".to_string()); // Different IP
+
+        let points = vec![
+            Point {
+                measurement: "cpu".to_string(),
+                tags: tags1,
+                timestamp: Some(1234567890),
+                date: today,
+                service: "test_service".to_string(),
+            },
+            Point {
+                measurement: "cpu".to_string(),
+                tags: tags2,
+                timestamp: Some(1234567891),
+                date: today,
+                service: "test_service".to_string(),
+            },
+        ];
+
+        tracker.track_points("testdb", &points).await;
+
+        // Check pending writes
+        let pending = tracker.pending_writes.read().await;
+
+        let mut pmc_count = 0;
+        let mut umc_count = 0;
+
+        for ((schema, db, _date), records) in pending.iter() {
+            if db == "testdb" {
+                if schema == "pmc" {
+                    pmc_count = records.len();
+                } else if schema == "umc" {
+                    umc_count = records.len();
+                }
+            }
+        }
+
+        // PMC should have 2 records (different system tags)
+        assert_eq!(pmc_count, 2, "PMC should track both series (different system tags)");
+
+        // UMC should have 1 record (same user tags)
+        assert_eq!(umc_count, 1, "UMC should deduplicate series with same user tags");
+
+        // Clean up
+        let _ = std::fs::remove_dir_all("./test_data_independence");
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_track_points() {
+        use crate::config::{BloomConfig as ConfigBloomConfig, SeriesTrackerConfig, StorageConfig};
+        use chrono::Utc;
+        use tokio::task;
+
+        let storage_config = StorageConfig {
+            data_dir: "./test_data_concurrent".to_string(),
+            system_dir: "_system".to_string(),
+        };
+        let tracker_config = SeriesTrackerConfig {
+            track_only: false,
+            flush_interval_secs: 60,
+            system_tags: vec!["MONITOR.ip".to_string()],
+            cache_retention_days: 2,
+            default_strategy: "hashset".to_string(),
+            bloom_databases: vec![],
+            bloom: ConfigBloomConfig {
+                expected_series_per_day: 1_000_000_000,
+                false_positive_rate: 0.01,
+            },
+            bloom_custom: vec![],
+        };
+        let tracker = Arc::new(SeriesTracker::new(&storage_config, &tracker_config));
+
+        let today = Utc::now()
+            .date_naive()
+            .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days() as i32;
+
+        // Spawn 20 concurrent tasks that all track the SAME series
+        let mut handles = vec![];
+
+        for i in 0..20 {
+            let tracker_clone = Arc::clone(&tracker);
+            let handle = task::spawn(async move {
+                let mut tags = HashMap::new();
+                tags.insert("host".to_string(), "server1".to_string());
+                tags.insert("MONITOR.ip".to_string(), format!("192.168.1.{}", i));
+
+                let points = vec![
+                    Point {
+                        measurement: "cpu".to_string(),
+                        tags,
+                        timestamp: Some(1234567890 + i as i64),
+                        date: today,
+                        service: "test_service".to_string(),
+                    },
+                ];
+
+                tracker_clone.track_points("concurrent_db", &points).await;
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all tasks
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Check pending writes
+        let pending = tracker.pending_writes.read().await;
+
+        for ((schema, db, _date), records) in pending.iter() {
+            if db == "concurrent_db" {
+                if schema == "pmc" {
+                    // PMC should have 20 records (different IPs)
+                    assert_eq!(records.len(), 20, "PMC should track all 20 series with different IPs");
+                } else if schema == "umc" {
+                    // UMC should have 1 record (same host tag)
+                    assert_eq!(records.len(), 1, "UMC should deduplicate to 1 series (same user tags)");
+                }
+            }
+        }
+
+        // Clean up
+        let _ = std::fs::remove_dir_all("./test_data_concurrent");
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_same_series_deduplication() {
+        use crate::config::{BloomConfig as ConfigBloomConfig, SeriesTrackerConfig, StorageConfig};
+        use chrono::Utc;
+        use tokio::task;
+
+        let storage_config = StorageConfig {
+            data_dir: "./test_data_same_series".to_string(),
+            system_dir: "_system".to_string(),
+        };
+        let tracker_config = SeriesTrackerConfig {
+            track_only: false,
+            flush_interval_secs: 60,
+            system_tags: vec!["MONITOR.ip".to_string()],
+            cache_retention_days: 2,
+            default_strategy: "hashset".to_string(),
+            bloom_databases: vec![],
+            bloom: ConfigBloomConfig {
+                expected_series_per_day: 1_000_000_000,
+                false_positive_rate: 0.01,
+            },
+            bloom_custom: vec![],
+        };
+        let tracker = Arc::new(SeriesTracker::new(&storage_config, &tracker_config));
+
+        let today = Utc::now()
+            .date_naive()
+            .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days() as i32;
+
+        // Spawn 50 concurrent tasks that all track the EXACT SAME series
+        let mut handles = vec![];
+
+        for _ in 0..50 {
+            let tracker_clone = Arc::clone(&tracker);
+            let handle = task::spawn(async move {
+                let mut tags = HashMap::new();
+                tags.insert("host".to_string(), "server1".to_string());
+                tags.insert("MONITOR.ip".to_string(), "192.168.1.100".to_string());
+
+                let points = vec![
+                    Point {
+                        measurement: "cpu".to_string(),
+                        tags,
+                        timestamp: Some(1234567890),
+                        date: today,
+                        service: "test_service".to_string(),
+                    },
+                ];
+
+                tracker_clone.track_points("same_series_db", &points).await;
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all tasks
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Check pending writes - should only have 1 unique record
+        let pending = tracker.pending_writes.read().await;
+
+        for ((schema, db, _date), records) in pending.iter() {
+            if db == "same_series_db" {
+                // Both PMC and UMC should have exactly 1 record (same series)
+                assert_eq!(records.len(), 1, "Schema {} should have exactly 1 record despite 50 concurrent calls", schema);
+            }
+        }
+
+        // Clean up
+        let _ = std::fs::remove_dir_all("./test_data_same_series");
+    }
+
+    #[tokio::test]
+    async fn test_multiple_databases_isolation() {
+        use crate::config::{BloomConfig as ConfigBloomConfig, SeriesTrackerConfig, StorageConfig};
+        use chrono::Utc;
+
+        let storage_config = StorageConfig {
+            data_dir: "./test_data_multi_db".to_string(),
+            system_dir: "_system".to_string(),
+        };
+        let tracker_config = SeriesTrackerConfig {
+            track_only: false,
+            flush_interval_secs: 60,
+            system_tags: vec![],
+            cache_retention_days: 2,
+            default_strategy: "hashset".to_string(),
+            bloom_databases: vec![],
+            bloom: ConfigBloomConfig {
+                expected_series_per_day: 1_000_000_000,
+                false_positive_rate: 0.01,
+            },
+            bloom_custom: vec![],
+        };
+        let tracker = Arc::new(SeriesTracker::new(&storage_config, &tracker_config));
+
+        let today = Utc::now()
+            .date_naive()
+            .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days() as i32;
+
+        let mut tags = HashMap::new();
+        tags.insert("host".to_string(), "server1".to_string());
+
+        let points = vec![
+            Point {
+                measurement: "cpu".to_string(),
+                tags: tags.clone(),
+                timestamp: Some(1234567890),
+                date: today,
+                service: "test_service".to_string(),
+            },
+        ];
+
+        // Track same series in different databases
+        tracker.track_points("db1", &points).await;
+        tracker.track_points("db2", &points).await;
+        tracker.track_points("db3", &points).await;
+
+        // Check pending writes - each database should have its own records
+        let pending = tracker.pending_writes.read().await;
+
+        let mut db_count = std::collections::HashSet::new();
+        for ((schema, db, _date), _records) in pending.iter() {
+            if schema == "pmc" {
+                db_count.insert(db.clone());
+            }
+        }
+
+        assert_eq!(db_count.len(), 3, "Should track series separately for each database");
+
+        // Clean up
+        let _ = std::fs::remove_dir_all("./test_data_multi_db");
+    }
 }
