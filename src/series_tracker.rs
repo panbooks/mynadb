@@ -816,6 +816,16 @@ impl SeriesTracker {
         }
         0
     }
+
+    /// Get total memory usage of deduplication strategies
+    pub async fn total_dedup_memory_bytes(&self) -> usize {
+        self.strategy_manager.total_memory_bytes().await
+    }
+
+    /// Get detailed stats per database
+    pub async fn get_dedup_stats(&self) -> HashMap<String, crate::series_dedup::StrategyStats> {
+        self.strategy_manager.get_stats().await
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

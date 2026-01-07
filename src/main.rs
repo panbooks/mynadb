@@ -447,6 +447,7 @@ async fn main() {
         .route("/write", post(write_handler_query_param)) // InfluxDB-compatible
         // Cache management
         .route("/stats", get(stats_handler))
+        .route("/memory", get(memory_handler))
         .route("/flush", post(flush_handler))
         // Query endpoints
         .route("/query/:db", get(query_handler))
@@ -799,6 +800,65 @@ async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
             stats.max_size_bytes
         ),
     )
+}
+
+async fn memory_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let dedup_stats = state.series_tracker.get_dedup_stats().await;
+    let total_dedup = state.series_tracker.total_dedup_memory_bytes().await;
+    let cache_stats = state.cache.stats().await;
+
+    // Format bytes
+    let format_bytes = |bytes: usize| -> String {
+        if bytes >= 1024 * 1024 * 1024 {
+            format!("{:.2} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
+        } else if bytes >= 1024 * 1024 {
+            format!("{:.2} MB", bytes as f64 / 1024.0 / 1024.0)
+        } else if bytes >= 1024 {
+            format!("{:.2} KB", bytes as f64 / 1024.0)
+        } else {
+            format!("{} B", bytes)
+        }
+    };
+
+    let mut output = String::new();
+    output.push_str("Memory Usage Statistics:\n");
+    output.push_str("══════════════════════════════════════════\n\n");
+
+    // Cache memory
+    output.push_str(&format!("Data Cache:\n"));
+    output.push_str(&format!("  Size: {} ({} bytes)\n",
+        format_bytes(cache_stats.size_bytes), cache_stats.size_bytes));
+    output.push_str(&format!("  Limit: {} ({} bytes)\n\n",
+        format_bytes(cache_stats.max_size_bytes), cache_stats.max_size_bytes));
+
+    // Deduplication memory
+    output.push_str(&format!("Series Deduplication (Bloom/HashSet):\n"));
+    output.push_str(&format!("  Total: {} ({} bytes)\n\n",
+        format_bytes(total_dedup), total_dedup));
+
+    if !dedup_stats.is_empty() {
+        output.push_str("  Per Database:\n");
+        let mut db_vec: Vec<_> = dedup_stats.iter().collect();
+        db_vec.sort_by_key(|(name, _)| *name);
+
+        for (db_name, stats) in db_vec {
+            output.push_str(&format!("    {:<30} {:>12} ({:>15} bytes, strategy: {})\n",
+                db_name,
+                format_bytes(stats.memory_bytes),
+                stats.memory_bytes,
+                stats.strategy_type));
+        }
+        output.push_str("\n");
+    }
+
+    // Total estimate
+    let total_approx = cache_stats.size_bytes + total_dedup;
+    output.push_str("──────────────────────────────────────────\n");
+    output.push_str(&format!("Approximate Total: {} ({} bytes)\n",
+        format_bytes(total_approx), total_approx));
+    output.push_str("══════════════════════════════════════════\n");
+
+    (StatusCode::OK, output)
 }
 
 async fn flush_handler(State(state): State<AppState>) -> impl IntoResponse {

@@ -334,7 +334,7 @@ impl StrategyManager {
 }
 
 /// Statistics for a strategy
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct StrategyStats {
     pub strategy_type: String,
     pub memory_bytes: usize,
