@@ -65,6 +65,7 @@ mkdir -p ${DEPLOY_DIR}
 # Step 4: Copy binary
 print_info "Copying binary..."
 cp -f ${SOURCE_DIR}/tsdb-stats ${DEPLOY_DIR}/
+cp -rf ${SOURCE_DIR}/tools ${DEPLOY_DIR}/
 chmod +x ${DEPLOY_DIR}/tsdb-stats
 print_success "Binary copied"
 
