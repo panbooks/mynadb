@@ -33,6 +33,8 @@ bloomfilter = "1.0"
 wildmatch = "2.1"
 base64 = "0.22"
 urlencoding = "2.1"
+pprof = { version = "0.14", features = ["flamegraph", "prost-codec"] }
+prost = "0.13"
 
 [build-dependencies]
 chrono = "0.4"
