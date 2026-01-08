@@ -855,6 +855,7 @@ mod tests {
             flush_interval_secs: 60,
             system_tags: vec![],
             cache_retention_days: 2,
+            max_concurrent_tables: 8,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -894,6 +895,7 @@ mod tests {
             flush_interval_secs: 60,
             system_tags: vec![],
             cache_retention_days: 2,
+            max_concurrent_tables: 8,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -931,6 +933,7 @@ mod tests {
             flush_interval_secs: 60,
             system_tags: vec!["MONITOR.ip".to_string(), "MONITOR.hostName".to_string()],
             cache_retention_days: 2,
+            max_concurrent_tables: 8,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -976,6 +979,7 @@ mod tests {
             flush_interval_secs: 60,
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
+            max_concurrent_tables: 8,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1008,6 +1012,7 @@ mod tests {
             flush_interval_secs: 60,
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
+            max_concurrent_tables: 8,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1049,6 +1054,7 @@ mod tests {
             flush_interval_secs: 60,
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
+            max_concurrent_tables: 8,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1102,6 +1108,7 @@ mod tests {
             flush_interval_secs: 60,
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
+            max_concurrent_tables: 8,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1163,6 +1170,7 @@ mod tests {
             flush_interval_secs: 60,
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
+            max_concurrent_tables: 8,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1247,6 +1255,7 @@ mod tests {
             flush_interval_secs: 60,
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
+            max_concurrent_tables: 8,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1326,6 +1335,7 @@ mod tests {
             flush_interval_secs: 60,
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
+            max_concurrent_tables: 8,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1399,6 +1409,7 @@ mod tests {
             flush_interval_secs: 60,
             system_tags: vec![],
             cache_retention_days: 2,
+            max_concurrent_tables: 8,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1446,5 +1457,80 @@ mod tests {
 
         // Clean up
         let _ = std::fs::remove_dir_all("./test_data_multi_db");
+    }
+
+    #[tokio::test]
+    async fn test_load_series_cache() {
+        use crate::config::{BloomConfig as ConfigBloomConfig, SeriesTrackerConfig, StorageConfig};
+        use chrono::Utc;
+
+        let storage_config = StorageConfig {
+            data_dir: "./test_data_load_cache".to_string(),
+            system_dir: "_system".to_string(),
+        };
+        let tracker_config = SeriesTrackerConfig {
+            track_only: false,
+            flush_interval_secs: 60,
+            system_tags: vec!["MONITOR.ip".to_string()],
+            cache_retention_days: 2,
+            max_concurrent_tables: 8,
+            default_strategy: "hashset".to_string(),
+            bloom_databases: vec![],
+            bloom: ConfigBloomConfig {
+                expected_series_per_day: 1_000_000_000,
+                false_positive_rate: 0.01,
+            },
+            bloom_custom: vec![],
+        };
+        let tracker = Arc::new(SeriesTracker::new(&storage_config, &tracker_config));
+
+        let today = Utc::now()
+            .date_naive()
+            .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days() as i32;
+
+        // Create test data
+        let mut tags = HashMap::new();
+        tags.insert("host".to_string(), "server1".to_string());
+        tags.insert("MONITOR.ip".to_string(), "192.168.1.1".to_string());
+
+        let points = vec![
+            Point {
+                measurement: "cpu".to_string(),
+                tags: tags.clone(),
+                timestamp: Some(1234567890),
+                date: today,
+                service: "test_service".to_string(),
+            },
+        ];
+
+        // Track and flush
+        tracker.track_points("testdb", &points).await;
+        tracker.flush_all().await.unwrap();
+
+        // Create a new tracker to simulate restart
+        let tracker2 = Arc::new(SeriesTracker::new(&storage_config, &tracker_config));
+
+        // Load cache
+        let result = tracker2.load_cache(SCHEMA_PMC, "testdb").await;
+        assert!(result.is_ok(), "Load cache should succeed");
+
+        let result = tracker2.load_cache(SCHEMA_UMC, "testdb").await;
+        assert!(result.is_ok(), "Load cache should succeed");
+
+        // Verify data loaded: track same point again, should be deduplicated
+        tracker2.track_points("testdb", &points).await;
+
+        let pending = tracker2.pending_writes.read().await;
+
+        // Should have no new pending writes because series was already in cache
+        for ((schema, db, _date), records) in pending.iter() {
+            if schema == SCHEMA_PMC && db == "testdb" {
+                assert!(records.is_empty(), "Should have no new records after cache reload - deduplication works");
+            }
+        }
+
+        // Clean up
+        let _ = std::fs::remove_dir_all("./test_data_load_cache");
     }
 }
