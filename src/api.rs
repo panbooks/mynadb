@@ -682,13 +682,8 @@ pub async fn query_handler_post(
 }
 
 async fn execute_query(db: String, sql: String, state: AppState) -> impl IntoResponse {
-    // Auto-register database tables (simplified!)
-    if let Err(e) = state.query_engine.ensure_database_registered(&db).await {
-        error!("Error auto-registering database: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e));
-    }
-
     // Execute query with database context (auto-prefix table names)
+    // Tables will be registered on-demand based on the query
     match state
         .query_engine
         .execute_query_json_with_db(&sql, &db)

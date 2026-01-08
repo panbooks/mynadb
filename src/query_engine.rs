@@ -337,6 +337,15 @@ impl QueryEngine {
         sql: &str,
         db_name: &str,
     ) -> Result<Vec<RecordBatch>, String> {
+        // Extract table references from SQL and register only those tables
+        let table_refs = self.extract_table_references(sql, db_name);
+
+        for (catalog, schema, table) in table_refs {
+            // Try to register the table (will skip if already registered)
+            // Ignore errors here - DataFusion will report if table doesn't exist
+            let _ = self.register_table(&catalog, &schema, &table).await;
+        }
+
         // Qualify unqualified table names with catalog.schema
         let qualified_sql = self.qualify_table_names(sql, db_name);
 
@@ -455,6 +464,147 @@ impl QueryEngine {
         } else {
             ident.to_string()
         }
+    }
+
+    /// Extract table references from SQL query
+    /// Returns Vec<(catalog, schema, table)> with fully resolved names
+    fn extract_table_references(&self, sql: &str, catalog_name: &str) -> Vec<(String, String, String)> {
+        let sql_upper = sql.to_uppercase();
+        let mut table_refs = Vec::new();
+
+        let keywords = [
+            "FROM",
+            "JOIN",
+            "INNER JOIN",
+            "LEFT JOIN",
+            "RIGHT JOIN",
+            "FULL JOIN",
+        ];
+
+        for keyword in &keywords {
+            let pattern = format!("{} ", keyword);
+            let mut search_pos = 0;
+
+            while let Some(pos) = sql_upper[search_pos..].find(&pattern) {
+                let abs_pos = search_pos + pos + pattern.len();
+                let remaining = &sql[abs_pos..];
+
+                // Extract all comma-separated table references
+                let mut table_list_end = 0;
+                let mut in_quotes = false;
+                let mut quote_char = ' ';
+                let mut paren_depth = 0;
+
+                // Find the end of the table list (stops at WHERE, ORDER BY, GROUP BY, etc.)
+                for (i, ch) in remaining.chars().enumerate() {
+                    if !in_quotes && ch == '(' {
+                        paren_depth += 1;
+                    } else if !in_quotes && ch == ')' {
+                        paren_depth -= 1;
+                        if paren_depth < 0 {
+                            table_list_end = i;
+                            break;
+                        }
+                    } else if !in_quotes && (ch == '"' || ch == '`') {
+                        in_quotes = true;
+                        quote_char = ch;
+                    } else if in_quotes && ch == quote_char {
+                        in_quotes = false;
+                    } else if !in_quotes && paren_depth == 0 {
+                        // Check for SQL keywords that end the table list
+                        let remaining_upper = &sql_upper[abs_pos + i..];
+                        if remaining_upper.starts_with("WHERE ")
+                            || remaining_upper.starts_with("GROUP ")
+                            || remaining_upper.starts_with("ORDER ")
+                            || remaining_upper.starts_with("LIMIT ")
+                            || remaining_upper.starts_with("HAVING ")
+                            || remaining_upper.starts_with("UNION ")
+                            || remaining_upper.starts_with("EXCEPT ")
+                            || remaining_upper.starts_with("INTERSECT ")
+                            || ch == ';'
+                        {
+                            table_list_end = i;
+                            break;
+                        }
+                    }
+                }
+
+                if table_list_end == 0 {
+                    table_list_end = remaining.len();
+                }
+
+                let table_list = &remaining[..table_list_end];
+
+                // Split by commas and process each table reference
+                let mut current_table = String::new();
+                let mut in_quotes = false;
+                let mut quote_char = ' ';
+
+                for ch in table_list.chars() {
+                    if !in_quotes && (ch == '"' || ch == '`') {
+                        in_quotes = true;
+                        quote_char = ch;
+                        current_table.push(ch);
+                    } else if in_quotes && ch == quote_char {
+                        in_quotes = false;
+                        current_table.push(ch);
+                    } else if !in_quotes && ch == ',' {
+                        // Process the current table
+                        self.process_table_ref(&current_table, catalog_name, &mut table_refs);
+                        current_table.clear();
+                    } else {
+                        current_table.push(ch);
+                    }
+                }
+
+                // Process the last table
+                if !current_table.is_empty() {
+                    self.process_table_ref(&current_table, catalog_name, &mut table_refs);
+                }
+
+                search_pos = abs_pos + table_list_end;
+            }
+        }
+
+        // Deduplicate
+        table_refs.sort();
+        table_refs.dedup();
+        table_refs
+    }
+
+    /// Helper to process a single table reference and add to the list
+    fn process_table_ref(&self, table_ref: &str, catalog_name: &str, table_refs: &mut Vec<(String, String, String)>) {
+        let table_ref = table_ref.trim();
+
+        // Skip empty refs, subqueries, or aliases (words after whitespace)
+        if table_ref.is_empty() || table_ref.starts_with('(') {
+            return;
+        }
+
+        // Remove alias if present (e.g., "cpu c" -> "cpu")
+        let table_ref = table_ref.split_whitespace().next().unwrap_or(table_ref);
+
+        // Parse the table reference considering quotes
+        let (parts, _) = Self::parse_table_reference(table_ref);
+
+        // Determine catalog, schema, table based on number of parts
+        let (catalog, schema, table) = match parts.len() {
+            0 => return,
+            1 => {
+                // Simple name: cpu -> catalog.default.cpu
+                (catalog_name.to_string(), DEFAULT_SCHEMA.to_string(), parts[0].clone())
+            }
+            2 => {
+                // Partially qualified: schema.table -> catalog.schema.table
+                (catalog_name.to_string(), parts[0].clone(), parts[1].clone())
+            }
+            _ => {
+                // Fully qualified: catalog.schema.table
+                (parts[0].clone(), parts[1].clone(), parts[2].clone())
+            }
+        };
+
+        table_refs.push((catalog, schema, table));
     }
 
     /// Qualify unqualified or partially qualified table names with catalog.schema
@@ -994,5 +1144,49 @@ mod tests {
         let sql2 = r#"SELECT * FROM "TestDiskUsage""#;
         let result2 = engine.qualify_table_names(sql2, "_system");
         assert_eq!(result2, r#"SELECT * FROM _system.default."TestDiskUsage""#);
+    }
+
+    #[test]
+    fn test_extract_table_references() {
+        let engine = QueryEngine::new("./data");
+
+        // Simple unqualified table
+        let sql = "SELECT * FROM cpu WHERE usage > 50";
+        let refs = engine.extract_table_references(sql, "testdb");
+        assert_eq!(refs, vec![("testdb".to_string(), "default".to_string(), "cpu".to_string())]);
+
+        // Partially qualified
+        let sql = "SELECT * FROM webapp.cpu LIMIT 10";
+        let refs = engine.extract_table_references(sql, "testdb");
+        assert_eq!(refs, vec![("testdb".to_string(), "webapp".to_string(), "cpu".to_string())]);
+
+        // Fully qualified
+        let sql = "SELECT * FROM testdb.webapp.cpu WHERE timestamp > 0";
+        let refs = engine.extract_table_references(sql, "testdb");
+        assert_eq!(refs, vec![("testdb".to_string(), "webapp".to_string(), "cpu".to_string())]);
+
+        // Multiple tables (JOIN)
+        let sql = "SELECT * FROM cpu JOIN webapp.memory ON cpu.hostname = memory.hostname";
+        let mut refs = engine.extract_table_references(sql, "testdb");
+        refs.sort();
+        assert_eq!(refs, vec![
+            ("testdb".to_string(), "default".to_string(), "cpu".to_string()),
+            ("testdb".to_string(), "webapp".to_string(), "memory".to_string())
+        ]);
+
+        // Multiple tables with different qualification levels
+        let sql = "SELECT * FROM cpu, otherdb.webapp.disk, service.memory";
+        let mut refs = engine.extract_table_references(sql, "testdb");
+        refs.sort();
+        assert_eq!(refs, vec![
+            ("otherdb".to_string(), "webapp".to_string(), "disk".to_string()),
+            ("testdb".to_string(), "default".to_string(), "cpu".to_string()),
+            ("testdb".to_string(), "service".to_string(), "memory".to_string())
+        ]);
+
+        // With quoted identifiers
+        let sql = r#"SELECT * FROM default."cat.transaction""#;
+        let refs = engine.extract_table_references(sql, "testdb");
+        assert_eq!(refs, vec![("testdb".to_string(), "default".to_string(), "cat.transaction".to_string())]);
     }
 }

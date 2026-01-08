@@ -1,4 +1,3 @@
-use crate::series_tracker::SeriesRecord;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
