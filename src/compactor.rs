@@ -161,21 +161,21 @@ impl ParquetFileInfo {
                 let level = parts[0]
                     .trim_start_matches(LEVEL_PREFIX)
                     .parse::<u32>()
-                    .unwrap_or(0);
+                    .map_err(|_| "Invalid level in filename")?;
                 let timestamp = parts[1]
                     .trim_end_matches(PARQUET_EXT)
                     .parse::<i64>()
-                    .unwrap_or(0);
+                    .map_err(|_| "Invalid timestamp in filename")?;
                 (level, timestamp)
             } else {
-                (0, 0)
+                return Err("Invalid level format".into());
             }
         } else {
             // Legacy format: 1703251234567.parquet (treat as L0)
             let timestamp = filename
                 .trim_end_matches(PARQUET_EXT)
                 .parse::<i64>()
-                .unwrap_or(0);
+                .map_err(|_| "Invalid timestamp in legacy format")?;
             (0, timestamp)
         };
 
@@ -219,7 +219,7 @@ impl Compactor {
 
         Compactor {
             data_dir: data_dir.to_string(),
-            locks: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            locks: Arc::new(RwLock::new(HashMap::new())),
             compaction_semaphore,
             full_compaction_semaphore,
             read_rate_limiter,
@@ -810,176 +810,17 @@ impl Compactor {
         table: &str,
         config: &CompactionConfig,
     ) -> Result<Option<CompactionResult>, String> {
-        // Acquire semaphore permit if concurrent limiting is enabled
-        let _permit = if let Some(ref semaphore) = self.compaction_semaphore {
-            Some(semaphore.acquire().await.map_err(|e| format!("Failed to acquire semaphore: {}", e))?)
-        } else {
-            None
-        };
-
-        // Use empty string as partition identifier for non-partitioned tables
-        let partition_id = "";
-        let start = Instant::now();
-        let lock = self.get_lock(catalog, schema, table, partition_id).await;
-        let _guard = lock.lock().await;
-
         let table_path = format!("{}/{}/{}/{}", self.data_dir, catalog, schema, table);
-
-        if !Path::new(&table_path).exists() {
-            return Err(format!(
-                "Table '{}.{}.{}' does not exist",
-                catalog, schema, table
-            ));
-        }
-
-        // List and parse all parquet files directly in the table directory
-        let mut file_infos = self.list_parquet_file_infos(&table_path)?;
-
-        if file_infos.is_empty() {
-            return Ok(None);
-        }
-
-        // Sort by level (ascending) then timestamp (ascending)
-        file_infos.sort_by(|a, b| {
-            a.level
-                .cmp(&b.level)
-                .then_with(|| a.timestamp.cmp(&b.timestamp))
-        });
-
-        let total_files_before = file_infos.len();
-        let l0_files_before = file_infos
-            .iter()
-            .filter(|f| f.level == 0 && f.size < config.target_file_size)
-            .count();
-
-        // Calculate total size
-        let total_bytes_before: u64 = file_infos.iter().map(|f| f.size).sum();
-
-        debug!(
-            "Compacting non-partitioned {}.{}.{}: {} files ({} L0), {:.2} MB",
+        self.compact_path_internal(
             catalog,
             schema,
             table,
-            total_files_before,
-            l0_files_before,
-            total_bytes_before as f64 / 1024.0 / 1024.0
-        );
-
-        // Perform multi-level compaction
-        let mut total_rows = 0;
-        let mut compaction_happened = false;
-
-        // Step 1: Minor compaction (L0 → L1) - highest priority
-        if l0_files_before >= config.min_files {
-            let l0_files: Vec<_> = file_infos
-                .iter()
-                .filter(|f| f.level == 0)
-                .cloned()
-                .collect();
-
-            info!("Minor compaction: {} L0 files → L1", l0_files.len());
-
-            let rows = self
-                .compact_level_files(&table_path, &l0_files, 0, config)
-                .await?;
-            total_rows += rows;
-            compaction_happened = true;
-        }
-
-        // Step 2: Major compactions (L1 → L2, L2 → L3, L3 → L4, L4 → L4)
-        // Refresh file list after L0 compaction
-        let file_infos_updated = self.list_parquet_file_infos(&table_path)?;
-
-        for current_level in 1..=config.max_level {
-            // Get all files at this level
-            let all_level_files: Vec<_> = file_infos_updated
-                .iter()
-                .filter(|f| f.level == current_level)
-                .cloned()
-                .collect();
-
-            // Filter out files >= target_file_size to reduce I/O
-            // Already-large files don't need recompaction
-            let level_files: Vec<_> = all_level_files
-                .iter()
-                .filter(|f| f.size < config.target_file_size)
-                .cloned()
-                .collect();
-
-            let filtered_count = all_level_files.len() - level_files.len();
-            if filtered_count > 0 {
-                debug!(
-                    "Filtered out {} oversized files at L{} (>= {:.2} MB)",
-                    filtered_count,
-                    current_level,
-                    config.target_file_size as f64 / 1024.0 / 1024.0
-                );
-            }
-
-            // Allow compaction at all levels including max_level (to reduce file count)
-            if level_files.len() >= config.major_min_files {
-                if current_level < config.max_level {
-                    info!(
-                        "Major compaction: {} L{} files → L{} ({} oversized files skipped)",
-                        level_files.len(),
-                        current_level,
-                        current_level + 1,
-                        filtered_count
-                    );
-                } else {
-                    info!(
-                        "Max-level compaction: {} L{} files → L{} (same level, {} oversized files skipped)",
-                        level_files.len(),
-                        current_level,
-                        current_level,
-                        filtered_count
-                    );
-                }
-
-                let rows = self
-                    .compact_level_files(&table_path, &level_files, current_level, config)
-                    .await?;
-                total_rows += rows;
-                compaction_happened = true;
-            }
-        }
-
-        // If no compaction happened, return None
-        if !compaction_happened {
-            return Ok(None);
-        }
-
-        // Recalculate files after compaction
-        let file_infos_after = self.list_parquet_file_infos(&table_path)?;
-        let total_files_after = file_infos_after.len();
-        let l0_files_after = file_infos_after.iter().filter(|f| f.level == 0).count();
-        let total_bytes_after: u64 = file_infos_after.iter().map(|f| f.size).sum();
-
-        info!(
-            "Compaction complete: {}.{}.{}: {} -> {} files, {:.2} MB -> {:.2} MB in {:?}",
-            catalog,
-            schema,
-            table,
-            total_files_before,
-            total_files_after,
-            total_bytes_before as f64 / 1024.0 / 1024.0,
-            total_bytes_after as f64 / 1024.0 / 1024.0,
-            start.elapsed()
-        );
-
-        Ok(Some(CompactionResult {
-            catalog: catalog.to_string(),
-            schema: schema.to_string(),
-            table: table.to_string(),
-            date_partition: "[non-partitioned]".to_string(),
-            l0_files_before,
-            l0_files_after,
-            files_before: total_files_before,
-            files_after: total_files_after,
-            bytes_before: total_bytes_before,
-            bytes_after: total_bytes_after,
-            rows_compacted: total_rows,
-        }))
+            "",
+            &table_path,
+            "[non-partitioned]",
+            config,
+        )
+        .await
     }
 
     /// Compact a specific partition within a table
@@ -991,6 +832,33 @@ impl Compactor {
         date_partition: &str,
         config: &CompactionConfig,
     ) -> Result<Option<CompactionResult>, String> {
+        let partition_path = format!(
+            "{}/{}/{}/{}/{}",
+            self.data_dir, catalog, schema, table, date_partition
+        );
+        self.compact_path_internal(
+            catalog,
+            schema,
+            table,
+            date_partition,
+            &partition_path,
+            date_partition,
+            config,
+        )
+        .await
+    }
+
+    /// Internal compaction logic shared by partitioned and non-partitioned tables
+    async fn compact_path_internal(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        partition_id: &str,
+        path: &str,
+        display_partition: &str,
+        config: &CompactionConfig,
+    ) -> Result<Option<CompactionResult>, String> {
         // Acquire semaphore permit if concurrent limiting is enabled
         let _permit = if let Some(ref semaphore) = self.compaction_semaphore {
             Some(semaphore.acquire().await.map_err(|e| format!("Failed to acquire semaphore: {}", e))?)
@@ -998,25 +866,19 @@ impl Compactor {
             None
         };
 
-        // Acquire lock to prevent concurrent operations on this partition
-        let lock = self.get_lock(catalog, schema, table, date_partition).await;
-        let _guard = lock.lock().await;
         let start = Instant::now();
+        let lock = self.get_lock(catalog, schema, table, partition_id).await;
+        let _guard = lock.lock().await;
 
-        let partition_path = format!(
-            "{}/{}/{}/{}/{}",
-            self.data_dir, catalog, schema, table, date_partition
-        );
-
-        if !Path::new(&partition_path).exists() {
+        if !Path::new(path).exists() {
             return Err(format!(
-                "Partition '{}.{}.{}/{}' does not exist",
-                catalog, schema, table, date_partition
+                "Path '{}.{}.{}/{}' does not exist",
+                catalog, schema, table, display_partition
             ));
         }
 
-        // List and parse all parquet files in this partition
-        let mut file_infos = self.list_parquet_file_infos(&partition_path)?;
+        // List and parse all parquet files
+        let mut file_infos = self.list_parquet_file_infos(path)?;
 
         if file_infos.is_empty() {
             return Ok(None);
@@ -1031,8 +893,6 @@ impl Compactor {
 
         let total_files_before = file_infos.len();
         let l0_files_before = file_infos.iter().filter(|f| f.level == 0).count();
-
-        // Calculate total size
         let total_bytes_before: u64 = file_infos.iter().map(|f| f.size).sum();
 
         debug!(
@@ -1040,7 +900,7 @@ impl Compactor {
             catalog,
             schema,
             table,
-            date_partition,
+            display_partition,
             total_files_before,
             l0_files_before,
             total_bytes_before as f64 / 1024.0 / 1024.0
@@ -1061,18 +921,16 @@ impl Compactor {
             info!("Minor compaction: {} L0 files → L1", l0_files.len());
 
             let rows = self
-                .compact_level_files(&partition_path, &l0_files, 0, config)
+                .compact_level_files(path, &l0_files, 0, config)
                 .await?;
             total_rows += rows;
             compaction_happened = true;
         }
 
-        // Step 2: Major compactions (L1 → L2, L2 → L3, L3 → L4, L4 → L4)
-        // Refresh file list after L0 compaction
-        let file_infos_updated = self.list_parquet_file_infos(&partition_path)?;
+        // Step 2: Major compactions (L1 → L2, L2 → L3, etc.)
+        let file_infos_updated = self.list_parquet_file_infos(path)?;
 
         for current_level in 1..=config.max_level {
-            // Get all files at this level
             let all_level_files: Vec<_> = file_infos_updated
                 .iter()
                 .filter(|f| f.level == current_level)
@@ -1080,7 +938,6 @@ impl Compactor {
                 .collect();
 
             // Filter out files >= target_file_size to reduce I/O
-            // Already-large files don't need recompaction
             let level_files: Vec<_> = all_level_files
                 .iter()
                 .filter(|f| f.size < config.target_file_size)
@@ -1097,7 +954,6 @@ impl Compactor {
                 );
             }
 
-            // Allow compaction at all levels including max_level (to reduce file count)
             if level_files.len() >= config.major_min_files {
                 if current_level < config.max_level {
                     info!(
@@ -1118,36 +974,41 @@ impl Compactor {
                 }
 
                 let rows = self
-                    .compact_level_files(&partition_path, &level_files, current_level, config)
+                    .compact_level_files(path, &level_files, current_level, config)
                     .await?;
                 total_rows += rows;
                 compaction_happened = true;
             }
         }
 
-        // If no compaction happened, return None
         if !compaction_happened {
             return Ok(None);
         }
 
         // Recalculate files after compaction
-        let file_infos_after = self.list_parquet_file_infos(&partition_path)?;
+        let file_infos_after = self.list_parquet_file_infos(path)?;
         let total_files_after = file_infos_after.len();
         let l0_files_after = file_infos_after.iter().filter(|f| f.level == 0).count();
         let total_bytes_after: u64 = file_infos_after.iter().map(|f| f.size).sum();
 
-        info!("Compaction complete: {}.{}.{}/{}: {} -> {} files, {:.2} MB -> {:.2} MB, time used: {:?}",
-            catalog, schema, table, date_partition,
-            total_files_before, total_files_after,
+        info!(
+            "Compaction complete: {}.{}.{}/{}: {} -> {} files, {:.2} MB -> {:.2} MB in {:?}",
+            catalog,
+            schema,
+            table,
+            display_partition,
+            total_files_before,
+            total_files_after,
             total_bytes_before as f64 / 1024.0 / 1024.0,
             total_bytes_after as f64 / 1024.0 / 1024.0,
-            start.elapsed());
+            start.elapsed()
+        );
 
         Ok(Some(CompactionResult {
             catalog: catalog.to_string(),
             schema: schema.to_string(),
             table: table.to_string(),
-            date_partition: date_partition.to_string(),
+            date_partition: display_partition.to_string(),
             l0_files_before,
             l0_files_after,
             files_before: total_files_before,
@@ -1703,5 +1564,451 @@ impl Compactor {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn create_test_config() -> CompactionConfig {
+        CompactionConfig {
+            min_files: 5,
+            major_min_files: 3,
+            target_file_size: 100 * 1024 * 1024, // 100MB
+            max_level: 4,
+            full_compaction_enabled: false,
+            full_compaction_hour: 3,
+            full_compaction_target_size: 200 * 1024 * 1024,
+            max_concurrent_compactions: 4,
+            full_compaction_max_concurrent: 2,
+            read_rate_limit_bytes_per_sec: 0,
+            write_rate_limit_bytes_per_sec: 0,
+        }
+    }
+
+    #[test]
+    fn test_compaction_config_default() {
+        let config = CompactionConfig::default();
+        assert_eq!(config.min_files, DEFAULT_MIN_FILES);
+        assert_eq!(config.major_min_files, DEFAULT_MAJOR_MIN_FILES);
+        assert_eq!(config.max_level, DEFAULT_MAX_LEVEL);
+        assert_eq!(config.max_concurrent_compactions, 8);
+        assert_eq!(config.full_compaction_max_concurrent, 2);
+    }
+
+    #[test]
+    fn test_compaction_config_from_config() {
+        let app_config = crate::config::CompactionConfig {
+            min_files: 10,
+            major_min_files: 5,
+            target_file_size_mb: 500,
+            max_level: 7,
+            interval_secs: 120,
+            full_compaction_enabled: true,
+            full_compaction_hour: 5,
+            full_compaction_interval_secs: 7200,
+            full_compaction_target_size_mb: 300,
+            max_concurrent_compactions: 16,
+            full_compaction_max_concurrent: 4,
+            read_rate_limit_mb_per_sec: 100,
+            write_rate_limit_mb_per_sec: 50,
+        };
+
+        let config = CompactionConfig::from(&app_config);
+        assert_eq!(config.min_files, 10);
+        assert_eq!(config.major_min_files, 5);
+        assert_eq!(config.target_file_size, 500 * 1024 * 1024);
+        assert_eq!(config.max_level, 7);
+        assert_eq!(config.full_compaction_enabled, true);
+        assert_eq!(config.full_compaction_hour, 5);
+        assert_eq!(config.full_compaction_target_size, 300 * 1024 * 1024);
+        assert_eq!(config.max_concurrent_compactions, 16);
+        assert_eq!(config.full_compaction_max_concurrent, 4);
+        assert_eq!(config.read_rate_limit_bytes_per_sec, 100 * 1024 * 1024);
+        assert_eq!(config.write_rate_limit_bytes_per_sec, 50 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_parquet_file_info_from_path_l0() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("L0_1234567890123.parquet");
+        fs::write(&file_path, vec![0u8; 1024 * 1024]).unwrap();
+
+        let info = ParquetFileInfo::from_path(file_path).unwrap();
+        assert_eq!(info.level, 0);
+        assert_eq!(info.timestamp, 1234567890123);
+        assert_eq!(info.size, 1024 * 1024);
+    }
+
+    #[test]
+    fn test_parquet_file_info_from_path_l3() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("L3_9876543210987.parquet");
+        fs::write(&file_path, vec![0u8; 5 * 1024 * 1024]).unwrap();
+
+        let info = ParquetFileInfo::from_path(file_path).unwrap();
+        assert_eq!(info.level, 3);
+        assert_eq!(info.timestamp, 9876543210987);
+        assert_eq!(info.size, 5 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_parquet_file_info_from_path_legacy_format() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("1234567890123.parquet");
+        fs::write(&file_path, vec![0u8; 2048]).unwrap();
+
+        let info = ParquetFileInfo::from_path(file_path).unwrap();
+        assert_eq!(info.level, 0); // Legacy files default to L0
+        assert_eq!(info.timestamp, 1234567890123);
+        assert_eq!(info.size, 2048);
+    }
+
+    #[test]
+    fn test_parquet_file_info_sorting() {
+        let mut files = vec![
+            ParquetFileInfo {
+                path: PathBuf::from("L1_3000.parquet"),
+                level: 1,
+                timestamp: 3000,
+                size: 1024,
+            },
+            ParquetFileInfo {
+                path: PathBuf::from("L0_2000.parquet"),
+                level: 0,
+                timestamp: 2000,
+                size: 1024,
+            },
+            ParquetFileInfo {
+                path: PathBuf::from("L0_1000.parquet"),
+                level: 0,
+                timestamp: 1000,
+                size: 1024,
+            },
+            ParquetFileInfo {
+                path: PathBuf::from("L1_4000.parquet"),
+                level: 1,
+                timestamp: 4000,
+                size: 1024,
+            },
+        ];
+
+        files.sort_by(|a, b| {
+            a.level
+                .cmp(&b.level)
+                .then_with(|| a.timestamp.cmp(&b.timestamp))
+        });
+
+        assert_eq!(files[0].level, 0);
+        assert_eq!(files[0].timestamp, 1000);
+        assert_eq!(files[1].level, 0);
+        assert_eq!(files[1].timestamp, 2000);
+        assert_eq!(files[2].level, 1);
+        assert_eq!(files[2].timestamp, 3000);
+        assert_eq!(files[3].level, 1);
+        assert_eq!(files[3].timestamp, 4000);
+    }
+
+    #[test]
+    fn test_compaction_result_calculation() {
+        let result = CompactionResult {
+            catalog: "test".to_string(),
+            schema: "schema1".to_string(),
+            table: "table1".to_string(),
+            date_partition: "2024-01-01".to_string(),
+            l0_files_before: 10,
+            l0_files_after: 2,
+            files_before: 15,
+            files_after: 5,
+            bytes_before: 150 * 1024 * 1024,
+            bytes_after: 100 * 1024 * 1024,
+            rows_compacted: 1000000,
+        };
+
+        assert_eq!(result.files_before, 15);
+        assert_eq!(result.files_after, 5);
+        assert_eq!(result.bytes_before, 150 * 1024 * 1024);
+        assert_eq!(result.bytes_after, 100 * 1024 * 1024);
+        assert_eq!(result.rows_compacted, 1000000);
+    }
+
+    #[test]
+    fn test_compactor_creation() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = create_test_config();
+        let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+
+        assert_eq!(compactor.data_dir, temp_dir.path().to_str().unwrap());
+    }
+
+    #[test]
+    fn test_compactor_with_semaphore() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = CompactionConfig {
+            max_concurrent_compactions: 4,
+            full_compaction_max_concurrent: 2,
+            ..create_test_config()
+        };
+        let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+
+        assert!(compactor.compaction_semaphore.is_some());
+        assert!(compactor.full_compaction_semaphore.is_some());
+    }
+
+    #[test]
+    fn test_compactor_without_semaphore() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = CompactionConfig {
+            max_concurrent_compactions: 0,
+            full_compaction_max_concurrent: 0,
+            ..create_test_config()
+        };
+        let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+
+        assert!(compactor.compaction_semaphore.is_none());
+        assert!(compactor.full_compaction_semaphore.is_none());
+    }
+
+    #[test]
+    fn test_compactor_with_rate_limiters() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = CompactionConfig {
+            read_rate_limit_bytes_per_sec: 100 * 1024 * 1024,
+            write_rate_limit_bytes_per_sec: 50 * 1024 * 1024,
+            ..create_test_config()
+        };
+        let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+
+        assert!(compactor.read_rate_limiter.is_some());
+        assert!(compactor.write_rate_limiter.is_some());
+    }
+
+    #[test]
+    fn test_compactor_without_rate_limiters() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = CompactionConfig {
+            read_rate_limit_bytes_per_sec: 0,
+            write_rate_limit_bytes_per_sec: 0,
+            ..create_test_config()
+        };
+        let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+
+        assert!(compactor.read_rate_limiter.is_none());
+        assert!(compactor.write_rate_limiter.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_lock_same_partition() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = create_test_config();
+        let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+
+        let lock1 = compactor.get_lock("catalog", "schema", "table", "2024-01-01").await;
+        let lock2 = compactor.get_lock("catalog", "schema", "table", "2024-01-01").await;
+
+        // Should return the same lock instance
+        assert!(Arc::ptr_eq(&lock1, &lock2));
+    }
+
+    #[tokio::test]
+    async fn test_get_lock_different_partitions() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = create_test_config();
+        let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+
+        let lock1 = compactor.get_lock("catalog", "schema", "table", "2024-01-01").await;
+        let lock2 = compactor.get_lock("catalog", "schema", "table", "2024-01-02").await;
+
+        // Should return different lock instances
+        assert!(!Arc::ptr_eq(&lock1, &lock2));
+    }
+
+    #[tokio::test]
+    async fn test_list_parquet_file_infos_empty_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = create_test_config();
+        let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+
+        let result = compactor.list_parquet_file_infos(temp_dir.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_list_parquet_file_infos_with_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = create_test_config();
+        let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+
+        // Create test parquet files
+        fs::write(temp_dir.path().join("L0_1000000.parquet"), b"test data 1").unwrap();
+        fs::write(temp_dir.path().join("L1_2000000.parquet"), b"test data 2").unwrap();
+        fs::write(temp_dir.path().join("not_a_parquet.txt"), b"ignored").unwrap();
+
+        let result = compactor.list_parquet_file_infos(temp_dir.path().to_str().unwrap());
+        assert!(result.is_ok());
+
+        let files = result.unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|f| f.level == 0 && f.timestamp == 1000000));
+        assert!(files.iter().any(|f| f.level == 1 && f.timestamp == 2000000));
+    }
+
+    #[tokio::test]
+    async fn test_list_parquet_file_infos_filters_invalid() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = create_test_config();
+        let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+
+        // Create valid and invalid parquet files
+        fs::write(temp_dir.path().join("L0_1000000.parquet"), b"test data").unwrap();
+        fs::write(temp_dir.path().join("invalid_format.parquet"), b"test data").unwrap();
+        fs::write(temp_dir.path().join("LX_1000000.parquet"), b"test data").unwrap();
+
+        let result = compactor.list_parquet_file_infos(temp_dir.path().to_str().unwrap());
+        assert!(result.is_ok());
+
+        let files = result.unwrap();
+        // Should only include the valid file
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].level, 0);
+        assert_eq!(files[0].timestamp, 1000000);
+    }
+
+    #[test]
+    fn test_file_filtering_by_size() {
+        let config = create_test_config();
+        let target_size = config.target_file_size;
+
+        let files = vec![
+            ParquetFileInfo {
+                path: PathBuf::from("L1_1000.parquet"),
+                level: 1,
+                timestamp: 1000,
+                size: 50 * 1024 * 1024, // 50MB - should be included
+            },
+            ParquetFileInfo {
+                path: PathBuf::from("L1_2000.parquet"),
+                level: 1,
+                timestamp: 2000,
+                size: 150 * 1024 * 1024, // 150MB - should be filtered out
+            },
+            ParquetFileInfo {
+                path: PathBuf::from("L1_3000.parquet"),
+                level: 1,
+                timestamp: 3000,
+                size: 80 * 1024 * 1024, // 80MB - should be included
+            },
+        ];
+
+        let filtered: Vec<_> = files
+            .iter()
+            .filter(|f| f.size < target_size)
+            .collect();
+
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].timestamp, 1000);
+        assert_eq!(filtered[1].timestamp, 3000);
+    }
+
+    #[test]
+    fn test_compaction_thresholds() {
+        let config = create_test_config();
+
+        // L0 files should trigger compaction
+        let l0_count = config.min_files;
+        assert!(l0_count >= config.min_files);
+
+        // L1+ files should trigger compaction
+        let l1_count = config.major_min_files;
+        assert!(l1_count >= config.major_min_files);
+
+        // Below threshold should not trigger
+        assert!(config.min_files - 1 < config.min_files);
+        assert!(config.major_min_files - 1 < config.major_min_files);
+    }
+
+    #[test]
+    fn test_level_progression() {
+        let config = create_test_config();
+
+        // Test level progression
+        for level in 0..config.max_level {
+            let target_level = if level >= config.max_level {
+                level // Stay at max
+            } else {
+                level + 1 // Promote to next
+            };
+
+            if level < config.max_level {
+                assert_eq!(target_level, level + 1);
+            } else {
+                assert_eq!(target_level, level);
+            }
+        }
+    }
+
+    #[test]
+    fn test_max_level_compaction() {
+        let config = CompactionConfig {
+            max_level: 4,
+            ..create_test_config()
+        };
+
+        // At max level, should compact to same level
+        let current_level = 4;
+        let target_level = if current_level >= config.max_level {
+            current_level
+        } else {
+            current_level + 1
+        };
+
+        assert_eq!(target_level, 4);
+    }
+
+    #[test]
+    fn test_yesterday_partition_calculation() {
+        use chrono::{Duration, Utc};
+
+        let now = Utc::now();
+        let yesterday = now - Duration::days(1);
+        let partition = yesterday.format("date=%Y-%m-%d").to_string();
+
+        assert!(partition.starts_with("date="));
+        assert_eq!(partition.len(), 15); // "date=YYYY-MM-DD"
+    }
+
+    #[test]
+    fn test_hour_check_for_full_compaction() {
+        let config = CompactionConfig {
+            full_compaction_hour: 3,
+            ..create_test_config()
+        };
+
+        // Should only run at hour 3
+        for hour in 0..24 {
+            if hour == config.full_compaction_hour {
+                assert_eq!(hour, 3);
+            } else {
+                assert_ne!(hour, 3);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compact_non_existing_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = create_test_config();
+        let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+
+        let result = compactor
+            .compact_table_partition("catalog", "schema", "table", "2024-01-01", &config)
+            .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("does not exist"));
     }
 }

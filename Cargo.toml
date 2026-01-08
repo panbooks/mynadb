@@ -36,5 +36,8 @@ urlencoding = "2.1"
 pprof = { version = "0.14", features = ["flamegraph", "prost-codec"] }
 prost = "0.13"
 
+[dev-dependencies]
+tempfile = "3"
+
 [build-dependencies]
 chrono = "0.4"
