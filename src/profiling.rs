@@ -127,9 +127,6 @@ fn generate_text_report(report: &pprof::Report) -> String {
     output.push_str("Profile Report\n");
     output.push_str("═══════════════════════════════════════════════════\n\n");
 
-    // Get the top frames by sample count
-    let mut frames_data: Vec<(String, usize)> = Vec::new();
-
     // Convert report to protobuf to extract frame data
     if let Ok(profile) = report.pprof() {
         // Extract sample data from profile
