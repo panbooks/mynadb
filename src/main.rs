@@ -116,42 +116,118 @@ fn initialize_wal(config: &Config) -> Option<Arc<wal::Wal>> {
     }
 }
 
-/// Load existing series cache from disk for both PMC and UMC schemas
+/// Load existing series cache from disk for both PMC and UMC schemas (parallel)
 async fn load_series_cache(series_tracker: &Arc<SeriesTracker>, config: &Config) {
-    info!("Loading series cache from disk (PMC and UMC)...");
+    use std::time::Instant;
 
-    for schema in [SCHEMA_PMC, SCHEMA_UMC] {
-        let stats_schema_dir = std::path::Path::new(&config.storage.data_dir)
-            .join(&config.storage.system_dir)
-            .join(schema);
+    let start = Instant::now();
+    info!("Loading series cache from disk (PMC and UMC) in parallel...");
 
-        if stats_schema_dir.exists() {
-            match std::fs::read_dir(&stats_schema_dir) {
-                Ok(entries) => {
-                    for entry in entries.flatten() {
-                        if entry.path().is_dir() {
-                            if let Some(table_name) = entry.file_name().to_str() {
-                                debug!("Loading series cache for schema '{}', table '{}'", schema, table_name);
-                                match series_tracker.load_cache(schema, table_name).await {
-                                    Ok(()) => {
-                                        debug!("Series cache loaded for schema '{}', table '{}'", schema, table_name);
-                                    }
-                                    Err(e) => {
-                                        warn!("Failed to load series cache for schema '{}', table '{}': {}", schema, table_name, e);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to read stats schema directory for '{}': {}", schema, e);
-                }
+    // Load PMC and UMC in parallel (Phase 1)
+    let (pmc_result, umc_result) = tokio::join!(
+        load_schema_cache(series_tracker, config, SCHEMA_PMC),
+        load_schema_cache(series_tracker, config, SCHEMA_UMC)
+    );
+
+    if let Err(e) = pmc_result {
+        warn!("Failed to load PMC schema cache: {}", e);
+    }
+    if let Err(e) = umc_result {
+        warn!("Failed to load UMC schema cache: {}", e);
+    }
+
+    let elapsed = start.elapsed();
+    info!("Series cache loading completed in {:.2}s", elapsed.as_secs_f64());
+}
+
+/// Load all tables for a specific schema in parallel
+async fn load_schema_cache(
+    series_tracker: &Arc<SeriesTracker>,
+    config: &Config,
+    schema: &str,
+) -> Result<(), String> {
+    use futures::stream::{FuturesUnordered, StreamExt};
+    use std::time::Instant;
+
+    let start = Instant::now();
+    let stats_schema_dir = std::path::Path::new(&config.storage.data_dir)
+        .join(&config.storage.system_dir)
+        .join(schema);
+
+    if !stats_schema_dir.exists() {
+        debug!("Stats schema directory does not exist yet for '{}': {}", schema, stats_schema_dir.display());
+        return Ok(());
+    }
+
+    let entries = std::fs::read_dir(&stats_schema_dir)
+        .map_err(|e| format!("Failed to read stats schema directory for '{}': {}", schema, e))?;
+
+    // Collect all table directories
+    let mut table_names = Vec::new();
+    for entry in entries.flatten() {
+        if entry.path().is_dir() {
+            if let Some(table_name) = entry.file_name().to_str() {
+                table_names.push(table_name.to_string());
             }
-        } else {
-            debug!("Stats schema directory does not exist yet for '{}': {}", schema, stats_schema_dir.display());
         }
     }
+
+    if table_names.is_empty() {
+        debug!("No tables found for schema '{}'", schema);
+        return Ok(());
+    }
+
+    info!("Loading {} table(s) for schema '{}' with concurrency {}",
+          table_names.len(), schema, config.series_tracker.max_concurrent_tables);
+
+    // Load tables in parallel (Phase 2)
+    let max_concurrent = config.series_tracker.max_concurrent_tables;
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
+    let mut tasks = FuturesUnordered::new();
+
+    for table_name in table_names {
+        let tracker = Arc::clone(series_tracker);
+        let schema_owned = schema.to_string();
+        let sem = Arc::clone(&semaphore);
+
+        tasks.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+
+            debug!("Loading series cache for schema '{}', table '{}'", schema_owned, table_name);
+            match tracker.load_cache(&schema_owned, &table_name).await {
+                Ok(()) => {
+                    debug!("Series cache loaded for schema '{}', table '{}'", schema_owned, table_name);
+                    Ok(())
+                }
+                Err(e) => {
+                    warn!("Failed to load series cache for schema '{}', table '{}': {}",
+                          schema_owned, table_name, e);
+                    Err(e)
+                }
+            }
+        }));
+    }
+
+    // Await all tasks
+    let mut success_count = 0;
+    let mut error_count = 0;
+
+    while let Some(result) = tasks.next().await {
+        match result {
+            Ok(Ok(())) => success_count += 1,
+            Ok(Err(_)) => error_count += 1,
+            Err(e) => {
+                warn!("Table loading task panicked: {}", e);
+                error_count += 1;
+            }
+        }
+    }
+
+    let elapsed = start.elapsed();
+    info!("Schema '{}' loaded: {} successful, {} errors, took {:.2}s",
+          schema, success_count, error_count, elapsed.as_secs_f64());
+
+    Ok(())
 }
 
 /// Perform WAL recovery by replaying unflushed writes
