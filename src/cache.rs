@@ -197,8 +197,8 @@ impl DataCache {
 
         let flushed_size = self.cache_size_bytes.load(Ordering::Relaxed);
         info!(
-            "Flushing cache to disk: {}MB in {} table(s)...",
-            flushed_size / 1024 / 1024,
+            "Flushing cache to disk: {}KB in {} table(s)...",
+            flushed_size / 1024,
             cache.len()
         );
 
@@ -248,9 +248,9 @@ impl DataCache {
         }
 
         info!(
-            "Flush complete: {} file(s), {}MB written in {:?}",
+            "Flush complete: {} file(s), {}KB written in {:?}",
             files_written,
-            flushed_size / 1024 / 1024,
+            flushed_size / 1024,
             elapsed
         );
 
