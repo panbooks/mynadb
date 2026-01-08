@@ -524,29 +524,6 @@ impl Wal {
         Ok(())
     }
 
-    /// Replay all series tracking entries
-    pub async fn replay_series_tracks<F>(&self, mut callback: F) -> Result<usize, String>
-    where
-        F: FnMut(&str, &[SeriesRecord]) -> Result<(), String>,
-    {
-        let files = self.list_wal_files("series")?;
-        let mut count = 0;
-
-        for file_path in files {
-            debug!("Replaying series WAL: {}", file_path.display());
-            count += self.replay_file(&file_path, |entry| {
-                if entry.entry_type == EntryType::SeriesTrack {
-                    let records: Vec<SeriesRecord> = bincode::deserialize(&entry.payload)
-                        .map_err(|e| format!("Failed to deserialize records: {}", e))?;
-                    callback(&entry.db_name, &records)?;
-                }
-                Ok(())
-            })?;
-        }
-
-        Ok(count)
-    }
-
     /// Replay a single WAL file
     fn replay_file<F>(&self, path: &Path, mut callback: F) -> Result<usize, String>
     where
