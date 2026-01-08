@@ -1,3 +1,4 @@
+mod api;
 mod auth;
 mod cache;
 mod compactor;
@@ -8,34 +9,23 @@ mod line_protocol;
 mod logger;
 mod mysql_service;
 mod parquet_writer;
+mod profiling;
 mod query_engine;
 mod rate_limiter;
 mod retention_manager;
 mod series_dedup;
 mod series_tracker;
 mod wal;
-mod profiling;
 
 use axum::{
-    extract::{Path, Query as AxumQuery, Request, State},
-    http::StatusCode,
-    response::IntoResponse,
     routing::{delete, get, post},
-    Json, Router,
+    Router,
 };
-use cache::DataCache;
 use clap::{Parser, Subcommand};
-use compactor::Compactor;
 use config::Config;
-use database_manager::DatabaseManager;
 use flight_service::StatsFlightService;
 use mysql_service::MysqlService;
-use line_protocol::parse_multiple_lines;
-use query_engine::QueryEngine;
-use retention_manager::RetentionManager;
-use serde::{Deserialize, Serialize};
 use series_tracker::{SeriesTracker, SCHEMA_PMC, SCHEMA_UMC};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::transport::Server;
 use tracing::{debug, error, info, warn};
@@ -81,92 +71,8 @@ enum Commands {
     Version,
 }
 
-#[derive(Clone)]
-struct AppState {
-    cache: DataCache,
-    query_engine: Arc<QueryEngine>,
-    db_manager: Arc<DatabaseManager>,
-    compactor: Arc<Compactor>,
-    series_tracker: Arc<SeriesTracker>,
-    config: Arc<Config>,
-    wal: Option<Arc<wal::Wal>>,
-}
-
-#[derive(Deserialize)]
-struct QueryParams {
-    sql: String,
-}
-
-#[derive(Deserialize)]
-struct WriteQueryParams {
-    db: String,
-}
-
-#[derive(Deserialize, Serialize)]
-struct CreateDatabaseRequest {
-    name: String,
-}
-
-#[derive(Deserialize, Serialize)]
-struct CreateTableRequest {
-    name: String,
-    #[serde(default)]
-    partition_by: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct RetentionRequest {
-    /// Delete partitions before this date (YYYY-MM-DD)
-    #[serde(default)]
-    before_date: Option<String>,
-    /// Delete partitions older than N days
-    #[serde(default)]
-    older_than_days: Option<u32>,
-}
-
-fn default_profile_duration() -> u64 {
-    10
-}
-
-fn default_profile_format() -> String {
-    "protobuf".to_string()
-}
-
-#[derive(Deserialize)]
-struct ProfileParams {
-    /// Profile duration in seconds (default: 10)
-    #[serde(default = "default_profile_duration")]
-    duration: u64,
-    /// Output format: protobuf, flamegraph, text (default: protobuf)
-    #[serde(default = "default_profile_format")]
-    format: String,
-    /// Add Content-Disposition header for download (default: false)
-    #[serde(default)]
-    download: bool,
-}
-
-#[tokio::main]
-async fn main() {
-    // Parse command line arguments
-    let cli = Cli::parse();
-
-    // Handle subcommands
-    if let Some(Commands::Version) = cli.command {
-        version::print_version();
-        return;
-    }
-
-    // Load configuration (CLI arg takes precedence over env var)
-    let config_path = cli.config;
-    let config = Arc::new(Config::load_or_default(&config_path));
-
-    // Initialize logging
-    if let Err(e) = logger::init_logging(&config.logging) {
-        eprintln!("Failed to initialize logging: {}", e);
-        std::process::exit(1);
-    }
-
-    // Welcome messages (only these go to stdout)
+/// Initialize and print welcome banner
+fn print_welcome_banner(config: &Config) {
     welcome!("═══════════════════════════════════════════════════════");
     welcome!("  📊 Stats Service - Time Series Stats Database");
     welcome!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
@@ -183,88 +89,35 @@ async fn main() {
     welcome!("   Log Directory: {}", config.logging.log_dir);
     welcome!("   Log Level: {}", config.logging.level);
     welcome!("");
+}
 
-    info!("Stats Service starting with config: {:?}", *config);
-
-    // Create data directory
-    std::fs::create_dir_all(&config.storage.data_dir).expect("Failed to create data directory");
-
-    // Initialize WAL if enabled
-    let wal = if config.wal.enabled {
-        let wal_dir = format!("{}/{}", config.storage.data_dir, "_wal");
-        info!(
-            "Initializing WAL at {} (sync_on_write={}, rotate_size={}MB)",
-            wal_dir, config.wal.sync_on_write, config.wal.rotate_size_mb
-        );
-
-        match wal::Wal::new(&wal_dir, config.wal.sync_on_write, config.wal.rotate_size_mb) {
-            Ok(w) => {
-                info!("WAL initialized successfully - recovery will happen after components initialize");
-                Some(Arc::new(w))
-            }
-            Err(e) => {
-                error!("Failed to initialize WAL: {}", e);
-                None
-            }
-        }
-    } else {
+/// Initialize WAL (Write-Ahead Log)
+fn initialize_wal(config: &Config) -> Option<Arc<wal::Wal>> {
+    if !config.wal.enabled {
         info!("WAL is disabled");
-        None
-    };
+        return None;
+    }
 
-    // Initialize components
+    let wal_dir = format!("{}/{}", config.storage.data_dir, "_wal");
     info!(
-        "Initializing data cache (max: {}MB, flush threshold: 80%)",
-        config.cache.max_size_mb
-    );
-    let cache = DataCache::with_max_size_and_wal(
-        &config.storage.data_dir,
-        config.cache.max_size_mb,
-        wal.as_ref().map(Arc::clone),
+        "Initializing WAL at {} (sync_on_write={}, rotate_size={}MB)",
+        wal_dir, config.wal.sync_on_write, config.wal.rotate_size_mb
     );
 
-    // Start background flush early so cache threshold notifications work during recovery
-    // Recovery mode flag prevents premature WAL deletion during replay
-    cache
-        .clone()
-        .start_background_flush(config.cache.flush_interval_secs);
-
-    info!("Initializing query engine");
-    let query_engine = Arc::new(QueryEngine::new(&config.storage.data_dir));
-
-    info!("Initializing database manager");
-    let db_manager = Arc::new(DatabaseManager::new(&config.storage.data_dir));
-
-    info!("Initializing compactor");
-    // Convert config to compactor's internal config (includes rate limiting settings)
-    let compaction_config = compactor::CompactionConfig::from(&config.compaction);
-    let compactor = Arc::new(Compactor::with_config(&config.storage.data_dir, &compaction_config));
-
-    // Start LSM compaction (every 60s by default)
-    if config.compaction.interval_secs > 0 {
-        Arc::clone(&compactor).start_background_lsm_compaction(
-            config.compaction.interval_secs,
-            compaction_config.clone(),
-        );
+    match wal::Wal::new(&wal_dir, config.wal.sync_on_write, config.wal.rotate_size_mb) {
+        Ok(w) => {
+            info!("WAL initialized successfully - recovery will happen after components initialize");
+            Some(Arc::new(w))
+        }
+        Err(e) => {
+            error!("Failed to initialize WAL: {}", e);
+            None
+        }
     }
+}
 
-    // Start full compaction (every 1 hour by default)
-    if config.compaction.full_compaction_enabled && config.compaction.full_compaction_interval_secs > 0 {
-        Arc::clone(&compactor).start_background_full_compaction(
-            config.compaction.full_compaction_interval_secs,
-            compaction_config,
-        );
-    }
-
-    info!("Initializing series tracker");
-    let series_tracker = Arc::new(SeriesTracker::new(
-        &config.storage,
-        &config.series_tracker,
-    ));
-
-    // Load existing series cache from disk (latest N days only)
-    // Series stats are stored in: {system_dir}/{schema}/{table}/date=YYYY-MM-DD/*.parquet
-    // We load both PMC (physical metric count) and UMC (user metric count) schemas
+/// Load existing series cache from disk for both PMC and UMC schemas
+async fn load_series_cache(series_tracker: &Arc<SeriesTracker>, config: &Config) {
     info!("Loading series cache from disk (PMC and UMC)...");
 
     for schema in [SCHEMA_PMC, SCHEMA_UMC] {
@@ -299,237 +152,198 @@ async fn main() {
             debug!("Stats schema directory does not exist yet for '{}': {}", schema, stats_schema_dir.display());
         }
     }
+}
 
-    Arc::clone(&series_tracker).start_background_flush(config.series_tracker.flush_interval_secs);
+/// Perform WAL recovery by replaying unflushed writes
+async fn perform_wal_recovery(
+    wal: &Arc<wal::Wal>,
+    cache: &cache::DataCache,
+    series_tracker: &Arc<SeriesTracker>,
+    query_engine: &Arc<query_engine::QueryEngine>,
+    config: &Arc<Config>,
+) {
+    info!("Starting WAL recovery - replaying unflushed writes...");
+    welcome!("");
+    welcome!("🔄 Replaying WAL files...");
 
-    // WAL Recovery: Now that cache and series_tracker are initialized, replay unflushed writes
-    if let Some(ref wal_arc) = wal {
-        info!("Starting WAL recovery - replaying unflushed writes...");
-        welcome!("");
-        welcome!("🔄 Replaying WAL files...");
+    wal.set_recovery_mode(true);
 
-        // Enable recovery mode to prevent WAL deletion during replay
-        // Background flush task is already running and will handle cache threshold automatically
-        wal_arc.set_recovery_mode(true);
+    let cache_for_recovery = cache.clone();
+    let series_tracker_for_recovery = Arc::clone(series_tracker);
+    let query_engine_for_recovery = Arc::clone(query_engine);
+    let config_for_recovery = config.clone();
 
-        // Prepare references for recovery closure
-        let cache_for_recovery = cache.clone();
-        let series_tracker_for_recovery = Arc::clone(&series_tracker);
-        let query_engine_for_recovery = Arc::clone(&query_engine);
-        let config_for_recovery = config.clone();
+    let recovered_data = wal
+        .replay_data_writes(|db, line_protocol| {
+            debug!("WAL recovery: replaying {} bytes to {}", line_protocol.len(), db);
 
-        let recovered_data = wal_arc
-            .replay_data_writes(|db, line_protocol| {
-                debug!("WAL recovery: replaying {} bytes to {}", line_protocol.len(), db);
+            match tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(api::ingest_line_protocol_to_cache(
+                    db,
+                    line_protocol,
+                    &cache_for_recovery,
+                    Some(&series_tracker_for_recovery),
+                    Some(&query_engine_for_recovery),
+                    &config_for_recovery.schema,
+                    &config_for_recovery.series_tracker,
+                ))
+            }) {
+                Ok(count) => {
+                    debug!("WAL recovery: replayed {} points to {}", count, db);
+                    Ok(())
+                }
+                Err(e) => {
+                    error!("WAL recovery failed for {}: {}", db, e);
+                    Err(e)
+                }
+            }
+        })
+        .await;
 
-                // Use the same ingestion logic as normal writes (via block_in_place for sync callback)
-                match tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(ingest_line_protocol_to_cache(
-                        db,
-                        line_protocol,
-                        &cache_for_recovery,
-                        Some(&series_tracker_for_recovery),
-                        Some(&query_engine_for_recovery),
-                        &config_for_recovery.schema,
-                        &config_for_recovery.series_tracker,
-                    ))
-                }) {
-                    Ok(count) => {
-                        debug!("WAL recovery: replayed {} points to {}", count, db);
-                        Ok(())
+    match recovered_data {
+        Ok(count) => {
+            if count > 0 {
+                info!("WAL recovery: replayed {} data write entries", count);
+                welcome!("   Replayed {} data entries", count);
+
+                info!("Flushing recovered data to Parquet for durability...");
+                welcome!("   Flushing recovered data to Parquet...");
+                match cache.flush().await {
+                    Ok(files) => {
+                        info!("Recovery flush complete: {} file(s) written", files);
+                        welcome!("   ✅ Recovery complete: {} Parquet file(s) written", files);
+
+                        wal.set_recovery_mode(false);
+                        if let Err(e) = wal.cleanup_old_data_wal_files().await {
+                            warn!("Failed to cleanup old WAL files after recovery: {}", e);
+                        }
                     }
                     Err(e) => {
-                        error!("WAL recovery failed for {}: {}", db, e);
-                        Err(e)
+                        error!("Recovery flush failed: {}", e);
+                        welcome!("   ⚠️  Recovery flush failed: {}", e);
+                        wal.set_recovery_mode(false);
                     }
                 }
-            })
-            .await;
-
-        match recovered_data {
-            Ok(count) => {
-                if count > 0 {
-                    info!("WAL recovery: replayed {} data write entries", count);
-                    welcome!("   Replayed {} data entries", count);
-
-                    // Flush recovered data to Parquet immediately to ensure durability
-                    info!("Flushing recovered data to Parquet for durability...");
-                    welcome!("   Flushing recovered data to Parquet...");
-                    match cache.flush().await {
-                        Ok(files) => {
-                            info!("Recovery flush complete: {} file(s) written", files);
-                            welcome!("   ✅ Recovery complete: {} Parquet file(s) written", files);
-
-                            // Disable recovery mode and clean up old replayed WAL files
-                            wal_arc.set_recovery_mode(false);
-                            if let Err(e) = wal_arc.cleanup_old_data_wal_files().await {
-                                warn!("Failed to cleanup old WAL files after recovery: {}", e);
-                                // Don't fail startup, cleanup will happen on next cycle
-                            }
-                        }
-                        Err(e) => {
-                            error!("Recovery flush failed: {}", e);
-                            welcome!("   ⚠️  Recovery flush failed: {}", e);
-                            // Disable recovery mode even on flush failure
-                            wal_arc.set_recovery_mode(false);
-                            // Don't fail startup, but old WAL files will remain until next flush
-                        }
-                    }
-                } else {
-                    info!("WAL recovery: no data writes to replay");
-                    welcome!("   ✅ No WAL entries to replay");
-                    // Disable recovery mode
-                    wal_arc.set_recovery_mode(false);
-                }
-            }
-            Err(e) => {
-                error!("WAL recovery failed: {}", e);
-                welcome!("   ⚠️  WAL recovery failed: {}", e);
-                // Disable recovery mode even on error
-                wal_arc.set_recovery_mode(false);
-                // Don't fail startup, but log the error
+            } else {
+                info!("WAL recovery: no data writes to replay");
+                welcome!("   ✅ No WAL entries to replay");
+                wal.set_recovery_mode(false);
             }
         }
-    } else {
-        info!("WAL disabled, skipping recovery");
-        welcome!("");
-        welcome!("ℹ️  WAL disabled, skipping recovery");
-    }
-
-    info!("Initializing retention manager");
-    let retention_manager = Arc::new(RetentionManager::new(
-        Arc::clone(&db_manager),
-        &config.storage.data_dir,
-        &config.storage.system_dir,
-    ));
-
-    // Start background retention if enabled
-    if config.retention.enabled && config.retention.interval_secs > 0 {
-        Arc::clone(&retention_manager)
-            .start_background_retention(config.retention.clone());
-    }
-
-    // Start background WAL cleanup if enabled
-    if let Some(ref wal_arc) = wal {
-        if config.wal.cleanup_interval_secs > 0 {
-            let wal_clone = Arc::clone(wal_arc);
-            let retention_hours = config.wal.retention_hours;
-            let interval_secs = config.wal.cleanup_interval_secs;
-
-            tokio::spawn(async move {
-                use tokio::time::{interval, Duration};
-                let mut ticker = interval(Duration::from_secs(interval_secs));
-
-                info!("Background WAL cleanup started: every {}s, retention {}h", interval_secs, retention_hours);
-
-                loop {
-                    ticker.tick().await;
-
-                    debug!("Running WAL cleanup...");
-                    match wal_clone.cleanup_old_files(retention_hours).await {
-                        Ok(count) if count > 0 => {
-                            info!("WAL cleanup: deleted {} old files", count);
-                        }
-                        Ok(_) => {
-                            debug!("WAL cleanup: no files to delete");
-                        }
-                        Err(e) => {
-                            error!("WAL cleanup error: {}", e);
-                        }
-                    }
-                }
-            });
+        Err(e) => {
+            error!("WAL recovery failed: {}", e);
+            welcome!("   ⚠️  WAL recovery failed: {}", e);
+            wal.set_recovery_mode(false);
         }
     }
+}
 
-    let state = AppState {
-        cache,
-        query_engine,
-        db_manager,
-        compactor,
-        series_tracker,
-        config: config.clone(),
-        wal,
-    };
+/// Start background WAL cleanup task
+fn start_wal_cleanup_task(wal: &Arc<wal::Wal>, config: &Config) {
+    if config.wal.cleanup_interval_secs == 0 {
+        return;
+    }
 
-    // Initialize authentication middleware
-    let auth_middleware = Arc::new(auth::AuthMiddleware::new(Arc::new(config.auth.clone())));
-    info!(
-        "Authentication: {} (username: {})",
-        if config.auth.enabled { "ENABLED" } else { "DISABLED" },
-        config.auth.username
-    );
+    let wal_clone = Arc::clone(wal);
+    let retention_hours = config.wal.retention_hours;
+    let interval_secs = config.wal.cleanup_interval_secs;
 
-    let app = Router::new()
-        .route("/", get(home))
-        .route("/health", get(health))
-        .route("/version", get(version_handler))
+    tokio::spawn(async move {
+        use tokio::time::{interval, Duration};
+        let mut ticker = interval(Duration::from_secs(interval_secs));
+
+        info!("Background WAL cleanup started: every {}s, retention {}h", interval_secs, retention_hours);
+
+        loop {
+            ticker.tick().await;
+
+            debug!("Running WAL cleanup...");
+            match wal_clone.cleanup_old_files(retention_hours).await {
+                Ok(count) if count > 0 => {
+                    info!("WAL cleanup: deleted {} old files", count);
+                }
+                Ok(_) => {
+                    debug!("WAL cleanup: no files to delete");
+                }
+                Err(e) => {
+                    error!("WAL cleanup error: {}", e);
+                }
+            }
+        }
+    });
+}
+
+/// Build the Axum router with all routes
+fn build_router(state: api::AppState, auth_middleware: Arc<auth::AuthMiddleware>) -> Router {
+    Router::new()
+        .route("/", get(api::home))
+        .route("/health", get(api::health))
+        .route("/version", get(api::version_handler))
         // Write endpoints
-        .route("/write/:db", post(write_handler))
-        .route("/write", post(write_handler_query_param)) // InfluxDB-compatible
+        .route("/write/:db", post(api::write_handler))
+        .route("/write", post(api::write_handler_query_param))
         // Cache management
-        .route("/stats", get(stats_handler))
-        .route("/memory", get(memory_handler))
-        .route("/flush", post(flush_handler))
+        .route("/stats", get(api::stats_handler))
+        .route("/memory", get(api::memory_handler))
+        .route("/flush", post(api::flush_handler))
         // Profiling endpoints
-        .route("/debug/heap", get(heap_profile_handler))
-        .route("/debug/cpu", get(cpu_profile_handler))
-        .route("/debug/profile/heap", get(heap_profile_handler))
-        .route("/debug/profile/cpu", get(cpu_profile_handler))
+        .route("/debug/heap", get(api::heap_profile_handler))
+        .route("/debug/cpu", get(api::cpu_profile_handler))
+        .route("/debug/profile/heap", get(api::heap_profile_handler))
+        .route("/debug/profile/cpu", get(api::cpu_profile_handler))
         // Query endpoints
-        .route("/query/:db", get(query_handler))
-        .route("/query/:db", post(query_handler_post))
+        .route("/query/:db", get(api::query_handler))
+        .route("/query/:db", post(api::query_handler_post))
         // Database management
-        .route("/databases", get(list_databases_handler))
-        .route("/databases", post(create_database_handler))
-        .route("/databases/:db", delete(delete_database_handler))
-        .route("/databases/:db", get(get_database_info_handler))
-        // Schema (service) management
-        .route("/databases/:db/schemas", get(list_schemas_handler))
+        .route("/databases", get(api::list_databases_handler))
+        .route("/databases", post(api::create_database_handler))
+        .route("/databases/:db", delete(api::delete_database_handler))
+        .route("/databases/:db", get(api::get_database_info_handler))
+        // Schema management
+        .route("/databases/:db/schemas", get(api::list_schemas_handler))
         .route(
             "/databases/:db/schemas/:schema/tables",
-            get(list_schema_tables_handler),
+            get(api::list_schema_tables_handler),
         )
         // Table management
-        .route("/databases/:db/tables", post(create_table_handler))
-        .route("/databases/:db/tables", get(list_tables_handler))
-        .route("/databases/:db/tables/:table", delete(delete_table_handler))
-        .route("/schema/:db/:table", get(schema_handler))
+        .route("/databases/:db/tables", post(api::create_table_handler))
+        .route("/databases/:db/tables", get(api::list_tables_handler))
+        .route("/databases/:db/tables/:table", delete(api::delete_table_handler))
+        .route("/schema/:db/:table", get(api::schema_handler))
         // Compaction endpoints
-        .route("/compact/:catalog", post(compact_handler))
+        .route("/compact/:catalog", post(api::compact_handler))
         .route(
             "/compact/:catalog/:schema/:table",
-            post(compact_table_handler),
+            post(api::compact_table_handler),
         )
         .route(
             "/compact/:catalog/:schema/:table/:date",
-            post(compact_partition_handler),
+            post(api::compact_partition_handler),
         )
-        // Partition management endpoints
+        // Partition management
         .route(
             "/partitions/:catalog/:schema/:table",
-            get(list_partitions_handler),
+            get(api::list_partitions_handler),
         )
         .route(
             "/partitions/:catalog/:schema/:table/:date",
-            delete(delete_partition_handler),
+            delete(api::delete_partition_handler),
         )
         .route(
             "/retention/:catalog/:schema/:table",
-            post(delete_old_partitions_handler),
+            post(api::delete_old_partitions_handler),
         )
         // Series cardinality tracking
-        .route("/pmc/:db", get(series_stats_handler))
-        .fallback(log_request)
-        .with_state(state.clone())
+        .route("/pmc/:db", get(api::series_stats_handler))
+        .fallback(api::log_request)
+        .with_state(state)
         .layer(axum::middleware::from_fn(auth::auth_middleware_fn))
-        .layer(axum::Extension(auth_middleware));
+        .layer(axum::Extension(auth_middleware))
+}
 
-    // Start HTTP server
-    let http_addr = config.http_addr();
-    let http_listener = tokio::net::TcpListener::bind(&http_addr).await.unwrap();
-
-    info!("HTTP REST API bound to: {}", http_addr);
+/// Print server configuration information
+fn print_server_info(config: &Config) {
+    info!("HTTP REST API bound to: {}", config.http_addr());
     info!("Arrow Flight API will bind to: {}", config.flight_addr());
     info!("Data directory: {}", config.storage.data_dir);
     info!(
@@ -556,11 +370,133 @@ async fn main() {
     } else {
         info!("Background retention: disabled");
     }
+}
+
+#[tokio::main]
+async fn main() {
+    let cli = Cli::parse();
+
+    if let Some(Commands::Version) = cli.command {
+        version::print_version();
+        return;
+    }
+
+    let config = Arc::new(Config::load_or_default(&cli.config));
+
+    if let Err(e) = logger::init_logging(&config.logging) {
+        eprintln!("Failed to initialize logging: {}", e);
+        std::process::exit(1);
+    }
+
+    print_welcome_banner(&config);
+    info!("Stats Service starting with config: {:?}", *config);
+
+    std::fs::create_dir_all(&config.storage.data_dir).expect("Failed to create data directory");
+
+    // Initialize WAL
+    let wal = initialize_wal(&config);
+
+    // Initialize cache
+    info!(
+        "Initializing data cache (max: {}MB, flush threshold: 80%)",
+        config.cache.max_size_mb
+    );
+    let cache = cache::DataCache::with_max_size_and_wal(
+        &config.storage.data_dir,
+        config.cache.max_size_mb,
+        wal.as_ref().map(Arc::clone),
+    );
+    cache
+        .clone()
+        .start_background_flush(config.cache.flush_interval_secs);
+
+    // Initialize core components
+    info!("Initializing query engine");
+    let query_engine = Arc::new(query_engine::QueryEngine::new(&config.storage.data_dir));
+
+    info!("Initializing database manager");
+    let db_manager = Arc::new(database_manager::DatabaseManager::new(&config.storage.data_dir));
+
+    info!("Initializing compactor");
+    let compaction_config = compactor::CompactionConfig::from(&config.compaction);
+    let compactor = Arc::new(compactor::Compactor::with_config(&config.storage.data_dir, &compaction_config));
+
+    if config.compaction.interval_secs > 0 {
+        Arc::clone(&compactor).start_background_lsm_compaction(
+            config.compaction.interval_secs,
+            compaction_config.clone(),
+        );
+    }
+
+    if config.compaction.full_compaction_enabled && config.compaction.full_compaction_interval_secs > 0 {
+        Arc::clone(&compactor).start_background_full_compaction(
+            config.compaction.full_compaction_interval_secs,
+            compaction_config,
+        );
+    }
+
+    // Initialize series tracker
+    info!("Initializing series tracker");
+    let series_tracker = Arc::new(SeriesTracker::new(
+        &config.storage,
+        &config.series_tracker,
+    ));
+
+    load_series_cache(&series_tracker, &config).await;
+    Arc::clone(&series_tracker).start_background_flush(config.series_tracker.flush_interval_secs);
+
+    // WAL Recovery
+    if let Some(ref wal_arc) = wal {
+        perform_wal_recovery(wal_arc, &cache, &series_tracker, &query_engine, &config).await;
+    } else {
+        info!("WAL disabled, skipping recovery");
+        welcome!("");
+        welcome!("ℹ️  WAL disabled, skipping recovery");
+    }
+
+    // Initialize retention manager
+    info!("Initializing retention manager");
+    let retention_manager = Arc::new(retention_manager::RetentionManager::new(
+        Arc::clone(&db_manager),
+        &config.storage.data_dir,
+    ));
+
+    if config.retention.enabled && config.retention.interval_secs > 0 {
+        Arc::clone(&retention_manager)
+            .start_background_retention(config.retention.clone());
+    }
+
+    // Start background WAL cleanup
+    if let Some(ref wal_arc) = wal {
+        start_wal_cleanup_task(wal_arc, &config);
+    }
+
+    // Build application state
+    let state = api::AppState {
+        cache,
+        query_engine: query_engine.clone(),
+        db_manager,
+        compactor,
+        series_tracker,
+        config: config.clone(),
+        wal,
+    };
+
+    // Initialize authentication
+    let auth_middleware = Arc::new(auth::AuthMiddleware::new(Arc::new(config.auth.clone())));
+    info!(
+        "Authentication: {} (username: {})",
+        if config.auth.enabled { "ENABLED" } else { "DISABLED" },
+        config.auth.username
+    );
+
+    let app = build_router(state.clone(), auth_middleware);
+
+    print_server_info(&config);
 
     // Start Arrow Flight server
-    let flight_service = StatsFlightService::new(state.query_engine.clone());
+    let flight_service = StatsFlightService::new(query_engine);
     let flight_addr = config.flight_addr().parse().unwrap();
-
     let flight_server = tokio::spawn(async move {
         info!("Arrow Flight server starting on {}", flight_addr);
         welcome!("✅ Arrow Flight server started successfully!");
@@ -591,6 +527,8 @@ async fn main() {
     };
 
     // Start HTTP server
+    let http_addr = config.http_addr();
+    let http_listener = tokio::net::TcpListener::bind(&http_addr).await.unwrap();
     let http_addr_display = http_addr.clone();
     let http_server = tokio::spawn(async move {
         info!("HTTP server starting on {}", http_addr_display);
@@ -613,1176 +551,11 @@ async fn main() {
             if let Some(mysql) = mysql_server {
                 mysql.await.ok();
             } else {
-                // If MySQL is not enabled, this future never completes
                 std::future::pending::<()>().await
             }
         } => {
             error!("MySQL server stopped unexpectedly");
             welcome!("❌ MySQL server stopped");
         },
-    }
-}
-
-async fn home() -> &'static str {
-    "Time Series Database Server\n\n\
-     Database Management:\n\
-       GET    /databases              - List all databases\n\
-       POST   /databases              - Create database\n\
-       DELETE /databases/:db          - Delete database\n\
-       GET    /databases/:db          - Get database info\n\
-       GET    /databases/:db/schemas  - List all schemas (services) in database\n\
-       GET    /databases/:db/schemas/:schema/tables - List tables in schema\n\
-       POST   /databases/:db/tables   - Create table (with partitioning)\n\
-       GET    /databases/:db/tables   - List tables\n\
-       DELETE /databases/:db/tables/:table - Delete table\n\n\
-     Data Operations:\n\
-       POST   /write/:db              - Write data (line protocol)\n\
-       POST   /write?db=:db           - Write data (InfluxDB-compatible)\n\
-       GET    /query/:db?sql=<query>  - Query data (GET)\n\
-       POST   /query/:db              - Query data (POST body)\n\
-       GET    /schema/:db/:table      - Get table schema\n\n\
-     Cache Management:\n\
-       GET    /stats                  - Cache statistics\n\
-       GET    /memory                 - Memory usage breakdown\n\
-       POST   /flush                  - Flush cache to disk\n\
-       GET    /health                 - Health check\n\n\
-     Profiling (pprof-compatible):\n\
-       GET    /debug/heap?duration=10&format=protobuf  - Heap allocation profile\n\
-       GET    /debug/cpu?duration=10&format=protobuf   - CPU profile\n\
-       Query parameters:\n\
-         duration - Profile duration in seconds (default: 10, max: 300)\n\
-         format   - Output format: protobuf, flamegraph, text (default: protobuf)\n\
-         download - Add Content-Disposition header (default: false)\n\n\
-     Compaction:\n\
-       POST   /compact/:catalog       - Compact all tables in catalog\n\
-       POST   /compact/:catalog/:schema/:table - Compact all partitions in table\n\
-       POST   /compact/:catalog/:schema/:table/:date - Compact specific partition\n\n\
-     Partition Management:\n\
-       GET    /partitions/:catalog/:schema/:table - List all partitions\n\
-       DELETE /partitions/:catalog/:schema/:table/:date - Delete specific partition\n\
-       POST   /retention/:catalog/:schema/:table - Delete old partitions (body: {older_than_days: N} or {before_date: \"YYYY-MM-DD\"})\n"
-}
-
-// ===== Database Management Handlers =====
-
-async fn list_databases_handler(State(state): State<AppState>) -> impl IntoResponse {
-    debug!("List Databases Request");
-
-    match state.db_manager.list_databases() {
-        Ok(databases) => {
-            let response = serde_json::json!({
-                "databases": databases,
-                "count": databases.len()
-            });
-            (
-                StatusCode::OK,
-                serde_json::to_string_pretty(&response).unwrap(),
-            )
-        }
-        Err(e) => {
-            error!("List databases error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
-        }
-    }
-}
-
-async fn create_database_handler(
-    State(state): State<AppState>,
-    Json(req): Json<CreateDatabaseRequest>,
-) -> impl IntoResponse {
-    info!("Create Database Request: {}", req.name);
-
-    match state.db_manager.create_database(&req.name) {
-        Ok(msg) => {
-            info!("Database created: {}", msg);
-            (StatusCode::CREATED, msg)
-        }
-        Err(e) => {
-            error!("Create database error: {}", e);
-            (StatusCode::BAD_REQUEST, format!("Error: {}", e))
-        }
-    }
-}
-
-async fn delete_database_handler(
-    Path(db): Path<String>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    info!("Delete Database Request: {}", db);
-
-    match state.db_manager.delete_database(&db) {
-        Ok(msg) => {
-            info!("Database deleted: {}", msg);
-            (StatusCode::OK, msg)
-        }
-        Err(e) => {
-            error!("Delete database error: {}", e);
-            (StatusCode::NOT_FOUND, format!("Error: {}", e))
-        }
-    }
-}
-
-async fn get_database_info_handler(
-    Path(db): Path<String>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    debug!("Get Database Info Request: {}", db);
-
-    match state.db_manager.get_database_info(&db) {
-        Ok(info) => {
-            let json = serde_json::to_string_pretty(&info).unwrap();
-            (StatusCode::OK, json)
-        }
-        Err(e) => {
-            error!("Get database info error: {}", e);
-            (StatusCode::NOT_FOUND, format!("Error: {}", e))
-        }
-    }
-}
-
-async fn create_table_handler(
-    Path(db): Path<String>,
-    State(state): State<AppState>,
-    Json(req): Json<CreateTableRequest>,
-) -> impl IntoResponse {
-    info!(
-        "Create Table Request: db={}, table={}, partition_by={:?}",
-        db, req.name, req.partition_by
-    );
-
-    match state
-        .db_manager
-        .create_table(&db, &req.name, req.partition_by)
-    {
-        Ok(msg) => {
-            info!("Table created: {}", msg);
-            (StatusCode::CREATED, msg)
-        }
-        Err(e) => {
-            error!("Create table error: {}", e);
-            (StatusCode::BAD_REQUEST, format!("Error: {}", e))
-        }
-    }
-}
-
-async fn delete_table_handler(
-    Path((db, table)): Path<(String, String)>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    info!("Delete Table Request: db={}, table={}", db, table);
-
-    match state.db_manager.delete_table(&db, &table) {
-        Ok(msg) => {
-            info!("Table deleted: {}", msg);
-            (StatusCode::OK, msg)
-        }
-        Err(e) => {
-            error!("Delete table error: {}", e);
-            (StatusCode::NOT_FOUND, format!("Error: {}", e))
-        }
-    }
-}
-
-async fn health() -> &'static str {
-    "OK"
-}
-
-/// GET /version - Return version information as JSON
-async fn version_handler() -> impl IntoResponse {
-    let version_info = serde_json::json!({
-        "version": env!("GIT_VERSION"),
-        "git_hash": env!("GIT_HASH"),
-        "git_commit_date": env!("GIT_COMMIT_DATE"),
-        "build_time": env!("BUILD_TIME"),
-        "cargo_version": env!("CARGO_PKG_VERSION"),
-        "rustc_version": env!("RUSTC_VERSION"),
-    });
-    (StatusCode::OK, Json(version_info))
-}
-
-async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let stats = state.cache.stats().await;
-
-    // Format bytes in human-readable format
-    let format_bytes = |bytes: usize| -> String {
-        if bytes >= 1024 * 1024 * 1024 {
-            format!("{:.2} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
-        } else if bytes >= 1024 * 1024 {
-            format!("{:.2} MB", bytes as f64 / 1024.0 / 1024.0)
-        } else if bytes >= 1024 {
-            format!("{:.2} KB", bytes as f64 / 1024.0)
-        } else {
-            format!("{} B", bytes)
-        }
-    };
-
-    (
-        StatusCode::OK,
-        format!(
-            "Cache Statistics:\n\
-             ─────────────────────────────\n\
-               Rows:         {}\n\
-               Tables:       {}\n\
-               Size:         {} / {} ({}%)\n\
-               Size (bytes): {} / {}\n\
-             ─────────────────────────────\n",
-            stats.total_rows,
-            stats.num_measurements,
-            format_bytes(stats.size_bytes),
-            format_bytes(stats.max_size_bytes),
-            stats.usage_percent(),
-            stats.size_bytes,
-            stats.max_size_bytes
-        ),
-    )
-}
-
-async fn memory_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let dedup_stats = state.series_tracker.get_dedup_stats().await;
-    let total_dedup = state.series_tracker.total_dedup_memory_bytes().await;
-    let cache_stats = state.cache.stats().await;
-
-    // Format bytes
-    let format_bytes = |bytes: usize| -> String {
-        if bytes >= 1024 * 1024 * 1024 {
-            format!("{:.2} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
-        } else if bytes >= 1024 * 1024 {
-            format!("{:.2} MB", bytes as f64 / 1024.0 / 1024.0)
-        } else if bytes >= 1024 {
-            format!("{:.2} KB", bytes as f64 / 1024.0)
-        } else {
-            format!("{} B", bytes)
-        }
-    };
-
-    let mut output = String::new();
-    output.push_str("Memory Usage Statistics:\n");
-    output.push_str("══════════════════════════════════════════\n\n");
-
-    // Cache memory
-    output.push_str(&format!("Data Cache:\n"));
-    output.push_str(&format!("  Size: {} ({} bytes)\n",
-        format_bytes(cache_stats.size_bytes), cache_stats.size_bytes));
-    output.push_str(&format!("  Limit: {} ({} bytes)\n\n",
-        format_bytes(cache_stats.max_size_bytes), cache_stats.max_size_bytes));
-
-    // Deduplication memory
-    output.push_str(&format!("Series Deduplication (Bloom/HashSet):\n"));
-    output.push_str(&format!("  Total: {} ({} bytes)\n\n",
-        format_bytes(total_dedup), total_dedup));
-
-    if !dedup_stats.is_empty() {
-        output.push_str("  Per Database:\n");
-        let mut db_vec: Vec<_> = dedup_stats.iter().collect();
-        db_vec.sort_by_key(|(name, _)| *name);
-
-        for (db_name, stats) in db_vec {
-            output.push_str(&format!("    {:<30} {:>12} ({:>15} bytes, strategy: {})\n",
-                db_name,
-                format_bytes(stats.memory_bytes),
-                stats.memory_bytes,
-                stats.strategy_type));
-        }
-        output.push_str("\n");
-    }
-
-    // Total estimate
-    let total_approx = cache_stats.size_bytes + total_dedup;
-    output.push_str("──────────────────────────────────────────\n");
-    output.push_str(&format!("Approximate Total: {} ({} bytes)\n",
-        format_bytes(total_approx), total_approx));
-    output.push_str("══════════════════════════════════════════\n");
-
-    (StatusCode::OK, output)
-}
-
-async fn flush_handler(State(state): State<AppState>) -> impl IntoResponse {
-    info!("Manual Flush Request");
-
-    match state.cache.flush().await {
-        Ok(count) => {
-            info!("Manual flush completed: {} files", count);
-            (StatusCode::OK, format!("Flushed {} file(s) to disk", count))
-        }
-        Err(e) => {
-            error!("Manual flush error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Flush error: {}", e),
-            )
-        }
-    }
-}
-
-async fn heap_profile_handler(
-    AxumQuery(params): AxumQuery<ProfileParams>,
-) -> impl IntoResponse {
-    use axum::response::Response;
-    use axum::body::Body;
-    use axum::http::header;
-
-    info!("Heap Profile Request: duration={}s, format={}", params.duration, params.format);
-
-    // Validate duration (max 300 seconds = 5 minutes)
-    if params.duration > 300 {
-        return Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .header(header::CONTENT_TYPE, "text/plain")
-            .body(Body::from("Duration too long (max 300 seconds)"))
-            .unwrap();
-    }
-
-    if params.duration == 0 {
-        return Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .header(header::CONTENT_TYPE, "text/plain")
-            .body(Body::from("Duration must be greater than 0"))
-            .unwrap();
-    }
-
-    // Parse format
-    let format = match profiling::ProfileFormat::from_str(&params.format) {
-        Ok(f) => f,
-        Err(e) => {
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .header(header::CONTENT_TYPE, "text/plain")
-                .body(Body::from(e))
-                .unwrap();
-        }
-    };
-
-    let download = params.download;
-
-    // Generate profile in a blocking task to avoid blocking the async runtime
-    let profile_result = tokio::task::spawn_blocking(move || {
-        profiling::generate_heap_profile(params.duration, format)
-    })
-    .await;
-
-    match profile_result {
-        Ok(Ok(data)) => {
-            let mut response = Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, format.content_type());
-
-            if download {
-                let filename = format!("heap_profile_{}.{}",
-                    chrono::Utc::now().format("%Y%m%d_%H%M%S"),
-                    format.file_extension());
-                response = response.header(header::CONTENT_DISPOSITION,
-                    format!("attachment; filename=\"{}\"", filename));
-            }
-
-            info!("Heap profile generated successfully: {} bytes", data.len());
-            response.body(Body::from(data)).unwrap()
-        }
-        Ok(Err(e)) => {
-            error!("Failed to generate heap profile: {}", e);
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header(header::CONTENT_TYPE, "text/plain")
-                .body(Body::from(format!("Failed to generate profile: {}", e)))
-                .unwrap()
-        }
-        Err(e) => {
-            error!("Profile task panicked: {}", e);
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header(header::CONTENT_TYPE, "text/plain")
-                .body(Body::from("Profile task failed"))
-                .unwrap()
-        }
-    }
-}
-
-async fn cpu_profile_handler(
-    AxumQuery(params): AxumQuery<ProfileParams>,
-) -> impl IntoResponse {
-    use axum::response::Response;
-    use axum::body::Body;
-    use axum::http::header;
-
-    info!("CPU Profile Request: duration={}s, format={}", params.duration, params.format);
-
-    // Validate duration (max 300 seconds = 5 minutes)
-    if params.duration > 300 {
-        return Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .header(header::CONTENT_TYPE, "text/plain")
-            .body(Body::from("Duration too long (max 300 seconds)"))
-            .unwrap();
-    }
-
-    if params.duration == 0 {
-        return Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .header(header::CONTENT_TYPE, "text/plain")
-            .body(Body::from("Duration must be greater than 0"))
-            .unwrap();
-    }
-
-    // Parse format
-    let format = match profiling::ProfileFormat::from_str(&params.format) {
-        Ok(f) => f,
-        Err(e) => {
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .header(header::CONTENT_TYPE, "text/plain")
-                .body(Body::from(e))
-                .unwrap();
-        }
-    };
-
-    let download = params.download;
-
-    // Generate profile in a blocking task to avoid blocking the async runtime
-    let profile_result = tokio::task::spawn_blocking(move || {
-        profiling::generate_cpu_profile(params.duration, format)
-    })
-    .await;
-
-    match profile_result {
-        Ok(Ok(data)) => {
-            let mut response = Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, format.content_type());
-
-            if download {
-                let filename = format!("cpu_profile_{}.{}",
-                    chrono::Utc::now().format("%Y%m%d_%H%M%S"),
-                    format.file_extension());
-                response = response.header(header::CONTENT_DISPOSITION,
-                    format!("attachment; filename=\"{}\"", filename));
-            }
-
-            info!("CPU profile generated successfully: {} bytes", data.len());
-            response.body(Body::from(data)).unwrap()
-        }
-        Ok(Err(e)) => {
-            error!("Failed to generate CPU profile: {}", e);
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header(header::CONTENT_TYPE, "text/plain")
-                .body(Body::from(format!("Failed to generate profile: {}", e)))
-                .unwrap()
-        }
-        Err(e) => {
-            error!("Profile task panicked: {}", e);
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header(header::CONTENT_TYPE, "text/plain")
-                .body(Body::from("Profile task failed"))
-                .unwrap()
-        }
-    }
-}
-
-async fn query_handler(
-    Path(db): Path<String>,
-    AxumQuery(params): AxumQuery<QueryParams>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    debug!("Query Request (GET): db={}, sql={}", db, params.sql);
-
-    execute_query(db, params.sql, state).await
-}
-
-async fn query_handler_post(
-    Path(db): Path<String>,
-    State(state): State<AppState>,
-    body: String,
-) -> impl IntoResponse {
-    debug!("Query Request (POST): db={}, sql={}", db, body);
-
-    execute_query(db, body, state).await
-}
-
-async fn execute_query(db: String, sql: String, state: AppState) -> impl IntoResponse {
-    // Auto-register database tables (simplified!)
-    if let Err(e) = state.query_engine.ensure_database_registered(&db).await {
-        error!("Error auto-registering database: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e));
-    }
-
-    // Execute query with database context (auto-prefix table names)
-    match state
-        .query_engine
-        .execute_query_json_with_db(&sql, &db)
-        .await
-    {
-        Ok(json) => {
-            info!("Query executed successfully");
-            (StatusCode::OK, json)
-        }
-        Err(e) => {
-            error!("Query error: {}", e);
-            (StatusCode::BAD_REQUEST, format!("Query error: {}", e))
-        }
-    }
-}
-
-/// Helper function to parse line protocol and add to cache
-/// This is used by both the normal write path and WAL recovery
-async fn ingest_line_protocol_to_cache(
-    db: &str,
-    line_protocol: &str,
-    cache: &DataCache,
-    series_tracker: Option<&SeriesTracker>,
-    query_engine: Option<&Arc<QueryEngine>>,
-    schema_config: &config::SchemaConfig,
-    series_tracker_config: &config::SeriesTrackerConfig,
-) -> Result<usize, String> {
-    // Parse line protocol
-    let points = parse_multiple_lines(line_protocol, schema_config);
-
-    if points.is_empty() {
-        return Err("No valid points to write".to_string());
-    }
-
-    let point_count = points.len();
-
-    // Track series cardinality (if tracker provided)
-    if let Some(tracker) = series_tracker {
-        tracker.track_points(db, &points).await;
-    }
-
-    // If track_only mode is enabled, skip data ingestion
-    if series_tracker_config.track_only {
-        debug!(
-            "Track-only mode enabled: skipping ingestion of {} points for database={}",
-            point_count, db
-        );
-        return Ok(point_count);
-    }
-
-    // Group by schema and table based on strategy
-    let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::new();
-    for point in points {
-        let (schema, table) = match schema_config.strategy {
-            config::SchemaTableStrategy::ServiceAsSchema => {
-                // Current behavior: service → schema, measurement → table
-                (point.service.clone(), point.measurement.clone())
-            }
-            config::SchemaTableStrategy::ServiceAsTable => {
-                // New behavior: "default" → schema, service → table
-                (schema_config.default_name.clone(), point.service.clone())
-            }
-        };
-
-        let key = (schema, table);
-        grouped.entry(key).or_default().push(point);
-    }
-
-    // Add to cache and register catalog.schema
-    for ((schema, table), points) in grouped {
-        debug!(
-            "Adding {} points for database={}, schema={}, table={}",
-            points.len(),
-            db,
-            schema,
-            table
-        );
-
-        // Ensure catalog.schema is registered in query engine (if provided)
-        if let Some(qe) = query_engine {
-            if let Err(e) = qe.ensure_schema(db, &schema).await {
-                warn!("Failed to register schema {}.{}: {}", db, schema, e);
-            }
-        }
-
-        // Add to cache
-        cache
-            .add_points(db, &schema, &table, points)
-            .await
-            .map_err(|e| format!("Cache error: {}", e))?;
-    }
-
-    Ok(point_count)
-}
-
-async fn list_tables_handler(
-    Path(db): Path<String>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    debug!("List Tables Request: db={}", db);
-
-    // Auto-register database
-    if let Err(e) = state.query_engine.ensure_database_registered(&db).await {
-        error!("Error registering database: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e));
-    }
-
-    let tables = state.query_engine.list_tables().await;
-    let db_tables: Vec<String> = tables
-        .into_iter()
-        .filter(|t| t.starts_with(&format!("{}_", db)))
-        .collect();
-
-    let response = serde_json::json!({
-        "database": db,
-        "tables": db_tables,
-        "count": db_tables.len()
-    });
-    (
-        StatusCode::OK,
-        serde_json::to_string_pretty(&response).unwrap(),
-    )
-}
-
-async fn schema_handler(
-    Path((db, table)): Path<(String, String)>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    debug!("Schema Request: db={}, table={}", db, table);
-
-    // Auto-register database
-    if let Err(e) = state.query_engine.ensure_database_registered(&db).await {
-        error!("Error registering database: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e));
-    }
-
-    let full_table_name = format!("{}_{}", db, table);
-    match state.query_engine.get_table_schema(&full_table_name).await {
-        Ok(schema) => (StatusCode::OK, schema),
-        Err(e) => {
-            error!("Get schema error: {}", e);
-            (StatusCode::NOT_FOUND, format!("Error: {}", e))
-        }
-    }
-}
-
-async fn write_handler(
-    Path(db): Path<String>,
-    State(state): State<AppState>,
-    req: Request,
-) -> impl IntoResponse {
-    debug!("Write Request: db={}", db);
-
-    // Read body
-    let body = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
-        Ok(b) => b,
-        Err(e) => {
-            error!("Error reading body: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("Error reading body: {}", e),
-            );
-        }
-    };
-
-    let data = match String::from_utf8(body.to_vec()) {
-        Ok(s) => s,
-        Err(e) => {
-            error!("Invalid UTF-8: {}", e);
-            return (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e));
-        }
-    };
-
-    process_write_data(&db, &data, state).await
-}
-
-async fn write_handler_query_param(
-    AxumQuery(params): AxumQuery<WriteQueryParams>,
-    State(state): State<AppState>,
-    req: Request,
-) -> impl IntoResponse {
-    debug!("Write Request (InfluxDB-compatible): db={}", params.db);
-
-    // Read body
-    let body = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
-        Ok(b) => b,
-        Err(e) => {
-            error!("Error reading body: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("Error reading body: {}", e),
-            );
-        }
-    };
-
-    let data = match String::from_utf8(body.to_vec()) {
-        Ok(s) => s,
-        Err(e) => {
-            error!("Invalid UTF-8: {}", e);
-            return (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e));
-        }
-    };
-
-    process_write_data(&params.db, &data, state).await
-}
-
-async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCode, String) {
-    debug!("Processing write data: {} bytes", data.len());
-
-    // STEP 1: Write to WAL first for durability
-    if let Some(ref wal) = state.wal {
-        if let Err(e) = wal.log_data_write(db, data).await {
-            error!("WAL write failed: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("WAL error: {}\n", e),
-            );
-        }
-    }
-
-    // STEP 2: Parse and ingest to cache (using shared helper function)
-    match ingest_line_protocol_to_cache(
-        db,
-        data,
-        &state.cache,
-        Some(&state.series_tracker),
-        Some(&state.query_engine),
-        &state.config.schema,
-        &state.config.series_tracker,
-    )
-    .await
-    {
-        Ok(count) => {
-            debug!("Added {} points to cache", count);
-            (StatusCode::OK, "Data added to cache\n".to_string())
-        }
-        Err(e) if e.contains("Cache error") => {
-            error!("Cache write failed: {}", e);
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("Cache full, try again later: {}\n", e),
-            )
-        }
-        Err(e) => (StatusCode::BAD_REQUEST, e),
-    }
-}
-
-async fn log_request(req: Request) -> impl IntoResponse {
-    let method = req.method().clone();
-    let uri = req.uri().clone();
-
-    warn!("Endpoint not found: {} {}", method, uri);
-
-    (
-        StatusCode::NOT_FOUND,
-        format!("Endpoint not found: {} {}", method, uri),
-    )
-}
-
-// ===== Compaction Handlers =====
-
-async fn compact_handler(
-    Path(catalog): Path<String>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    info!("Compact Catalog Request: catalog={}", catalog);
-
-    // Convert config to compactor's CompactionConfig
-    let config = compactor::CompactionConfig::from(&state.config.compaction);
-
-    match state.compactor.compact_catalog(&catalog, &config).await {
-        Ok(results) => {
-            if results.is_empty() {
-                (
-                    StatusCode::OK,
-                    "No compaction needed (minimum file threshold not met)".to_string(),
-                )
-            } else {
-                let summary = results
-                    .iter()
-                    .map(|r| {
-                        format!(
-                            "{}.{}.{}/{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
-                            r.catalog,
-                            r.schema,
-                            r.table,
-                            r.date_partition,
-                            r.l0_files_before,
-                            r.l0_files_after,
-                            r.files_before,
-                            r.files_after,
-                            r.bytes_before as f64 / 1024.0 / 1024.0,
-                            r.bytes_after as f64 / 1024.0 / 1024.0,
-                            r.rows_compacted
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                (
-                    StatusCode::OK,
-                    format!(
-                        "Compacted {} partition(s) in catalog '{}'\n\n{}",
-                        results.len(),
-                        catalog,
-                        summary
-                    ),
-                )
-            }
-        }
-        Err(e) => {
-            error!("Compaction error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Compaction error: {}", e),
-            )
-        }
-    }
-}
-
-async fn compact_table_handler(
-    Path((catalog, schema, table)): Path<(String, String, String)>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    info!(
-        "Compact Table Request: catalog={}, schema={}, table={}",
-        catalog, schema, table
-    );
-
-    // Convert config to compactor's CompactionConfig
-    let config = compactor::CompactionConfig::from(&state.config.compaction);
-
-    match state
-        .compactor
-        .compact_table_all_partitions(&catalog, &schema, &table, &config)
-        .await
-    {
-        Ok(results) => {
-            if results.is_empty() {
-                (
-                    StatusCode::OK,
-                    format!(
-                        "No compaction needed for {}.{}.{} (minimum file threshold not met)",
-                        catalog, schema, table
-                    ),
-                )
-            } else {
-                let summary = results
-                    .iter()
-                    .map(|r| {
-                        format!(
-                            "{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
-                            r.date_partition,
-                            r.l0_files_before,
-                            r.l0_files_after,
-                            r.files_before,
-                            r.files_after,
-                            r.bytes_before as f64 / 1024.0 / 1024.0,
-                            r.bytes_after as f64 / 1024.0 / 1024.0,
-                            r.rows_compacted
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                (
-                    StatusCode::OK,
-                    format!(
-                        "Compacted {} partition(s) in {}.{}.{}\n\n{}",
-                        results.len(),
-                        catalog,
-                        schema,
-                        table,
-                        summary
-                    ),
-                )
-            }
-        }
-        Err(e) => {
-            error!("Compaction error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Compaction error: {}", e),
-            )
-        }
-    }
-}
-
-async fn compact_partition_handler(
-    Path((catalog, schema, table, date)): Path<(String, String, String, String)>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    info!(
-        "Compact Partition Request: catalog={}, schema={}, table={}, date={}",
-        catalog, schema, table, date
-    );
-
-    // Format as date partition (date=YYYY-MM-DD)
-    let date_partition = if date.starts_with("date=") {
-        date.clone()
-    } else {
-        format!("date={}", date)
-    };
-
-    // Convert config to compactor's CompactionConfig
-    let config = compactor::CompactionConfig::from(&state.config.compaction);
-
-    match state
-        .compactor
-        .compact_table_partition(&catalog, &schema, &table, &date_partition, &config)
-        .await
-    {
-        Ok(Some(result)) => {
-            let message = format!(
-                "Compacted {}.{}.{}/{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
-                result.catalog,
-                result.schema,
-                result.table,
-                result.date_partition,
-                result.l0_files_before,
-                result.l0_files_after,
-                result.files_before,
-                result.files_after,
-                result.bytes_before as f64 / 1024.0 / 1024.0,
-                result.bytes_after as f64 / 1024.0 / 1024.0,
-                result.rows_compacted
-            );
-            info!("{}", message);
-            (StatusCode::OK, message)
-        }
-        Ok(None) => {
-            let message = format!(
-                "No compaction needed for {}.{}.{}/{} (minimum file threshold not met)",
-                catalog, schema, table, date_partition
-            );
-            info!("{}", message);
-            (StatusCode::OK, message)
-        }
-        Err(e) => {
-            error!("Compaction error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Compaction error: {}", e),
-            )
-        }
-    }
-}
-
-// ===== Series Cardinality Handler =====
-
-async fn series_stats_handler(
-    Path(db): Path<String>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    debug!("Series Stats Request: db={}", db);
-
-    // Default to PMC (physical metric count) for backward compatibility
-    // TODO: Add query parameter to select PMC or UMC
-    match state.series_tracker.get_series_stats(SCHEMA_PMC, &db).await {
-        Ok(stats) => {
-            if stats.is_empty() {
-                return (
-                    StatusCode::OK,
-                    Json(serde_json::json!({
-                        "database": db,
-                        "services": {},
-                        "total_series": 0,
-                        "message": "No series data available"
-                    }))
-                    .to_string(),
-                );
-            }
-
-            // Calculate total series across all services
-            let total_series: usize = stats.values().map(|s| s.total_series).sum();
-
-            // Format response
-            let response = serde_json::json!({
-                "database": db,
-                "total_series": total_series,
-                "service_count": stats.len(),
-                "services": stats.iter().map(|(service, stats)| {
-                    serde_json::json!({
-                        "service": service,
-                        "total_series": stats.total_series,
-                        "metrics": stats.metrics
-                    })
-                }).collect::<Vec<_>>()
-            });
-
-            info!(
-                "Returned stats for {} services, {} total series",
-                stats.len(),
-                total_series
-            );
-            (
-                StatusCode::OK,
-                serde_json::to_string_pretty(&response).unwrap(),
-            )
-        }
-        Err(e) => {
-            error!("Error getting series stats: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Error getting series stats: {}", e),
-            )
-        }
-    }
-}
-
-// ===== Schema and Table Listing Handlers =====
-
-async fn list_schemas_handler(
-    Path(db): Path<String>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    debug!("List Schemas Request: db={}", db);
-
-    match state.query_engine.list_schemas(&db).await {
-        Ok(schemas) => {
-            let response = serde_json::json!({
-                "database": db,
-                "schemas": schemas,
-                "count": schemas.len()
-            });
-            info!("Found {} schema(s)", schemas.len());
-            (
-                StatusCode::OK,
-                serde_json::to_string_pretty(&response).unwrap(),
-            )
-        }
-        Err(e) => {
-            error!("List schemas error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
-        }
-    }
-}
-
-async fn list_schema_tables_handler(
-    Path((db, schema)): Path<(String, String)>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    debug!("List Schema Tables Request: db={}, schema={}", db, schema);
-
-    match state.query_engine.list_tables_in_schema(&db, &schema).await {
-        Ok(tables) => {
-            let response = serde_json::json!({
-                "database": db,
-                "schema": schema,
-                "tables": tables,
-                "count": tables.len()
-            });
-            info!("Found {} table(s)", tables.len());
-            (
-                StatusCode::OK,
-                serde_json::to_string_pretty(&response).unwrap(),
-            )
-        }
-        Err(e) => {
-            error!("List schema tables error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
-        }
-    }
-}
-
-// ===== Partition Management Handlers =====
-
-async fn list_partitions_handler(
-    Path((catalog, schema, table)): Path<(String, String, String)>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    debug!(
-        "List Partitions Request: catalog={}, schema={}, table={}",
-        catalog, schema, table
-    );
-
-    match state
-        .db_manager
-        .discover_table_partitions(&catalog, &schema, &table)
-    {
-        Ok(partitions) => {
-            let response = serde_json::json!({
-                "catalog": catalog,
-                "schema": schema,
-                "table": table,
-                "partitions": partitions.iter().map(|p| {
-                    serde_json::json!({
-                        "partition": p.partition,
-                        "date": p.date,
-                        "file_count": p.file_count,
-                        "size_mb": p.total_size_bytes as f64 / 1024.0 / 1024.0
-                    })
-                }).collect::<Vec<_>>(),
-                "count": partitions.len(),
-                "total_size_mb": partitions.iter().map(|p| p.total_size_bytes).sum::<u64>() as f64 / 1024.0 / 1024.0
-            });
-            info!("Found {} partition(s)", partitions.len());
-            (
-                StatusCode::OK,
-                serde_json::to_string_pretty(&response).unwrap(),
-            )
-        }
-        Err(e) => {
-            error!("List partitions error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
-        }
-    }
-}
-
-async fn delete_partition_handler(
-    Path((catalog, schema, table, date)): Path<(String, String, String, String)>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    info!(
-        "Delete Partition Request: catalog={}, schema={}, table={}, date={}",
-        catalog, schema, table, date
-    );
-
-    match state
-        .db_manager
-        .delete_partition(&catalog, &schema, &table, &date)
-    {
-        Ok(msg) => {
-            info!("{}", msg);
-            (StatusCode::OK, msg)
-        }
-        Err(e) => {
-            error!("Delete partition error: {}", e);
-            (StatusCode::NOT_FOUND, format!("Error: {}", e))
-        }
-    }
-}
-
-async fn delete_old_partitions_handler(
-    Path((catalog, schema, table)): Path<(String, String, String)>,
-    State(state): State<AppState>,
-    Json(req): Json<RetentionRequest>,
-) -> impl IntoResponse {
-    info!(
-        "Delete Old Partitions Request: catalog={}, schema={}, table={}",
-        catalog, schema, table
-    );
-
-    let deleted = if let Some(days) = req.older_than_days {
-        info!("Deleting partitions older than {} days", days);
-        state
-            .db_manager
-            .delete_partitions_older_than_days(&catalog, &schema, &table, days)
-    } else if let Some(before_date) = req.before_date {
-        info!("Deleting partitions before {}", before_date);
-        state
-            .db_manager
-            .delete_partitions_before(&catalog, &schema, &table, &before_date)
-    } else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "Must specify either 'older_than_days' or 'before_date'".to_string(),
-        );
-    };
-
-    match deleted {
-        Ok(messages) => {
-            if messages.is_empty() {
-                (StatusCode::OK, "No partitions to delete".to_string())
-            } else {
-                let summary = format!(
-                    "Deleted {} partition(s):\n{}",
-                    messages.len(),
-                    messages.join("\n")
-                );
-                info!("{}", summary);
-                (StatusCode::OK, summary)
-            }
-        }
-        Err(e) => {
-            error!("Delete partitions error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
-        }
     }
 }

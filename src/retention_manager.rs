@@ -9,15 +9,13 @@ use tracing::{debug, error, info, warn};
 pub struct RetentionManager {
     db_manager: Arc<DatabaseManager>,
     data_dir: String,
-    system_dir: String,
 }
 
 impl RetentionManager {
-    pub fn new(db_manager: Arc<DatabaseManager>, data_dir: &str, system_dir: &str) -> Self {
+    pub fn new(db_manager: Arc<DatabaseManager>, data_dir: &str) -> Self {
         RetentionManager {
             db_manager,
             data_dir: data_dir.to_string(),
-            system_dir: system_dir.to_string(),
         }
     }
 
