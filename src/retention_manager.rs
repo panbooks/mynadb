@@ -75,12 +75,6 @@ impl RetentionManager {
                 continue;
             }
 
-            // Skip system directory
-            if catalog == self.system_dir {
-                debug!("Skipping system directory: {}", catalog);
-                continue;
-            }
-
             debug!("Checking retention for catalog: {}", catalog);
             match self
                 .run_catalog_retention(&catalog, config, &mut stats)
