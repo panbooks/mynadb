@@ -146,6 +146,10 @@ max_level = 4
 
 # Background compaction interval in seconds (0 = disabled)
 interval_secs = 60
+
+# Concurrency control
+max_concurrent_compactions = 8          # LSM compaction parallelism
+full_compaction_max_concurrent = 2      # Full compaction parallelism (lower to avoid OOM)
 ```
 
 ### Configuration Parameters
@@ -158,6 +162,8 @@ interval_secs = 60
 | `target_file_size_mb` | u64 | 500 | Target size for compacted files |
 | `max_level` | u32 | 4 | Maximum level (L0-L4) |
 | `interval_secs` | u64 | 60 | Background compaction interval |
+| `max_concurrent_compactions` | usize | 8 | Max parallel LSM compaction operations |
+| `full_compaction_max_concurrent` | usize | 2 | Max parallel full compaction operations (lower to avoid OOM) |
 
 ## Compaction Flow Example
 
