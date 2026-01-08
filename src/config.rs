@@ -198,6 +198,11 @@ pub struct SeriesTrackerConfig {
     #[serde(default = "default_series_max_concurrent_tables")]
     pub max_concurrent_tables: usize,
 
+    /// Maximum concurrent files to read per table during cache loading (default: 4)
+    /// Higher values speed up I/O but use more threads and memory
+    #[serde(default = "default_series_max_concurrent_files")]
+    pub max_concurrent_files: usize,
+
     /// Default deduplication strategy: "hashset" or "bloom"
     #[serde(default = "default_dedup_strategy")]
     pub default_strategy: String,
@@ -454,6 +459,10 @@ fn default_series_max_concurrent_tables() -> usize {
     8
 }
 
+fn default_series_max_concurrent_files() -> usize {
+    4
+}
+
 fn default_dedup_strategy() -> String {
     "hashset".to_string()
 }
@@ -612,6 +621,7 @@ impl Default for Config {
                 system_tags: vec![],
                 cache_retention_days: default_series_cache_retention_days(),
                 max_concurrent_tables: default_series_max_concurrent_tables(),
+                max_concurrent_files: default_series_max_concurrent_files(),
                 default_strategy: default_dedup_strategy(),
                 bloom_databases: vec![],
                 bloom: BloomConfig::default(),

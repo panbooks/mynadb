@@ -47,6 +47,8 @@ pub struct SeriesTracker {
     pending_writes: PendingWrites,
     /// Number of days to keep in cache
     cache_retention_days: u32,
+    /// Maximum concurrent files to read during cache loading
+    max_concurrent_files: usize,
     /// System tags to exclude for UMC calculation (from config)
     system_tags: Vec<String>,
 }
@@ -174,6 +176,7 @@ impl SeriesTracker {
             strategy_manager,
             pending_writes: Arc::new(RwLock::new(HashMap::new())),
             cache_retention_days: tracker_config.cache_retention_days,
+            max_concurrent_files: tracker_config.max_concurrent_files,
             system_tags: tracker_config.system_tags.clone(),
         };
 
@@ -673,138 +676,154 @@ impl SeriesTracker {
     }
 
     /// Load existing stats into cache on startup (only latest N days based on config)
+    /// Uses parallel file reading and batch insertion for optimal performance
     pub async fn load_cache(&self, schema: &str, db: &str) -> Result<(), String> {
+        use futures::stream::{FuturesUnordered, StreamExt};
+
         let parquet_files = self.get_all_parquet_files(schema, db)?;
 
         if parquet_files.is_empty() {
             return Ok(());
         }
 
-        // Calculate cutoff date - only load latest N days
+        let start = Instant::now();
         let cutoff_date = self.get_cutoff_date();
-
-        // Get or create strategy for this database and schema
         let strategy = self.strategy_manager.get_or_create_strategy(db, schema).await;
 
-        use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+        // Phase 1: Read all files in parallel using spawn_blocking
+        let max_concurrent = self.max_concurrent_files;
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
+        let mut tasks = FuturesUnordered::new();
+
+        for file_path in parquet_files {
+            let sem = Arc::clone(&semaphore);
+            let cache_retention = self.cache_retention_days;
+
+            let task = async move {
+                let _permit = sem.acquire().await.unwrap();
+                tokio::task::spawn_blocking(move || {
+                    Self::read_parquet_file_blocking(&file_path, cutoff_date, cache_retention)
+                }).await
+            };
+
+            tasks.push(task);
+        }
+
+        // Collect all file data (I/O happens in parallel)
+        let mut all_series_data: Vec<(i32, Vec<(String, String, u64)>)> = Vec::new();
+        let mut skipped_count = 0;
+        let mut file_count = 0;
+
+        while let Some(result) = tasks.next().await {
+            match result {
+                Ok(Ok(Some(data))) => {
+                    file_count += 1;
+                    all_series_data.push(data);
+                }
+                Ok(Ok(None)) => skipped_count += 1,
+                Ok(Err(e)) => warn!("Failed to read parquet file: {}", e),
+                Err(e) => warn!("File reading task panicked: {}", e),
+            }
+        }
+
+        let io_time = start.elapsed();
+        debug!(
+            "I/O completed for {}.{}: read {} files in {:.2}s",
+            schema, db, file_count, io_time.as_secs_f64()
+        );
+
+        // Phase 2: Acquire lock ONCE and batch insert all data
+        let insert_start = Instant::now();
+        let mut strategy_guard = strategy.write().await;
 
         let mut loaded_count = 0;
         let mut loaded_by_date: HashMap<i32, usize> = HashMap::new();
-        let mut skipped_count = 0;
 
-        for file_path in parquet_files {
-            if std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0) == 0 {
-                continue;
-            }
+        for (date, series_list) in all_series_data {
+            for (service, metric, tag_hash) in series_list {
+                let series_hash = Self::calculate_series_hash(&service, &metric, tag_hash);
 
-            let file =
-                File::open(&file_path).map_err(|e| format!("Failed to open stats file: {}", e))?;
-
-            let builder = match ParquetRecordBatchReaderBuilder::try_new(file) {
-                Ok(b) => b,
-                Err(e) => {
-                    warn!(
-                        "Corrupted cache file detected at '{}': {}",
-                        file_path.display(),
-                        e
-                    );
-                    warn!("Deleting corrupted file...");
-                    if let Err(del_err) = std::fs::remove_file(&file_path) {
-                        error!("Failed to delete corrupted file: {}", del_err);
-                    } else {
-                        info!("Corrupted file deleted successfully");
-                    }
-                    continue;
-                }
-            };
-
-            let mut reader = match builder.build() {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!(
-                        "Corrupted cache file detected at '{}': {}",
-                        file_path.display(),
-                        e
-                    );
-                    warn!("Deleting corrupted file...");
-                    if let Err(del_err) = std::fs::remove_file(&file_path) {
-                        error!("Failed to delete corrupted file: {}", del_err);
-                    } else {
-                        info!("Corrupted file deleted successfully");
-                    }
-                    continue;
-                }
-            };
-
-            // Extract date from partition path (date=YYYY-MM-DD)
-            let date = Self::extract_date_from_path(&file_path);
-
-            // Skip files older than retention period
-            if date < cutoff_date {
-                skipped_count += 1;
-                debug!(
-                    "Skipping old partition {} (older than {} days)",
-                    file_path.display(),
-                    self.cache_retention_days
-                );
-                continue;
-            }
-
-            // Load data into strategy
-            let mut strategy_guard = strategy.write().await;
-
-            while let Some(Ok(batch)) = reader.next() {
-                let service_col = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .unwrap();
-                let metric_col = batch
-                    .column(1)
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .unwrap();
-                let hash_col = batch
-                    .column(2)
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
-                    .unwrap();
-
-                for i in 0..batch.num_rows() {
-                    let service = service_col.value(i);
-                    let metric = metric_col.value(i);
-                    let tag_hash = hash_col.value(i);
-
-                    let series_hash = Self::calculate_series_hash(service, metric, tag_hash);
-
-                    // Insert into strategy (strategy handles deduplication internally)
-                    if !strategy_guard.contains(schema, db, date, series_hash) {
-                        strategy_guard.insert(schema, db, date, series_hash);
-                        loaded_count += 1;
-                        *loaded_by_date.entry(date).or_insert(0) += 1;
-                    }
+                if !strategy_guard.contains(schema, db, date, series_hash) {
+                    strategy_guard.insert(schema, db, date, series_hash);
+                    loaded_count += 1;
+                    *loaded_by_date.entry(date).or_insert(0) += 1;
                 }
             }
-
-            // Release lock after processing this file
-            drop(strategy_guard);
         }
+
+        drop(strategy_guard);
+        let insert_time = insert_start.elapsed();
+
+        let total_time = start.elapsed();
 
         if loaded_count > 0 || skipped_count > 0 {
             info!(
-                "Loaded {} series into cache for schema '{}', database '{}' across {} day(s) (skipped {} old partition(s), keeping {} days)",
-                loaded_count,
-                schema,
-                db,
-                loaded_by_date.len(),
-                skipped_count,
-                self.cache_retention_days
+                "Loaded {} series into cache for schema '{}', database '{}' across {} day(s) \
+                 (I/O: {:.2}s, insert: {:.2}s, total: {:.2}s, skipped {} old file(s), keeping {} days)",
+                loaded_count, schema, db, loaded_by_date.len(),
+                io_time.as_secs_f64(), insert_time.as_secs_f64(), total_time.as_secs_f64(),
+                skipped_count, self.cache_retention_days
             );
             for (date, count) in loaded_by_date {
                 debug!("  Date {}: {} series", date, count);
             }
         }
+
         Ok(())
+    }
+
+    /// Read parquet file in blocking context (called from spawn_blocking)
+    fn read_parquet_file_blocking(
+        file_path: &Path,
+        cutoff_date: i32,
+        cache_retention_days: u32,
+    ) -> Result<Option<(i32, Vec<(String, String, u64)>)>, String> {
+        use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        if std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0) == 0 {
+            return Ok(None);
+        }
+
+        let date = Self::extract_date_from_path(file_path);
+
+        if date < cutoff_date {
+            debug!(
+                "Skipping old partition {} (older than {} days)",
+                file_path.display(), cache_retention_days
+            );
+            return Ok(None);
+        }
+
+        let file = File::open(file_path)
+            .map_err(|e| format!("Failed to open: {}", e))?;
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+            .map_err(|e| {
+                warn!("Corrupted file {}, deleting", file_path.display());
+                let _ = std::fs::remove_file(file_path);
+                format!("Corrupted: {}", e)
+            })?;
+
+        let mut reader = builder.build()
+            .map_err(|e| format!("Failed to build reader: {}", e))?;
+
+        let mut series_data = Vec::new();
+
+        while let Some(Ok(batch)) = reader.next() {
+            let service_col = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+            let metric_col = batch.column(1).as_any().downcast_ref::<StringArray>().unwrap();
+            let hash_col = batch.column(2).as_any().downcast_ref::<UInt64Array>().unwrap();
+
+            for i in 0..batch.num_rows() {
+                series_data.push((
+                    service_col.value(i).to_string(),
+                    metric_col.value(i).to_string(),
+                    hash_col.value(i),
+                ));
+            }
+        }
+
+        Ok(Some((date, series_data)))
     }
 
     /// Extract date (days since epoch) from partition path like ".../date=2024-01-15/..."
@@ -856,6 +875,7 @@ mod tests {
             system_tags: vec![],
             cache_retention_days: 2,
             max_concurrent_tables: 8,
+            max_concurrent_files: 4,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -896,6 +916,7 @@ mod tests {
             system_tags: vec![],
             cache_retention_days: 2,
             max_concurrent_tables: 8,
+            max_concurrent_files: 4,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -934,6 +955,7 @@ mod tests {
             system_tags: vec!["MONITOR.ip".to_string(), "MONITOR.hostName".to_string()],
             cache_retention_days: 2,
             max_concurrent_tables: 8,
+            max_concurrent_files: 4,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -980,6 +1002,7 @@ mod tests {
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
             max_concurrent_tables: 8,
+            max_concurrent_files: 4,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1013,6 +1036,7 @@ mod tests {
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
             max_concurrent_tables: 8,
+            max_concurrent_files: 4,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1055,6 +1079,7 @@ mod tests {
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
             max_concurrent_tables: 8,
+            max_concurrent_files: 4,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1109,6 +1134,7 @@ mod tests {
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
             max_concurrent_tables: 8,
+            max_concurrent_files: 4,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1171,6 +1197,7 @@ mod tests {
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
             max_concurrent_tables: 8,
+            max_concurrent_files: 4,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1256,6 +1283,7 @@ mod tests {
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
             max_concurrent_tables: 8,
+            max_concurrent_files: 4,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1336,6 +1364,7 @@ mod tests {
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
             max_concurrent_tables: 8,
+            max_concurrent_files: 4,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1410,6 +1439,7 @@ mod tests {
             system_tags: vec![],
             cache_retention_days: 2,
             max_concurrent_tables: 8,
+            max_concurrent_files: 4,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
@@ -1474,6 +1504,7 @@ mod tests {
             system_tags: vec!["MONITOR.ip".to_string()],
             cache_retention_days: 2,
             max_concurrent_tables: 8,
+            max_concurrent_files: 4,
             default_strategy: "hashset".to_string(),
             bloom_databases: vec![],
             bloom: ConfigBloomConfig {
