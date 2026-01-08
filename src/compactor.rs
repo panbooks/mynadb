@@ -42,8 +42,10 @@ pub struct Compactor {
     data_dir: String,
     /// Lock to prevent concurrent compaction and read/write operations
     locks: CompactionLocks,
-    /// Semaphore to limit concurrent compaction operations
+    /// Semaphore to limit concurrent LSM compaction operations
     compaction_semaphore: Option<Arc<Semaphore>>,
+    /// Semaphore to limit concurrent full compaction operations
+    full_compaction_semaphore: Option<Arc<Semaphore>>,
     /// Read rate limiter (None = unlimited)
     read_rate_limiter: Option<Arc<RateLimiter>>,
     /// Write rate limiter (None = unlimited)
@@ -71,8 +73,10 @@ pub struct CompactionConfig {
     pub full_compaction_target_size: u64,
 
     // Rate limiting settings
-    /// Maximum concurrent compaction operations (0 = unlimited)
+    /// Maximum concurrent LSM compaction operations (0 = unlimited)
     pub max_concurrent_compactions: usize,
+    /// Maximum concurrent full compaction operations (0 = unlimited)
+    pub full_compaction_max_concurrent: usize,
     /// Read rate limit in bytes/sec (0 = unlimited)
     pub read_rate_limit_bytes_per_sec: u64,
     /// Write rate limit in bytes/sec (0 = unlimited)
@@ -87,9 +91,10 @@ impl Default for CompactionConfig {
             target_file_size: DEFAULT_TARGET_FILE_SIZE_MB * MB_TO_BYTES,
             max_level: DEFAULT_MAX_LEVEL,
             full_compaction_enabled: true,
-            full_compaction_hour: 1, // 01:00
+            full_compaction_hour: 3, // 03:00
             full_compaction_target_size: 200 * MB_TO_BYTES, // 200MB
-            max_concurrent_compactions: 4,
+            max_concurrent_compactions: 8,
+            full_compaction_max_concurrent: 2,
             read_rate_limit_bytes_per_sec: 0, // Unlimited
             write_rate_limit_bytes_per_sec: 0, // Unlimited
         }
@@ -107,6 +112,7 @@ impl From<&crate::config::CompactionConfig> for CompactionConfig {
             full_compaction_hour: config.full_compaction_hour,
             full_compaction_target_size: config.full_compaction_target_size_mb * MB_TO_BYTES,
             max_concurrent_compactions: config.max_concurrent_compactions,
+            full_compaction_max_concurrent: config.full_compaction_max_concurrent,
             read_rate_limit_bytes_per_sec: config.read_rate_limit_mb_per_sec * MB_TO_BYTES,
             write_rate_limit_bytes_per_sec: config.write_rate_limit_mb_per_sec * MB_TO_BYTES,
         }
@@ -191,6 +197,13 @@ impl Compactor {
             None
         };
 
+        // Create semaphore for full compaction if full_compaction_max_concurrent > 0
+        let full_compaction_semaphore = if config.full_compaction_max_concurrent > 0 {
+            Some(Arc::new(Semaphore::new(config.full_compaction_max_concurrent)))
+        } else {
+            None
+        };
+
         // Create rate limiters if configured
         let read_rate_limiter = if config.read_rate_limit_bytes_per_sec > 0 {
             Some(Arc::new(RateLimiter::new(config.read_rate_limit_bytes_per_sec)))
@@ -208,6 +221,7 @@ impl Compactor {
             data_dir: data_dir.to_string(),
             locks: Arc::new(RwLock::new(std::collections::HashMap::new())),
             compaction_semaphore,
+            full_compaction_semaphore,
             read_rate_limiter,
             write_rate_limiter,
         }
@@ -547,7 +561,7 @@ impl Compactor {
         info!(
             "Found {} partitions for full compaction (max {} concurrent)",
             partitions_to_compact.len(),
-            config.max_concurrent_compactions
+            config.full_compaction_max_concurrent
         );
 
         // Phase 2: Process partitions concurrently using FuturesUnordered
@@ -628,9 +642,9 @@ impl Compactor {
         partition_path: &Path,
         config: &CompactionConfig,
     ) -> Result<Option<CompactionResult>, String> {
-        // Acquire semaphore permit if concurrent limiting is enabled
-        let _permit = if let Some(ref semaphore) = self.compaction_semaphore {
-            Some(semaphore.acquire().await.map_err(|e| format!("Failed to acquire semaphore: {}", e))?)
+        // Acquire full compaction semaphore permit if concurrent limiting is enabled
+        let _permit = if let Some(ref semaphore) = self.full_compaction_semaphore {
+            Some(semaphore.acquire().await.map_err(|e| format!("Failed to acquire full compaction semaphore: {}", e))?)
         } else {
             None
         };

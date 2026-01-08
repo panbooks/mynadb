@@ -114,6 +114,8 @@ flush_interval_secs = 30
 [compaction]
 min_files = 4
 max_level = 5
+max_concurrent_compactions = 8  # LSM compaction parallelism
+full_compaction_max_concurrent = 2  # Full compaction parallelism (lower to avoid OOM)
 
 [retention]
 enabled = true           # Enable automatic retention

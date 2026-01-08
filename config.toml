@@ -59,9 +59,15 @@ interval_secs = 70
 # Rate limiting settings (prevents I/O saturation during compaction)
 
 # Maximum concurrent compaction operations (0 = unlimited, default: 8)
-# Limits number of partitions that can be compacted in parallel
+# Limits number of partitions that can be compacted in parallel (LSM compaction)
 # Lower values reduce resource usage but slow down compaction
 max_concurrent_compactions = 8
+
+# Maximum concurrent full compaction operations (0 = unlimited, default: 2)
+# Limits number of partitions for full compaction in parallel
+# Set lower than max_concurrent_compactions to avoid OOM during full compaction
+# Full compaction processes entire partitions and uses more memory
+full_compaction_max_concurrent = 2
 
 # Read rate limit in MB/sec (0 = unlimited, default: 0)
 # Throttles parquet file reads to prevent I/O saturation

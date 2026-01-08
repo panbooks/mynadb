@@ -150,24 +150,48 @@ Parquet file compaction settings
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `min_files` | usize | `5` | Minimum files to trigger compaction |
-| `max_file_size_mb` | u64 | `100` | Max file size before compaction (MB) |
-| `target_file_size_mb` | u64 | `500` | Target size after compaction (MB) |
-| `max_level` | u32 | `5` | Maximum compaction levels |
+| `min_files` | usize | `5` | Minimum L0 files to trigger LSM compaction |
+| `major_min_files` | usize | `3` | Minimum L1+ files to trigger major compaction |
+| `target_file_size_mb` | u64 | `200` | Target size after compaction (MB) |
+| `max_level` | u32 | `5` | Maximum compaction levels (L0-L5) |
+| `interval_secs` | u64 | `70` | Background LSM compaction interval |
+| `full_compaction_enabled` | bool | `true` | Enable full compaction for yesterday's partitions |
+| `full_compaction_hour` | u32 | `3` | Hour to run full compaction (0-23) |
+| `full_compaction_interval_secs` | u64 | `3600` | Full compaction check interval |
+| `full_compaction_target_size_mb` | u64 | `200` | Skip partitions larger than this in full compaction |
+| `max_concurrent_compactions` | usize | `8` | Max parallel LSM compaction operations |
+| `full_compaction_max_concurrent` | usize | `2` | Max parallel full compaction operations (lower to avoid OOM) |
+| `read_rate_limit_mb_per_sec` | u64 | `0` | Read rate limit in MB/sec (0 = unlimited) |
+| `write_rate_limit_mb_per_sec` | u64 | `0` | Write rate limit in MB/sec (0 = unlimited) |
 
 **Example:**
 ```toml
 [compaction]
-min_files = 10
-max_file_size_mb = 200
-target_file_size_mb = 1024  # 1GB target files
-max_level = 7
+min_files = 5
+major_min_files = 3
+target_file_size_mb = 200
+max_level = 5
+interval_secs = 70
+
+# Full compaction (date-based consolidation)
+full_compaction_enabled = true
+full_compaction_hour = 3  # Run at 03:00
+full_compaction_interval_secs = 3600
+full_compaction_target_size_mb = 200
+
+# Rate limiting
+max_concurrent_compactions = 8  # LSM compaction parallelism
+full_compaction_max_concurrent = 2  # Full compaction parallelism (lower to avoid OOM)
+read_rate_limit_mb_per_sec = 0
+write_rate_limit_mb_per_sec = 0
 ```
 
 **Tuning Guidelines:**
-- **Write-Heavy**: Higher `min_files` (10-20), larger `target_file_size_mb` (1-2GB)
-- **Read-Heavy**: Lower `min_files` (5-10), moderate `target_file_size_mb` (500MB-1GB)
-- More levels = better compression, slower queries
+- **Write-Heavy**: Higher `min_files` (10-20), larger `target_file_size_mb` (500MB-1GB)
+- **Read-Heavy**: Lower `min_files` (5-10), moderate `target_file_size_mb` (200-500MB)
+- **High Memory**: Increase `full_compaction_max_concurrent` (4-8) if you have >64GB RAM
+- **Low Memory**: Decrease `full_compaction_max_concurrent` (1-2) to avoid OOM during full compaction
+- **I/O Limited**: Set `read_rate_limit_mb_per_sec` and `write_rate_limit_mb_per_sec` to prevent saturation
 
 ### [series_tracker]
 Series cardinality tracking settings
@@ -211,9 +235,18 @@ max_size_mb = 1024
 
 [compaction]
 min_files = 5
-max_file_size_mb = 100
-target_file_size_mb = 500
+major_min_files = 3
+target_file_size_mb = 200
 max_level = 5
+interval_secs = 70
+full_compaction_enabled = true
+full_compaction_hour = 3
+full_compaction_interval_secs = 3600
+full_compaction_target_size_mb = 200
+max_concurrent_compactions = 8
+full_compaction_max_concurrent = 2
+read_rate_limit_mb_per_sec = 0
+write_rate_limit_mb_per_sec = 0
 
 [series_tracker]
 flush_interval_secs = 60
@@ -244,10 +277,19 @@ flush_interval_secs = 30
 max_size_mb = 4096  # 4GB cache
 
 [compaction]
-min_files = 15
-max_file_size_mb = 256
-target_file_size_mb = 2048  # 2GB files
+min_files = 10
+major_min_files = 4
+target_file_size_mb = 500
 max_level = 7
+interval_secs = 60
+full_compaction_enabled = true
+full_compaction_hour = 3
+full_compaction_interval_secs = 3600
+full_compaction_target_size_mb = 500
+max_concurrent_compactions = 16  # More parallelism on production
+full_compaction_max_concurrent = 4  # More concurrent full compaction with sufficient RAM
+read_rate_limit_mb_per_sec = 200
+write_rate_limit_mb_per_sec = 200
 
 [series_tracker]
 flush_interval_secs = 120  # 2 minutes
@@ -262,8 +304,12 @@ max_size_mb = 8192  # 8GB cache
 
 [compaction]
 min_files = 20  # Less frequent compaction
-max_file_size_mb = 512
-target_file_size_mb = 4096  # 4GB files
+major_min_files = 5
+target_file_size_mb = 1024
+max_level = 7
+interval_secs = 120  # Less frequent compaction
+max_concurrent_compactions = 16
+full_compaction_max_concurrent = 4
 ```
 
 ### Low-Latency Queries
@@ -274,8 +320,12 @@ max_size_mb = 512
 
 [compaction]
 min_files = 5  # Keep files small
-max_file_size_mb = 100
-target_file_size_mb = 512
+major_min_files = 3
+target_file_size_mb = 200
+max_level = 5
+interval_secs = 30  # More frequent compaction
+max_concurrent_compactions = 8
+full_compaction_max_concurrent = 2
 ```
 
 ## Environment Variables

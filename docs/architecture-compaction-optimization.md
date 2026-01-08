@@ -875,7 +875,8 @@ target_file_size_mb = 500               # Output size
 # ========== EXECUTION ==========
 interval_secs = 60                      # Check every minute
 max_compaction_time_secs = 300          # Timeout per partition
-concurrent_partitions = 4               # Parallel compaction
+max_concurrent_compactions = 8          # LSM compaction parallelism
+full_compaction_max_concurrent = 2      # Full compaction parallelism (lower to avoid OOM)
 ```
 
 ### Decision Matrix
@@ -1163,7 +1164,8 @@ max_file_size_mb = 100                  # (Unused, for future)
 # ==========================================
 interval_secs = 60                      # Background check interval
 max_compaction_time_secs = 300          # Timeout per partition (5 min)
-concurrent_partitions = 4               # Parallel compaction workers
+max_concurrent_compactions = 8          # LSM compaction parallelism
+full_compaction_max_concurrent = 2      # Full compaction parallelism (lower to avoid OOM)
 retry_on_error = true                   # Retry failed compactions
 max_retries = 3                         # Max retry attempts
 
@@ -1195,8 +1197,9 @@ interval_secs = 300                # Check less frequently (5 min)
 
 #### High Cardinality (many partitions)
 ```toml
-concurrent_partitions = 8          # More parallel workers
-max_compaction_time_secs = 120     # Shorter timeout to prevent blocking
+max_concurrent_compactions = 16        # More parallel workers for LSM compaction
+full_compaction_max_concurrent = 4     # More parallel full compaction (with sufficient RAM)
+max_compaction_time_secs = 120         # Shorter timeout to prevent blocking
 ```
 
 #### Large Files (GB-scale partitions)

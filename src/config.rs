@@ -149,9 +149,15 @@ pub struct CompactionConfig {
 
     // Rate limiting settings
     /// Maximum concurrent compaction operations (0 = unlimited, default: 8)
-    /// Limits number of partitions that can be compacted in parallel
+    /// Limits number of partitions that can be compacted in parallel (LSM compaction)
     #[serde(default = "default_compaction_max_concurrent")]
     pub max_concurrent_compactions: usize,
+
+    /// Maximum concurrent full compaction operations (0 = unlimited, default: 2)
+    /// Limits number of partitions for full compaction in parallel
+    /// Set lower than max_concurrent_compactions to avoid OOM during full compaction
+    #[serde(default = "default_full_compaction_max_concurrent")]
+    pub full_compaction_max_concurrent: usize,
 
     /// Read rate limit in MB/sec (0 = unlimited, default: 200)
     /// Throttles parquet file reads to prevent I/O saturation
@@ -415,6 +421,10 @@ fn default_compaction_max_concurrent() -> usize {
     8 // Max 8 concurrent compaction operations
 }
 
+fn default_full_compaction_max_concurrent() -> usize {
+    2 // Max 2 concurrent full compaction operations (lower to avoid OOM)
+}
+
 fn default_compaction_read_rate_limit() -> u64 {
     200
 }
@@ -583,6 +593,7 @@ impl Default for Config {
                 full_compaction_interval_secs: default_full_compaction_interval_secs(),
                 full_compaction_target_size_mb: default_full_compaction_target_size_mb(),
                 max_concurrent_compactions: default_compaction_max_concurrent(),
+                full_compaction_max_concurrent: default_full_compaction_max_concurrent(),
                 read_rate_limit_mb_per_sec: default_compaction_read_rate_limit(),
                 write_rate_limit_mb_per_sec: default_compaction_write_rate_limit(),
             },
