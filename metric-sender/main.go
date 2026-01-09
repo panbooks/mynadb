@@ -109,10 +109,10 @@ func doRequestWithRetry(client *http.Client, url string, maxRetries int, retryDe
 			log.Printf("Request returned status %d (attempt %d)", resp.StatusCode, attempt+1)
 		}
 
-		// Don't retry on client errors (4xx)
-		if resp != nil && resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			return nil, lastErr
-		}
+// 		// Don't retry on client errors (4xx)
+// 		if resp != nil && resp.StatusCode >= 400 && resp.StatusCode < 500 {
+// 			return nil, lastErr
+// 		}
 	}
 
 	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
