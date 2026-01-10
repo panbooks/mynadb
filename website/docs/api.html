@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service API Reference - Complete HTTP and Flight API documentation">
+  <title>API Reference - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html" class="active">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>API Reference</h4>
+        <ul class="sidebar-nav">
+          <li><a href="api.html" class="active">HTTP API</a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>On This Page</h4>
+        <ul class="sidebar-nav">
+          <li><a href="#write">Write Data</a></li>
+          <li><a href="#query">Query Data</a></li>
+          <li><a href="#flush">Flush Cache</a></li>
+          <li><a href="#compact">Compaction</a></li>
+          <li><a href="#tables">List Tables</a></li>
+          <li><a href="#schema">Get Schema</a></li>
+          <li><a href="#partitions">Partitions</a></li>
+          <li><a href="#retention">Retention</a></li>
+          <li><a href="#health">Health Check</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>HTTP API Reference</h1>
+
+      <p>
+        Stats Service exposes a REST API on port 7000 (configurable). All endpoints accept and return JSON unless otherwise noted.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Base URL</div>
+        <p><code>http://localhost:7000</code> (default configuration)</p>
+      </div>
+
+      <!-- Write Data -->
+      <h2 id="write">Write Data</h2>
+
+      <p>Write time series data using InfluxDB Line Protocol.</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>Endpoint</strong></td>
+              <td><code>POST /write/:db</code></td>
+            </tr>
+            <tr>
+              <td><strong>Content-Type</strong></td>
+              <td><code>text/plain</code></td>
+            </tr>
+            <tr>
+              <td><strong>Parameters</strong></td>
+              <td><code>:db</code> - Database name (auto-created if not exists)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Line Protocol Format</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>&lt;measurement&gt;,&lt;tag_key&gt;=&lt;tag_value&gt;,... &lt;field_key&gt;=&lt;field_value&gt;,... [timestamp]</code></pre>
+        </div>
+      </div>
+
+      <h3>Example</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/write/mydb \
+  -H "Content-Type: text/plain" \
+  -d 'cpu,host=server01,region=us-west usage=75.5,temp=45
+cpu,host=server02,region=us-east usage=82.3,temp=50
+memory,host=server01 used=16.5,total=32.0'</code></pre>
+        </div>
+      </div>
+
+      <h3>Response</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>HTTP/1.1 204 No Content</code></pre>
+        </div>
+      </div>
+
+      <h3>Field Types</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Suffix</th>
+              <th>Type</th>
+              <th>Example</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>(none)</td>
+              <td>Float64</td>
+              <td><code>usage=75.5</code></td>
+            </tr>
+            <tr>
+              <td><code>i</code></td>
+              <td>Int64</td>
+              <td><code>count=42i</code></td>
+            </tr>
+            <tr>
+              <td><code>u</code></td>
+              <td>UInt64</td>
+              <td><code>bytes=1024u</code></td>
+            </tr>
+            <tr>
+              <td>quotes</td>
+              <td>String</td>
+              <td><code>status="ok"</code></td>
+            </tr>
+            <tr>
+              <td><code>t/f</code></td>
+              <td>Boolean</td>
+              <td><code>active=t</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Query Data -->
+      <h2 id="query">Query Data</h2>
+
+      <p>Execute SQL queries against your time series data.</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>Endpoint</strong></td>
+              <td><code>GET /query/:db?sql=&lt;query&gt;</code><br><code>POST /query/:db</code></td>
+            </tr>
+            <tr>
+              <td><strong>Content-Type</strong></td>
+              <td><code>text/plain</code> (POST body is SQL)</td>
+            </tr>
+            <tr>
+              <td><strong>Response</strong></td>
+              <td>JSON array of objects</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>GET Request</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'</code></pre>
+        </div>
+      </div>
+
+      <h3>POST Request (Recommended for complex queries)</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/query/mydb \
+  -d "SELECT host, AVG(usage) as avg_cpu
+      FROM cpu
+      WHERE region = 'us-west'
+      GROUP BY host
+      ORDER BY avg_cpu DESC"</code></pre>
+        </div>
+      </div>
+
+      <h3>Response</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[
+  {"host": "server01", "avg_cpu": 75.5},
+  {"host": "server02", "avg_cpu": 45.2}
+]</code></pre>
+        </div>
+      </div>
+
+      <h3>Table Name Formats</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Format</th>
+              <th>Example</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Short name</td>
+              <td><code>SELECT * FROM cpu</code></td>
+              <td>Auto-prefixed with catalog.schema</td>
+            </tr>
+            <tr>
+              <td>Schema.table</td>
+              <td><code>SELECT * FROM default.cpu</code></td>
+              <td>Explicit schema</td>
+            </tr>
+            <tr>
+              <td>Fully qualified</td>
+              <td><code>SELECT * FROM mydb.default.cpu</code></td>
+              <td>Full catalog.schema.table</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Flush Cache -->
+      <h2 id="flush">Flush Cache</h2>
+
+      <p>Flush in-memory cache to Parquet files on disk.</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>Endpoint</strong></td>
+              <td><code>POST /flush</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/flush</code></pre>
+        </div>
+      </div>
+
+      <h3>Response</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{"status": "ok", "message": "Cache flushed successfully"}</code></pre>
+        </div>
+      </div>
+
+      <!-- Compaction -->
+      <h2 id="compact">Trigger Compaction</h2>
+
+      <p>Manually trigger compaction for a database or specific measurement.</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>Endpoint</strong></td>
+              <td><code>POST /compact/:db</code><br><code>POST /compact/:db/:measurement</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Compact entire database</span>
+curl -X POST http://localhost:7000/compact/mydb
+
+<span class="token-comment"># Compact specific measurement</span>
+curl -X POST http://localhost:7000/compact/mydb/cpu</code></pre>
+        </div>
+      </div>
+
+      <!-- List Tables -->
+      <h2 id="tables">List Tables</h2>
+
+      <p>List all tables in a database.</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>Endpoint</strong></td>
+              <td><code>GET /tables/:db</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/tables/mydb</code></pre>
+        </div>
+      </div>
+
+      <h3>Response</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "catalog": "mydb",
+  "tables": [
+    "mydb.default.cpu",
+    "mydb.default.memory",
+    "mydb.default.disk"
+  ],
+  "count": 3
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- Get Schema -->
+      <h2 id="schema">Get Table Schema</h2>
+
+      <p>Get the schema (columns and types) for a table.</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>Endpoint</strong></td>
+              <td><code>GET /schema/:db/:table</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/schema/mydb/cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>Response</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "table": "cpu",
+  "columns": [
+    {"name": "timestamp", "type": "Int64"},
+    {"name": "host", "type": "Utf8"},
+    {"name": "region", "type": "Utf8"},
+    {"name": "usage", "type": "Float64"},
+    {"name": "temp", "type": "Int64"}
+  ]
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- Partitions -->
+      <h2 id="partitions">List Partitions</h2>
+
+      <p>List date partitions for a table.</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>Endpoint</strong></td>
+              <td><code>GET /partitions/:catalog/:schema/:table</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/partitions/mydb/default/cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>Delete Partition</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl -X DELETE http://localhost:7000/partitions/mydb/default/cpu/2024-01-15</code></pre>
+        </div>
+      </div>
+
+      <!-- Retention -->
+      <h2 id="retention">Retention</h2>
+
+      <p>Delete old partitions based on age or date.</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>Endpoint</strong></td>
+              <td><code>POST /retention/:catalog/:schema/:table</code></td>
+            </tr>
+            <tr>
+              <td><strong>Content-Type</strong></td>
+              <td><code>application/json</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Delete by Age</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"older_than_days": 30}'</code></pre>
+        </div>
+      </div>
+
+      <h3>Delete by Date</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"before_date": "2024-01-01"}'</code></pre>
+        </div>
+      </div>
+
+      <!-- Health Check -->
+      <h2 id="health">Health Check</h2>
+
+      <p>Check if the server is running.</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>Endpoint</strong></td>
+              <td><code>GET /health</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/health</code></pre>
+        </div>
+      </div>
+
+      <h3>Response</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{"status": "ok"}</code></pre>
+        </div>
+      </div>
+
+      <!-- Cache Stats -->
+      <h2 id="stats">Cache Statistics</h2>
+
+      <p>Get statistics about the in-memory cache.</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>Endpoint</strong></td>
+              <td><code>GET /stats</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/stats</code></pre>
+        </div>
+      </div>
+
+      <h2>Error Responses</h2>
+
+      <p>All errors return JSON with an error message:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "error": "Table not found: mydb.default.unknown"
+}</code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Status Code</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>200</td>
+              <td>Success (with response body)</td>
+            </tr>
+            <tr>
+              <td>204</td>
+              <td>Success (no content)</td>
+            </tr>
+            <tr>
+              <td>400</td>
+              <td>Bad request (invalid syntax)</td>
+            </tr>
+            <tr>
+              <td>404</td>
+              <td>Not found (table, database)</td>
+            </tr>
+            <tr>
+              <td>500</td>
+              <td>Internal server error</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Next Steps</h2>
+
+      <div class="cards-grid">
+        <a href="flight-api.html" class="card">
+          <div class="card-icon">&#9992;</div>
+          <h3>Arrow Flight API</h3>
+          <p>High-performance gRPC streaming interface.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="examples.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>Examples</h3>
+          <p>Ready-to-use query examples and patterns.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

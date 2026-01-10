@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service Guides - Step-by-step tutorials">
+  <title>Guides - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Guides</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html" class="active">All Guides</a></li>
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="retention.html">Retention Policies</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>Guides</h1>
+
+      <p>
+        Step-by-step tutorials to help you get the most out of Stats Service.
+        From basic operations to advanced configurations.
+      </p>
+
+      <h2>Getting Started</h2>
+
+      <div class="cards-grid">
+        <a href="quickstart.html" class="card">
+          <div class="card-icon">&#128640;</div>
+          <h3>Quick Start</h3>
+          <p>Get up and running in 5 minutes. Write your first data and run your first query.</p>
+          <span class="card-link">Read guide <span>&#8594;</span></span>
+        </a>
+
+        <a href="installation.html" class="card">
+          <div class="card-icon">&#128229;</div>
+          <h3>Installation</h3>
+          <p>Build from source, Docker deployment, and system requirements.</p>
+          <span class="card-link">Read guide <span>&#8594;</span></span>
+        </a>
+
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>Configuration</h3>
+          <p>All configuration options with detailed explanations and examples.</p>
+          <span class="card-link">Read guide <span>&#8594;</span></span>
+        </a>
+      </div>
+
+      <h2>Data Operations</h2>
+
+      <div class="cards-grid">
+        <a href="line-protocol.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>Writing Data</h3>
+          <p>InfluxDB Line Protocol format, field types, and best practices for ingestion.</p>
+          <span class="card-link">Read guide <span>&#8594;</span></span>
+        </a>
+
+        <a href="sql-queries.html" class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>SQL Queries</h3>
+          <p>Complete SQL guide: SELECT, JOIN, aggregations, window functions, and more.</p>
+          <span class="card-link">Read guide <span>&#8594;</span></span>
+        </a>
+
+        <a href="examples.html" class="card">
+          <div class="card-icon">&#128203;</div>
+          <h3>Query Examples</h3>
+          <p>Ready-to-use examples for common time series operations.</p>
+          <span class="card-link">Read guide <span>&#8594;</span></span>
+        </a>
+      </div>
+
+      <h2>Storage & Maintenance</h2>
+
+      <div class="cards-grid">
+        <a href="compaction.html" class="card">
+          <div class="card-icon">&#128218;</div>
+          <h3>Compaction</h3>
+          <p>Understanding LSM-style compaction, tuning, and manual triggering.</p>
+          <span class="card-link">Read guide <span>&#8594;</span></span>
+        </a>
+
+        <a href="retention.html" class="card">
+          <div class="card-icon">&#128197;</div>
+          <h3>Retention Policies</h3>
+          <p>Automatic data expiration and manual partition management.</p>
+          <span class="card-link">Read guide <span>&#8594;</span></span>
+        </a>
+
+        <a href="storage.html" class="card">
+          <div class="card-icon">&#128451;</div>
+          <h3>Storage</h3>
+          <p>Parquet format, partitioning strategies, and storage optimization.</p>
+          <span class="card-link">Read guide <span>&#8594;</span></span>
+        </a>
+      </div>
+
+      <h2>Integration</h2>
+
+      <div class="cards-grid">
+        <a href="flight-api.html" class="card">
+          <div class="card-icon">&#9992;</div>
+          <h3>Arrow Flight</h3>
+          <p>High-performance gRPC streaming for analytics tools and dashboards.</p>
+          <span class="card-link">Read guide <span>&#8594;</span></span>
+        </a>
+
+        <a href="grafana.html" class="card">
+          <div class="card-icon">&#128202;</div>
+          <h3>Grafana Integration</h3>
+          <p>Connect Stats Service to Grafana for real-time dashboards.</p>
+          <span class="card-link">Read guide <span>&#8594;</span></span>
+        </a>
+
+        <a href="telegraf.html" class="card">
+          <div class="card-icon">&#128225;</div>
+          <h3>Telegraf Integration</h3>
+          <p>Collect metrics from your infrastructure with Telegraf.</p>
+          <span class="card-link">Read guide <span>&#8594;</span></span>
+        </a>
+      </div>
+
+      <h2>Featured Guide: SQL Queries</h2>
+
+      <p>
+        Stats Service supports full SQL via Apache DataFusion. Here's a quick reference
+        for common query patterns:
+      </p>
+
+      <h3>Basic Query</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu LIMIT 10'</code></pre>
+        </div>
+      </div>
+
+      <h3>Aggregation</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl 'http://localhost:7000/query/mydb' -d "
+SELECT host, AVG(usage) as avg_cpu
+FROM cpu
+GROUP BY host
+ORDER BY avg_cpu DESC
+"</code></pre>
+        </div>
+      </div>
+
+      <h3>JOIN Query</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl 'http://localhost:7000/query/mydb' -d "
+SELECT c.host, c.usage as cpu, m.used as memory
+FROM cpu c
+JOIN memory m ON c.host = m.host
+WHERE c.usage > 80
+"</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; See More</div>
+        <p>Check out the <a href="sql-queries.html">full SQL guide</a> and <a href="examples.html">examples page</a> for comprehensive coverage.</p>
+      </div>
+
+      <h2>Featured Guide: Retention Policies</h2>
+
+      <p>
+        Stats Service supports automatic data expiration to manage disk space.
+        Configure retention in <code>config.toml</code>:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[retention]
+enabled = true           # Enable background retention
+default_days = 7         # Delete data older than 7 days
+interval_secs = 3600     # Check every hour</code></pre>
+        </div>
+      </div>
+
+      <p>Manual retention via API:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Delete partitions older than 30 days</span>
+curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"older_than_days": 30}'</code></pre>
+        </div>
+      </div>
+
+      <h2>Need Help?</h2>
+
+      <div class="cards-grid">
+        <a href="troubleshooting.html" class="card">
+          <div class="card-icon">&#128295;</div>
+          <h3>Troubleshooting</h3>
+          <p>Common issues and solutions.</p>
+          <span class="card-link">View <span>&#8594;</span></span>
+        </a>
+
+        <a href="faq.html" class="card">
+          <div class="card-icon">&#10067;</div>
+          <h3>FAQ</h3>
+          <p>Frequently asked questions.</p>
+          <span class="card-link">View <span>&#8594;</span></span>
+        </a>
+
+        <a href="https://github.com/anthropics/stats-service/issues" class="card" target="_blank">
+          <div class="card-icon">&#128172;</div>
+          <h3>GitHub Issues</h3>
+          <p>Report bugs or request features.</p>
+          <span class="card-link">Open <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

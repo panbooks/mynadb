@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service Installation Guide - Install and deploy Stats Service">
+  <title>Installation - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%230066ff' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html" class="active">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Installation Topics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="#requirements">Requirements</a></li>
+          <li><a href="#binary">Binary Release</a></li>
+          <li><a href="#source">Build from Source</a></li>
+          <li><a href="#docker">Docker</a></li>
+          <li><a href="#systemd">Systemd Service</a></li>
+          <li><a href="#verify">Verify Installation</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>Installation</h1>
+
+      <p class="lead">
+        This guide covers multiple ways to install Stats Service: pre-built binaries,
+        building from source, Docker containers, and setting up as a system service.
+      </p>
+
+      <h2 id="requirements">System Requirements</h2>
+
+      <h3>Hardware</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Component</th>
+              <th>Minimum</th>
+              <th>Recommended</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>CPU</strong></td>
+              <td>2 cores</td>
+              <td>4+ cores</td>
+            </tr>
+            <tr>
+              <td><strong>Memory</strong></td>
+              <td>2 GB</td>
+              <td>8+ GB</td>
+            </tr>
+            <tr>
+              <td><strong>Storage</strong></td>
+              <td>10 GB SSD</td>
+              <td>100+ GB NVMe SSD</td>
+            </tr>
+            <tr>
+              <td><strong>Network</strong></td>
+              <td>100 Mbps</td>
+              <td>1 Gbps+</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Software</h3>
+
+      <ul>
+        <li><strong>Operating System:</strong> Linux (Ubuntu 20.04+, Debian 11+, RHEL 8+, etc.)</li>
+        <li><strong>Architecture:</strong> x86_64 (AMD64) or ARM64</li>
+        <li><strong>Rust:</strong> 1.75+ (for building from source)</li>
+      </ul>
+
+      <h2 id="binary">Binary Release</h2>
+
+      <p>The easiest way to install Stats Service is using pre-built binaries.</p>
+
+      <h3>Download Latest Release</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Download the latest release</span>
+curl -LO https://github.com/anthropics/stats-service/releases/latest/download/stats-service-linux-amd64.tar.gz
+
+<span class="token-comment"># Extract the archive</span>
+tar -xzf stats-service-linux-amd64.tar.gz
+
+<span class="token-comment"># Move binary to /usr/local/bin</span>
+sudo mv stats-service /usr/local/bin/
+
+<span class="token-comment"># Verify installation</span>
+stats-service --version</code></pre>
+        </div>
+      </div>
+
+      <h3>ARM64 (Apple Silicon, AWS Graviton)</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Download ARM64 version</span>
+curl -LO https://github.com/anthropics/stats-service/releases/latest/download/stats-service-linux-arm64.tar.gz
+
+<span class="token-comment"># Extract and install</span>
+tar -xzf stats-service-linux-arm64.tar.gz
+sudo mv stats-service /usr/local/bin/</code></pre>
+        </div>
+      </div>
+
+      <h2 id="source">Build from Source</h2>
+
+      <p>Building from source gives you the latest features and allows customization.</p>
+
+      <h3>Prerequisites</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Install Rust (if not already installed)</span>
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+<span class="token-comment"># Reload shell configuration</span>
+source $HOME/.cargo/env
+
+<span class="token-comment"># Verify Rust installation</span>
+rustc --version  <span class="token-comment"># Should be 1.75+</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Clone and Build</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Clone the repository</span>
+git clone https://github.com/anthropics/stats-service.git
+cd stats-service
+
+<span class="token-comment"># Build release binary</span>
+cargo build --release
+
+<span class="token-comment"># Binary is now at target/release/stats-service</span>
+./target/release/stats-service --version
+
+<span class="token-comment"># Optional: Install to system path</span>
+sudo cp target/release/stats-service /usr/local/bin/</code></pre>
+        </div>
+      </div>
+
+      <h3>Build Script</h3>
+
+      <p>Use the provided build script to create a distributable archive:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Build and create release archive</span>
+./build.sh
+
+<span class="token-comment"># Output: stats-service-vX.X.X-linux-amd64.tar.gz</span></code></pre>
+        </div>
+      </div>
+
+      <h2 id="docker">Docker</h2>
+
+      <p>Run Stats Service in a Docker container for easy deployment and isolation.</p>
+
+      <h3>Pull Official Image</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Pull the latest image</span>
+docker pull ghcr.io/anthropics/stats-service:latest
+
+<span class="token-comment"># Run with default settings</span>
+docker run -d \
+  --name stats-service \
+  -p 7000:7000 \
+  -p 7001:7001 \
+  -v stats-data:/data \
+  ghcr.io/anthropics/stats-service:latest</code></pre>
+        </div>
+      </div>
+
+      <h3>Docker Compose</h3>
+
+      <p>For production deployments, use Docker Compose:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">yaml</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># docker-compose.yml</span>
+version: '3.8'
+
+services:
+  stats-service:
+    image: ghcr.io/anthropics/stats-service:latest
+    container_name: stats-service
+    restart: unless-stopped
+    ports:
+      - "7000:7000"   <span class="token-comment"># HTTP API</span>
+      - "7001:7001"   <span class="token-comment"># Arrow Flight</span>
+    volumes:
+      - ./data:/data
+      - ./config.toml:/etc/stats-service/config.toml:ro
+    environment:
+      - RUST_LOG=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Start with Docker Compose</span>
+docker-compose up -d
+
+<span class="token-comment"># View logs</span>
+docker-compose logs -f stats-service
+
+<span class="token-comment"># Stop</span>
+docker-compose down</code></pre>
+        </div>
+      </div>
+
+      <h3>Build Docker Image Locally</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">dockerfile</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Dockerfile</span>
+FROM rust:1.75-slim as builder
+
+WORKDIR /app
+COPY . .
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/stats-service /usr/local/bin/
+
+EXPOSE 7000 7001
+VOLUME ["/data"]
+
+CMD ["stats-service"]</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Build the image</span>
+docker build -t stats-service:local .
+
+<span class="token-comment"># Run locally built image</span>
+docker run -d -p 7000:7000 -p 7001:7001 stats-service:local</code></pre>
+        </div>
+      </div>
+
+      <h2 id="systemd">Systemd Service</h2>
+
+      <p>Set up Stats Service as a systemd service for automatic startup and management.</p>
+
+      <h3>Create Service User</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Create a dedicated user</span>
+sudo useradd --system --no-create-home --shell /bin/false stats-service
+
+<span class="token-comment"># Create data directory</span>
+sudo mkdir -p /var/lib/stats-service
+sudo chown stats-service:stats-service /var/lib/stats-service
+
+<span class="token-comment"># Create config directory</span>
+sudo mkdir -p /etc/stats-service</code></pre>
+        </div>
+      </div>
+
+      <h3>Create Configuration File</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># /etc/stats-service/config.toml</span>
+
+[server]
+http_port = 7000
+flight_port = 7001
+
+[storage]
+data_dir = "/var/lib/stats-service/data"
+
+[cache]
+flush_interval_secs = 30
+
+[compaction]
+min_files = 4
+max_level = 5
+max_concurrent_compactions = 8
+
+[retention]
+enabled = true
+default_days = 30
+interval_secs = 3600</code></pre>
+        </div>
+      </div>
+
+      <h3>Create Systemd Unit File</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">ini</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># /etc/systemd/system/stats-service.service</span>
+
+[Unit]
+Description=Stats Service - High-Performance Time Series Database
+Documentation=https://github.com/anthropics/stats-service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stats-service
+Group=stats-service
+ExecStart=/usr/local/bin/stats-service --config /etc/stats-service/config.toml
+Restart=on-failure
+RestartSec=5
+
+<span class="token-comment"># Resource limits</span>
+LimitNOFILE=65536
+LimitNPROC=4096
+
+<span class="token-comment"># Security hardening</span>
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/stats-service
+PrivateTmp=true
+
+<span class="token-comment"># Environment</span>
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+        </div>
+      </div>
+
+      <h3>Enable and Start Service</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Reload systemd</span>
+sudo systemctl daemon-reload
+
+<span class="token-comment"># Enable service to start on boot</span>
+sudo systemctl enable stats-service
+
+<span class="token-comment"># Start the service</span>
+sudo systemctl start stats-service
+
+<span class="token-comment"># Check status</span>
+sudo systemctl status stats-service
+
+<span class="token-comment"># View logs</span>
+sudo journalctl -u stats-service -f</code></pre>
+        </div>
+      </div>
+
+      <h2 id="verify">Verify Installation</h2>
+
+      <p>After installation, verify Stats Service is running correctly:</p>
+
+      <h3>Health Check</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Check HTTP health endpoint</span>
+curl http://localhost:7000/health
+
+<span class="token-comment"># Expected response:</span>
+<span class="token-string">{"status": "ok"}</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Write Test Data</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Write test data</span>
+curl -X POST 'http://localhost:7000/write/testdb' \
+  -d 'cpu,host=server01 usage=45.2'
+
+<span class="token-comment"># Flush to disk</span>
+curl -X POST http://localhost:7000/flush
+
+<span class="token-comment"># Query data</span>
+curl 'http://localhost:7000/query/testdb' \
+  -d 'SELECT * FROM cpu'</code></pre>
+        </div>
+      </div>
+
+      <h3>Check Ports</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Verify ports are listening</span>
+ss -tlnp | grep -E '7000|7001'
+
+<span class="token-comment"># Expected output:</span>
+<span class="token-string">LISTEN  0  128  *:7000  *:*  users:(("stats-service",pid=1234,fd=3))</span>
+<span class="token-string">LISTEN  0  128  *:7001  *:*  users:(("stats-service",pid=1234,fd=4))</span></code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-success">
+        <div class="callout-title">Installation Complete!</div>
+        <p>
+          Stats Service is now installed and running. Continue to the
+          <a href="quickstart.html">Quick Start</a> guide to learn how to use it,
+          or see <a href="configuration.html">Configuration</a> for advanced setup options.
+        </p>
+      </div>
+
+      <h2>Troubleshooting</h2>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Issue</th>
+              <th>Solution</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Port already in use</strong></td>
+              <td>Change <code>http_port</code> or <code>flight_port</code> in config.toml</td>
+            </tr>
+            <tr>
+              <td><strong>Permission denied</strong></td>
+              <td>Check data directory ownership: <code>chown -R stats-service:stats-service /var/lib/stats-service</code></td>
+            </tr>
+            <tr>
+              <td><strong>Service won't start</strong></td>
+              <td>Check logs: <code>journalctl -u stats-service -n 50</code></td>
+            </tr>
+            <tr>
+              <td><strong>Out of memory</strong></td>
+              <td>Reduce <code>full_compaction_max_concurrent</code> in config</td>
+            </tr>
+            <tr>
+              <td><strong>Slow queries</strong></td>
+              <td>Trigger compaction: <code>curl -X POST http://localhost:7000/compact/mydb</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="cards-grid">
+        <a href="quickstart.html" class="card">
+          <div class="card-icon">&#9889;</div>
+          <h3>Quick Start</h3>
+          <p>Get started with Stats Service in 5 minutes.</p>
+          <span class="card-link">Start <span>&#8594;</span></span>
+        </a>
+
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>Configuration</h3>
+          <p>Full configuration reference.</p>
+          <span class="card-link">Configure <span>&#8594;</span></span>
+        </a>
+
+        <a href="architecture.html" class="card">
+          <div class="card-icon">&#127959;</div>
+          <h3>Architecture</h3>
+          <p>Learn how Stats Service works.</p>
+          <span class="card-link">Explore <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

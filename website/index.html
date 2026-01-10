@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service - A high-performance time series database built with Rust, powered by Apache DataFusion and Parquet">
+  <meta name="keywords" content="time series database, TSDB, Rust, DataFusion, Parquet, InfluxDB, metrics, analytics">
+  <title>Stats Service - High-Performance Time Series Database</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="css/style.css">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="docs/index.html">Documentation</a></li>
+        <li><a href="docs/quickstart.html">Quick Start</a></li>
+        <li><a href="docs/architecture.html">Architecture</a></li>
+        <li><a href="docs/api.html">API Reference</a></li>
+        <li><a href="docs/examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+        <a href="docs/quickstart.html" class="btn btn-primary">Get Started</a>
+      </div>
+
+      <button class="mobile-menu-btn" aria-label="Toggle menu">&#9776;</button>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-content">
+        <div class="hero-badge">
+          <span>&#9889;</span> Built with Rust for Maximum Performance
+        </div>
+
+        <h1>
+          The Modern<br>
+          <span>Time Series Database</span>
+        </h1>
+
+        <p class="hero-description">
+          A blazing-fast time series database built with Rust. Ingest data via InfluxDB Line Protocol,
+          store in columnar Parquet format, and query with SQL powered by Apache DataFusion.
+        </p>
+
+        <div class="hero-buttons">
+          <a href="docs/quickstart.html" class="btn btn-primary btn-lg">
+            <span>&#9654;</span> Get Started
+          </a>
+          <a href="docs/index.html" class="btn btn-secondary btn-lg">
+            <span>&#128214;</span> Read the Docs
+          </a>
+        </div>
+
+        <div class="hero-code">
+          <pre><code><span class="comment"># Write data using InfluxDB Line Protocol</span>
+<span class="command">curl</span> -X POST http://localhost:7000/write/mydb \
+  -d <span class="string">'cpu,host=server01,region=us-west usage=75.5,temp=45'</span>
+
+<span class="comment"># Query with SQL</span>
+<span class="command">curl</span> 'http://localhost:7000/query/mydb' \
+  -d <span class="string">'SELECT host, AVG(usage) FROM cpu GROUP BY host'</span></code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Stats Section -->
+  <section class="stats-section section">
+    <div class="container">
+      <div class="stats-grid">
+        <div class="stat-item">
+          <h3>10x</h3>
+          <p>Faster Ingestion</p>
+        </div>
+        <div class="stat-item">
+          <h3>90%</h3>
+          <p>Storage Reduction</p>
+        </div>
+        <div class="stat-item">
+          <h3>&lt;1ms</h3>
+          <p>Query Latency</p>
+        </div>
+        <div class="stat-item">
+          <h3>SQL</h3>
+          <p>Standard Queries</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header">
+        <h2>Why Stats Service?</h2>
+        <p>Built for modern infrastructure monitoring and analytics with a focus on performance and developer experience.</p>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">&#128293;</div>
+          <h3>Blazing Fast</h3>
+          <p>Written in Rust with zero-copy deserialization and efficient memory management for maximum throughput.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128451;</div>
+          <h3>Columnar Storage</h3>
+          <p>Apache Parquet format provides excellent compression ratios and fast analytical query performance.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128270;</div>
+          <h3>SQL Queries</h3>
+          <p>Full SQL support powered by Apache DataFusion. Use familiar syntax for complex analytical queries.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128268;</div>
+          <h3>InfluxDB Compatible</h3>
+          <p>Drop-in replacement for InfluxDB write API. Migrate your existing applications seamlessly.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128218;</div>
+          <h3>LSM Compaction</h3>
+          <p>Multi-level compaction strategy optimizes storage and query performance automatically.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#9992;</div>
+          <h3>Arrow Flight</h3>
+          <p>High-performance gRPC streaming for efficient data transfer to analytics tools and dashboards.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128203;</div>
+          <h3>Schema Flexibility</h3>
+          <p>Automatic schema detection and evolution. No need to define schemas upfront.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128200;</div>
+          <h3>Time Partitioning</h3>
+          <p>Automatic date-based partitioning for efficient time-range queries and data retention.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128274;</div>
+          <h3>Retention Policies</h3>
+          <p>Automatic data expiration and cleanup based on configurable retention policies.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture Overview -->
+  <section class="section" style="background: var(--bg-secondary);">
+    <div class="container">
+      <div class="section-header">
+        <h2>Architecture</h2>
+        <p>A modern, layered architecture designed for high-throughput ingestion and fast analytical queries.</p>
+      </div>
+
+      <div class="architecture-diagram">
+        <pre>
+                            +-----------------+
+                            |   HTTP Client   |
+                            +--------+--------+
+                                     |
+                    +----------------+----------------+
+                    |                                 |
+            +-------v-------+                 +-------v-------+
+            |  POST /write  |                 |  GET /query   |
+            |  (Line Proto) |                 |    (SQL)      |
+            +-------+-------+                 +-------+-------+
+                    |                                 |
+            +-------v-------+                 +-------v-------+
+            |   DataCache   |                 |  QueryEngine  |
+            |  (In-Memory)  |                 |  (DataFusion) |
+            +-------+-------+                 +-------+-------+
+                    |                                 |
+                    |    +------------------+         |
+                    +--->|  Parquet Files   |<--------+
+                         |  (Columnar)      |
+                         +--------+---------+
+                                  |
+                         +--------v---------+
+                         |    Compactor     |
+                         |  (LSM Multi-Level)|
+                         +------------------+
+        </pre>
+      </div>
+
+      <div class="architecture-cards">
+        <div class="arch-card">
+          <h4>&#128229; Data Ingestion</h4>
+          <p>InfluxDB Line Protocol parser with high-throughput buffering and background flush to Parquet.</p>
+        </div>
+        <div class="arch-card">
+          <h4>&#128451; Storage Layer</h4>
+          <p>Columnar Parquet files with date partitioning and multi-level LSM compaction.</p>
+        </div>
+        <div class="arch-card">
+          <h4>&#128270; Query Engine</h4>
+          <p>Apache DataFusion SQL engine with predicate pushdown and parallel execution.</p>
+        </div>
+        <div class="arch-card">
+          <h4>&#9992; Arrow Flight</h4>
+          <p>gRPC streaming interface for high-performance data transfer to clients.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quick Start -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header">
+        <h2>Quick Start</h2>
+        <p>Get up and running in under a minute.</p>
+      </div>
+
+      <div class="code-block" style="max-width: 800px; margin: 0 auto;">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 1. Build and run</span>
+<span class="token-function">cargo</span> build --release
+<span class="token-function">./target/release/stats-service</span>
+
+<span class="token-comment"># 2. Write some data</span>
+<span class="token-function">curl</span> -X POST http://localhost:7000/write/mydb -d <span class="token-string">'
+cpu,host=server01,region=us-west usage=75.5,temp=45
+cpu,host=server02,region=us-east usage=82.3,temp=50
+memory,host=server01 used=16.5,total=32.0
+'</span>
+
+<span class="token-comment"># 3. Flush to disk</span>
+<span class="token-function">curl</span> -X POST http://localhost:7000/flush
+
+<span class="token-comment"># 4. Query with SQL</span>
+<span class="token-function">curl</span> <span class="token-string">'http://localhost:7000/query/mydb'</span> \
+  -d <span class="token-string">'SELECT host, AVG(usage) as avg_cpu FROM cpu GROUP BY host'</span>
+
+<span class="token-comment"># Result:</span>
+<span class="token-comment"># [{"host":"server01","avg_cpu":75.5},{"host":"server02","avg_cpu":82.3}]</span></code></pre>
+        </div>
+      </div>
+
+      <div class="text-center mt-2">
+        <a href="docs/quickstart.html" class="btn btn-primary btn-lg">
+          View Full Quick Start Guide <span>&#8594;</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Use Cases -->
+  <section class="section" style="background: var(--bg-secondary);">
+    <div class="container">
+      <div class="section-header">
+        <h2>Use Cases</h2>
+        <p>Stats Service is perfect for a wide range of time series workloads.</p>
+      </div>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-icon">&#128187;</div>
+          <h3>Infrastructure Monitoring</h3>
+          <p>Track CPU, memory, disk, and network metrics from thousands of servers in real-time.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128202;</div>
+          <h3>Application Metrics</h3>
+          <p>Store and analyze application performance data, request latencies, and error rates.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#127760;</div>
+          <h3>IoT Data</h3>
+          <p>Collect sensor data from IoT devices with high-frequency ingestion and efficient storage.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128176;</div>
+          <h3>Financial Data</h3>
+          <p>Store tick data, price feeds, and trading metrics with sub-millisecond precision.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128640;</div>
+          <h3>DevOps Analytics</h3>
+          <p>Track deployments, build times, and CI/CD metrics for operational insights.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#127919;</div>
+          <h3>Real-time Analytics</h3>
+          <p>Power dashboards and alerting systems with fast analytical queries.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Documentation Cards -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header">
+        <h2>Documentation</h2>
+        <p>Everything you need to get started and become an expert.</p>
+      </div>
+
+      <div class="cards-grid">
+        <a href="docs/quickstart.html" class="card">
+          <div class="card-icon">&#128640;</div>
+          <h3>Quick Start</h3>
+          <p>Get up and running with Stats Service in under 5 minutes.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/architecture.html" class="card">
+          <div class="card-icon">&#127959;</div>
+          <h3>Architecture</h3>
+          <p>Deep dive into the internal architecture and design decisions.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/guides.html" class="card">
+          <div class="card-icon">&#128214;</div>
+          <h3>Guides</h3>
+          <p>Step-by-step tutorials for common tasks and workflows.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/api.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>API Reference</h3>
+          <p>Complete reference for all HTTP and Arrow Flight APIs.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/examples.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>Examples</h3>
+          <p>Ready-to-use examples for common query patterns.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>Configuration</h3>
+          <p>All configuration options explained with examples.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a href="index.html" class="navbar-brand">
+            <span class="logo-icon">S</span>
+            Stats Service
+          </a>
+          <p>A high-performance time series database built with Rust, Apache DataFusion, and Parquet.</p>
+        </div>
+
+        <div class="footer-column">
+          <h4>Documentation</h4>
+          <ul>
+            <li><a href="docs/quickstart.html">Quick Start</a></li>
+            <li><a href="docs/architecture.html">Architecture</a></li>
+            <li><a href="docs/guides.html">Guides</a></li>
+            <li><a href="docs/api.html">API Reference</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-column">
+          <h4>Resources</h4>
+          <ul>
+            <li><a href="docs/examples.html">Examples</a></li>
+            <li><a href="docs/configuration.html">Configuration</a></li>
+            <li><a href="docs/troubleshooting.html">Troubleshooting</a></li>
+            <li><a href="#">Changelog</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-column">
+          <h4>Community</h4>
+          <ul>
+            <li><a href="https://github.com/anthropics/stats-service" target="_blank">GitHub</a></li>
+            <li><a href="#">Discord</a></li>
+            <li><a href="#">Twitter</a></li>
+            <li><a href="#">Contributing</a></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <p>&copy; 2024 Stats Service. Built with Rust.</p>
+        <div class="footer-social">
+          <a href="https://github.com/anthropics/stats-service" target="_blank" aria-label="GitHub">&#128736;</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script src="js/main.js"></script>
+</body>
+</html>

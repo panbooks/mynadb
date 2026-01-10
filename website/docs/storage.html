@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service Storage - Parquet format and partitioning">
+  <title>Storage - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html" class="active">Storage</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>On This Page</h4>
+        <ul class="sidebar-nav">
+          <li><a href="#overview">Overview</a></li>
+          <li><a href="#parquet">Parquet Format</a></li>
+          <li><a href="#directory">Directory Structure</a></li>
+          <li><a href="#partitioning">Partitioning</a></li>
+          <li><a href="#file-naming">File Naming</a></li>
+          <li><a href="#compression">Compression</a></li>
+          <li><a href="#optimization">Optimization</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>Storage</h1>
+
+      <p>
+        Stats Service stores time series data in Apache Parquet format, a columnar storage format
+        optimized for analytical queries. This page explains the storage architecture, partitioning
+        strategy, and optimization techniques.
+      </p>
+
+      <h2 id="overview">Overview</h2>
+
+      <div class="architecture-diagram">
+        <pre>
+  Write Path                           Storage
+      |                                   |
+      v                                   v
+  +--------+     Flush      +---------------------------+
+  | Cache  | ------------> | Parquet Files              |
+  | (RAM)  |    (30s)      |                           |
+  +--------+               | data/                      |
+                           | └── mydb/                  |
+                           |     └── default/           |
+                           |         └── cpu/           |
+                           |             └── date=.../  |
+                           |                 ├── L0_... |
+                           |                 ├── L1_... |
+                           |                 └── L2_... |
+                           +---------------------------+
+        </pre>
+      </div>
+
+      <h3>Key Features</h3>
+
+      <ul>
+        <li><strong>Columnar Storage</strong> - Read only the columns you need</li>
+        <li><strong>Compression</strong> - Up to 90% storage reduction</li>
+        <li><strong>Date Partitioning</strong> - Efficient time-range queries</li>
+        <li><strong>LSM Levels</strong> - Optimized read/write balance</li>
+        <li><strong>Predicate Pushdown</strong> - Filter at storage level</li>
+      </ul>
+
+      <h2 id="parquet">Apache Parquet Format</h2>
+
+      <p>
+        <a href="https://parquet.apache.org/" target="_blank">Apache Parquet</a> is a columnar
+        storage format designed for efficient data processing. It's the foundation of Stats Service's
+        high-performance storage.
+      </p>
+
+      <h3>Why Parquet?</h3>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-icon">&#128451;</div>
+          <h3>Columnar Layout</h3>
+          <p>Data is stored by column, not by row. Queries that access few columns read less data.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128230;</div>
+          <h3>Compression</h3>
+          <p>Similar values in a column compress well. Supports Snappy, ZSTD, LZ4, and more.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128269;</div>
+          <h3>Predicate Pushdown</h3>
+          <p>Statistics in file footer allow skipping irrelevant row groups.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#127760;</div>
+          <h3>Ecosystem</h3>
+          <p>Works with Spark, Pandas, DuckDB, DataFusion, and many other tools.</p>
+        </div>
+      </div>
+
+      <h3>Parquet File Structure</h3>
+
+      <div class="architecture-diagram">
+        <pre>
+  +------------------------------------------+
+  |              Parquet File                |
+  +------------------------------------------+
+  |  Row Group 1                             |
+  |  +--------------------------------------+|
+  |  | Column Chunk: timestamp              ||
+  |  | Column Chunk: host                   ||
+  |  | Column Chunk: usage                  ||
+  |  +--------------------------------------+|
+  |                                          |
+  |  Row Group 2                             |
+  |  +--------------------------------------+|
+  |  | Column Chunk: timestamp              ||
+  |  | Column Chunk: host                   ||
+  |  | Column Chunk: usage                  ||
+  |  +--------------------------------------+|
+  |                                          |
+  |  Footer (Schema + Statistics)            |
+  +------------------------------------------+
+        </pre>
+      </div>
+
+      <h2 id="directory">Directory Structure</h2>
+
+      <p>Stats Service organizes files in a hierarchical structure:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>data/
+├── {catalog}/                        <span class="token-comment"># Database name</span>
+│   ├── {schema}/                     <span class="token-comment"># Schema (service or "default")</span>
+│   │   └── {table}/                  <span class="token-comment"># Measurement name</span>
+│   │       └── date=YYYY-MM-DD/      <span class="token-comment"># Date partition</span>
+│   │           ├── L0_xxx.parquet    <span class="token-comment"># Level 0 (recent writes)</span>
+│   │           ├── L0_yyy.parquet
+│   │           ├── L1_aaa.parquet    <span class="token-comment"># Level 1 (compacted)</span>
+│   │           └── L2_bbb.parquet    <span class="token-comment"># Level 2 (more compacted)</span>
+│   └── _system/
+│       └── series_stats/             <span class="token-comment"># Cardinality tracking</span>
+│           └── {catalog}.parquet
+│
+└── mydb/                             <span class="token-comment"># Example database</span>
+    ├── default/
+    │   ├── cpu/
+    │   │   ├── date=2024-01-15/
+    │   │   │   ├── L0_1705312345_abc.parquet
+    │   │   │   └── L1_1705398745_def.parquet
+    │   │   └── date=2024-01-16/
+    │   │       └── L0_1705398800_ghi.parquet
+    │   └── memory/
+    │       └── date=2024-01-15/
+    └── web/
+        └── requests/</code></pre>
+        </div>
+      </div>
+
+      <h2 id="partitioning">Date Partitioning</h2>
+
+      <p>
+        Data is automatically partitioned by date based on the timestamp of each data point.
+        This enables efficient time-range queries by skipping irrelevant partitions.
+      </p>
+
+      <h3>How It Works</h3>
+
+      <ol>
+        <li>Each data point's timestamp is extracted</li>
+        <li>Date is derived: <code>YYYY-MM-DD</code></li>
+        <li>Data is written to the corresponding partition directory</li>
+        <li>Queries with time filters skip unneeded partitions</li>
+      </ol>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Data written with timestamp 2024-01-15T10:30:00Z</span>
+cpu,host=server01 usage=75.5 1705315800000000000
+
+<span class="token-comment"># Stored in:</span>
+data/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet
+
+<span class="token-comment"># Query only reads date=2024-01-15 partition</span>
+SELECT * FROM cpu
+WHERE timestamp >= '2024-01-15' AND timestamp < '2024-01-16'</code></pre>
+        </div>
+      </div>
+
+      <h3>Partition Pruning</h3>
+
+      <p>When you filter by timestamp, only relevant partitions are scanned:</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Query</th>
+              <th>Partitions Scanned</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>WHERE timestamp > '2024-01-15'</code></td>
+              <td>Only date=2024-01-15 and later</td>
+            </tr>
+            <tr>
+              <td><code>WHERE timestamp BETWEEN '2024-01-10' AND '2024-01-12'</code></td>
+              <td>Only 3 partitions</td>
+            </tr>
+            <tr>
+              <td><code>SELECT * FROM cpu</code> (no filter)</td>
+              <td>All partitions</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Managing Partitions</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># List partitions</span>
+curl http://localhost:7000/partitions/mydb/default/cpu
+
+<span class="token-comment"># Delete a specific partition</span>
+curl -X DELETE http://localhost:7000/partitions/mydb/default/cpu/2024-01-15
+
+<span class="token-comment"># Delete old partitions (retention)</span>
+curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"older_than_days": 30}'</code></pre>
+        </div>
+      </div>
+
+      <h2 id="file-naming">File Naming Convention</h2>
+
+      <p>Parquet files follow a naming convention that encodes metadata:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>L{level}_{timestamp}_{uuid}.parquet
+
+<span class="token-comment"># Examples:</span>
+L0_1705312345_a1b2c3d4.parquet    <span class="token-comment"># Level 0, recent write</span>
+L1_1705398745_e5f6g7h8.parquet    <span class="token-comment"># Level 1, compacted</span>
+L2_1705485145_i9j0k1l2.parquet    <span class="token-comment"># Level 2, more compacted</span></code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Component</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>L{level}</code></td>
+              <td>Compaction level (L0-L5)</td>
+            </tr>
+            <tr>
+              <td><code>{timestamp}</code></td>
+              <td>Unix timestamp when file was created</td>
+            </tr>
+            <tr>
+              <td><code>{uuid}</code></td>
+              <td>Unique identifier to prevent collisions</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="compression">Compression</h2>
+
+      <p>
+        Parquet supports multiple compression codecs. Stats Service uses Snappy by default
+        for a good balance of speed and compression ratio.
+      </p>
+
+      <h3>Compression Codecs</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Codec</th>
+              <th>Ratio</th>
+              <th>Speed</th>
+              <th>Use Case</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Snappy</td>
+              <td>Good</td>
+              <td>Fast</td>
+              <td>Default, balanced</td>
+            </tr>
+            <tr>
+              <td>ZSTD</td>
+              <td>Better</td>
+              <td>Medium</td>
+              <td>Cold storage</td>
+            </tr>
+            <tr>
+              <td>LZ4</td>
+              <td>Lower</td>
+              <td>Fastest</td>
+              <td>Real-time queries</td>
+            </tr>
+            <tr>
+              <td>GZIP</td>
+              <td>Best</td>
+              <td>Slow</td>
+              <td>Archival</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Compression Effectiveness</h3>
+
+      <p>Time series data compresses very well due to:</p>
+
+      <ul>
+        <li><strong>Repeated tags</strong> - Same host/region values</li>
+        <li><strong>Similar values</strong> - Metrics change gradually</li>
+        <li><strong>Columnar layout</strong> - Similar data grouped together</li>
+        <li><strong>Dictionary encoding</strong> - String deduplication</li>
+      </ul>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#128200; Typical Compression</div>
+        <p>
+          Time series data typically achieves 5-10x compression with Snappy,
+          and 10-20x with ZSTD. A 100GB raw dataset might compress to 10GB or less.
+        </p>
+      </div>
+
+      <h2 id="optimization">Storage Optimization</h2>
+
+      <h3>Best Practices</h3>
+
+      <ol>
+        <li>
+          <strong>Use SSD storage</strong> - Random reads are common for queries
+        </li>
+        <li>
+          <strong>Enable compaction</strong> - Reduces file count and improves query performance
+        </li>
+        <li>
+          <strong>Set retention policies</strong> - Prevent unbounded growth
+        </li>
+        <li>
+          <strong>Monitor disk usage</strong> - Plan capacity based on ingestion rate
+        </li>
+      </ol>
+
+      <h3>Estimating Storage</h3>
+
+      <p>Approximate storage calculation:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Formula (approximate)</span>
+Storage = (points_per_second) × (bytes_per_point) × (seconds) × (1/compression_ratio)
+
+<span class="token-comment"># Example: 10,000 points/sec, 50 bytes/point, 30 days, 10x compression</span>
+Storage = 10,000 × 50 × (30 × 86400) / 10
+        = 10,000 × 50 × 2,592,000 / 10
+        = 129.6 GB</code></pre>
+        </div>
+      </div>
+
+      <h3>Disk Space Management</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Check disk usage</span>
+du -sh /data/stats/*
+
+<span class="token-comment"># Check by database</span>
+du -sh /data/stats/mydb/*
+
+<span class="token-comment"># Check by table</span>
+du -sh /data/stats/mydb/default/cpu/*
+
+<span class="token-comment"># Force compaction to reduce file count</span>
+curl -X POST http://localhost:7000/compact/mydb
+
+<span class="token-comment"># Apply retention to free space</span>
+curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"older_than_days": 7}'</code></pre>
+        </div>
+      </div>
+
+      <h2>Backup and Recovery</h2>
+
+      <p>Since data is stored as standard Parquet files, backup is straightforward:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Backup entire database</span>
+tar -czf mydb_backup.tar.gz /data/stats/mydb/
+
+<span class="token-comment"># Backup specific table</span>
+tar -czf cpu_backup.tar.gz /data/stats/mydb/default/cpu/
+
+<span class="token-comment"># Restore</span>
+tar -xzf mydb_backup.tar.gz -C /data/stats/</code></pre>
+        </div>
+      </div>
+
+      <h2>Next Steps</h2>
+
+      <div class="cards-grid">
+        <a href="compaction.html" class="card">
+          <div class="card-icon">&#128218;</div>
+          <h3>Compaction</h3>
+          <p>Learn about LSM-style compaction.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="retention.html" class="card">
+          <div class="card-icon">&#128197;</div>
+          <h3>Retention</h3>
+          <p>Configure data retention policies.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>Configuration</h3>
+          <p>Storage configuration options.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

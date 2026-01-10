@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service SQL Query Guide - Complete SQL reference">
+  <title>SQL Queries - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>SQL Guide</h4>
+        <ul class="sidebar-nav">
+          <li><a href="#quick-start">Quick Start</a></li>
+          <li><a href="#table-names">Table Names</a></li>
+          <li><a href="#select">SELECT</a></li>
+          <li><a href="#filtering">Filtering</a></li>
+          <li><a href="#aggregations">Aggregations</a></li>
+          <li><a href="#joins">JOINs</a></li>
+          <li><a href="#window">Window Functions</a></li>
+          <li><a href="#advanced">Advanced</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>SQL Query Guide</h1>
+
+      <p>
+        Stats Service uses Apache DataFusion for SQL queries, supporting standard SQL syntax
+        including JOINs, aggregations, window functions, CTEs, and subqueries.
+      </p>
+
+      <h2 id="quick-start">Quick Start</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Simple query (short table name)</span>
+curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu LIMIT 10'
+
+<span class="token-comment"># Fully qualified table name</span>
+curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM mydb.default.cpu LIMIT 10'
+
+<span class="token-comment"># GET request (for simple queries)</span>
+curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'</code></pre>
+        </div>
+      </div>
+
+      <h2 id="table-names">Table Naming</h2>
+
+      <p>Stats Service uses <code>catalog.schema.table</code> structure:</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Format</th>
+              <th>Example</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Short name</td>
+              <td><code>cpu</code></td>
+              <td>Auto-prefixed (recommended)</td>
+            </tr>
+            <tr>
+              <td>Schema.table</td>
+              <td><code>default.cpu</code></td>
+              <td>Explicit schema</td>
+            </tr>
+            <tr>
+              <td>Full path</td>
+              <td><code>mydb.default.cpu</code></td>
+              <td>Fully qualified</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="select">SELECT Statements</h2>
+
+      <h3>All Columns</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu LIMIT 10</code></pre>
+        </div>
+      </div>
+
+      <h3>Specific Columns</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, usage, timestamp FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>Column Aliases</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, usage AS cpu_usage, timestamp AS ts FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>DISTINCT</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT DISTINCT host FROM cpu
+SELECT COUNT(DISTINCT host) AS unique_hosts FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h2 id="filtering">Filtering (WHERE)</h2>
+
+      <h3>Comparison Operators</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu WHERE usage > 80
+SELECT * FROM cpu WHERE usage >= 50 AND usage <= 90
+SELECT * FROM cpu WHERE host = 'server01'
+SELECT * FROM cpu WHERE host != 'server01'</code></pre>
+        </div>
+      </div>
+
+      <h3>Logical Operators</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu WHERE usage > 80 AND region = 'us-west'
+SELECT * FROM cpu WHERE region = 'us-west' OR region = 'us-east'
+SELECT * FROM cpu WHERE NOT (usage < 50)</code></pre>
+        </div>
+      </div>
+
+      <h3>IN / NOT IN</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu WHERE host IN ('server01', 'server02', 'server03')
+SELECT * FROM cpu WHERE region NOT IN ('eu-west')</code></pre>
+        </div>
+      </div>
+
+      <h3>BETWEEN</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu WHERE usage BETWEEN 50 AND 80
+SELECT * FROM cpu WHERE timestamp BETWEEN 1703251234567000000 AND 1703251300000000000</code></pre>
+        </div>
+      </div>
+
+      <h3>LIKE Pattern Matching</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu WHERE host LIKE 'server%'
+SELECT * FROM cpu WHERE host LIKE '%01'
+SELECT * FROM cpu WHERE host LIKE 'web_server_'</code></pre>
+        </div>
+      </div>
+
+      <h3>NULL Handling</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu WHERE region IS NULL
+SELECT * FROM cpu WHERE region IS NOT NULL</code></pre>
+        </div>
+      </div>
+
+      <h2 id="aggregations">Aggregations</h2>
+
+      <h3>Basic Functions</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT COUNT(*) FROM cpu
+SELECT AVG(usage) FROM cpu
+SELECT SUM(usage) FROM cpu
+SELECT MIN(usage), MAX(usage) FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>GROUP BY</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, AVG(usage) AS avg_cpu
+FROM cpu
+GROUP BY host
+
+SELECT host, region, COUNT(*) AS samples
+FROM cpu
+GROUP BY host, region</code></pre>
+        </div>
+      </div>
+
+      <h3>HAVING</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, AVG(usage) AS avg_cpu
+FROM cpu
+GROUP BY host
+HAVING AVG(usage) > 50</code></pre>
+        </div>
+      </div>
+
+      <h3>ORDER BY</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu ORDER BY usage DESC
+SELECT * FROM cpu ORDER BY timestamp ASC
+SELECT * FROM cpu ORDER BY host ASC, usage DESC</code></pre>
+        </div>
+      </div>
+
+      <h2 id="joins">JOINs</h2>
+
+      <h3>INNER JOIN</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT c.host, c.usage AS cpu, m.used AS memory
+FROM cpu c
+JOIN memory m ON c.host = m.host</code></pre>
+        </div>
+      </div>
+
+      <h3>LEFT JOIN</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT c.host, c.usage, m.used
+FROM cpu c
+LEFT JOIN memory m ON c.host = m.host</code></pre>
+        </div>
+      </div>
+
+      <h3>Multiple JOINs</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT c.host, c.usage, m.used, d.free
+FROM cpu c
+LEFT JOIN memory m ON c.host = m.host
+LEFT JOIN disk d ON c.host = d.host</code></pre>
+        </div>
+      </div>
+
+      <h2 id="window">Window Functions</h2>
+
+      <h3>ROW_NUMBER / RANK</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, usage,
+  ROW_NUMBER() OVER (ORDER BY usage DESC) AS row_num,
+  RANK() OVER (ORDER BY usage DESC) AS rank
+FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>Moving Average</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT timestamp, usage,
+  AVG(usage) OVER (
+    ORDER BY timestamp
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+  ) AS moving_avg
+FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>LAG / LEAD</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT timestamp, usage,
+  LAG(usage, 1) OVER (ORDER BY timestamp) AS prev_usage,
+  LEAD(usage, 1) OVER (ORDER BY timestamp) AS next_usage
+FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>Partition By</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, timestamp, usage,
+  AVG(usage) OVER (PARTITION BY host ORDER BY timestamp) AS host_avg
+FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h2 id="advanced">Advanced Queries</h2>
+
+      <h3>Common Table Expressions (CTE)</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>WITH host_stats AS (
+  SELECT host, AVG(usage) AS avg_usage
+  FROM cpu
+  GROUP BY host
+)
+SELECT * FROM host_stats
+WHERE avg_usage > 50</code></pre>
+        </div>
+      </div>
+
+      <h3>Subqueries</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu
+WHERE usage > (SELECT AVG(usage) FROM cpu)</code></pre>
+        </div>
+      </div>
+
+      <h3>CASE Statements</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, usage,
+  CASE
+    WHEN usage < 30 THEN 'low'
+    WHEN usage < 70 THEN 'medium'
+    ELSE 'high'
+  END AS level
+FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>UNION</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, 'cpu' AS metric, usage AS value FROM cpu
+UNION ALL
+SELECT host, 'memory' AS metric, used AS value FROM memory</code></pre>
+        </div>
+      </div>
+
+      <h2>Tips</h2>
+
+      <ul>
+        <li><strong>Use POST</strong> for complex multi-line queries</li>
+        <li><strong>Always LIMIT</strong> exploratory queries</li>
+        <li><strong>Filter on timestamp</strong> for better performance</li>
+        <li><strong>Use short table names</strong> for cleaner queries</li>
+        <li><strong>Flush before querying</strong> recent writes</li>
+      </ul>
+
+      <div class="cards-grid">
+        <a href="examples.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>More Examples</h3>
+          <p>Ready-to-use query patterns.</p>
+          <span class="card-link">View <span>&#8594;</span></span>
+        </a>
+
+        <a href="api.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>API Reference</h3>
+          <p>Query endpoint documentation.</p>
+          <span class="card-link">View <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>
