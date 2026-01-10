@@ -1,5 +1,9 @@
 # Correct Query Examples
 
+> **Primary Reference:** This is the recommended quick-start guide for SQL queries.
+> For comprehensive examples, see [guide-query-examples.md](guide-query-examples.md).
+> For short table name details, see [guide-query-examples-updated.md](guide-query-examples-updated.md).
+
 ## Quick Answer
 
 After the fix, you can now query using **short table names** (without database prefix):
@@ -8,8 +12,8 @@ After the fix, you can now query using **short table names** (without database p
 # ✅ CORRECT - Simple short name (RECOMMENDED)
 curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu LIMIT 10'
 
-# ✅ CORRECT - Full name also works
-curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM mydb_cpu LIMIT 10'
+# ✅ CORRECT - Fully qualified name also works
+curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM mydb.default.cpu LIMIT 10'
 
 # ✅ CORRECT - GET request
 curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'
@@ -94,34 +98,50 @@ ORDER BY avg_usage DESC
 
 ## How It Works
 
-When you query via `/query/mydb`, the system automatically:
+Stats Service uses a **catalog.schema.table** structure. When you query via `/query/mydb`:
 
 1. **Auto-registers** the database tables (if not already registered)
-2. **Prefixes** unqualified table names with the database name
+2. **Prefixes** unqualified table names with the catalog and schema
 3. **Executes** the query using DataFusion
+
+### Schema Strategies
+
+The naming behavior depends on the configured strategy (see `config.toml`):
+
+**ServiceAsSchema (Default):**
+- Schema = Service tag value (e.g., `service=web` → schema `web`)
+- Table = Measurement name
+- Query: `SELECT * FROM cpu` → `SELECT * FROM mydb.default.cpu`
+
+**ServiceAsTable:**
+- Schema = "default" (fixed)
+- Table = Service tag value
+- Measurement stored as a tag column
+- Query: `SELECT * FROM service_1 WHERE measurement = 'cpu'`
 
 ### Example
 
 ```
 You write:    SELECT * FROM cpu
-System sees:  SELECT * FROM mydb_cpu
+System sees:  SELECT * FROM mydb.default.cpu
 ```
 
 ## Supported Table Name Formats
 
-Both formats work:
+Multiple formats work:
 
 | Format | Example | When to Use |
 |--------|---------|------------|
 | Short name | `SELECT * FROM cpu` | **Recommended** - cleaner |
-| Full name | `SELECT * FROM mydb_cpu` | Explicit - also works |
+| Schema.table | `SELECT * FROM default.cpu` | Explicit schema reference |
+| Fully qualified | `SELECT * FROM mydb.default.cpu` | Cross-database queries |
 
 ## Common Mistakes
 
 ### ❌ WRONG
 
 ```bash
-# Don't use dot notation (not supported yet)
+# Missing schema (catalog.table without schema)
 curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM mydb.cpu'  # ❌
 
 # Don't forget the database in the URL
@@ -131,11 +151,11 @@ curl 'http://localhost:7000/query' -d 'SELECT * FROM cpu'  # ❌
 ### ✅ CORRECT
 
 ```bash
-# Use short name
+# Use short name (recommended)
 curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu'  # ✅
 
-# Or use full underscore name
-curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM mydb_cpu'  # ✅
+# Or use fully qualified name (catalog.schema.table)
+curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM mydb.default.cpu'  # ✅
 ```
 
 ## Verifying Tables
@@ -144,7 +164,7 @@ Before querying, you can verify what tables are available:
 
 ```bash
 # List all tables in a database
-curl 'http://localhost:7000/databases/mydb/tables'
+curl 'http://localhost:7000/tables/mydb'
 
 # Get schema for a specific table
 curl 'http://localhost:7000/schema/mydb/cpu'
@@ -153,29 +173,24 @@ curl 'http://localhost:7000/schema/mydb/cpu'
 ## Full Workflow Example
 
 ```bash
-# 1. Create database
-curl -X POST http://localhost:7000/databases \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"mydb"}'
-
-# 2. Write data
+# 1. Write data (database is auto-created)
 curl -X POST http://localhost:7000/write/mydb \
   -d 'cpu,host=server01,region=us-west usage=75.5,temp=45i
 cpu,host=server02,region=us-east usage=82.3,temp=50i
 memory,host=server01,region=us-west used=16.5,total=32.0
 memory,host=server02,region=us-east used=20.1,total=32.0'
 
-# 3. Flush to disk
+# 2. Flush to disk
 curl -X POST http://localhost:7000/flush
 
-# 4. Query using short names
+# 3. Query using short names
 curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu LIMIT 10'
 
 curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM memory LIMIT 10'
 
-# 5. Query with JOIN
+# 4. Query with JOIN
 curl 'http://localhost:7000/query/mydb' -d "
-SELECT 
+SELECT
   c.host,
   c.usage as cpu_usage,
   m.used as memory_used
@@ -184,7 +199,7 @@ JOIN memory m ON c.host = m.host
 WHERE c.usage > 80
 "
 
-# 6. Aggregation
+# 5. Aggregation
 curl 'http://localhost:7000/query/mydb' -d "
 SELECT 
   host,
@@ -209,7 +224,7 @@ ORDER BY avg_cpu DESC
 
 ```bash
 # Make sure database is registered
-curl 'http://localhost:7000/databases/mydb/tables'
+curl 'http://localhost:7000/tables/mydb'
 
 # Make sure you flushed data to disk
 curl -X POST http://localhost:7000/flush
@@ -231,7 +246,7 @@ When you run a query, check the server logs:
 
 ```
 📝 SQL: SELECT * FROM cpu
-📝 Prefixed: SELECT * FROM mydb_cpu
+📝 Prefixed: SELECT * FROM mydb.default.cpu
 ✅ Query executed successfully
 ```
 
@@ -247,7 +262,5 @@ curl 'http://localhost:7000/query/<database>' -d '<SQL with short or full table 
 
 **Examples:**
 - `curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu'` ✅
-- `curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM mydb_cpu'` ✅
+- `curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM mydb.default.cpu'` ✅
 - `curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu'` ✅
-
-Happy querying! 🚀
