@@ -1,6 +1,17 @@
 # SQL Query Examples (Updated with Short Table Names)
 
+> **Note:** For a quick reference, see [guide-correct-query-examples.md](guide-correct-query-examples.md).
+
 This document shows SQL query examples using the new **short table name** feature.
+
+## Schema Strategies
+
+Stats Service uses a **catalog.schema.table** structure. The naming depends on the configured strategy:
+
+- **ServiceAsSchema (Default):** Schema = service tag, Table = measurement name
+- **ServiceAsTable:** Schema = "default", Table = service tag, measurement stored as column
+
+See `config.toml` for configuration options.
 
 ## Basic Queries
 
@@ -10,8 +21,8 @@ This document shows SQL query examples using the new **short table name** featur
 # Short form (NEW - recommended)
 curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'
 
-# Full form (still works)
-curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM mydb_cpu LIMIT 10'
+# Fully qualified form (also works)
+curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM mydb.default.cpu LIMIT 10'
 ```
 
 ### Filter by Condition
@@ -316,16 +327,16 @@ The server logs show the rewritten SQL:
 
 ```
 📝 Original SQL: SELECT * FROM cpu
-📝 Rewritten SQL: SELECT * FROM mydb_cpu
+📝 Rewritten SQL: SELECT * FROM mydb.default.cpu
 ```
 
 ### 4. Mixed Mode Works
 
-You can mix short and full table names:
+You can mix short and fully qualified table names:
 
 ```bash
 curl -X POST http://localhost:7000/query/mydb \
-  -d "SELECT * FROM cpu JOIN mydb_memory ON cpu.host = mydb_memory.host"
+  -d "SELECT * FROM cpu JOIN mydb.default.memory ON cpu.host = mydb.default.memory.host"
 ```
 
 ### 5. Use Aliases for Readability
