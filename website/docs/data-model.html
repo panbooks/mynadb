@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service Data Model - Understanding time series data structure">
+  <title>Data Model - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html" class="active">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>On This Page</h4>
+        <ul class="sidebar-nav">
+          <li><a href="#overview">Overview</a></li>
+          <li><a href="#line-protocol">Line Protocol</a></li>
+          <li><a href="#measurements">Measurements</a></li>
+          <li><a href="#tags">Tags</a></li>
+          <li><a href="#fields">Fields</a></li>
+          <li><a href="#timestamps">Timestamps</a></li>
+          <li><a href="#schema">Schema Structure</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>Data Model</h1>
+
+      <p>
+        Stats Service uses a time series data model compatible with InfluxDB Line Protocol.
+        Understanding the data model helps you design efficient schemas and write optimal queries.
+      </p>
+
+      <h2 id="overview">Overview</h2>
+
+      <p>Time series data in Stats Service consists of:</p>
+
+      <div class="architecture-diagram">
+        <pre>
+  +------------------------------------------------------------------+
+  |                         Data Point                                |
+  +------------------------------------------------------------------+
+  |                                                                   |
+  |  Measurement     Tags                  Fields           Timestamp |
+  |  (table name)    (indexed metadata)    (values)         (time)    |
+  |                                                                   |
+  |  cpu             host=server01         usage=75.5       1699900000|
+  |                  region=us-west        temp=45                    |
+  |                                                                   |
+  +------------------------------------------------------------------+
+        </pre>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Component</th>
+              <th>Description</th>
+              <th>Indexed</th>
+              <th>Required</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Measurement</strong></td>
+              <td>Table name (e.g., "cpu", "memory")</td>
+              <td>Yes</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><strong>Tags</strong></td>
+              <td>Key-value metadata for filtering</td>
+              <td>Yes</td>
+              <td>No</td>
+            </tr>
+            <tr>
+              <td><strong>Fields</strong></td>
+              <td>Actual metric values</td>
+              <td>No</td>
+              <td>Yes (at least one)</td>
+            </tr>
+            <tr>
+              <td><strong>Timestamp</strong></td>
+              <td>Time of the data point</td>
+              <td>Yes</td>
+              <td>No (defaults to now)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="line-protocol">Line Protocol Format</h2>
+
+      <p>Data is written using InfluxDB Line Protocol:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">Line Protocol</span>
+        </div>
+        <div class="code-content">
+          <pre><code>&lt;measurement&gt;,&lt;tag_key&gt;=&lt;tag_value&gt;,... &lt;field_key&gt;=&lt;field_value&gt;,... [timestamp]
+
+<span class="token-comment"># Examples:</span>
+cpu,host=server01,region=us-west usage=75.5,temp=45i 1699900000000000000
+memory,host=server01 used=16.5,total=32.0
+disk,host=server01,mount=/data free=100.5,used=50.2</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Syntax Rules</div>
+        <ul>
+          <li>Measurement and tags are separated by commas (no spaces)</li>
+          <li>Tags and fields are separated by a space</li>
+          <li>Multiple tags/fields are separated by commas</li>
+          <li>Timestamp is optional and separated by a space</li>
+        </ul>
+      </div>
+
+      <h2 id="measurements">Measurements</h2>
+
+      <p>
+        A measurement is like a table in a relational database. It groups related time series data together.
+      </p>
+
+      <h3>Naming Conventions</h3>
+
+      <ul>
+        <li>Use lowercase with underscores: <code>cpu_usage</code>, <code>network_io</code></li>
+        <li>Be descriptive but concise</li>
+        <li>Avoid special characters except underscores</li>
+        <li>Don't include metadata in the name (use tags instead)</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Good measurement names</span>
+cpu
+memory
+disk_io
+http_requests
+application_errors
+
+<span class="token-comment"># Bad measurement names (use tags instead)</span>
+cpu_server01           <span class="token-comment"># Use: cpu,host=server01</span>
+memory_us_west         <span class="token-comment"># Use: memory,region=us-west</span></code></pre>
+        </div>
+      </div>
+
+      <h2 id="tags">Tags</h2>
+
+      <p>
+        Tags are indexed key-value pairs used for filtering and grouping. They're stored as strings
+        and are ideal for metadata that you'll query by.
+      </p>
+
+      <h3>When to Use Tags</h3>
+
+      <ul>
+        <li><strong>Identifiers</strong>: host, server_id, container_id</li>
+        <li><strong>Locations</strong>: region, datacenter, rack</li>
+        <li><strong>Categories</strong>: environment (prod/dev), service, team</li>
+        <li><strong>Versions</strong>: app_version, os_version</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Tags enable efficient filtering</span>
+cpu,host=server01,region=us-west,env=prod usage=75.5
+
+<span class="token-comment"># Query by tags</span>
+SELECT * FROM cpu WHERE host = 'server01'
+SELECT * FROM cpu WHERE region = 'us-west' AND env = 'prod'
+SELECT region, AVG(usage) FROM cpu GROUP BY region</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; Cardinality Warning</div>
+        <p>
+          Avoid high-cardinality tags (unique IDs, timestamps, random values).
+          High cardinality increases storage and slows queries.
+          Use fields for high-cardinality data.
+        </p>
+      </div>
+
+      <h3>Tag Best Practices</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Do</th>
+              <th>Don't</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>host=server01</code></td>
+              <td><code>request_id=abc123...</code> (use field)</td>
+            </tr>
+            <tr>
+              <td><code>region=us-west</code></td>
+              <td><code>timestamp=1699900000</code> (use timestamp)</td>
+            </tr>
+            <tr>
+              <td><code>env=prod</code></td>
+              <td><code>user_id=12345</code> (high cardinality)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="fields">Fields</h2>
+
+      <p>
+        Fields contain the actual metric values. They're not indexed, so filtering by fields
+        requires scanning data, but they support multiple data types.
+      </p>
+
+      <h3>Field Types</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Suffix</th>
+              <th>Example</th>
+              <th>Storage Type</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Float</td>
+              <td>(none)</td>
+              <td><code>usage=75.5</code></td>
+              <td>Float64</td>
+            </tr>
+            <tr>
+              <td>Integer</td>
+              <td><code>i</code></td>
+              <td><code>count=42i</code></td>
+              <td>Int64</td>
+            </tr>
+            <tr>
+              <td>Unsigned Integer</td>
+              <td><code>u</code></td>
+              <td><code>bytes=1024u</code></td>
+              <td>UInt64</td>
+            </tr>
+            <tr>
+              <td>String</td>
+              <td>quotes</td>
+              <td><code>status="ok"</code></td>
+              <td>Utf8</td>
+            </tr>
+            <tr>
+              <td>Boolean</td>
+              <td><code>t/f/true/false</code></td>
+              <td><code>active=t</code></td>
+              <td>Boolean</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Different field types</span>
+system,host=server01 cpu=75.5,memory=16384i,active=t,status="healthy"
+
+<span class="token-comment"># Multiple fields per measurement</span>
+http_request,endpoint=/api/users latency=45.2,status_code=200i,success=t</code></pre>
+        </div>
+      </div>
+
+      <h3>When to Use Fields</h3>
+
+      <ul>
+        <li><strong>Metrics</strong>: cpu_usage, memory_bytes, request_latency</li>
+        <li><strong>Counters</strong>: request_count, error_count</li>
+        <li><strong>High-cardinality data</strong>: user_id, request_id</li>
+        <li><strong>Values you aggregate</strong>: SUM, AVG, MIN, MAX</li>
+      </ul>
+
+      <h2 id="timestamps">Timestamps</h2>
+
+      <p>
+        Timestamps represent when the data point occurred. Stats Service stores timestamps
+        as nanoseconds since Unix epoch (January 1, 1970).
+      </p>
+
+      <h3>Timestamp Precision</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Precision</th>
+              <th>Digits</th>
+              <th>Example</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Nanoseconds</td>
+              <td>19</td>
+              <td><code>1699900000000000000</code></td>
+            </tr>
+            <tr>
+              <td>Microseconds</td>
+              <td>16</td>
+              <td><code>1699900000000000</code></td>
+            </tr>
+            <tr>
+              <td>Milliseconds</td>
+              <td>13</td>
+              <td><code>1699900000000</code></td>
+            </tr>
+            <tr>
+              <td>Seconds</td>
+              <td>10</td>
+              <td><code>1699900000</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># With explicit timestamp (nanoseconds)</span>
+cpu,host=server01 usage=75.5 1699900000000000000
+
+<span class="token-comment"># Without timestamp (uses server time)</span>
+cpu,host=server01 usage=75.5
+
+<span class="token-comment"># Query by time range</span>
+SELECT * FROM cpu
+WHERE timestamp > 1699900000000000000
+  AND timestamp < 1699986400000000000</code></pre>
+        </div>
+      </div>
+
+      <h2 id="schema">Schema Structure</h2>
+
+      <p>Stats Service organizes data in a <strong>Catalog.Schema.Table</strong> hierarchy:</p>
+
+      <div class="architecture-diagram">
+        <pre>
+  Catalog (Database)
+  └── mydb
+      ├── Schema (Service)
+      │   ├── default
+      │   │   ├── Table (Measurement)
+      │   │   │   ├── cpu
+      │   │   │   ├── memory
+      │   │   │   └── disk
+      │   │   └── ...
+      │   ├── web
+      │   │   ├── cpu
+      │   │   └── requests
+      │   └── api
+      │       └── latency
+      └── _system
+          └── series_stats
+        </pre>
+      </div>
+
+      <h3>Schema Strategies</h3>
+
+      <div class="cards-grid">
+        <div class="card">
+          <h3>ServiceAsSchema (Default)</h3>
+          <p>Service tag becomes the schema name.</p>
+          <ul>
+            <li>Schema = service tag value</li>
+            <li>Table = measurement name</li>
+          </ul>
+          <code>cpu,service=web</code> &#8594; <code>mydb.web.cpu</code>
+        </div>
+
+        <div class="card">
+          <h3>ServiceAsTable</h3>
+          <p>Service tag becomes the table name.</p>
+          <ul>
+            <li>Schema = "default"</li>
+            <li>Table = service tag value</li>
+          </ul>
+          <code>cpu,service=web</code> &#8594; <code>mydb.default.web</code>
+        </div>
+      </div>
+
+      <h3>Column Types in Parquet</h3>
+
+      <p>When stored in Parquet, data is converted to Arrow types:</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Line Protocol</th>
+              <th>Arrow Type</th>
+              <th>Parquet Type</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Tag values</td>
+              <td>Utf8</td>
+              <td>BYTE_ARRAY (STRING)</td>
+            </tr>
+            <tr>
+              <td>Float fields</td>
+              <td>Float64</td>
+              <td>DOUBLE</td>
+            </tr>
+            <tr>
+              <td>Integer fields</td>
+              <td>Int64</td>
+              <td>INT64</td>
+            </tr>
+            <tr>
+              <td>Boolean fields</td>
+              <td>Boolean</td>
+              <td>BOOLEAN</td>
+            </tr>
+            <tr>
+              <td>Timestamp</td>
+              <td>Int64</td>
+              <td>INT64</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Example: Complete Data Model</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Write data with proper structure</span>
+curl -X POST http://localhost:7000/write/mydb -d '
+cpu,host=server01,region=us-west,env=prod usage=75.5,temp=45i,cores=8i
+cpu,host=server02,region=us-east,env=prod usage=82.3,temp=50i,cores=16i
+memory,host=server01,region=us-west used=16.5,total=32.0,cached=8.2
+disk,host=server01,mount=/data free=100i,used=50i,iops=1500.5
+'
+
+<span class="token-comment"># Query with proper filtering</span>
+curl 'http://localhost:7000/query/mydb' -d "
+SELECT
+  host,
+  region,
+  AVG(usage) as avg_cpu,
+  MAX(temp) as max_temp
+FROM cpu
+WHERE env = 'prod'
+GROUP BY host, region
+ORDER BY avg_cpu DESC
+"</code></pre>
+        </div>
+      </div>
+
+      <h2>Next Steps</h2>
+
+      <div class="cards-grid">
+        <a href="storage.html" class="card">
+          <div class="card-icon">&#128451;</div>
+          <h3>Storage</h3>
+          <p>Learn about Parquet storage and partitioning.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="sql-queries.html" class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>SQL Queries</h3>
+          <p>Query your time series data with SQL.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="examples.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>Examples</h3>
+          <p>Ready-to-use query patterns.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

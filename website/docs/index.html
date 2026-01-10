@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service Documentation - Learn how to use the high-performance time series database">
+  <title>Documentation - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html" class="active">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html" class="active">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Guides</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">All Guides</a></li>
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="retention.html">Retention Policies</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>API Reference</h4>
+        <ul class="sidebar-nav">
+          <li><a href="api.html">HTTP API</a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>Stats Service Documentation</h1>
+
+      <p class="hero-description" style="font-size: 1.125rem; max-width: none;">
+        Welcome to the Stats Service documentation. Stats Service is a high-performance time series database
+        built with Rust, Apache DataFusion, and Parquet for modern infrastructure monitoring and analytics.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; New to Stats Service?</div>
+        <p>Start with our <a href="quickstart.html">Quick Start Guide</a> to get up and running in minutes.</p>
+      </div>
+
+      <h2>What is Stats Service?</h2>
+
+      <p>
+        Stats Service is a time series database designed for high-throughput ingestion and fast analytical queries.
+        It combines the best of modern data infrastructure:
+      </p>
+
+      <ul>
+        <li><strong>InfluxDB Line Protocol</strong> - Compatible write API for easy migration</li>
+        <li><strong>Apache Parquet</strong> - Columnar storage for excellent compression and query performance</li>
+        <li><strong>Apache DataFusion</strong> - Full SQL query support with advanced analytics</li>
+        <li><strong>Apache Arrow Flight</strong> - High-performance gRPC streaming for data transfer</li>
+        <li><strong>Rust</strong> - Memory-safe, zero-cost abstractions for maximum performance</li>
+      </ul>
+
+      <h2>Key Features</h2>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-icon">&#128293;</div>
+          <h3>High Performance</h3>
+          <p>Written in Rust with zero-copy deserialization for maximum throughput and low latency.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>SQL Queries</h3>
+          <p>Full SQL support including JOINs, aggregations, window functions, and CTEs.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128451;</div>
+          <h3>Columnar Storage</h3>
+          <p>Parquet format provides up to 90% compression with excellent query performance.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128268;</div>
+          <h3>InfluxDB Compatible</h3>
+          <p>Drop-in replacement for InfluxDB write API for seamless migration.</p>
+        </div>
+      </div>
+
+      <h2>Quick Example</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Write metrics using InfluxDB Line Protocol</span>
+curl -X POST http://localhost:7000/write/mydb -d '
+cpu,host=server01,region=us-west usage=75.5,temp=45
+cpu,host=server02,region=us-east usage=82.3,temp=50
+memory,host=server01 used=16.5,total=32.0
+'
+
+<span class="token-comment"># Flush data to disk</span>
+curl -X POST http://localhost:7000/flush
+
+<span class="token-comment"># Query with SQL</span>
+curl 'http://localhost:7000/query/mydb' \
+  -d 'SELECT host, AVG(usage) as avg_cpu FROM cpu GROUP BY host'</code></pre>
+        </div>
+      </div>
+
+      <h2>Architecture Overview</h2>
+
+      <p>Stats Service uses a layered architecture designed for performance and reliability:</p>
+
+      <div class="architecture-diagram">
+        <pre>
+  Client Request
+        |
+        v
+  +------------------+
+  |   HTTP Server    |  Port 7000
+  |      (Axum)      |
+  +--------+---------+
+           |
+     +-----+-----+
+     |           |
+     v           v
+  +------+   +-------+
+  |Write |   | Query |
+  |  API |   |  API  |
+  +--+---+   +---+---+
+     |           |
+     v           v
+  +------+   +----------+
+  |Cache |   |DataFusion|
+  +--+---+   +----+-----+
+     |            |
+     +------+-----+
+            |
+            v
+     +------+------+
+     |   Parquet   |
+     |   Storage   |
+     +------+------+
+            |
+            v
+     +------+------+
+     |  Compactor  |
+     | (LSM-style) |
+     +-------------+
+        </pre>
+      </div>
+
+      <h2>Documentation Sections</h2>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Section</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><a href="quickstart.html">Quick Start</a></td>
+              <td>Get up and running in 5 minutes</td>
+            </tr>
+            <tr>
+              <td><a href="architecture.html">Architecture</a></td>
+              <td>Deep dive into system design and components</td>
+            </tr>
+            <tr>
+              <td><a href="guides.html">Guides</a></td>
+              <td>Step-by-step tutorials for common tasks</td>
+            </tr>
+            <tr>
+              <td><a href="api.html">API Reference</a></td>
+              <td>Complete HTTP and Flight API documentation</td>
+            </tr>
+            <tr>
+              <td><a href="examples.html">Examples</a></td>
+              <td>Ready-to-use query examples and patterns</td>
+            </tr>
+            <tr>
+              <td><a href="configuration.html">Configuration</a></td>
+              <td>All configuration options explained</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Getting Help</h2>
+
+      <p>If you run into issues or have questions:</p>
+
+      <ul>
+        <li>Check the <a href="troubleshooting.html">Troubleshooting Guide</a></li>
+        <li>Browse the <a href="faq.html">FAQ</a></li>
+        <li>Open an issue on <a href="https://github.com/anthropics/stats-service/issues" target="_blank">GitHub</a></li>
+      </ul>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#128640; Ready to Start?</div>
+        <p>Head to the <a href="quickstart.html">Quick Start Guide</a> to write your first query!</p>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

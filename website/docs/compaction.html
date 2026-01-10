@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service Compaction - LSM-style multi-level compaction for optimal storage">
+  <title>Compaction - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="compaction.html" class="active">Compaction</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Compaction Topics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="#overview">Overview</a></li>
+          <li><a href="#lsm-tree">LSM-Tree Architecture</a></li>
+          <li><a href="#levels">Compaction Levels</a></li>
+          <li><a href="#strategies">Compaction Strategies</a></li>
+          <li><a href="#configuration">Configuration</a></li>
+          <li><a href="#manual">Manual Compaction</a></li>
+          <li><a href="#monitoring">Monitoring</a></li>
+          <li><a href="#best-practices">Best Practices</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Reference</h4>
+        <ul class="sidebar-nav">
+          <li><a href="api.html">API Reference</a></li>
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="examples.html">Examples</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>Compaction</h1>
+
+      <p class="lead">
+        Stats Service uses LSM-tree style multi-level compaction to optimize storage efficiency
+        and query performance. Small files from recent writes are progressively merged into
+        larger, more efficient files.
+      </p>
+
+      <h2 id="overview">Overview</h2>
+
+      <p>
+        When data is written to Stats Service, it first goes to an in-memory cache, then gets
+        flushed to disk as small Parquet files (Level 0). Over time, these small files accumulate,
+        which can slow down queries. Compaction solves this by merging files together.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Why Compaction Matters</div>
+        <ul>
+          <li><strong>Fewer files</strong> - Reduces file system overhead</li>
+          <li><strong>Faster queries</strong> - Less I/O, better file scanning</li>
+          <li><strong>Better compression</strong> - Larger files compress more efficiently</li>
+          <li><strong>Reduced storage</strong> - Eliminates duplicate and obsolete data</li>
+        </ul>
+      </div>
+
+      <h2 id="lsm-tree">LSM-Tree Architecture</h2>
+
+      <p>
+        Stats Service implements a Log-Structured Merge-tree (LSM-tree) inspired architecture
+        for managing Parquet files:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">LSM-Tree Data Flow</span>
+        </div>
+        <div class="code-content">
+          <pre><code>Write Request
+     │
+     ▼
+┌─────────────┐
+│  In-Memory  │  ← Fast writes
+│    Cache    │
+└─────────────┘
+     │ flush (every 30s)
+     ▼
+┌─────────────┐
+│   Level 0   │  ← Many small files (1-10 MB)
+│  (L0_*.parquet)
+└─────────────┘
+     │ compaction (when ≥4 files)
+     ▼
+┌─────────────┐
+│   Level 1   │  ← Fewer, larger files (10-50 MB)
+│  (L1_*.parquet)
+└─────────────┘
+     │ compaction
+     ▼
+┌─────────────┐
+│   Level 2   │  ← Even fewer files (50-200 MB)
+│  (L2_*.parquet)
+└─────────────┘
+     │
+     ▼
+    ...       ← Up to Level 5</code></pre>
+        </div>
+      </div>
+
+      <h3>Key Properties</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Property</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Write-optimized</strong></td>
+              <td>New data appends to L0 without modifying existing files</td>
+            </tr>
+            <tr>
+              <td><strong>Background merging</strong></td>
+              <td>Compaction runs asynchronously, doesn't block writes</td>
+            </tr>
+            <tr>
+              <td><strong>Level-based</strong></td>
+              <td>Each level contains progressively larger, more optimized files</td>
+            </tr>
+            <tr>
+              <td><strong>Size amplification</strong></td>
+              <td>Controlled by level ratios and compaction thresholds</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="levels">Compaction Levels</h2>
+
+      <p>Stats Service supports up to 6 levels (L0-L5):</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Level</th>
+              <th>File Prefix</th>
+              <th>Typical Size</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>L0</strong></td>
+              <td><code>L0_*.parquet</code></td>
+              <td>1-10 MB</td>
+              <td>Direct flush from cache, many small files</td>
+            </tr>
+            <tr>
+              <td><strong>L1</strong></td>
+              <td><code>L1_*.parquet</code></td>
+              <td>10-50 MB</td>
+              <td>First compaction level</td>
+            </tr>
+            <tr>
+              <td><strong>L2</strong></td>
+              <td><code>L2_*.parquet</code></td>
+              <td>50-200 MB</td>
+              <td>Second compaction level</td>
+            </tr>
+            <tr>
+              <td><strong>L3</strong></td>
+              <td><code>L3_*.parquet</code></td>
+              <td>200-500 MB</td>
+              <td>Third compaction level</td>
+            </tr>
+            <tr>
+              <td><strong>L4</strong></td>
+              <td><code>L4_*.parquet</code></td>
+              <td>500 MB - 1 GB</td>
+              <td>Fourth compaction level</td>
+            </tr>
+            <tr>
+              <td><strong>L5</strong></td>
+              <td><code>L5_*.parquet</code></td>
+              <td>1+ GB</td>
+              <td>Final level, fully compacted</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>File Naming Convention</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code># Format: L{level}_{timestamp}_{uuid}.parquet
+
+L0_1703251234567_a1b2c3d4.parquet   # Level 0, recently flushed
+L1_1703251300000_e5f6g7h8.parquet   # Level 1, first compaction
+L2_1703252000000_i9j0k1l2.parquet   # Level 2, second compaction</code></pre>
+        </div>
+      </div>
+
+      <h2 id="strategies">Compaction Strategies</h2>
+
+      <p>Stats Service supports two compaction strategies that work together:</p>
+
+      <h3>1. LSM Compaction (Default, Continuous)</h3>
+
+      <p>
+        Runs continuously in the background, merging files when thresholds are reached.
+        This is the primary compaction mechanism.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">LSM Compaction Process</span>
+        </div>
+        <div class="code-content">
+          <pre><code># When L0 has 4+ files:
+L0_file1.parquet ─┐
+L0_file2.parquet ─┼─► Merge ─► L1_merged.parquet
+L0_file3.parquet ─┤
+L0_file4.parquet ─┘
+
+# When L1 has 4+ files:
+L1_file1.parquet ─┐
+L1_file2.parquet ─┼─► Merge ─► L2_merged.parquet
+L1_file3.parquet ─┤
+L1_file4.parquet ─┘
+
+# And so on up to L5...</code></pre>
+        </div>
+      </div>
+
+      <h3>2. Full Compaction (Scheduled/Manual)</h3>
+
+      <p>
+        Merges ALL files at a level into a single file. Useful for aggressive optimization
+        but more resource-intensive.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">Full Compaction Process</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Full compaction at L0:
+L0_file1.parquet ─┐
+L0_file2.parquet ─┤
+L0_file3.parquet ─┼─► Merge ALL ─► L1_single.parquet
+L0_file4.parquet ─┤
+L0_file5.parquet ─┤
+L0_file6.parquet ─┘</code></pre>
+        </div>
+      </div>
+
+      <h2 id="configuration">Configuration</h2>
+
+      <p>Compaction is configured in <code>config.toml</code>:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">config.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[compaction]
+# Minimum files at a level before compaction triggers
+min_files = 4
+
+# Maximum compaction level (L0-L5)
+max_level = 5
+
+# Parallel LSM compaction tasks
+max_concurrent_compactions = 8
+
+# Parallel full compaction tasks (lower to avoid OOM)
+full_compaction_max_concurrent = 2
+
+# Schedule full compaction at specific hours (0-23)
+# Example: Run at 2 AM and 2 PM
+full_compaction_hours = [2, 14]
+
+# Enable/disable automatic compaction
+enabled = true</code></pre>
+        </div>
+      </div>
+
+      <h3>Configuration Options Explained</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Option</th>
+              <th>Default</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>min_files</code></td>
+              <td>4</td>
+              <td>Files needed at a level to trigger compaction</td>
+            </tr>
+            <tr>
+              <td><code>max_level</code></td>
+              <td>5</td>
+              <td>Highest compaction level (L0-L5)</td>
+            </tr>
+            <tr>
+              <td><code>max_concurrent_compactions</code></td>
+              <td>8</td>
+              <td>Parallel LSM compaction workers</td>
+            </tr>
+            <tr>
+              <td><code>full_compaction_max_concurrent</code></td>
+              <td>2</td>
+              <td>Parallel full compaction workers (memory-intensive)</td>
+            </tr>
+            <tr>
+              <td><code>full_compaction_hours</code></td>
+              <td>[]</td>
+              <td>Hours (0-23) to run scheduled full compaction</td>
+            </tr>
+            <tr>
+              <td><code>enabled</code></td>
+              <td>true</td>
+              <td>Enable/disable automatic compaction</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">Memory Considerations</div>
+        <p>
+          Full compaction loads all files into memory for merging. Set
+          <code>full_compaction_max_concurrent</code> to a low value (1-2) to avoid
+          out-of-memory errors on systems with limited RAM.
+        </p>
+      </div>
+
+      <h2 id="manual">Manual Compaction</h2>
+
+      <p>You can trigger compaction manually via the HTTP API:</p>
+
+      <h3>Compact Entire Database</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code># Compact all tables in a database
+curl -X POST http://localhost:7000/compact/mydb
+
+# Response
+{
+  "status": "compaction_started",
+  "database": "mydb"
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Compact Specific Table</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code># Compact a specific table
+curl -X POST http://localhost:7000/compact/mydb/cpu
+
+# Response
+{
+  "status": "compaction_started",
+  "database": "mydb",
+  "table": "cpu"
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Force Full Compaction</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code># Force full compaction (merge all files)
+curl -X POST http://localhost:7000/compact/mydb?full=true
+
+# Response
+{
+  "status": "full_compaction_started",
+  "database": "mydb"
+}</code></pre>
+        </div>
+      </div>
+
+      <h2 id="monitoring">Monitoring Compaction</h2>
+
+      <h3>Check File Counts</h3>
+
+      <p>Monitor compaction progress by checking file counts per level:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code># Count files per level
+find /data/stats/mydb/default/cpu -name "L*.parquet" | \
+  sed 's/.*\(L[0-9]\).*/\1/' | sort | uniq -c
+
+# Output:
+#   12 L0   ← Many L0 files, compaction needed
+#    3 L1
+#    1 L2</code></pre>
+        </div>
+      </div>
+
+      <h3>Check Partition Files</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code># List partitions and file counts via API
+curl http://localhost:7000/partitions/mydb/default/cpu
+
+# Response
+{
+  "partitions": [
+    {
+      "date": "2024-01-15",
+      "files": 5,
+      "size_bytes": 52428800
+    },
+    {
+      "date": "2024-01-14",
+      "files": 2,
+      "size_bytes": 104857600
+    }
+  ]
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Server Logs</h3>
+
+      <p>Compaction events are logged for monitoring:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>INFO  Compaction started: mydb.default.cpu L0 → L1 (4 files)
+INFO  Compaction completed: mydb.default.cpu L0 → L1 (merged to 1 file, 45MB)
+INFO  Full compaction started: mydb.default.cpu
+INFO  Full compaction completed: mydb.default.cpu (12 files → 1 file, 234MB)</code></pre>
+        </div>
+      </div>
+
+      <h2 id="best-practices">Best Practices</h2>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>Tune min_files</h3>
+          <p>
+            Lower values (2-3) = more aggressive compaction, higher CPU usage.<br>
+            Higher values (6-8) = less frequent compaction, more files to scan.
+          </p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128337;</div>
+          <h3>Schedule Full Compaction</h3>
+          <p>
+            Run full compaction during off-peak hours using <code>full_compaction_hours</code>.
+            Example: <code>[2, 3, 4]</code> for 2-4 AM.
+          </p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128190;</div>
+          <h3>Monitor Disk Space</h3>
+          <p>
+            Compaction temporarily uses extra disk space while merging.
+            Keep 20% free space for compaction operations.
+          </p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128200;</div>
+          <h3>Balance Query vs Write</h3>
+          <p>
+            More compaction = faster queries but higher CPU.<br>
+            Less compaction = faster writes but slower queries.
+          </p>
+        </div>
+      </div>
+
+      <h3>Recommended Settings by Workload</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Workload</th>
+              <th>min_files</th>
+              <th>max_concurrent</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Write-heavy</strong></td>
+              <td>6-8</td>
+              <td>4</td>
+              <td>Less frequent compaction, prioritize writes</td>
+            </tr>
+            <tr>
+              <td><strong>Read-heavy</strong></td>
+              <td>2-3</td>
+              <td>8</td>
+              <td>Aggressive compaction, optimize for queries</td>
+            </tr>
+            <tr>
+              <td><strong>Balanced</strong></td>
+              <td>4</td>
+              <td>8</td>
+              <td>Default settings work well</td>
+            </tr>
+            <tr>
+              <td><strong>Low memory</strong></td>
+              <td>4</td>
+              <td>2</td>
+              <td>Limit concurrent compactions</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Compaction and Retention</h2>
+
+      <p>
+        Compaction and retention work together but serve different purposes:
+      </p>
+
+      <ul>
+        <li><strong>Compaction</strong> - Merges files within a partition for efficiency</li>
+        <li><strong>Retention</strong> - Deletes entire partitions older than a threshold</li>
+      </ul>
+
+      <p>
+        When retention deletes old partitions, it also removes any compacted files in those
+        partitions. There's no need to compact data that will soon be deleted.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Tip</div>
+        <p>
+          If you have short retention periods (e.g., 7 days), consider using less aggressive
+          compaction settings since the data will be deleted before compaction provides
+          significant benefits.
+        </p>
+      </div>
+
+      <div class="cards-grid">
+        <a href="storage.html" class="card">
+          <div class="card-icon">&#128451;</div>
+          <h3>Storage</h3>
+          <p>Learn about Parquet format and partitioning.</p>
+          <span class="card-link">Read <span>&#8594;</span></span>
+        </a>
+
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>Configuration</h3>
+          <p>Full configuration reference.</p>
+          <span class="card-link">View <span>&#8594;</span></span>
+        </a>
+
+        <a href="api.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>API Reference</h3>
+          <p>Compaction API endpoints.</p>
+          <span class="card-link">View <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

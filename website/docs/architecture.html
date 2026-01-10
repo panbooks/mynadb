@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service Architecture - Deep dive into the system design">
+  <title>Architecture - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html" class="active">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html" class="active">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Guides</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">All Guides</a></li>
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="retention.html">Retention Policies</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>API Reference</h4>
+        <ul class="sidebar-nav">
+          <li><a href="api.html">HTTP API</a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>Architecture</h1>
+
+      <p>
+        Stats Service is built with a layered architecture optimized for high-throughput time series ingestion
+        and fast analytical queries. This document explains the key components and how they work together.
+      </p>
+
+      <h2>System Overview</h2>
+
+      <div class="architecture-diagram">
+        <pre>
+                              +------------------+
+                              |     Clients      |
+                              | (curl, Grafana,  |
+                              |  Telegraf, etc.) |
+                              +--------+---------+
+                                       |
+                 +---------------------+---------------------+
+                 |                                           |
+                 v                                           v
+        +--------+--------+                         +--------+--------+
+        |   HTTP Server   |                         | Arrow Flight    |
+        |   (Port 7000)   |                         |   (Port 7001)   |
+        |      Axum       |                         |     Tonic       |
+        +--------+--------+                         +--------+--------+
+                 |                                           |
+       +---------+---------+                                 |
+       |                   |                                 |
+       v                   v                                 |
+  +----+----+        +-----+------+                          |
+  |  Write  |        |   Query    |<-------------------------+
+  |   API   |        |   API      |
+  +----+----+        +-----+------+
+       |                   |
+       v                   v
+  +----+----+        +-----+------+
+  |  Line   |        | DataFusion |
+  | Protocol|        |   Query    |
+  | Parser  |        |   Engine   |
+  +----+----+        +-----+------+
+       |                   |
+       v                   |
+  +----+----+              |
+  |  Data   |              |
+  |  Cache  |              |
+  | (Memory)|              |
+  +----+----+              |
+       |                   |
+       v                   v
+  +----+-------------------+----+
+  |       Parquet Storage       |
+  |   (Columnar, Compressed)    |
+  +-------------+---------------+
+                |
+                v
+        +-------+-------+
+        |   Compactor   |
+        | (LSM-style)   |
+        +---------------+
+        </pre>
+      </div>
+
+      <h2>Core Components</h2>
+
+      <h3>HTTP Server (Axum)</h3>
+
+      <p>The HTTP server handles all REST API requests. Built with <a href="https://github.com/tokio-rs/axum" target="_blank">Axum</a>, it provides:</p>
+
+      <ul>
+        <li>High-performance async request handling</li>
+        <li>Connection pooling and keep-alive</li>
+        <li>Graceful shutdown support</li>
+        <li>Tower middleware integration</li>
+      </ul>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Endpoint</th>
+              <th>Method</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>/write/:db</code></td>
+              <td>POST</td>
+              <td>Write data (Line Protocol)</td>
+            </tr>
+            <tr>
+              <td><code>/query/:db</code></td>
+              <td>GET/POST</td>
+              <td>Execute SQL queries</td>
+            </tr>
+            <tr>
+              <td><code>/flush</code></td>
+              <td>POST</td>
+              <td>Flush cache to disk</td>
+            </tr>
+            <tr>
+              <td><code>/compact/:db</code></td>
+              <td>POST</td>
+              <td>Trigger compaction</td>
+            </tr>
+            <tr>
+              <td><code>/tables/:db</code></td>
+              <td>GET</td>
+              <td>List tables</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Line Protocol Parser</h3>
+
+      <p>Parses InfluxDB Line Protocol with high performance:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>&lt;measurement&gt;,&lt;tag_key&gt;=&lt;tag_value&gt;,... &lt;field_key&gt;=&lt;field_value&gt;,... [timestamp]
+
+<span class="token-comment"># Example:</span>
+cpu,host=server01,region=us-west usage=75.5,temp=45i 1609459200000000000</code></pre>
+        </div>
+      </div>
+
+      <ul>
+        <li><strong>Measurement</strong> - The table name (e.g., "cpu", "memory")</li>
+        <li><strong>Tags</strong> - Indexed string key-value pairs for filtering</li>
+        <li><strong>Fields</strong> - Numeric or string values (the actual metrics)</li>
+        <li><strong>Timestamp</strong> - Nanosecond Unix timestamp (optional, defaults to now)</li>
+      </ul>
+
+      <h3>Data Cache</h3>
+
+      <p>In-memory buffer that batches writes for efficiency:</p>
+
+      <ul>
+        <li>Buffers incoming data in memory</li>
+        <li>Organizes by database, schema, table, and date partition</li>
+        <li>Background flush every 30 seconds (configurable)</li>
+        <li>Manual flush via <code>/flush</code> endpoint</li>
+      </ul>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Write Path</div>
+        <p>Writes are acknowledged as soon as data is in the cache, providing low-latency ingestion. Data is durably stored on the next flush.</p>
+      </div>
+
+      <h3>DataFusion Query Engine</h3>
+
+      <p><a href="https://arrow.apache.org/datafusion/" target="_blank">Apache DataFusion</a> provides SQL query capabilities:</p>
+
+      <ul>
+        <li>Full SQL support (SELECT, JOIN, GROUP BY, window functions, CTEs)</li>
+        <li>Predicate pushdown to Parquet files</li>
+        <li>Parallel query execution</li>
+        <li>Memory-efficient streaming</li>
+        <li>Columnar processing with Apache Arrow</li>
+      </ul>
+
+      <h3>Parquet Storage</h3>
+
+      <p>Data is stored in <a href="https://parquet.apache.org/" target="_blank">Apache Parquet</a> format:</p>
+
+      <ul>
+        <li><strong>Columnar layout</strong> - Efficient for analytical queries</li>
+        <li><strong>Compression</strong> - Up to 90% storage reduction</li>
+        <li><strong>Predicate pushdown</strong> - Filter at read time</li>
+        <li><strong>Schema evolution</strong> - Add columns without rewriting</li>
+      </ul>
+
+      <h3>Compactor (LSM-style)</h3>
+
+      <p>Multi-level compaction optimizes storage and query performance:</p>
+
+      <div class="architecture-diagram">
+        <pre>
+  Write Path                    Compaction
+      |                             |
+      v                             |
+  +-------+                         |
+  |  L0   |  (Recent writes)        |
+  +---+---+                         |
+      |                             |
+      +-----> Merge when 4+ files --+
+      |                             |
+      v                             |
+  +-------+                         |
+  |  L1   |  (First compaction)     |
+  +---+---+                         |
+      |                             |
+      +-----> Merge when 4+ files --+
+      |                             |
+      v                             |
+  +-------+                         |
+  |  L2   |  (Second compaction)    |
+  +---+---+                         |
+      |                             |
+      ...                           |
+      |                             |
+      v                             v
+  +-------+
+  |  L5   |  (Maximum level)
+  +-------+
+        </pre>
+      </div>
+
+      <ul>
+        <li><strong>L0</strong> - Recent writes, many small files</li>
+        <li><strong>L1-L5</strong> - Progressively larger, merged files</li>
+        <li>Compaction triggered when 4+ files at a level</li>
+        <li>Parallel compaction for performance</li>
+      </ul>
+
+      <h2>Storage Structure</h2>
+
+      <p>Stats Service uses a hierarchical <strong>Catalog.Schema.Table</strong> structure:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>data/
+└── {catalog}/                    <span class="token-comment"># Database name</span>
+    ├── {schema}/                 <span class="token-comment"># Service tag value (or "default")</span>
+    │   └── {table}/              <span class="token-comment"># Measurement name</span>
+    │       └── date=YYYY-MM-DD/  <span class="token-comment"># Date partition</span>
+    │           ├── L0_xxx.parquet
+    │           ├── L1_xxx.parquet
+    │           └── L2_xxx.parquet
+    └── _system/
+        └── series_stats/         <span class="token-comment"># Cardinality tracking</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Schema Strategies</h3>
+
+      <p>Two strategies for mapping data to the catalog structure:</p>
+
+      <div class="cards-grid">
+        <div class="card">
+          <h3>ServiceAsSchema (Default)</h3>
+          <ul>
+            <li>Schema = Service tag value</li>
+            <li>Table = Measurement name</li>
+            <li>Best for multi-tenant setups</li>
+          </ul>
+          <p><code>cpu,service=web</code> → <code>mydb.web.cpu</code></p>
+        </div>
+
+        <div class="card">
+          <h3>ServiceAsTable</h3>
+          <ul>
+            <li>Schema = "default"</li>
+            <li>Table = Service tag value</li>
+            <li>Measurement stored as column</li>
+          </ul>
+          <p><code>cpu,service=web</code> → <code>mydb.default.web</code></p>
+        </div>
+      </div>
+
+      <h2>Arrow Flight</h2>
+
+      <p><a href="https://arrow.apache.org/docs/format/Flight.html" target="_blank">Arrow Flight</a> provides high-performance gRPC streaming:</p>
+
+      <ul>
+        <li>Columnar data transfer without serialization overhead</li>
+        <li>Compatible with DataFusion CLI and Arrow clients</li>
+        <li>Streaming results for large datasets</li>
+        <li>Runs on port 7001 by default</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Connect with DataFusion CLI</span>
+datafusion-cli --host localhost --port 7001
+
+<span class="token-comment"># Run SQL queries</span>
+> SELECT * FROM mydb.default.cpu LIMIT 10;</code></pre>
+        </div>
+      </div>
+
+      <h2>Key Design Decisions</h2>
+
+      <h3>Why Rust?</h3>
+
+      <ul>
+        <li><strong>Memory safety</strong> - No null pointer errors or data races</li>
+        <li><strong>Zero-cost abstractions</strong> - High-level code, C-like performance</li>
+        <li><strong>Async/await</strong> - Efficient handling of thousands of connections</li>
+        <li><strong>Strong type system</strong> - Catches errors at compile time</li>
+      </ul>
+
+      <h3>Why Parquet?</h3>
+
+      <ul>
+        <li><strong>Columnar format</strong> - Only read columns you need</li>
+        <li><strong>Compression</strong> - Snappy, ZSTD, LZ4 support</li>
+        <li><strong>Predicate pushdown</strong> - Filter before reading</li>
+        <li><strong>Ecosystem</strong> - Works with Spark, Pandas, Arrow</li>
+      </ul>
+
+      <h3>Why DataFusion?</h3>
+
+      <ul>
+        <li><strong>Full SQL</strong> - No custom query language to learn</li>
+        <li><strong>Extensible</strong> - Custom functions and optimizations</li>
+        <li><strong>Arrow native</strong> - Zero-copy data processing</li>
+        <li><strong>Active community</strong> - Part of Apache Arrow project</li>
+      </ul>
+
+      <h2>Performance Characteristics</h2>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Operation</th>
+              <th>Typical Latency</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Write (cached)</td>
+              <td>&lt; 1ms</td>
+              <td>Acknowledged when in memory</td>
+            </tr>
+            <tr>
+              <td>Simple query</td>
+              <td>1-10ms</td>
+              <td>Single table, indexed filter</td>
+            </tr>
+            <tr>
+              <td>Aggregation</td>
+              <td>10-100ms</td>
+              <td>Depends on data size</td>
+            </tr>
+            <tr>
+              <td>JOIN query</td>
+              <td>50-500ms</td>
+              <td>Depends on table sizes</td>
+            </tr>
+            <tr>
+              <td>Flush</td>
+              <td>100-1000ms</td>
+              <td>Depends on cache size</td>
+            </tr>
+            <tr>
+              <td>Compaction (L0→L1)</td>
+              <td>1-10s</td>
+              <td>Runs in background</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Next Steps</h2>
+
+      <div class="cards-grid">
+        <a href="storage.html" class="card">
+          <div class="card-icon">&#128451;</div>
+          <h3>Storage Deep Dive</h3>
+          <p>Learn more about Parquet storage and partitioning.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="compaction.html" class="card">
+          <div class="card-icon">&#128218;</div>
+          <h3>Compaction</h3>
+          <p>Understand LSM-style compaction in detail.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>Configuration</h3>
+          <p>Tune Stats Service for your workload.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

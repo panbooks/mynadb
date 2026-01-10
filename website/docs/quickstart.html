@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service Quick Start Guide - Get up and running in minutes">
+  <title>Quick Start - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html" class="active">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html" class="active">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Guides</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">All Guides</a></li>
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="retention.html">Retention Policies</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>API Reference</h4>
+        <ul class="sidebar-nav">
+          <li><a href="api.html">HTTP API</a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>Quick Start Guide</h1>
+
+      <p>Get Stats Service up and running in under 5 minutes. This guide covers building, running, writing data, and querying.</p>
+
+      <h2>Prerequisites</h2>
+
+      <ul>
+        <li>Rust 1.70+ (install via <a href="https://rustup.rs" target="_blank">rustup</a>)</li>
+        <li>curl (for testing the API)</li>
+      </ul>
+
+      <h2>Step 1: Build and Run</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Clone the repository</span>
+git clone https://github.com/anthropics/stats-service.git
+cd stats-service
+
+<span class="token-comment"># Build in release mode</span>
+cargo build --release
+
+<span class="token-comment"># Run the server</span>
+./target/release/stats-service</code></pre>
+        </div>
+      </div>
+
+      <p>You should see output like:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>Stats Service starting...
+HTTP server listening on 0.0.0.0:7000
+Arrow Flight listening on 0.0.0.0:7001
+Ready to accept connections</code></pre>
+        </div>
+      </div>
+
+      <h2>Step 2: Write Data</h2>
+
+      <p>Stats Service accepts data in <strong>InfluxDB Line Protocol</strong> format:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">Line Protocol Format</span>
+        </div>
+        <div class="code-content">
+          <pre><code>&lt;measurement&gt;,&lt;tag_key&gt;=&lt;tag_value&gt; &lt;field_key&gt;=&lt;field_value&gt; [timestamp]</code></pre>
+        </div>
+      </div>
+
+      <p>Write some sample data:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Write CPU and memory metrics</span>
+curl -X POST http://localhost:7000/write/mydb -d '
+cpu,host=server01,region=us-west usage=75.5,temp=45
+cpu,host=server02,region=us-west usage=45.2,temp=38
+cpu,host=server03,region=us-east usage=89.1,temp=52
+memory,host=server01 used=16.5,total=32.0
+memory,host=server02 used=24.8,total=64.0
+memory,host=server03 used=12.2,total=32.0
+'</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; About the Database</div>
+        <p>The database (<code>mydb</code>) is automatically created when you first write to it. No need to create it explicitly!</p>
+      </div>
+
+      <h2>Step 3: Flush to Disk</h2>
+
+      <p>Data is buffered in memory for performance. Flush it to Parquet files before querying:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/flush</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; Note</div>
+        <p>Data is also automatically flushed every 30 seconds (configurable). Manual flush is only needed for immediate queries.</p>
+      </div>
+
+      <h2>Step 4: Query with SQL</h2>
+
+      <p>Now query your data using standard SQL:</p>
+
+      <h3>Basic Select</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Select all CPU data</span>
+curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu'</code></pre>
+        </div>
+      </div>
+
+      <h3>Aggregation</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Average CPU usage by host</span>
+curl 'http://localhost:7000/query/mydb' \
+  -d 'SELECT host, AVG(usage) as avg_cpu FROM cpu GROUP BY host'</code></pre>
+        </div>
+      </div>
+
+      <p>Result:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[
+  {"host": "server01", "avg_cpu": 75.5},
+  {"host": "server02", "avg_cpu": 45.2},
+  {"host": "server03", "avg_cpu": 89.1}
+]</code></pre>
+        </div>
+      </div>
+
+      <h3>Filtering</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># High CPU usage servers</span>
+curl 'http://localhost:7000/query/mydb' \
+  -d 'SELECT host, usage FROM cpu WHERE usage > 70 ORDER BY usage DESC'</code></pre>
+        </div>
+      </div>
+
+      <h3>JOIN Queries</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Join CPU and memory data</span>
+curl 'http://localhost:7000/query/mydb' -d "
+SELECT c.host, c.usage as cpu_usage, m.used as memory_used
+FROM cpu c
+JOIN memory m ON c.host = m.host
+"</code></pre>
+        </div>
+      </div>
+
+      <h2>Step 5: List Tables</h2>
+
+      <p>See what tables are available in your database:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/tables/mydb</code></pre>
+        </div>
+      </div>
+
+      <p>Result:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "catalog": "mydb",
+  "tables": ["mydb.default.cpu", "mydb.default.memory"],
+  "count": 2
+}</code></pre>
+        </div>
+      </div>
+
+      <h2>Summary</h2>
+
+      <p>You've successfully:</p>
+
+      <ul>
+        <li>&#10003; Built and started Stats Service</li>
+        <li>&#10003; Written time series data using Line Protocol</li>
+        <li>&#10003; Flushed data to Parquet storage</li>
+        <li>&#10003; Queried data using SQL</li>
+        <li>&#10003; Listed available tables</li>
+      </ul>
+
+      <h2>Next Steps</h2>
+
+      <div class="cards-grid">
+        <a href="sql-queries.html" class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>SQL Query Guide</h3>
+          <p>Learn all SQL features including aggregations, JOINs, and window functions.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="architecture.html" class="card">
+          <div class="card-icon">&#127959;</div>
+          <h3>Architecture</h3>
+          <p>Understand how Stats Service works under the hood.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>Configuration</h3>
+          <p>Customize Stats Service for your workload.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>
