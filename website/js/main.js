@@ -3,6 +3,47 @@
  */
 
 // ============================================
+// Theme Selector
+// ============================================
+const THEMES = ['neon-cyber', 'sunset', 'arctic', 'forest', 'midnight', 'solar'];
+const DEFAULT_THEME = 'neon-cyber';
+
+function initThemeSelector() {
+  const selector = document.getElementById('theme-selector');
+  if (!selector) return;
+
+  // Load saved theme or use default
+  const savedTheme = localStorage.getItem('stats-theme') || DEFAULT_THEME;
+  setTheme(savedTheme);
+  selector.value = savedTheme;
+
+  // Listen for changes
+  selector.addEventListener('change', (e) => {
+    const theme = e.target.value;
+    setTheme(theme);
+    localStorage.setItem('stats-theme', theme);
+  });
+}
+
+function setTheme(theme) {
+  if (!THEMES.includes(theme)) {
+    theme = DEFAULT_THEME;
+  }
+  document.documentElement.setAttribute('data-theme', theme);
+
+  // Update all theme selectors on the page (for docs pages)
+  document.querySelectorAll('.theme-selector').forEach(sel => {
+    sel.value = theme;
+  });
+}
+
+// Apply theme immediately to prevent flash
+(function() {
+  const savedTheme = localStorage.getItem('stats-theme') || DEFAULT_THEME;
+  document.documentElement.setAttribute('data-theme', savedTheme);
+})();
+
+// ============================================
 // Copy Code Button
 // ============================================
 function copyCode(button) {
@@ -26,7 +67,7 @@ function copyCode(button) {
 // ============================================
 // Mobile Menu Toggle
 // ============================================
-document.addEventListener('DOMContentLoaded', () => {
+function initMobileMenu() {
   const mobileMenuBtn = document.querySelector('.mobile-menu-btn');
   const navbarNav = document.querySelector('.navbar-nav');
 
@@ -37,42 +78,46 @@ document.addEventListener('DOMContentLoaded', () => {
       mobileMenuBtn.innerHTML = isOpen ? '&#10005;' : '&#9776;';
     });
   }
-});
+}
 
 // ============================================
 // Smooth Scroll for Anchor Links
 // ============================================
-document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-  anchor.addEventListener('click', function (e) {
-    e.preventDefault();
-    const target = document.querySelector(this.getAttribute('href'));
-    if (target) {
-      target.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start'
-      });
-    }
+function initSmoothScroll() {
+  document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+    anchor.addEventListener('click', function (e) {
+      e.preventDefault();
+      const target = document.querySelector(this.getAttribute('href'));
+      if (target) {
+        target.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start'
+        });
+      }
+    });
   });
-});
+}
 
 // ============================================
 // Navbar Background on Scroll
 // ============================================
-window.addEventListener('scroll', () => {
+function initNavbarScroll() {
   const navbar = document.querySelector('.navbar');
-  if (navbar) {
+  if (!navbar) return;
+
+  window.addEventListener('scroll', () => {
     if (window.scrollY > 50) {
-      navbar.style.background = 'rgba(15, 23, 42, 0.95)';
+      navbar.classList.add('scrolled');
     } else {
-      navbar.style.background = 'rgba(15, 23, 42, 0.8)';
+      navbar.classList.remove('scrolled');
     }
-  }
-});
+  });
+}
 
 // ============================================
 // Active Sidebar Link
 // ============================================
-document.addEventListener('DOMContentLoaded', () => {
+function initActiveSidebarLink() {
   const sidebarLinks = document.querySelectorAll('.sidebar-nav a');
   const currentPath = window.location.pathname;
 
@@ -82,7 +127,7 @@ document.addEventListener('DOMContentLoaded', () => {
       link.classList.add('active');
     }
   });
-});
+}
 
 // ============================================
 // Code Syntax Highlighting (Basic)
@@ -215,13 +260,44 @@ function initCollapsible() {
 }
 
 // ============================================
+// Animate on Scroll
+// ============================================
+function initScrollAnimations() {
+  const observerOptions = {
+    threshold: 0.1,
+    rootMargin: '0px 0px -50px 0px'
+  };
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('animate-fade-in');
+        observer.unobserve(entry.target);
+      }
+    });
+  }, observerOptions);
+
+  // Observe feature cards and other animatable elements
+  document.querySelectorAll('.feature-card, .card, .arch-card, .stat-item').forEach(el => {
+    el.style.opacity = '0';
+    observer.observe(el);
+  });
+}
+
+// ============================================
 // Initialize on DOM Load
 // ============================================
 document.addEventListener('DOMContentLoaded', () => {
+  initThemeSelector();
+  initMobileMenu();
+  initSmoothScroll();
+  initNavbarScroll();
+  initActiveSidebarLink();
   generateTOC();
   initSearch();
   initTabs();
   initCollapsible();
+  initScrollAnimations();
 });
 
 // ============================================
@@ -235,24 +311,5 @@ function initVersionSelector() {
     const version = e.target.value;
     // Handle version change - could redirect to versioned docs
     console.log('Selected version:', version);
-  });
-}
-
-// ============================================
-// Theme Toggle (Dark/Light)
-// ============================================
-function initThemeToggle() {
-  const toggle = document.querySelector('.theme-toggle');
-  if (!toggle) return;
-
-  const savedTheme = localStorage.getItem('theme') || 'dark';
-  document.documentElement.setAttribute('data-theme', savedTheme);
-
-  toggle.addEventListener('click', () => {
-    const currentTheme = document.documentElement.getAttribute('data-theme');
-    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-
-    document.documentElement.setAttribute('data-theme', newTheme);
-    localStorage.setItem('theme', newTheme);
   });
 }
