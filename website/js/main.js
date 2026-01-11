@@ -1,47 +1,7 @@
 /**
  * Stats Service Website - Main JavaScript
+ * Fantastic animations and interactions
  */
-
-// ============================================
-// Theme Selector
-// ============================================
-const THEMES = ['neon-cyber', 'sunset', 'arctic', 'forest', 'midnight', 'solar'];
-const DEFAULT_THEME = 'neon-cyber';
-
-function initThemeSelector() {
-  const selector = document.getElementById('theme-selector');
-  if (!selector) return;
-
-  // Load saved theme or use default
-  const savedTheme = localStorage.getItem('stats-theme') || DEFAULT_THEME;
-  setTheme(savedTheme);
-  selector.value = savedTheme;
-
-  // Listen for changes
-  selector.addEventListener('change', (e) => {
-    const theme = e.target.value;
-    setTheme(theme);
-    localStorage.setItem('stats-theme', theme);
-  });
-}
-
-function setTheme(theme) {
-  if (!THEMES.includes(theme)) {
-    theme = DEFAULT_THEME;
-  }
-  document.documentElement.setAttribute('data-theme', theme);
-
-  // Update all theme selectors on the page (for docs pages)
-  document.querySelectorAll('.theme-selector').forEach(sel => {
-    sel.value = theme;
-  });
-}
-
-// Apply theme immediately to prevent flash
-(function() {
-  const savedTheme = localStorage.getItem('stats-theme') || DEFAULT_THEME;
-  document.documentElement.setAttribute('data-theme', savedTheme);
-})();
 
 // ============================================
 // Copy Code Button
@@ -54,10 +14,12 @@ function copyCode(button) {
     const originalText = button.innerHTML;
     button.innerHTML = '&#10003; Copied!';
     button.style.color = '#10b981';
+    button.style.transform = 'scale(1.1)';
 
     setTimeout(() => {
       button.innerHTML = originalText;
       button.style.color = '';
+      button.style.transform = '';
     }, 2000);
   }).catch(err => {
     console.error('Failed to copy:', err);
@@ -99,18 +61,25 @@ function initSmoothScroll() {
 }
 
 // ============================================
-// Navbar Background on Scroll
+// Navbar Effects on Scroll
 // ============================================
 function initNavbarScroll() {
   const navbar = document.querySelector('.navbar');
   if (!navbar) return;
 
+  let lastScroll = 0;
+
   window.addEventListener('scroll', () => {
-    if (window.scrollY > 50) {
+    const currentScroll = window.scrollY;
+
+    // Add scrolled class for background change
+    if (currentScroll > 50) {
       navbar.classList.add('scrolled');
     } else {
       navbar.classList.remove('scrolled');
     }
+
+    lastScroll = currentScroll;
   });
 }
 
@@ -130,33 +99,206 @@ function initActiveSidebarLink() {
 }
 
 // ============================================
-// Code Syntax Highlighting (Basic)
+// Scroll Reveal Animation
 // ============================================
-function highlightCode() {
-  document.querySelectorAll('pre code').forEach(block => {
-    let html = block.innerHTML;
+function initScrollAnimations() {
+  const observerOptions = {
+    threshold: 0.1,
+    rootMargin: '0px 0px -50px 0px'
+  };
 
-    // Comments
-    html = html.replace(/(#[^\n]*)/g, '<span class="token-comment">$1</span>');
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
 
-    // Strings
-    html = html.replace(/('[^']*')/g, '<span class="token-string">$1</span>');
-    html = html.replace(/("[^"]*")/g, '<span class="token-string">$1</span>');
+        // Add staggered animation for children
+        const children = entry.target.querySelectorAll('.animate-child');
+        children.forEach((child, index) => {
+          child.style.transitionDelay = `${index * 0.1}s`;
+          child.classList.add('visible');
+        });
+      }
+    });
+  }, observerOptions);
 
-    // Keywords
-    const keywords = ['SELECT', 'FROM', 'WHERE', 'GROUP BY', 'ORDER BY', 'LIMIT',
-                      'JOIN', 'LEFT', 'RIGHT', 'INNER', 'ON', 'AND', 'OR', 'AS',
-                      'AVG', 'COUNT', 'MIN', 'MAX', 'SUM', 'HAVING', 'BETWEEN',
-                      'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER'];
-    keywords.forEach(kw => {
-      const regex = new RegExp(`\\b(${kw})\\b`, 'gi');
-      html = html.replace(regex, '<span class="token-keyword">$1</span>');
+  // Observe elements with animation class
+  document.querySelectorAll('.animate-on-scroll').forEach(el => {
+    observer.observe(el);
+  });
+
+  // Auto-add animation class to common elements
+  const animatableSelectors = [
+    '.feature-card',
+    '.card',
+    '.arch-card',
+    '.stat-item',
+    '.section-header'
+  ];
+
+  animatableSelectors.forEach(selector => {
+    document.querySelectorAll(selector).forEach((el, index) => {
+      if (!el.classList.contains('animate-on-scroll')) {
+        el.classList.add('animate-on-scroll');
+        el.classList.add(`delay-${(index % 4) + 1}`);
+        observer.observe(el);
+      }
+    });
+  });
+}
+
+// ============================================
+// Parallax Effect for Hero
+// ============================================
+function initParallax() {
+  const hero = document.querySelector('.hero');
+  const particles = document.querySelector('.hero-particles');
+
+  if (!hero || !particles) return;
+
+  window.addEventListener('scroll', () => {
+    const scrolled = window.scrollY;
+    const rate = scrolled * 0.3;
+
+    if (scrolled < window.innerHeight) {
+      particles.style.transform = `translateY(${rate}px)`;
+    }
+  });
+}
+
+// ============================================
+// Mouse Move Effect on Cards
+// ============================================
+function initCardTilt() {
+  const cards = document.querySelectorAll('.feature-card, .card');
+
+  cards.forEach(card => {
+    card.addEventListener('mousemove', (e) => {
+      const rect = card.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      const centerX = rect.width / 2;
+      const centerY = rect.height / 2;
+
+      const rotateX = (y - centerY) / 20;
+      const rotateY = (centerX - x) / 20;
+
+      card.style.transform = `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateY(-8px) scale(1.02)`;
     });
 
-    // Numbers
-    html = html.replace(/\b(\d+\.?\d*)\b/g, '<span class="token-number">$1</span>');
+    card.addEventListener('mouseleave', () => {
+      card.style.transform = '';
+    });
+  });
+}
 
-    block.innerHTML = html;
+// ============================================
+// Typing Effect for Code
+// ============================================
+function initTypingEffect() {
+  const codeBlocks = document.querySelectorAll('.hero-code pre code');
+
+  codeBlocks.forEach(block => {
+    const text = block.innerHTML;
+    block.innerHTML = '';
+    block.style.visibility = 'visible';
+
+    let i = 0;
+    const speed = 10; // ms per character
+
+    function typeWriter() {
+      if (i < text.length) {
+        block.innerHTML = text.substring(0, i + 1);
+        i++;
+        setTimeout(typeWriter, speed);
+      }
+    }
+
+    // Start typing when element is in view
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          setTimeout(typeWriter, 500);
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.5 });
+
+    observer.observe(block.closest('.hero-code'));
+  });
+}
+
+// ============================================
+// Counter Animation for Stats
+// ============================================
+function initCounterAnimation() {
+  const stats = document.querySelectorAll('.stat-item h3');
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const target = entry.target;
+        const text = target.textContent;
+
+        // Extract number and suffix
+        const match = text.match(/^([\d.]+)(.*)$/);
+        if (match) {
+          const endValue = parseFloat(match[1]);
+          const suffix = match[2];
+          const duration = 2000;
+          const startTime = performance.now();
+
+          function animate(currentTime) {
+            const elapsed = currentTime - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+
+            // Easing function
+            const easeOut = 1 - Math.pow(1 - progress, 3);
+            const currentValue = endValue * easeOut;
+
+            if (Number.isInteger(endValue)) {
+              target.textContent = Math.floor(currentValue) + suffix;
+            } else {
+              target.textContent = currentValue.toFixed(1) + suffix;
+            }
+
+            if (progress < 1) {
+              requestAnimationFrame(animate);
+            } else {
+              target.textContent = text; // Ensure exact final value
+            }
+          }
+
+          requestAnimationFrame(animate);
+        }
+
+        observer.unobserve(target);
+      }
+    });
+  }, { threshold: 0.5 });
+
+  stats.forEach(stat => observer.observe(stat));
+}
+
+// ============================================
+// Magnetic Button Effect
+// ============================================
+function initMagneticButtons() {
+  const buttons = document.querySelectorAll('.btn-primary');
+
+  buttons.forEach(button => {
+    button.addEventListener('mousemove', (e) => {
+      const rect = button.getBoundingClientRect();
+      const x = e.clientX - rect.left - rect.width / 2;
+      const y = e.clientY - rect.top - rect.height / 2;
+
+      button.style.transform = `translate(${x * 0.2}px, ${y * 0.2}px) translateY(-3px) scale(1.02)`;
+    });
+
+    button.addEventListener('mouseleave', () => {
+      button.style.transform = '';
+    });
   });
 }
 
@@ -173,7 +315,6 @@ function generateTOC() {
   const tocList = document.createElement('ul');
 
   headings.forEach((heading, index) => {
-    // Add ID to heading if not present
     if (!heading.id) {
       heading.id = `heading-${index}`;
     }
@@ -197,7 +338,7 @@ function generateTOC() {
 }
 
 // ============================================
-// Search Functionality (Basic)
+// Search Functionality
 // ============================================
 function initSearch() {
   const searchInput = document.querySelector('.search-input');
@@ -231,13 +372,12 @@ function initTabs() {
     button.addEventListener('click', () => {
       const target = button.dataset.tab;
 
-      // Remove active class from all buttons and panels
       tabButtons.forEach(btn => btn.classList.remove('active'));
       tabPanels.forEach(panel => panel.classList.remove('active'));
 
-      // Add active class to clicked button and corresponding panel
       button.classList.add('active');
-      document.querySelector(`#${target}`).classList.add('active');
+      const panel = document.querySelector(`#${target}`);
+      if (panel) panel.classList.add('active');
     });
   });
 }
@@ -260,56 +400,60 @@ function initCollapsible() {
 }
 
 // ============================================
-// Animate on Scroll
+// Cursor Glow Effect
 // ============================================
-function initScrollAnimations() {
-  const observerOptions = {
-    threshold: 0.1,
-    rootMargin: '0px 0px -50px 0px'
-  };
+function initCursorGlow() {
+  const hero = document.querySelector('.hero');
+  if (!hero) return;
 
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        entry.target.classList.add('animate-fade-in');
-        observer.unobserve(entry.target);
-      }
-    });
-  }, observerOptions);
+  const glow = document.createElement('div');
+  glow.style.cssText = `
+    position: fixed;
+    width: 400px;
+    height: 400px;
+    background: radial-gradient(circle, rgba(2, 132, 199, 0.15) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+    transform: translate(-50%, -50%);
+    transition: opacity 0.3s ease;
+    opacity: 0;
+  `;
+  document.body.appendChild(glow);
 
-  // Observe feature cards and other animatable elements
-  document.querySelectorAll('.feature-card, .card, .arch-card, .stat-item').forEach(el => {
-    el.style.opacity = '0';
-    observer.observe(el);
+  document.addEventListener('mousemove', (e) => {
+    if (e.clientY < window.innerHeight) {
+      glow.style.left = e.clientX + 'px';
+      glow.style.top = e.clientY + 'px';
+      glow.style.opacity = '1';
+    } else {
+      glow.style.opacity = '0';
+    }
+  });
+
+  document.addEventListener('mouseleave', () => {
+    glow.style.opacity = '0';
   });
 }
 
 // ============================================
-// Initialize on DOM Load
+// Initialize Everything
 // ============================================
 document.addEventListener('DOMContentLoaded', () => {
-  initThemeSelector();
   initMobileMenu();
   initSmoothScroll();
   initNavbarScroll();
   initActiveSidebarLink();
+  initScrollAnimations();
+  initParallax();
+  initCardTilt();
+  initCounterAnimation();
+  initMagneticButtons();
+  initCursorGlow();
   generateTOC();
   initSearch();
   initTabs();
   initCollapsible();
-  initScrollAnimations();
 });
 
-// ============================================
-// Version Selector
-// ============================================
-function initVersionSelector() {
-  const selector = document.querySelector('.version-selector');
-  if (!selector) return;
-
-  selector.addEventListener('change', (e) => {
-    const version = e.target.value;
-    // Handle version change - could redirect to versioned docs
-    console.log('Selected version:', version);
-  });
-}
+// Disable typing effect by default (can be enabled if desired)
+// initTypingEffect();
