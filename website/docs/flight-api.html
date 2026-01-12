@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service Arrow Flight API - High-performance gRPC streaming for analytics">
+  <title>Arrow Flight API - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html" class="active">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>API Reference</h4>
+        <ul class="sidebar-nav">
+          <li><a href="api.html">HTTP API</a></li>
+          <li><a href="flight-api.html" class="active">Arrow Flight API</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>On This Page</h4>
+        <ul class="sidebar-nav">
+          <li><a href="#overview">Overview</a></li>
+          <li><a href="#connection">Connection</a></li>
+          <li><a href="#datafusion-cli">DataFusion CLI</a></li>
+          <li><a href="#python">Python Client</a></li>
+          <li><a href="#rust">Rust Client</a></li>
+          <li><a href="#queries">SQL Queries</a></li>
+          <li><a href="#performance">Performance Tips</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>Arrow Flight API</h1>
+
+      <p>
+        Stats Service exposes an <strong>Apache Arrow Flight</strong> interface for high-performance data streaming.
+        Arrow Flight is a gRPC-based protocol optimized for transferring large datasets with zero-copy efficiency.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#9992; Why Arrow Flight?</div>
+        <p>Arrow Flight provides 10-100x faster data transfer compared to REST APIs for large result sets.
+        It's ideal for analytics dashboards, data pipelines, and machine learning workloads.</p>
+      </div>
+
+      <!-- Overview -->
+      <h2 id="overview">Overview</h2>
+
+      <p>The Arrow Flight API provides:</p>
+
+      <ul>
+        <li><strong>High-throughput streaming</strong> - Transfer millions of rows per second</li>
+        <li><strong>Zero-copy transfers</strong> - Data stays in Arrow columnar format</li>
+        <li><strong>SQL query execution</strong> - Full DataFusion SQL support</li>
+        <li><strong>Parallel data retrieval</strong> - Multiple endpoints for distributed reads</li>
+        <li><strong>Compression</strong> - Built-in LZ4/ZSTD compression</li>
+      </ul>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th>HTTP API</th>
+              <th>Arrow Flight</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Protocol</td>
+              <td>REST/JSON</td>
+              <td>gRPC/Arrow IPC</td>
+            </tr>
+            <tr>
+              <td>Data Format</td>
+              <td>JSON (text)</td>
+              <td>Arrow (binary)</td>
+            </tr>
+            <tr>
+              <td>Best For</td>
+              <td>Small queries, writes</td>
+              <td>Large result sets</td>
+            </tr>
+            <tr>
+              <td>Streaming</td>
+              <td>No</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td>Client Libraries</td>
+              <td>Any HTTP client</td>
+              <td>Arrow Flight clients</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Connection -->
+      <h2 id="connection">Connection</h2>
+
+      <p>The Arrow Flight server runs on port <code>7001</code> by default (configurable via <code>flight_port</code>).</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>Default Port</strong></td>
+              <td><code>7001</code></td>
+            </tr>
+            <tr>
+              <td><strong>Protocol</strong></td>
+              <td>gRPC (HTTP/2)</td>
+            </tr>
+            <tr>
+              <td><strong>Connection String</strong></td>
+              <td><code>grpc://localhost:7001</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Configuration</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[server]
+http_port = 7000
+flight_port = 7001  # Arrow Flight gRPC port</code></pre>
+        </div>
+      </div>
+
+      <!-- DataFusion CLI -->
+      <h2 id="datafusion-cli">DataFusion CLI</h2>
+
+      <p>
+        The easiest way to query Stats Service via Flight is using the <strong>DataFusion CLI</strong>.
+        It provides an interactive SQL shell with full Arrow Flight support.
+      </p>
+
+      <h3>Installation</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Install via Cargo</span>
+cargo install datafusion-cli
+
+<span class="token-comment"># Or download pre-built binary</span>
+<span class="token-comment"># https://github.com/apache/arrow-datafusion/releases</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Connect to Stats Service</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Connect to Flight server</span>
+datafusion-cli --host localhost --port 7001
+
+<span class="token-comment"># With specific database catalog</span>
+datafusion-cli --host localhost --port 7001 --catalog mydb</code></pre>
+        </div>
+      </div>
+
+      <h3>Interactive Session</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- List available tables</span>
+<span class="token-keyword">SHOW</span> TABLES;
+
+<span class="token-comment">-- Query data</span>
+<span class="token-keyword">SELECT</span> host, <span class="token-function">AVG</span>(usage) <span class="token-keyword">AS</span> avg_cpu
+<span class="token-keyword">FROM</span> mydb.default.cpu
+<span class="token-keyword">WHERE</span> timestamp > now() - interval '1 hour'
+<span class="token-keyword">GROUP BY</span> host
+<span class="token-keyword">ORDER BY</span> avg_cpu <span class="token-keyword">DESC</span>;
+
+<span class="token-comment">-- Describe table schema</span>
+<span class="token-keyword">DESCRIBE</span> mydb.default.cpu;</code></pre>
+        </div>
+      </div>
+
+      <!-- Python Client -->
+      <h2 id="python">Python Client</h2>
+
+      <p>Use <code>pyarrow</code> to connect to Stats Service via Arrow Flight.</p>
+
+      <h3>Installation</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>pip install pyarrow pandas</code></pre>
+        </div>
+      </div>
+
+      <h3>Basic Query</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">python</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-keyword">import</span> pyarrow.flight <span class="token-keyword">as</span> flight
+<span class="token-keyword">import</span> pandas <span class="token-keyword">as</span> pd
+
+<span class="token-comment"># Connect to Stats Service</span>
+client = flight.connect(<span class="token-string">"grpc://localhost:7001"</span>)
+
+<span class="token-comment"># Execute SQL query</span>
+sql = <span class="token-string">"""
+    SELECT host, region, AVG(usage) as avg_cpu
+    FROM mydb.default.cpu
+    WHERE timestamp > now() - interval '1 hour'
+    GROUP BY host, region
+"""</span>
+
+<span class="token-comment"># Get Flight info and read data</span>
+flight_info = client.get_flight_info(flight.FlightDescriptor.for_command(sql))
+reader = client.do_get(flight_info.endpoints[<span class="token-number">0</span>].ticket)
+
+<span class="token-comment"># Convert to Pandas DataFrame</span>
+df = reader.read_pandas()
+<span class="token-function">print</span>(df)</code></pre>
+        </div>
+      </div>
+
+      <h3>Streaming Large Results</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">python</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-keyword">import</span> pyarrow.flight <span class="token-keyword">as</span> flight
+
+client = flight.connect(<span class="token-string">"grpc://localhost:7001"</span>)
+
+sql = <span class="token-string">"SELECT * FROM mydb.default.cpu"</span>
+flight_info = client.get_flight_info(flight.FlightDescriptor.for_command(sql))
+
+<span class="token-comment"># Stream record batches (memory efficient)</span>
+reader = client.do_get(flight_info.endpoints[<span class="token-number">0</span>].ticket)
+
+total_rows = <span class="token-number">0</span>
+<span class="token-keyword">for</span> batch <span class="token-keyword">in</span> reader:
+    total_rows += batch.data.num_rows
+    <span class="token-comment"># Process each batch...</span>
+    <span class="token-function">print</span>(<span class="token-string">f"Received batch with {batch.data.num_rows} rows"</span>)
+
+<span class="token-function">print</span>(<span class="token-string">f"Total rows: {total_rows}"</span>)</code></pre>
+        </div>
+      </div>
+
+      <h3>Integration with Pandas/Polars</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">python</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-keyword">import</span> pyarrow.flight <span class="token-keyword">as</span> flight
+<span class="token-keyword">import</span> polars <span class="token-keyword">as</span> pl
+
+<span class="token-keyword">def</span> <span class="token-function">query_stats_service</span>(sql: <span class="token-variable">str</span>) -> pl.DataFrame:
+    <span class="token-string">"""Execute SQL and return Polars DataFrame."""</span>
+    client = flight.connect(<span class="token-string">"grpc://localhost:7001"</span>)
+    flight_info = client.get_flight_info(
+        flight.FlightDescriptor.for_command(sql)
+    )
+    reader = client.do_get(flight_info.endpoints[<span class="token-number">0</span>].ticket)
+
+    <span class="token-comment"># Read as Arrow table, convert to Polars</span>
+    arrow_table = reader.read_all()
+    <span class="token-keyword">return</span> pl.from_arrow(arrow_table)
+
+<span class="token-comment"># Example usage</span>
+df = query_stats_service(<span class="token-string">"""
+    SELECT
+        date_trunc('minute', to_timestamp(timestamp/1000000000)) as minute,
+        host,
+        AVG(usage) as avg_cpu,
+        MAX(usage) as max_cpu
+    FROM mydb.default.cpu
+    GROUP BY 1, 2
+    ORDER BY 1 DESC
+    LIMIT 100
+"""</span>)
+<span class="token-function">print</span>(df)</code></pre>
+        </div>
+      </div>
+
+      <!-- Rust Client -->
+      <h2 id="rust">Rust Client</h2>
+
+      <p>Use the <code>arrow-flight</code> crate to connect from Rust applications.</p>
+
+      <h3>Cargo.toml</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[dependencies]
+arrow-flight = "50"
+arrow = "50"
+tonic = "0.10"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"</code></pre>
+        </div>
+      </div>
+
+      <h3>Example Client</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">rust</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-keyword">use</span> arrow_flight::flight_service_client::FlightServiceClient;
+<span class="token-keyword">use</span> arrow_flight::{FlightDescriptor, Ticket};
+<span class="token-keyword">use</span> futures::StreamExt;
+
+<span class="token-keyword">async fn</span> <span class="token-function">query_stats_service</span>() -> Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    <span class="token-comment">// Connect to Flight server</span>
+    <span class="token-keyword">let mut</span> client = FlightServiceClient::connect(
+        <span class="token-string">"http://localhost:7001"</span>
+    ).<span class="token-keyword">await</span>?;
+
+    <span class="token-comment">// Create SQL command</span>
+    <span class="token-keyword">let</span> sql = <span class="token-string">"SELECT * FROM mydb.default.cpu LIMIT 100"</span>;
+    <span class="token-keyword">let</span> descriptor = FlightDescriptor::new_cmd(sql.to_string());
+
+    <span class="token-comment">// Get flight info</span>
+    <span class="token-keyword">let</span> flight_info = client
+        .get_flight_info(descriptor)
+        .<span class="token-keyword">await</span>?
+        .into_inner();
+
+    <span class="token-comment">// Read data from first endpoint</span>
+    <span class="token-keyword">if let</span> Some(endpoint) = flight_info.endpoint.first() {
+        <span class="token-keyword">let</span> ticket = endpoint.ticket.clone().unwrap();
+        <span class="token-keyword">let mut</span> stream = client.do_get(ticket).<span class="token-keyword">await</span>?.into_inner();
+
+        <span class="token-keyword">while let</span> Some(batch) = stream.next().<span class="token-keyword">await</span> {
+            <span class="token-keyword">let</span> batch = batch?;
+            <span class="token-function">println!</span>(<span class="token-string">"Received batch with {} bytes"</span>, batch.data_body.len());
+        }
+    }
+
+    Ok(())
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- SQL Queries -->
+      <h2 id="queries">SQL Queries via Flight</h2>
+
+      <p>
+        Arrow Flight in Stats Service uses <strong>FlightSQL semantics</strong>.
+        SQL queries are passed as command descriptors.
+      </p>
+
+      <h3>Supported Operations</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Operation</th>
+              <th>Description</th>
+              <th>Example</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>SELECT</code></td>
+              <td>Query data</td>
+              <td><code>SELECT * FROM cpu</code></td>
+            </tr>
+            <tr>
+              <td><code>SHOW TABLES</code></td>
+              <td>List tables</td>
+              <td><code>SHOW TABLES</code></td>
+            </tr>
+            <tr>
+              <td><code>DESCRIBE</code></td>
+              <td>Table schema</td>
+              <td><code>DESCRIBE cpu</code></td>
+            </tr>
+            <tr>
+              <td>Aggregations</td>
+              <td>GROUP BY, window functions</td>
+              <td><code>SELECT AVG(x) FROM t GROUP BY y</code></td>
+            </tr>
+            <tr>
+              <td>Joins</td>
+              <td>Cross-table queries</td>
+              <td><code>SELECT * FROM a JOIN b ON ...</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Table Naming</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- Fully qualified name (recommended)</span>
+<span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> mydb.default.cpu;
+
+<span class="token-comment">-- With schema</span>
+<span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> default.cpu;
+
+<span class="token-comment">-- Simple name (uses default catalog/schema)</span>
+<span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> cpu;</code></pre>
+        </div>
+      </div>
+
+      <!-- Performance Tips -->
+      <h2 id="performance">Performance Tips</h2>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#128293; Performance Best Practices</div>
+        <ul>
+          <li>Use <strong>column projection</strong> - only select needed columns</li>
+          <li>Apply <strong>time filters</strong> - leverage partition pruning</li>
+          <li>Use <strong>streaming reads</strong> for large datasets</li>
+          <li>Enable <strong>compression</strong> for network-bound transfers</li>
+        </ul>
+      </div>
+
+      <h3>Column Projection</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- Good: Only select needed columns</span>
+<span class="token-keyword">SELECT</span> timestamp, host, usage <span class="token-keyword">FROM</span> cpu;
+
+<span class="token-comment">-- Avoid: Selecting all columns</span>
+<span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> cpu;</code></pre>
+        </div>
+      </div>
+
+      <h3>Time Range Filtering</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- Leverages date partition pruning</span>
+<span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> cpu
+<span class="token-keyword">WHERE</span> timestamp >= <span class="token-number">1704067200000000000</span>  <span class="token-comment">-- epoch nanos</span>
+  <span class="token-keyword">AND</span> timestamp <  <span class="token-number">1704153600000000000</span>;
+
+<span class="token-comment">-- Or using date functions</span>
+<span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> cpu
+<span class="token-keyword">WHERE</span> timestamp > now() - interval <span class="token-string">'1 day'</span>;</code></pre>
+        </div>
+      </div>
+
+      <h3>Compression Options</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">python</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-keyword">import</span> pyarrow.flight <span class="token-keyword">as</span> flight
+
+<span class="token-comment"># Enable gRPC compression</span>
+options = flight.FlightCallOptions(
+    headers=[(b<span class="token-string">"grpc-encoding"</span>, b<span class="token-string">"gzip"</span>)]
+)
+
+client = flight.connect(<span class="token-string">"grpc://localhost:7001"</span>)
+flight_info = client.get_flight_info(
+    flight.FlightDescriptor.for_command(sql),
+    options=options
+)</code></pre>
+        </div>
+      </div>
+
+      <h2>Troubleshooting</h2>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Issue</th>
+              <th>Solution</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Connection refused</td>
+              <td>Check <code>flight_port</code> config, ensure server is running</td>
+            </tr>
+            <tr>
+              <td>Table not found</td>
+              <td>Use fully qualified name: <code>catalog.schema.table</code></td>
+            </tr>
+            <tr>
+              <td>Timeout on large queries</td>
+              <td>Increase gRPC timeout, use streaming reads</td>
+            </tr>
+            <tr>
+              <td>Memory issues</td>
+              <td>Stream batches instead of <code>read_all()</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Next Steps</h2>
+
+      <div class="cards-grid">
+        <a href="api.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>HTTP API</h3>
+          <p>REST API for writes and simple queries.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="examples.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>Examples</h3>
+          <p>Ready-to-use query examples and patterns.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="sql-queries.html" class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>SQL Reference</h3>
+          <p>Complete SQL syntax and functions.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>
