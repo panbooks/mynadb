@@ -1,5 +1,6 @@
 use crate::config::LoggingConfig;
 use std::fs;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 /// Initialize logging based on configuration
@@ -8,13 +9,21 @@ pub fn init_logging(config: &LoggingConfig) -> Result<(), String> {
     fs::create_dir_all(&config.log_dir)
         .map_err(|e| format!("Failed to create log directory: {}", e))?;
 
-    // Create file appender based on rotation config
-    let file_appender = match config.rotation.to_lowercase().as_str() {
-        "daily" => tracing_appender::rolling::daily(&config.log_dir, &config.file_prefix),
-        "hourly" => tracing_appender::rolling::hourly(&config.log_dir, &config.file_prefix),
-        "never" => tracing_appender::rolling::never(&config.log_dir, &config.file_prefix),
-        _ => tracing_appender::rolling::daily(&config.log_dir, &config.file_prefix),
+    // Determine rotation strategy
+    let rotation = match config.rotation.to_lowercase().as_str() {
+        "daily" => Rotation::DAILY,
+        "hourly" => Rotation::HOURLY,
+        "never" => Rotation::NEVER,
+        _ => Rotation::DAILY,
     };
+
+    // Create file appender with max_files support
+    let file_appender = RollingFileAppender::builder()
+        .rotation(rotation)
+        .filename_prefix(&config.file_prefix)
+        .max_log_files(config.max_files)
+        .build(&config.log_dir)
+        .map_err(|e| format!("Failed to create log appender: {}", e))?;
 
     // Create non-blocking writer for better performance
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
