@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service High Availability - Master-Slave replication for fault tolerance">
+  <title>High Availability - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Guides</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">All Guides</a></li>
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="high-availability.html" class="active">High Availability</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="api.html">API Reference</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>High Availability</h1>
+
+      <p>
+        Stats Service supports Master-Slave replication for high availability and fault tolerance.
+        The master node handles all writes while replicating data to one or more slave nodes in real-time.
+        If the master fails, a slave can be promoted to take over.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Key Benefits</div>
+        <ul>
+          <li><strong>Fault Tolerance:</strong> Continue serving reads even when master is down</li>
+          <li><strong>Read Scaling:</strong> Distribute read queries across slave nodes</li>
+          <li><strong>Data Safety:</strong> Real-time replication ensures data durability</li>
+          <li><strong>Zero Downtime Failover:</strong> Promote slave to master without data loss</li>
+        </ul>
+      </div>
+
+      <h2>Architecture Overview</h2>
+
+      <p>
+        The HA system uses a simple master-slave architecture with WAL (Write-Ahead Log) streaming:
+      </p>
+
+      <div class="architecture-diagram">
+        <pre>
+                    +-----------------+
+                    |     Clients     |
+                    +--------+--------+
+                             |
+              +--------------+--------------+
+              |                             |
+      +-------v-------+             +-------v-------+
+      |    MASTER     |             |     SLAVE     |
+      |   (Active)    |------------>|   (Standby)   |
+      |               | WAL Stream  |               |
+      +-------+-------+             +-------+-------+
+              |                             |
+      +-------v-------+             +-------v-------+
+      |  Parquet      |             |  Parquet      |
+      |  Files        |             |  Files        |
+      +---------------+             +---------------+
+        </pre>
+      </div>
+
+      <h3>How It Works</h3>
+
+      <ol>
+        <li><strong>Write Path:</strong> All writes go to the master node</li>
+        <li><strong>WAL Replication:</strong> Master streams WAL entries to connected slaves via TCP</li>
+        <li><strong>Slave Replay:</strong> Slaves apply WAL entries to their local storage</li>
+        <li><strong>Heartbeat:</strong> Master sends periodic heartbeats; slaves monitor for failures</li>
+        <li><strong>Failover:</strong> On master failure, slave can be promoted (manual or automatic)</li>
+      </ol>
+
+      <h2>Configuration</h2>
+
+      <h3>Master Node Configuration</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">config-master.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[server]
+http_port = 7000
+flight_port = 7001
+
+[storage]
+data_dir = "/data/master"
+
+[ha]
+enabled = true
+role = "master"
+node_id = "master-01"
+
+[ha.replication]
+mode = "async"                    # "async" or "sync"
+listen_addr = "0.0.0.0:7003"      # Replication port
+
+[ha.heartbeat]
+interval_secs = 5                 # Send heartbeat every 5 seconds
+timeout_secs = 15                 # Slave timeout threshold</code></pre>
+        </div>
+      </div>
+
+      <h3>Slave Node Configuration</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">config-slave.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[server]
+http_port = 7100                  # Different port from master
+flight_port = 7101
+
+[storage]
+data_dir = "/data/slave"
+
+[ha]
+enabled = true
+role = "slave"
+node_id = "slave-01"
+
+[ha.replication]
+master_addr = "master-host:7003"  # Master's replication address
+reconnect_interval_secs = 5       # Retry interval on disconnect
+
+[ha.heartbeat]
+interval_secs = 5
+timeout_secs = 15
+
+[ha.failover]
+mode = "manual"                   # "manual", "automatic", or "disabled"
+failure_threshold = 3             # Missed heartbeats before failover
+promotion_delay_secs = 10         # Wait before auto-promotion</code></pre>
+        </div>
+      </div>
+
+      <h3>Configuration Options</h3>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Option</th>
+            <th>Description</th>
+            <th>Default</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>ha.enabled</code></td>
+            <td>Enable HA mode</td>
+            <td><code>false</code></td>
+          </tr>
+          <tr>
+            <td><code>ha.role</code></td>
+            <td>Node role: "master" or "slave"</td>
+            <td><code>"master"</code></td>
+          </tr>
+          <tr>
+            <td><code>ha.node_id</code></td>
+            <td>Unique identifier for this node</td>
+            <td><code>"node-{pid}"</code></td>
+          </tr>
+          <tr>
+            <td><code>ha.replication.mode</code></td>
+            <td>"async" (faster) or "sync" (safer)</td>
+            <td><code>"async"</code></td>
+          </tr>
+          <tr>
+            <td><code>ha.replication.listen_addr</code></td>
+            <td>Master: address to listen for slaves</td>
+            <td><code>"0.0.0.0:7003"</code></td>
+          </tr>
+          <tr>
+            <td><code>ha.replication.master_addr</code></td>
+            <td>Slave: master's replication address</td>
+            <td><em>required</em></td>
+          </tr>
+          <tr>
+            <td><code>ha.failover.mode</code></td>
+            <td>"manual", "automatic", or "disabled"</td>
+            <td><code>"automatic"</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>HA API Endpoints</h2>
+
+      <h3>GET /ha/status</h3>
+
+      <p>Returns the current HA status of the node.</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/ha/status</code></pre>
+        </div>
+      </div>
+
+      <p>Response:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "enabled": true,
+  "node_id": "master-01",
+  "role": "master",
+  "state": "running",
+  "replication": {
+    "role": "master",
+    "current_sequence": 12345,
+    "slave_count": 1,
+    "connected": true
+  },
+  "promotion": {
+    "role": "master",
+    "state": "running",
+    "can_promote": false,
+    "failover_mode": "manual"
+  }
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>POST /ha/promote</h3>
+
+      <p>Manually promote a slave to master (requires confirmation).</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7100/ha/promote \
+  -H "Content-Type: application/json" \
+  -d '{"confirm": true}'</code></pre>
+        </div>
+      </div>
+
+      <p>Response:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "status": "success",
+  "message": "Promoted to master",
+  "new_role": "master"
+}</code></pre>
+        </div>
+      </div>
+
+      <h2>Operational Guide</h2>
+
+      <h3>Starting a Cluster</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Terminal 1: Start master</span>
+./tsdb-stats -c config-master.toml
+
+<span class="token-comment"># Terminal 2: Start slave</span>
+./tsdb-stats -c config-slave.toml
+
+<span class="token-comment"># Verify connection</span>
+curl http://localhost:7000/ha/status | jq '.replication.slave_count'
+<span class="token-comment"># Should return: 1</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Writing Data</h3>
+
+      <p>Always write to the master node. Writes to slave nodes are rejected:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Write to master (succeeds)</span>
+curl -X POST http://localhost:7000/write/mydb \
+  -d 'cpu,host=server1 usage=75.5'
+
+<span class="token-comment"># Write to slave (fails with 503)</span>
+curl -X POST http://localhost:7100/write/mydb \
+  -d 'cpu,host=server1 usage=75.5'
+<span class="token-comment"># Error: This node is a slave; writes must be sent to the master</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Reading Data</h3>
+
+      <p>Both master and slave can serve read queries:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Query master</span>
+curl -X POST http://localhost:7000/query/mydb \
+  -d 'SELECT * FROM cpu LIMIT 10'
+
+<span class="token-comment"># Query slave (same data after replication)</span>
+curl -X POST http://localhost:7100/query/mydb \
+  -d 'SELECT * FROM cpu LIMIT 10'</code></pre>
+        </div>
+      </div>
+
+      <h3>Manual Failover</h3>
+
+      <p>When the master is unavailable, promote a slave:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 1. Check slave status</span>
+curl http://localhost:7100/ha/status | jq '{role, state, can_promote: .promotion.can_promote}'
+
+<span class="token-comment"># 2. Promote slave to master</span>
+curl -X POST http://localhost:7100/ha/promote \
+  -H "Content-Type: application/json" \
+  -d '{"confirm": true}'
+
+<span class="token-comment"># 3. Verify new role</span>
+curl http://localhost:7100/ha/status | jq '.role'
+<span class="token-comment"># Should return: "master"</span>
+
+<span class="token-comment"># 4. Update your application to point to the new master</span></code></pre>
+        </div>
+      </div>
+
+      <h2>Replication Modes</h2>
+
+      <h3>Async Replication (Default)</h3>
+
+      <ul>
+        <li>Master returns success immediately after local write</li>
+        <li>Replication happens in background</li>
+        <li>Lower latency, higher throughput</li>
+        <li>Small window for data loss on master failure</li>
+      </ul>
+
+      <h3>Sync Replication</h3>
+
+      <ul>
+        <li>Master waits for slave acknowledgment before responding</li>
+        <li>Zero data loss guarantee</li>
+        <li>Higher latency (network round-trip)</li>
+        <li>Slave failure blocks writes (with timeout)</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[ha.replication]
+mode = "sync"
+timeout_ms = 5000  # Wait up to 5 seconds for slave ACK</code></pre>
+        </div>
+      </div>
+
+      <h2>Failover Modes</h2>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Mode</th>
+            <th>Description</th>
+            <th>Use Case</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>manual</code></td>
+            <td>Operator must call /ha/promote API</td>
+            <td>Production with human oversight</td>
+          </tr>
+          <tr>
+            <td><code>automatic</code></td>
+            <td>Slave auto-promotes after detecting master failure</td>
+            <td>Unattended operation</td>
+          </tr>
+          <tr>
+            <td><code>disabled</code></td>
+            <td>Promotion is not allowed</td>
+            <td>Read-only replicas</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Local Testing</h2>
+
+      <p>Test master-slave mode on a single machine:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Use the included test script</span>
+./scripts/ha_setup_local.sh setup   # Create configs
+./scripts/ha_setup_local.sh master  # Terminal 1
+./scripts/ha_setup_local.sh slave   # Terminal 2
+./scripts/ha_setup_local.sh test    # Terminal 3 - Run tests
+
+<span class="token-comment"># Or run automated tests</span>
+./scripts/test_ha_local.sh</code></pre>
+        </div>
+      </div>
+
+      <h2>Monitoring</h2>
+
+      <h3>Key Metrics to Monitor</h3>
+
+      <ul>
+        <li><strong>Replication Lag:</strong> <code>current_sequence</code> difference between master and slave</li>
+        <li><strong>Connection Status:</strong> <code>replication.connected</code> on slave</li>
+        <li><strong>Heartbeat:</strong> <code>seconds_since_heartbeat</code> on slave</li>
+        <li><strong>Slave Count:</strong> <code>replication.slave_count</code> on master</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Monitor script example</span>
+while true; do
+  echo "=== Master ==="
+  curl -s http://master:7000/ha/status | jq '{seq: .replication.current_sequence, slaves: .replication.slave_count}'
+
+  echo "=== Slave ==="
+  curl -s http://slave:7100/ha/status | jq '{seq: .replication.last_sequence, connected: .replication.connected, lag: .replication.seconds_since_heartbeat}'
+
+  sleep 5
+done</code></pre>
+        </div>
+      </div>
+
+      <h2>Best Practices</h2>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; Production Recommendations</div>
+        <ul>
+          <li><strong>Network:</strong> Use low-latency network between master and slave</li>
+          <li><strong>Storage:</strong> Use separate storage volumes for each node</li>
+          <li><strong>Monitoring:</strong> Set up alerts for replication lag and connection status</li>
+          <li><strong>Backup:</strong> Regularly backup data from slave node</li>
+          <li><strong>Testing:</strong> Regularly test failover procedures</li>
+        </ul>
+      </div>
+
+      <h3>Deployment Topology</h3>
+
+      <ul>
+        <li><strong>Same Datacenter:</strong> Low latency, sync replication viable</li>
+        <li><strong>Cross Datacenter:</strong> Higher latency, use async replication</li>
+        <li><strong>Multiple Slaves:</strong> Distribute read load, improve durability</li>
+      </ul>
+
+      <h2>Troubleshooting</h2>
+
+      <h3>Slave Not Connecting</h3>
+
+      <ul>
+        <li>Check <code>master_addr</code> is correct and reachable</li>
+        <li>Verify firewall allows port 7003 (or configured replication port)</li>
+        <li>Check master logs for connection attempts</li>
+      </ul>
+
+      <h3>Replication Lag</h3>
+
+      <ul>
+        <li>Network bandwidth may be insufficient</li>
+        <li>Slave disk I/O may be bottleneck</li>
+        <li>Consider increasing <code>reconnect_interval_secs</code></li>
+      </ul>
+
+      <h3>Promotion Fails</h3>
+
+      <ul>
+        <li>Check <code>can_promote</code> in status is <code>true</code></li>
+        <li>Verify failover mode is not <code>disabled</code></li>
+        <li>Node must be in <code>running</code> or <code>syncing</code> state</li>
+      </ul>
+
+      <h2>See Also</h2>
+
+      <div class="cards-grid">
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>Configuration</h3>
+          <p>Full configuration reference</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="api.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>API Reference</h3>
+          <p>Complete API documentation</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="troubleshooting.html" class="card">
+          <div class="card-icon">&#128295;</div>
+          <h3>Troubleshooting</h3>
+          <p>Common issues and solutions</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>
