@@ -253,3 +253,228 @@ separator = "-"  # ← Key difference
 # Multi-environment: Use EXAMPLE 2 (extract service from env.service)
 # Legacy systems: Use EXAMPLE 3 (custom tag key)
 # Complex orgs: Use EXAMPLE 5 (preserve full paths)
+
+
+# ============================================================
+# HIGH AVAILABILITY CONFIGURATION
+# ============================================================
+
+# ============================================================
+# HA EXAMPLE 1: Master Node Configuration
+# ============================================================
+# Use this for the primary/master node that accepts writes
+
+[ha]
+enabled = true
+role = "master"
+node_id = "master-01"              # Unique identifier for this node
+
+[ha.replication]
+mode = "async"                     # "async" (default) or "sync"
+listen_addr = "0.0.0.0:7003"       # Address for slave connections
+timeout_ms = 5000                  # Sync mode ACK timeout (ms)
+
+[ha.heartbeat]
+interval_secs = 2                  # Send heartbeat every 2 seconds
+timeout_secs = 10                  # Heartbeat timeout threshold
+
+[ha.failover]
+mode = "manual"                    # Master typically uses manual
+failure_threshold = 3              # Not used on master
+promotion_delay_secs = 5           # Not used on master
+
+
+# ============================================================
+# HA EXAMPLE 2: Slave Node Configuration
+# ============================================================
+# Use this for standby/slave nodes that replicate from master
+
+[ha]
+enabled = true
+role = "slave"
+node_id = "slave-01"               # Unique identifier for this node
+
+[ha.replication]
+mode = "async"                     # Must match master
+master_addr = "master-host:7003"   # Master's replication address
+reconnect_interval_secs = 5        # Retry interval on disconnect
+
+[ha.heartbeat]
+interval_secs = 2                  # Must match master
+timeout_secs = 10                  # Time before considering master down
+
+[ha.failover]
+mode = "automatic"                 # "automatic", "manual", or "disabled"
+failure_threshold = 3              # Missed heartbeats before failover
+promotion_delay_secs = 5           # Wait before promoting
+
+
+# ============================================================
+# HA EXAMPLE 3: Synchronous Replication (Strong Consistency)
+# ============================================================
+# Use this when you need guaranteed data durability
+# WARNING: Higher latency due to waiting for slave ACK
+
+# Master config:
+[ha]
+enabled = true
+role = "master"
+node_id = "master-sync"
+
+[ha.replication]
+mode = "sync"                      # Wait for slave ACK
+listen_addr = "0.0.0.0:7003"
+timeout_ms = 3000                  # Fail write if no ACK in 3s
+
+# Slave config (same as async):
+[ha]
+enabled = true
+role = "slave"
+node_id = "slave-sync"
+
+[ha.replication]
+mode = "sync"
+master_addr = "master-host:7003"
+
+
+# ============================================================
+# HA EXAMPLE 4: Manual Failover Only (Production Safe)
+# ============================================================
+# Use this for critical production systems where you want
+# human verification before failover
+
+[ha]
+enabled = true
+role = "slave"
+node_id = "slave-manual"
+
+[ha.replication]
+master_addr = "master-host:7003"
+reconnect_interval_secs = 5
+
+[ha.heartbeat]
+interval_secs = 2
+timeout_secs = 10
+
+[ha.failover]
+mode = "manual"                    # Requires POST /ha/promote to failover
+failure_threshold = 3
+promotion_delay_secs = 0
+
+# To promote manually:
+#   curl -X POST http://slave:7000/ha/promote \
+#     -H "Content-Type: application/json" \
+#     -d '{"confirm": true}'
+
+
+# ============================================================
+# HA EXAMPLE 5: Disabled Failover (Read Replica Only)
+# ============================================================
+# Use this for read replicas that should never become master
+
+[ha]
+enabled = true
+role = "slave"
+node_id = "read-replica-01"
+
+[ha.replication]
+master_addr = "master-host:7003"
+reconnect_interval_secs = 5
+
+[ha.failover]
+mode = "disabled"                  # Never promote to master
+
+
+# ============================================================
+# HA EXAMPLE 6: Fast Failover (Low Latency)
+# ============================================================
+# Use this when minimal downtime is critical
+# WARNING: Higher risk of false positives / split-brain
+
+[ha]
+enabled = true
+role = "slave"
+node_id = "slave-fast"
+
+[ha.replication]
+master_addr = "master-host:7003"
+reconnect_interval_secs = 1        # Faster reconnect
+
+[ha.heartbeat]
+interval_secs = 1                  # More frequent heartbeats
+timeout_secs = 3                   # Shorter timeout
+
+[ha.failover]
+mode = "automatic"
+failure_threshold = 2              # Fewer missed beats needed
+promotion_delay_secs = 1           # Minimal delay
+
+# Estimated failover time: ~5-7 seconds
+
+
+# ============================================================
+# HA EXAMPLE 7: Conservative Failover (Stability First)
+# ============================================================
+# Use this when stability is more important than failover speed
+# Good for environments with network instability
+
+[ha]
+enabled = true
+role = "slave"
+node_id = "slave-stable"
+
+[ha.replication]
+master_addr = "master-host:7003"
+reconnect_interval_secs = 10       # Longer reconnect interval
+
+[ha.heartbeat]
+interval_secs = 5                  # Less frequent heartbeats
+timeout_secs = 30                  # Longer timeout
+
+[ha.failover]
+mode = "automatic"
+failure_threshold = 5              # More missed beats required
+promotion_delay_secs = 30          # Long delay for master recovery
+
+# Estimated failover time: ~2-3 minutes
+
+
+# ============================================================
+# HA API Endpoints
+# ============================================================
+#
+# GET  /ha/status     - Detailed HA status and replication info
+# GET  /ha/health     - Health check (200=healthy, 503=unhealthy)
+# GET  /ha/is-master  - Check if node can accept writes
+# POST /ha/promote    - Promote slave to master (body: {"confirm": true})
+#
+# Example health check for load balancer:
+#   curl -f http://localhost:7000/ha/health || echo "Node unhealthy"
+
+
+# ============================================================
+# HA Deployment Checklist
+# ============================================================
+#
+# ✅ Pre-deployment:
+#   □ Both nodes have same Stats Service version
+#   □ Network allows TCP on replication port (default: 7003)
+#   □ Unique node_id for each node
+#   □ Data directories are separate (not shared storage)
+#
+# ✅ Startup order:
+#   1. Start master first
+#   2. Verify master is listening: curl http://master:7000/ha/status
+#   3. Start slave
+#   4. Verify replication: curl http://slave:7000/ha/status
+#
+# ✅ Verification:
+#   □ Slave shows "connected": true
+#   □ Slave sequence matches master sequence
+#   □ Heartbeat latency is reasonable (<= interval_secs)
+#
+# ✅ Testing:
+#   □ Write to master, verify appears on slave
+#   □ Test manual failover (if using manual mode)
+#   □ Test automatic failover (if using automatic mode)
+#   □ Test recovery/failback procedure

@@ -40,6 +40,7 @@ pub struct AppState {
     pub series_tracker: Arc<SeriesTracker>,
     pub config: Arc<config::Config>,
     pub wal: Option<Arc<crate::wal::Wal>>,
+    pub ha_manager: Option<Arc<crate::ha::HaManager>>,
 }
 
 #[derive(Deserialize)]
@@ -765,6 +766,16 @@ pub async fn write_handler_query_param(
 async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCode, String) {
     debug!("Processing write data: {} bytes", data.len());
 
+    // Check if this node is master (if HA is enabled)
+    if let Some(ref ha) = state.ha_manager {
+        if ha.is_enabled() && !ha.is_master() {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "This node is a slave; writes must be sent to the master\n".to_string(),
+            );
+        }
+    }
+
     // STEP 1: Write to WAL first for durability
     if let Some(ref wal) = state.wal {
         if let Err(e) = wal.log_data_write(db, data).await {
@@ -773,6 +784,17 @@ async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCod
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("WAL error: {}\n", e),
             );
+        }
+    }
+
+    // STEP 1.5: Replicate to slaves (if HA master)
+    if let Some(ref ha) = state.ha_manager {
+        if ha.is_enabled() && ha.is_master() {
+            // Entry type 0 = DataWrite
+            if let Err(e) = ha.replicate_write(db, data.as_bytes(), 0).await {
+                // Log warning but don't fail the write (async replication)
+                warn!("HA replication warning: {}", e);
+            }
         }
     }
 

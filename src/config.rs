@@ -16,6 +16,8 @@ pub struct Config {
     pub retention: RetentionConfig,
     pub wal: WalConfig,
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub ha: HaConfig,
 }
 
 /// Server configuration
@@ -326,6 +328,179 @@ pub struct WalConfig {
     pub retention_hours: u64,
 }
 
+/// High Availability configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HaConfig {
+    /// Enable HA mode
+    #[serde(default = "default_ha_enabled")]
+    pub enabled: bool,
+
+    /// Node role: "master" or "slave"
+    #[serde(default = "default_ha_role")]
+    pub role: HaRole,
+
+    /// Unique node identifier
+    #[serde(default = "default_ha_node_id")]
+    pub node_id: String,
+
+    /// Replication settings
+    #[serde(default)]
+    pub replication: ReplicationConfig,
+
+    /// Heartbeat settings
+    #[serde(default)]
+    pub heartbeat: HeartbeatConfig,
+
+    /// Failover settings
+    #[serde(default)]
+    pub failover: FailoverConfig,
+}
+
+/// Node role in HA cluster
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HaRole {
+    Master,
+    Slave,
+}
+
+impl Default for HaRole {
+    fn default() -> Self {
+        HaRole::Master
+    }
+}
+
+/// Replication mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReplicationMode {
+    /// Wait for slave ACK before responding to client
+    Sync,
+    /// Fire and forget, don't wait for slave
+    Async,
+}
+
+impl Default for ReplicationMode {
+    fn default() -> Self {
+        ReplicationMode::Async
+    }
+}
+
+/// Replication configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplicationConfig {
+    /// Replication mode: "sync" or "async"
+    #[serde(default)]
+    pub mode: ReplicationMode,
+
+    /// Master: listen address for replication (e.g., "0.0.0.0:7003")
+    #[serde(default = "default_replication_listen_addr")]
+    pub listen_addr: String,
+
+    /// Slave: master address to connect to (e.g., "master:7003")
+    #[serde(default)]
+    pub master_addr: Option<String>,
+
+    /// Timeout for replication ACK in sync mode (ms)
+    #[serde(default = "default_replication_timeout_ms")]
+    pub timeout_ms: u64,
+
+    /// Reconnect interval when connection lost (seconds)
+    #[serde(default = "default_replication_reconnect_interval_secs")]
+    pub reconnect_interval_secs: u64,
+}
+
+impl Default for ReplicationConfig {
+    fn default() -> Self {
+        Self {
+            mode: ReplicationMode::default(),
+            listen_addr: default_replication_listen_addr(),
+            master_addr: None,
+            timeout_ms: default_replication_timeout_ms(),
+            reconnect_interval_secs: default_replication_reconnect_interval_secs(),
+        }
+    }
+}
+
+/// Heartbeat configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatConfig {
+    /// Heartbeat interval (seconds)
+    #[serde(default = "default_heartbeat_interval_secs")]
+    pub interval_secs: u64,
+
+    /// Heartbeat timeout (seconds) - how long to wait before considering master down
+    #[serde(default = "default_heartbeat_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+fn default_heartbeat_timeout_secs() -> u64 {
+    10
+}
+
+impl Default for HeartbeatConfig {
+    fn default() -> Self {
+        Self {
+            interval_secs: default_heartbeat_interval_secs(),
+            timeout_secs: default_heartbeat_timeout_secs(),
+        }
+    }
+}
+
+/// Failover mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FailoverMode {
+    Automatic,
+    Manual,
+    Disabled,
+}
+
+impl Default for FailoverMode {
+    fn default() -> Self {
+        FailoverMode::Automatic
+    }
+}
+
+/// Failover configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailoverConfig {
+    /// Failover mode: "automatic" or "manual"
+    #[serde(default)]
+    pub mode: FailoverMode,
+
+    /// Number of missed heartbeats before failover
+    #[serde(default = "default_failover_threshold")]
+    pub failure_threshold: u32,
+
+    /// Delay before promotion (allows master recovery)
+    #[serde(default = "default_promotion_delay_secs")]
+    pub promotion_delay_secs: u64,
+}
+
+impl Default for FailoverConfig {
+    fn default() -> Self {
+        Self {
+            mode: FailoverMode::default(),
+            failure_threshold: default_failover_threshold(),
+            promotion_delay_secs: default_promotion_delay_secs(),
+        }
+    }
+}
+
+impl Default for HaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_ha_enabled(),
+            role: default_ha_role(),
+            node_id: default_ha_node_id(),
+            replication: ReplicationConfig::default(),
+            heartbeat: HeartbeatConfig::default(),
+            failover: FailoverConfig::default(),
+        }
+    }
+}
+
 /// Authentication configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
@@ -574,6 +749,43 @@ fn default_auth_public_endpoints() -> Vec<String> {
     ]
 }
 
+// HA default functions
+fn default_ha_enabled() -> bool {
+    false
+}
+
+fn default_ha_role() -> HaRole {
+    HaRole::Master
+}
+
+fn default_ha_node_id() -> String {
+    format!("node-{}", std::process::id())
+}
+
+fn default_replication_listen_addr() -> String {
+    "0.0.0.0:7003".to_string()
+}
+
+fn default_replication_timeout_ms() -> u64 {
+    5000
+}
+
+fn default_replication_reconnect_interval_secs() -> u64 {
+    5
+}
+
+fn default_heartbeat_interval_secs() -> u64 {
+    5
+}
+
+fn default_failover_threshold() -> u32 {
+    3
+}
+
+fn default_promotion_delay_secs() -> u64 {
+    10
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -655,6 +867,7 @@ impl Default for Config {
                 password: default_auth_password(),
                 public_endpoints: default_auth_public_endpoints(),
             },
+            ha: HaConfig::default(),
         }
     }
 }
@@ -704,6 +917,11 @@ impl Config {
     /// Get MySQL server address
     pub fn mysql_addr(&self) -> String {
         format!("{}:{}", self.server.mysql_host, self.server.mysql_port)
+    }
+
+    /// Get replication server address
+    pub fn replication_addr(&self) -> String {
+        self.ha.replication.listen_addr.clone()
     }
 }
 
