@@ -163,24 +163,32 @@ run_test() {
 
     # Write to master
     echo "1. Writing to master..."
-    curl -s -X POST "http://localhost:$MASTER_HTTP/write/hatest" \
+    curl -s -w " (HTTP %{http_code})" -X POST "http://localhost:$MASTER_HTTP/write/hatest" \
         -d 'test,source=master value=42'
-    echo "   Done"
+    echo ""
 
-    # Wait
+    # Wait for replication
     echo "2. Waiting for replication..."
     sleep 2
 
-    # Query both
-    echo "3. Query master:"
-    curl -s "http://localhost:$MASTER_HTTP/query/hatest?sql=SELECT * FROM default.test" | jq .
+    # Flush both to persist data for querying
+    echo "3. Flushing data..."
+    curl -s -X POST "http://localhost:$MASTER_HTTP/flush"
+    curl -s -X POST "http://localhost:$SLAVE_HTTP/flush"
+    sleep 1
+
+    # Query both (use POST with SQL in body)
+    echo "4. Query master:"
+    curl -s -X POST "http://localhost:$MASTER_HTTP/query/hatest" \
+        -d "SELECT * FROM hatest.default.test" | jq .
 
     echo ""
-    echo "4. Query slave:"
-    curl -s "http://localhost:$SLAVE_HTTP/query/hatest?sql=SELECT * FROM default.test" | jq .
+    echo "5. Query slave:"
+    curl -s -X POST "http://localhost:$SLAVE_HTTP/query/hatest" \
+        -d "SELECT * FROM hatest.default.test" | jq .
 
     echo ""
-    echo "5. Try write to slave (should fail):"
+    echo "6. Try write to slave (should fail):"
     curl -s -w "HTTP %{http_code}\n" -X POST "http://localhost:$SLAVE_HTTP/write/hatest" \
         -d 'test,source=slave value=99'
 }

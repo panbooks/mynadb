@@ -251,24 +251,39 @@ test_replication() {
 
     # Write data to master
     echo "Writing data to master..."
-    curl -s -X POST "http://localhost:$MASTER_HTTP_PORT/write/testdb" \
+    WRITE_RESULT=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X POST "http://localhost:$MASTER_HTTP_PORT/write/testdb" \
         -d 'cpu,host=server1,region=us-east value=42.5
 cpu,host=server2,region=us-west value=38.2
 cpu,host=server3,region=eu-west value=45.0
 memory,host=server1 used=8589934592,total=17179869184
-memory,host=server2 used=4294967296,total=8589934592' > /dev/null
+memory,host=server2 used=4294967296,total=8589934592')
+    echo "Write result: $WRITE_RESULT"
 
     echo "Waiting for replication..."
-    sleep 3
+    sleep 2
 
-    # Query from master
+    # Flush both master and slave to persist data for querying
+    echo "Flushing data..."
+    curl -s -X POST "http://localhost:$MASTER_HTTP_PORT/flush"
+    curl -s -X POST "http://localhost:$SLAVE_HTTP_PORT/flush"
+    sleep 1
+
+    # List tables to verify data was written
+    echo -e "\n${YELLOW}Tables on master:${NC}"
+    curl -s "http://localhost:$MASTER_HTTP_PORT/tables/testdb"
+
+    # Query from master (use POST with SQL in body)
     echo -e "\n${YELLOW}Query from master:${NC}"
-    MASTER_RESULT=$(curl -s "http://localhost:$MASTER_HTTP_PORT/query/testdb?sql=SELECT COUNT(*) as cnt FROM default.cpu")
+    MASTER_RESULT=$(curl -s -X POST "http://localhost:$MASTER_HTTP_PORT/query/testdb" \
+        -d "SELECT COUNT(*) as cnt FROM testdb.default.cpu")
+    echo "Raw result: $MASTER_RESULT"
     echo "$MASTER_RESULT" | jq .
 
     # Query from slave
     echo -e "\n${YELLOW}Query from slave:${NC}"
-    SLAVE_RESULT=$(curl -s "http://localhost:$SLAVE_HTTP_PORT/query/testdb?sql=SELECT COUNT(*) as cnt FROM default.cpu")
+    SLAVE_RESULT=$(curl -s -X POST "http://localhost:$SLAVE_HTTP_PORT/query/testdb" \
+        -d "SELECT COUNT(*) as cnt FROM testdb.default.cpu")
+    echo "Raw result: $SLAVE_RESULT"
     echo "$SLAVE_RESULT" | jq .
 
     # Compare results
@@ -328,11 +343,22 @@ test_bulk_replication() {
     done
 
     echo "Waiting for replication..."
-    sleep 5
+    sleep 3
 
-    # Count on both sides
-    MASTER_COUNT=$(curl -s "http://localhost:$MASTER_HTTP_PORT/query/bulktest?sql=SELECT COUNT(*) as cnt FROM default.metric" | jq -r '.[0].cnt // 0')
-    SLAVE_COUNT=$(curl -s "http://localhost:$SLAVE_HTTP_PORT/query/bulktest?sql=SELECT COUNT(*) as cnt FROM default.metric" | jq -r '.[0].cnt // 0')
+    # Flush both master and slave to persist data for querying
+    echo "Flushing data..."
+    curl -s -X POST "http://localhost:$MASTER_HTTP_PORT/flush"
+    curl -s -X POST "http://localhost:$SLAVE_HTTP_PORT/flush"
+    sleep 1
+
+    # Count on both sides (use POST with SQL in body)
+    MASTER_RESULT=$(curl -s -X POST "http://localhost:$MASTER_HTTP_PORT/query/bulktest" \
+        -d "SELECT COUNT(*) as cnt FROM bulktest.default.metric")
+    SLAVE_RESULT=$(curl -s -X POST "http://localhost:$SLAVE_HTTP_PORT/query/bulktest" \
+        -d "SELECT COUNT(*) as cnt FROM bulktest.default.metric")
+
+    MASTER_COUNT=$(echo "$MASTER_RESULT" | jq -r '.[0].cnt // 0')
+    SLAVE_COUNT=$(echo "$SLAVE_RESULT" | jq -r '.[0].cnt // 0')
 
     echo "Master count: $MASTER_COUNT"
     echo "Slave count:  $SLAVE_COUNT"
@@ -341,6 +367,8 @@ test_bulk_replication() {
         echo -e "${GREEN}✓ Test 4 PASSED: All 100 points replicated${NC}"
     else
         echo -e "${RED}✗ Test 4 FAILED: Count mismatch (master: $MASTER_COUNT, slave: $SLAVE_COUNT)${NC}"
+        echo "Master raw: $MASTER_RESULT"
+        echo "Slave raw: $SLAVE_RESULT"
         return 1
     fi
 }
