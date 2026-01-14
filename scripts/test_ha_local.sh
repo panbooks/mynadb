@@ -68,9 +68,15 @@ create_master_config() {
 [server]
 http_port = $MASTER_HTTP_PORT
 flight_port = $MASTER_FLIGHT_PORT
+mysql_enabled = false
 
 [storage]
 data_dir = "$TEST_DIR/master/data"
+
+[schema]
+strategy = "service_as_schema"
+tag_keys = ["service"]
+default_name = "default"
 
 [logging]
 log_dir = "$TEST_DIR/master/logs"
@@ -113,9 +119,15 @@ create_slave_config() {
 [server]
 http_port = $SLAVE_HTTP_PORT
 flight_port = $SLAVE_FLIGHT_PORT
+mysql_enabled = false
 
 [storage]
 data_dir = "$TEST_DIR/slave/data"
+
+[schema]
+strategy = "service_as_schema"
+tag_keys = ["service"]
+default_name = "default"
 
 [logging]
 log_dir = "$TEST_DIR/slave/logs"
