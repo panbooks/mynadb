@@ -5,6 +5,7 @@ mod compactor;
 mod config;
 mod database_manager;
 mod flight_service;
+mod ha;
 mod line_protocol;
 mod logger;
 mod mysql_service;
@@ -350,8 +351,12 @@ fn start_wal_cleanup_task(wal: &Arc<wal::Wal>, config: &Config) {
 }
 
 /// Build the Axum router with all routes
-fn build_router(state: api::AppState, auth_middleware: Arc<auth::AuthMiddleware>) -> Router {
-    Router::new()
+fn build_router(
+    state: api::AppState,
+    ha_state: Option<ha::api::HaState>,
+    auth_middleware: Arc<auth::AuthMiddleware>,
+) -> Router {
+    let mut router = Router::new()
         .route("/", get(api::home))
         .route("/health", get(api::health))
         .route("/version", get(api::version_handler))
@@ -412,7 +417,20 @@ fn build_router(state: api::AppState, auth_middleware: Arc<auth::AuthMiddleware>
         // Series cardinality tracking
         .route("/pmc/:db", get(api::series_stats_handler))
         .fallback(api::log_request)
-        .with_state(state)
+        .with_state(state);
+
+    // Add HA routes if HA is enabled
+    if let Some(ha_st) = ha_state {
+        let ha_routes = Router::new()
+            .route("/ha/status", get(ha::api::ha_status_handler))
+            .route("/ha/promote", post(ha::api::ha_promote_handler))
+            .route("/ha/health", get(ha::api::ha_health_handler))
+            .route("/ha/is-master", get(ha::api::ha_is_master_handler))
+            .with_state(ha_st);
+        router = router.merge(ha_routes);
+    }
+
+    router
         .layer(axum::middleware::from_fn(auth::auth_middleware_fn))
         .layer(axum::Extension(auth_middleware))
 }
@@ -547,6 +565,33 @@ async fn main() {
         start_wal_cleanup_task(wal_arc, &config);
     }
 
+    // Initialize HA manager
+    let (ha_manager, ha_state, ha_entry_rx) = if config.ha.enabled {
+        info!(
+            "Initializing HA manager: role={:?}, node_id={}",
+            config.ha.role, config.ha.node_id
+        );
+        match ha::HaManager::new(&config.ha) {
+            Ok(mut manager) => {
+                // Take entry receiver before wrapping in Arc (for slave replay)
+                let entry_rx = manager.take_entry_receiver();
+                let ha_mgr = Arc::new(manager);
+                let ha_st = ha::api::HaState {
+                    ha_manager: ha_mgr.clone(),
+                };
+                (Some(ha_mgr), Some(ha_st), entry_rx)
+            }
+            Err(e) => {
+                error!("Failed to initialize HA manager: {}", e);
+                welcome!("⚠️  HA initialization failed: {}", e);
+                (None, None, None)
+            }
+        }
+    } else {
+        info!("HA is disabled");
+        (None, None, None)
+    };
+
     // Build application state
     let state = api::AppState {
         cache,
@@ -556,6 +601,7 @@ async fn main() {
         series_tracker,
         config: config.clone(),
         wal,
+        ha_manager: ha_manager.clone(),
     };
 
     // Initialize authentication
@@ -566,9 +612,85 @@ async fn main() {
         config.auth.username
     );
 
-    let app = build_router(state.clone(), auth_middleware);
+    let app = build_router(state.clone(), ha_state, auth_middleware);
 
     print_server_info(&config);
+
+    // Start HA services
+    if let Some(ref ha_mgr) = ha_manager {
+        info!("Starting HA services...");
+        let ha_mgr_clone = ha_mgr.clone();
+        tokio::spawn(async move {
+            if let Err(e) = ha_mgr_clone.start().await {
+                error!("HA service error: {}", e);
+            }
+        });
+        welcome!(
+            "✅ HA enabled: role={:?}, node_id={}",
+            config.ha.role,
+            config.ha.node_id
+        );
+    }
+
+    // Start HA slave replay task (applies replicated entries to local cache)
+    if let Some(mut entry_rx) = ha_entry_rx {
+        let cache_for_ha = state.cache.clone();
+        let series_tracker_for_ha = state.series_tracker.clone();
+        let query_engine_for_ha = state.query_engine.clone();
+        let wal_for_ha = state.wal.clone();
+        let schema_config = config.schema.clone();
+        let series_tracker_config = config.series_tracker.clone();
+
+        tokio::spawn(async move {
+            info!("HA slave replay task started");
+            while let Some(entry) = entry_rx.recv().await {
+                // Convert payload back to string (line protocol)
+                let line_protocol = match String::from_utf8(entry.payload.clone()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("HA replay: invalid UTF-8 in entry {}: {}", entry.sequence, e);
+                        continue;
+                    }
+                };
+
+                debug!(
+                    "HA replay: applying entry seq={} db={} size={}",
+                    entry.sequence,
+                    entry.db_name,
+                    line_protocol.len()
+                );
+
+                // Step 1: Write to local WAL for durability
+                if let Some(ref wal) = wal_for_ha {
+                    if let Err(e) = wal.log_data_write(&entry.db_name, &line_protocol).await {
+                        error!("HA replay: WAL write failed for seq={}: {}", entry.sequence, e);
+                        // Continue anyway - data will still be in cache
+                    }
+                }
+
+                // Step 2: Apply to local cache
+                match api::ingest_line_protocol_to_cache(
+                    &entry.db_name,
+                    &line_protocol,
+                    &cache_for_ha,
+                    Some(&series_tracker_for_ha),
+                    Some(&query_engine_for_ha),
+                    &schema_config,
+                    &series_tracker_config,
+                )
+                .await
+                {
+                    Ok(count) => {
+                        debug!("HA replay: applied {} points from seq={}", count, entry.sequence);
+                    }
+                    Err(e) => {
+                        error!("HA replay: failed to apply entry {}: {}", entry.sequence, e);
+                    }
+                }
+            }
+            info!("HA slave replay task stopped");
+        });
+    }
 
     // Start Arrow Flight server
     let flight_service = StatsFlightService::new(query_engine);
