@@ -47,6 +47,11 @@ data_dir = "$TEST_DIR/master/data"
 log_dir = "$TEST_DIR/master/logs"
 level = "debug"
 
+[schema]
+strategy = "service_as_schema"
+tag_keys = ["service"]
+default_name = "default"
+
 [cache]
 flush_interval_secs = 5
 
@@ -79,6 +84,11 @@ data_dir = "$TEST_DIR/slave/data"
 [logging]
 log_dir = "$TEST_DIR/slave/logs"
 level = "debug"
+
+[schema]
+strategy = "service_as_schema"
+tag_keys = ["service"]
+default_name = "default"
 
 [cache]
 flush_interval_secs = 5

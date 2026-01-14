@@ -1,20 +1,29 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use tracing::{error, info};
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default)]
     pub server: ServerConfig,
+    #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
     pub schema: SchemaConfig,
+    #[serde(default)]
     pub cache: CacheConfig,
+    #[serde(default)]
     pub compaction: CompactionConfig,
+    #[serde(default)]
     pub series_tracker: SeriesTrackerConfig,
+    #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
     pub retention: RetentionConfig,
+    #[serde(default)]
     pub wal: WalConfig,
+    #[serde(default)]
     pub auth: AuthConfig,
     #[serde(default)]
     pub ha: HaConfig,
@@ -786,87 +795,147 @@ fn default_promotion_delay_secs() -> u64 {
     10
 }
 
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            http_host: default_http_host(),
+            http_port: default_http_port(),
+            flight_host: default_flight_host(),
+            flight_port: default_flight_port(),
+            mysql_host: default_mysql_host(),
+            mysql_port: default_mysql_port(),
+            mysql_enabled: default_mysql_enabled(),
+        }
+    }
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            data_dir: default_data_dir(),
+            system_dir: default_system_dir(),
+        }
+    }
+}
+
+impl Default for SchemaConfig {
+    fn default() -> Self {
+        Self {
+            strategy: default_schema_strategy(),
+            tag_keys: default_schema_tag_keys(),
+            default_name: default_schema_name(),
+            prefix_numeric: default_schema_prefix_numeric(),
+        }
+    }
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            flush_interval_secs: default_cache_flush_interval(),
+            max_size_mb: default_cache_max_size_mb(),
+        }
+    }
+}
+
+impl Default for WalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_wal_enabled(),
+            sync_on_write: default_wal_sync_on_write(),
+            rotate_size_mb: default_wal_rotate_size_mb(),
+            cleanup_interval_secs: default_wal_cleanup_interval_secs(),
+            retention_hours: default_wal_retention_hours(),
+        }
+    }
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_auth_enabled(),
+            username: default_auth_username(),
+            password: default_auth_password(),
+            public_endpoints: default_auth_public_endpoints(),
+        }
+    }
+}
+
+impl Default for CompactionConfig {
+    fn default() -> Self {
+        Self {
+            min_files: default_compaction_min_files(),
+            major_min_files: default_compaction_major_min_files(),
+            target_file_size_mb: default_compaction_target_file_size_mb(),
+            max_level: default_compaction_max_level(),
+            interval_secs: default_compaction_interval_secs(),
+            full_compaction_enabled: default_full_compaction_enabled(),
+            full_compaction_hour: default_full_compaction_hour(),
+            full_compaction_interval_secs: default_full_compaction_interval_secs(),
+            full_compaction_target_size_mb: default_full_compaction_target_size_mb(),
+            max_concurrent_compactions: default_compaction_max_concurrent(),
+            full_compaction_max_concurrent: default_full_compaction_max_concurrent(),
+            read_rate_limit_mb_per_sec: default_compaction_read_rate_limit(),
+            write_rate_limit_mb_per_sec: default_compaction_write_rate_limit(),
+        }
+    }
+}
+
+impl Default for SeriesTrackerConfig {
+    fn default() -> Self {
+        Self {
+            track_only: default_series_track_only(),
+            flush_interval_secs: default_series_flush_interval(),
+            system_tags: vec![],
+            cache_retention_days: default_series_cache_retention_days(),
+            max_concurrent_tables: default_series_max_concurrent_tables(),
+            max_concurrent_files: default_series_max_concurrent_files(),
+            default_strategy: default_dedup_strategy(),
+            bloom_databases: vec![],
+            bloom: BloomConfig::default(),
+            bloom_custom: vec![],
+        }
+    }
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: default_log_level(),
+            log_dir: default_log_dir(),
+            file_prefix: default_log_file_prefix(),
+            rotation: default_log_rotation(),
+            max_files: default_log_max_files(),
+            json_format: default_log_json(),
+        }
+    }
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_retention_enabled(),
+            default_days: default_retention_days(),
+            interval_secs: default_retention_interval_secs(),
+            exclude_databases: default_retention_exclude_databases(),
+            exclude_tables: default_retention_exclude_tables(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
-            server: ServerConfig {
-                http_host: default_http_host(),
-                http_port: default_http_port(),
-                flight_host: default_flight_host(),
-                flight_port: default_flight_port(),
-                mysql_host: default_mysql_host(),
-                mysql_port: default_mysql_port(),
-                mysql_enabled: default_mysql_enabled(),
-            },
-            storage: StorageConfig {
-                data_dir: default_data_dir(),
-                system_dir: default_system_dir(),
-            },
-            schema: SchemaConfig {
-                strategy: default_schema_strategy(),
-                tag_keys: default_schema_tag_keys(),
-                default_name: default_schema_name(),
-                prefix_numeric: default_schema_prefix_numeric(),
-            },
-            cache: CacheConfig {
-                flush_interval_secs: default_cache_flush_interval(),
-                max_size_mb: default_cache_max_size_mb(),
-            },
-            compaction: CompactionConfig {
-                min_files: default_compaction_min_files(),
-                major_min_files: default_compaction_major_min_files(),
-                target_file_size_mb: default_compaction_target_file_size_mb(),
-                max_level: default_compaction_max_level(),
-                interval_secs: default_compaction_interval_secs(),
-                full_compaction_enabled: default_full_compaction_enabled(),
-                full_compaction_hour: default_full_compaction_hour(),
-                full_compaction_interval_secs: default_full_compaction_interval_secs(),
-                full_compaction_target_size_mb: default_full_compaction_target_size_mb(),
-                max_concurrent_compactions: default_compaction_max_concurrent(),
-                full_compaction_max_concurrent: default_full_compaction_max_concurrent(),
-                read_rate_limit_mb_per_sec: default_compaction_read_rate_limit(),
-                write_rate_limit_mb_per_sec: default_compaction_write_rate_limit(),
-            },
-            series_tracker: SeriesTrackerConfig {
-                track_only: default_series_track_only(),
-                flush_interval_secs: default_series_flush_interval(),
-                system_tags: vec![],
-                cache_retention_days: default_series_cache_retention_days(),
-                max_concurrent_tables: default_series_max_concurrent_tables(),
-                max_concurrent_files: default_series_max_concurrent_files(),
-                default_strategy: default_dedup_strategy(),
-                bloom_databases: vec![],
-                bloom: BloomConfig::default(),
-                bloom_custom: vec![],
-            },
-            logging: LoggingConfig {
-                level: default_log_level(),
-                log_dir: default_log_dir(),
-                file_prefix: default_log_file_prefix(),
-                rotation: default_log_rotation(),
-                max_files: default_log_max_files(),
-                json_format: default_log_json(),
-            },
-            retention: RetentionConfig {
-                enabled: default_retention_enabled(),
-                default_days: default_retention_days(),
-                interval_secs: default_retention_interval_secs(),
-                exclude_databases: default_retention_exclude_databases(),
-                exclude_tables: default_retention_exclude_tables(),
-            },
-            wal: WalConfig {
-                enabled: default_wal_enabled(),
-                sync_on_write: default_wal_sync_on_write(),
-                rotate_size_mb: default_wal_rotate_size_mb(),
-                cleanup_interval_secs: default_wal_cleanup_interval_secs(),
-                retention_hours: default_wal_retention_hours(),
-            },
-            auth: AuthConfig {
-                enabled: default_auth_enabled(),
-                username: default_auth_username(),
-                password: default_auth_password(),
-                public_endpoints: default_auth_public_endpoints(),
-            },
+            server: ServerConfig::default(),
+            storage: StorageConfig::default(),
+            schema: SchemaConfig::default(),
+            cache: CacheConfig::default(),
+            compaction: CompactionConfig::default(),
+            series_tracker: SeriesTrackerConfig::default(),
+            logging: LoggingConfig::default(),
+            retention: RetentionConfig::default(),
+            wal: WalConfig::default(),
+            auth: AuthConfig::default(),
             ha: HaConfig::default(),
         }
     }
@@ -890,15 +959,16 @@ impl Config {
         match Self::from_file(path) {
             Ok(config) => {
                 // Note: This is called before logging is initialized, so we use eprintln
-                // It will only show during startup before logging takes over
-                info!("Loaded configuration from: {}", path);
+                eprintln!("[config] Loaded configuration from: {}", path);
                 config
             }
             Err(e) => {
-                error!(
-                    "Could not load config file, path: {}, error: {}. Using default configuration",
+                // Use eprintln since logging is not yet initialized
+                eprintln!(
+                    "[config] ERROR: Could not load config file '{}': {}",
                     path, e
                 );
+                eprintln!("[config] Using default configuration");
                 Config::default()
             }
         }
