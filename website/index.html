@@ -185,6 +185,24 @@
           <h3>Retention Policies</h3>
           <p>Automatic data expiration and cleanup based on configurable retention policies.</p>
         </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128279;</div>
+          <h3>High Availability</h3>
+          <p>Master-slave replication with automatic failover for fault tolerance and read scaling.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128260;</div>
+          <h3>Zero Downtime Failover</h3>
+          <p>Promote slave to master seamlessly. Manual or automatic failover with no data loss.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128272;</div>
+          <h3>WAL Replication</h3>
+          <p>Real-time Write-Ahead Log streaming ensures data durability across nodes.</p>
+        </div>
       </div>
     </div>
   </section>
@@ -220,10 +238,15 @@
                          |  (Columnar)      |
                          +--------+---------+
                                   |
-                         +--------v---------+
-                         |    Compactor     |
-                         |  (LSM Multi-Level)|
-                         +------------------+
+           +-------------+--------v---------+-------------+
+           |             |    Compactor     |             |
+           |             |  (LSM Multi-Level)|            |
+           |             +------------------+             |
+           |                                              |
+   +-------v--------+    WAL Replication    +-------v--------+
+   |     MASTER     |---------------------->|     SLAVE      |
+   |   (Active)     |     Real-time        |   (Standby)    |
+   +----------------+                       +----------------+
         </pre>
       </div>
 
@@ -243,6 +266,10 @@
         <div class="arch-card">
           <h4>&#9992; Arrow Flight</h4>
           <p>gRPC streaming interface for high-performance data transfer to clients.</p>
+        </div>
+        <div class="arch-card">
+          <h4>&#128279; High Availability</h4>
+          <p>Master-slave replication with WAL streaming for fault tolerance and zero downtime failover.</p>
         </div>
       </div>
     </div>
@@ -396,6 +423,13 @@ memory,host=server01 used=16.5,total=32.0
           <p>All configuration options explained with examples.</p>
           <span class="card-link">Read more <span>&#8594;</span></span>
         </a>
+
+        <a href="docs/high-availability.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>High Availability</h3>
+          <p>Master-slave replication, failover, and HA configuration.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
       </div>
     </div>
   </section>
@@ -419,6 +453,7 @@ memory,host=server01 used=16.5,total=32.0
             <li><a href="docs/architecture.html">Architecture</a></li>
             <li><a href="docs/guides.html">Guides</a></li>
             <li><a href="docs/api.html">API Reference</a></li>
+            <li><a href="docs/high-availability.html">High Availability</a></li>
           </ul>
         </div>
 
