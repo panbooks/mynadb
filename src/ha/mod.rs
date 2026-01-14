@@ -7,6 +7,9 @@ pub mod failover;
 pub mod replication;
 pub mod state;
 
+#[cfg(test)]
+mod tests;
+
 pub use failover::{FailoverManager, PromotionResult, PromotionStateInfo, Promoter};
 pub use replication::{ReplicatedWalEntry, ReplicationManager, ReplicationStats};
 pub use state::{AtomicRole, AtomicState, HaState};
