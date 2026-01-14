@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service FAQ - Frequently asked questions and answers">
+  <title>FAQ - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Guides</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">All Guides</a></li>
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="retention.html">Retention Policies</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="high-availability.html">High Availability</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>API Reference</h4>
+        <ul class="sidebar-nav">
+          <li><a href="api.html">HTTP API</a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html" class="active">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>Frequently Asked Questions</h1>
+
+      <p class="lead">
+        Common questions about Stats Service, its features, and best practices for time series data management.
+      </p>
+
+      <h2 id="general">General</h2>
+
+      <h3>What is Stats Service?</h3>
+      <p>
+        Stats Service is a high-performance time series database written in Rust. It ingests data via
+        InfluxDB Line Protocol, stores it in Apache Parquet format, and provides SQL queries through
+        Apache DataFusion. It's designed for metrics, monitoring, and analytics workloads.
+      </p>
+
+      <h3>Is Stats Service compatible with InfluxDB?</h3>
+      <p>
+        Stats Service uses InfluxDB Line Protocol for data ingestion, making it compatible with many
+        existing InfluxDB clients and tools. However, the query interface uses SQL instead of InfluxQL
+        or Flux, providing more flexibility and familiarity for most users.
+      </p>
+
+      <h3>What are the system requirements?</h3>
+      <p>Stats Service runs on Linux, macOS, and Windows with minimal requirements:</p>
+      <ul>
+        <li><strong>CPU:</strong> 2+ cores recommended</li>
+        <li><strong>Memory:</strong> 512MB minimum, 2GB+ recommended for production</li>
+        <li><strong>Disk:</strong> SSD recommended for best performance</li>
+        <li><strong>Rust:</strong> 1.70+ for building from source</li>
+      </ul>
+
+      <h2 id="data">Data & Storage</h2>
+
+      <h3>What storage format does Stats Service use?</h3>
+      <p>
+        Stats Service stores data in Apache Parquet format, a columnar storage format optimized for
+        analytical queries. Parquet provides excellent compression ratios and fast query performance
+        for time series data.
+      </p>
+
+      <h3>How is data partitioned?</h3>
+      <p>
+        Data is partitioned by date (<code>date=YYYY-MM-DD</code>) within each table. This enables
+        efficient time-range queries and simple retention management by deleting entire date partitions.
+      </p>
+
+      <h3>What's the difference between ServiceAsSchema and ServiceAsTable?</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Strategy</th>
+              <th>Schema</th>
+              <th>Table</th>
+              <th>Best For</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>ServiceAsSchema</code></td>
+              <td>Service tag value</td>
+              <td>Measurement name</td>
+              <td>Multiple measurements per service</td>
+            </tr>
+            <tr>
+              <td><code>ServiceAsTable</code></td>
+              <td>Fixed "default"</td>
+              <td>Service tag value</td>
+              <td>Service-centric querying</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>How long is data retained?</h3>
+      <p>
+        Retention is configurable. By default, data is retained for 7 days. You can adjust this
+        in <code>config.toml</code> or manually trigger retention via the API:
+      </p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># config.toml</span>
+[retention]
+enabled = true
+default_days = 30    <span class="token-comment"># Keep data for 30 days</span></code></pre>
+        </div>
+      </div>
+
+      <h2 id="queries">Queries</h2>
+
+      <h3>What query language does Stats Service support?</h3>
+      <p>
+        Stats Service supports standard SQL via Apache DataFusion. This includes SELECT, WHERE,
+        GROUP BY, ORDER BY, JOIN, and aggregate functions. See the
+        <a href="sql-queries.html">SQL Queries guide</a> for details.
+      </p>
+
+      <h3>Why do I need to call /flush before querying new data?</h3>
+      <p>
+        Stats Service buffers incoming data in memory for performance. Data is periodically flushed
+        to disk (default: every 30 seconds). Call <code>/flush</code> to immediately persist buffered
+        data if you need to query it right away.
+      </p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Force flush before querying</span>
+curl -X POST http://localhost:7000/flush
+curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu LIMIT 10'</code></pre>
+        </div>
+      </div>
+
+      <h3>How do I query across multiple tables?</h3>
+      <p>Use standard SQL JOINs:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-keyword">SELECT</span> c.host, c.usage, m.available
+<span class="token-keyword">FROM</span> cpu c
+<span class="token-keyword">JOIN</span> memory m <span class="token-keyword">ON</span> c.host = m.host <span class="token-keyword">AND</span> c.timestamp = m.timestamp
+<span class="token-keyword">WHERE</span> c.timestamp > now() - <span class="token-keyword">INTERVAL</span> <span class="token-string">'1 hour'</span></code></pre>
+        </div>
+      </div>
+
+      <h3>What's the timestamp format?</h3>
+      <p>
+        Timestamps are stored as nanoseconds since Unix epoch (19-digit integers). When writing data,
+        you can omit the timestamp and the server will use the current time.
+      </p>
+
+      <h2 id="performance">Performance</h2>
+
+      <h3>How can I improve query performance?</h3>
+      <ul>
+        <li><strong>Use LIMIT:</strong> Always add LIMIT for exploratory queries</li>
+        <li><strong>Filter on timestamp:</strong> Time-based filters leverage partitioning</li>
+        <li><strong>Run compaction:</strong> Reduces file count and improves scan efficiency</li>
+        <li><strong>Use Arrow Flight:</strong> Faster than HTTP for large result sets</li>
+      </ul>
+
+      <h3>How can I improve write performance?</h3>
+      <ul>
+        <li><strong>Batch writes:</strong> Send multiple points per request</li>
+        <li><strong>Increase flush interval:</strong> Reduce disk I/O frequency</li>
+        <li><strong>Use SSD storage:</strong> Faster writes and compaction</li>
+      </ul>
+
+      <h3>What is compaction and when should I run it?</h3>
+      <p>
+        Compaction merges small Parquet files into larger ones, improving query performance and
+        reducing storage overhead. Stats Service runs compaction automatically, but you can also
+        trigger it manually:
+      </p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Compact all tables in a database</span>
+curl -X POST http://localhost:7000/compact/mydb
+
+<span class="token-comment"># Compact a specific table</span>
+curl -X POST http://localhost:7000/compact/mydb/cpu</code></pre>
+        </div>
+      </div>
+
+      <h2 id="api">API</h2>
+
+      <h3>What's the difference between HTTP API and Arrow Flight?</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th>HTTP API</th>
+              <th>Arrow Flight</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Protocol</td>
+              <td>HTTP/JSON</td>
+              <td>gRPC/Arrow</td>
+            </tr>
+            <tr>
+              <td>Best for</td>
+              <td>Simple queries, writes</td>
+              <td>Large result sets</td>
+            </tr>
+            <tr>
+              <td>Streaming</td>
+              <td>No</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td>Client support</td>
+              <td>Any HTTP client</td>
+              <td>Arrow Flight clients</td>
+            </tr>
+            <tr>
+              <td>Port</td>
+              <td>7000 (default)</td>
+              <td>7001 (default)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Can I use DataFusion CLI with Stats Service?</h3>
+      <p>
+        Yes! Stats Service's Arrow Flight interface is compatible with DataFusion CLI:
+      </p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>datafusion-cli --host localhost --port 7001</code></pre>
+        </div>
+      </div>
+
+      <h2 id="operations">Operations</h2>
+
+      <h3>How do I back up my data?</h3>
+      <p>
+        Since data is stored as Parquet files, you can back up the entire <code>data_dir</code>
+        directory. For consistency, either stop the service or call <code>/flush</code> before
+        backing up.
+      </p>
+
+      <h3>Can I run multiple Stats Service instances?</h3>
+      <p>
+        Yes, with High Availability mode. Configure a master-slave setup for replication and
+        automatic failover. See the <a href="high-availability.html">High Availability guide</a>.
+      </p>
+
+      <h3>How do I monitor Stats Service?</h3>
+      <p>Use the built-in endpoints:</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Health check</span>
+curl http://localhost:7000/health
+
+<span class="token-comment"># Cache and write statistics</span>
+curl http://localhost:7000/stats
+
+<span class="token-comment"># List tables</span>
+curl http://localhost:7000/tables/mydb</code></pre>
+        </div>
+      </div>
+
+      <h2 id="migration">Migration</h2>
+
+      <h3>Can I migrate from InfluxDB?</h3>
+      <p>
+        Yes. Since Stats Service uses InfluxDB Line Protocol, you can export data from InfluxDB
+        and replay it to Stats Service. Tools like Telegraf can write to both simultaneously
+        during migration.
+      </p>
+
+      <h3>Can I import existing Parquet files?</h3>
+      <p>
+        Yes, place Parquet files in the appropriate directory structure
+        (<code>data_dir/catalog/schema/table/date=YYYY-MM-DD/</code>) and restart the service.
+        Ensure the schema matches the expected format.
+      </p>
+
+      <h2>Still Have Questions?</h2>
+
+      <div class="cards-grid">
+        <a href="troubleshooting.html" class="card">
+          <div class="card-icon">&#128295;</div>
+          <h3>Troubleshooting</h3>
+          <p>Solutions to common issues.</p>
+          <span class="card-link">View <span>&#8594;</span></span>
+        </a>
+
+        <a href="https://github.com/anthropics/stats-service/issues" class="card" target="_blank">
+          <div class="card-icon">&#128172;</div>
+          <h3>GitHub Issues</h3>
+          <p>Ask questions or report bugs.</p>
+          <span class="card-link">Open <span>&#8594;</span></span>
+        </a>
+
+        <a href="examples.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>Examples</h3>
+          <p>Working code examples.</p>
+          <span class="card-link">View <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>
