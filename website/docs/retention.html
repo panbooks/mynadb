@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service Retention Policies - Automatic data expiration and partition management">
+  <title>Retention Policies - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Guides</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">All Guides</a></li>
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="retention.html" class="active">Retention Policies</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="high-availability.html">High Availability</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>Retention Policies</h1>
+
+      <p>
+        Stats Service automatically manages disk space by deleting old date-partitioned data.
+        Configure retention policies to automatically expire data after a specified number of days,
+        or manually trigger retention via the API.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128197; Date-Based Partitions</div>
+        <p>
+          Retention works on date partitions (<code>date=YYYY-MM-DD/</code>). Data is stored
+          in daily partitions, making it efficient to delete entire days of data at once.
+        </p>
+      </div>
+
+      <h2 id="configuration">Configuration</h2>
+
+      <p>
+        Configure automatic retention in <code>config.toml</code>:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[retention]
+<span class="token-comment"># Enable automatic background retention</span>
+enabled = true
+
+<span class="token-comment"># Delete partitions older than N days</span>
+default_days = 7
+
+<span class="token-comment"># How often to check for expired data (seconds)</span>
+interval_secs = 3600
+
+<span class="token-comment"># Optional: Databases to exclude from retention</span>
+exclude_databases = ["_system", "archive"]
+
+<span class="token-comment"># Optional: Specific tables to exclude (catalog.schema.table)</span>
+exclude_tables = ["mydb.default.important_metrics"]</code></pre>
+        </div>
+      </div>
+
+      <h3>Configuration Options</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Option</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>enabled</code></td>
+            <td>bool</td>
+            <td><code>false</code></td>
+            <td>Enable/disable automatic retention</td>
+          </tr>
+          <tr>
+            <td><code>default_days</code></td>
+            <td>u32</td>
+            <td><code>7</code></td>
+            <td>Delete data older than N days</td>
+          </tr>
+          <tr>
+            <td><code>interval_secs</code></td>
+            <td>u64</td>
+            <td><code>3600</code></td>
+            <td>Background check interval (seconds)</td>
+          </tr>
+          <tr>
+            <td><code>exclude_databases</code></td>
+            <td>array</td>
+            <td><code>[]</code></td>
+            <td>Databases to skip during retention</td>
+          </tr>
+          <tr>
+            <td><code>exclude_tables</code></td>
+            <td>array</td>
+            <td><code>[]</code></td>
+            <td>Specific tables to skip (fully qualified)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2 id="how-it-works">How It Works</h2>
+
+      <p>
+        The retention manager runs as a background task and performs these steps:
+      </p>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">&#128269;</div>
+          <h4>1. Scan Storage</h4>
+          <p>Scans all catalogs, schemas, and tables in the data directory</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128197;</div>
+          <h4>2. Find Partitions</h4>
+          <p>Discovers date partitions (<code>date=YYYY-MM-DD/</code>) in each table</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128344;</div>
+          <h4>3. Check Age</h4>
+          <p>Compares partition dates against <code>default_days</code> threshold</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128465;</div>
+          <h4>4. Delete Old Data</h4>
+          <p>Removes entire partition directories for expired data</p>
+        </div>
+      </div>
+
+      <h3>Storage Structure</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>data/
+└── mydb/                           # Catalog (database)
+    └── default/                    # Schema
+        └── cpu/                    # Table
+            ├── date=2024-01-01/    # Partition (7+ days old - DELETE)
+            │   └── L0_xxx.parquet
+            ├── date=2024-01-05/    # Partition (3 days old - KEEP)
+            │   └── L0_xxx.parquet
+            └── date=2024-01-08/    # Partition (today - KEEP)
+                └── L0_xxx.parquet</code></pre>
+        </div>
+      </div>
+
+      <h2 id="api">Retention API</h2>
+
+      <p>
+        Use the REST API for manual retention operations on specific tables.
+      </p>
+
+      <h3>Delete by Age</h3>
+
+      <p>Delete partitions older than a specified number of days:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Delete partitions older than 30 days</span>
+curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"older_than_days": 30}'</code></pre>
+        </div>
+      </div>
+
+      <h4>Response</h4>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "status": "ok",
+  "table": "mydb.default.cpu",
+  "partitions_deleted": 5,
+  "bytes_freed": 1048576000,
+  "cutoff_date": "2023-12-08"
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Delete Before Date</h3>
+
+      <p>Delete partitions before a specific date:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Delete partitions before January 1, 2024</span>
+curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"before_date": "2024-01-01"}'</code></pre>
+        </div>
+      </div>
+
+      <h3>List Partitions</h3>
+
+      <p>View existing partitions before running retention:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># List all partitions for a table</span>
+curl http://localhost:7000/partitions/mydb/default/cpu</code></pre>
+        </div>
+      </div>
+
+      <h4>Response</h4>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "catalog": "mydb",
+  "schema": "default",
+  "table": "cpu",
+  "partitions": [
+    {
+      "date": "2024-01-01",
+      "files": 3,
+      "size_bytes": 10485760
+    },
+    {
+      "date": "2024-01-05",
+      "files": 2,
+      "size_bytes": 8388608
+    },
+    {
+      "date": "2024-01-08",
+      "files": 1,
+      "size_bytes": 2097152
+    }
+  ]
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Delete Specific Partition</h3>
+
+      <p>Delete a single partition by date:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Delete specific date partition</span>
+curl -X DELETE http://localhost:7000/partitions/mydb/default/cpu/2024-01-01</code></pre>
+        </div>
+      </div>
+
+      <h2 id="examples">Example Configurations</h2>
+
+      <h3>Short-Term Metrics (1 Week)</h3>
+
+      <p>For high-frequency metrics where you only need recent data:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[retention]
+enabled = true
+default_days = 7
+interval_secs = 3600  <span class="token-comment"># Check hourly</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Medium-Term Analytics (30 Days)</h3>
+
+      <p>For dashboards and trend analysis:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[retention]
+enabled = true
+default_days = 30
+interval_secs = 86400  <span class="token-comment"># Check daily</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Long-Term Archive (1 Year)</h3>
+
+      <p>For compliance and historical analysis:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[retention]
+enabled = true
+default_days = 365
+interval_secs = 86400  <span class="token-comment"># Check daily</span>
+exclude_databases = ["archive"]  <span class="token-comment"># Keep archive forever</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Multi-Tier Retention</h3>
+
+      <p>
+        For different retention periods per table, use the API to set up custom
+        retention schedules via cron jobs:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">#!/bin/bash</span>
+<span class="token-comment"># retention_cron.sh - Run daily via cron</span>
+
+<span class="token-comment"># High-frequency metrics: 7 days</span>
+curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" -d '{"older_than_days": 7}'
+
+curl -X POST http://localhost:7000/retention/mydb/default/memory \
+  -H "Content-Type: application/json" -d '{"older_than_days": 7}'
+
+<span class="token-comment"># Business metrics: 90 days</span>
+curl -X POST http://localhost:7000/retention/mydb/default/orders \
+  -H "Content-Type: application/json" -d '{"older_than_days": 90}'
+
+<span class="token-comment"># Audit logs: 1 year</span>
+curl -X POST http://localhost:7000/retention/mydb/default/audit \
+  -H "Content-Type: application/json" -d '{"older_than_days": 365}'</code></pre>
+        </div>
+      </div>
+
+      <h2 id="monitoring">Monitoring Retention</h2>
+
+      <h3>Log Output</h3>
+
+      <p>
+        The retention manager logs its activity. Enable info-level logging to monitor:
+      </p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[logging]
+level = "info"
+
+<span class="token-comment"># Log output:</span>
+<span class="token-comment"># INFO retention: Starting retention scan</span>
+<span class="token-comment"># INFO retention: Scanning catalog=mydb</span>
+<span class="token-comment"># INFO retention: Deleted 3 partitions from mydb.default.cpu, freed 15.5 MB</span>
+<span class="token-comment"># INFO retention: Retention scan complete: 5 partitions deleted, 42.3 MB freed</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Disk Usage Monitoring</h3>
+
+      <p>Monitor disk usage before and after retention:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Check data directory size</span>
+du -sh /data0/stats/data/
+
+<span class="token-comment"># Check size per database</span>
+du -sh /data0/stats/data/*/
+
+<span class="token-comment"># Check size per table</span>
+du -sh /data0/stats/data/mydb/default/*/</code></pre>
+        </div>
+      </div>
+
+      <h2 id="best-practices">Best Practices</h2>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#9989; Do</div>
+        <ul>
+          <li>Start with automatic retention enabled</li>
+          <li>Set <code>interval_secs</code> appropriately (hourly for short retention, daily for long)</li>
+          <li>Monitor disk usage and adjust <code>default_days</code> as needed</li>
+          <li>Use exclusions for tables that need longer retention</li>
+          <li>Test retention on non-production data first</li>
+        </ul>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; Don't</div>
+        <ul>
+          <li>Set <code>interval_secs</code> too low (causes unnecessary disk I/O)</li>
+          <li>Forget to exclude critical historical tables</li>
+          <li>Run manual retention during peak query times</li>
+          <li>Delete partitions that are still being written to (current date)</li>
+        </ul>
+      </div>
+
+      <h3>Capacity Planning</h3>
+
+      <p>
+        Calculate expected storage based on your retention policy:
+      </p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Example calculation:</span>
+<span class="token-comment"># Daily data volume: 10 GB</span>
+<span class="token-comment"># Retention: 7 days</span>
+<span class="token-comment"># Expected storage: 10 GB x 7 = 70 GB</span>
+<span class="token-comment"># Add 20% buffer: 84 GB recommended</span></code></pre>
+        </div>
+      </div>
+
+      <h2 id="troubleshooting">Troubleshooting</h2>
+
+      <h3>Retention Not Running</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Check if retention is enabled in config</span>
+grep -A 5 '\[retention\]' config.toml
+
+<span class="token-comment"># Should show:</span>
+<span class="token-comment"># [retention]</span>
+<span class="token-comment"># enabled = true</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Data Not Being Deleted</h3>
+
+      <ul>
+        <li>Check if the table is in <code>exclude_tables</code></li>
+        <li>Verify partition dates are older than <code>default_days</code></li>
+        <li>Ensure partitions follow the <code>date=YYYY-MM-DD/</code> format</li>
+      </ul>
+
+      <h3>Permission Errors</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Check file permissions</span>
+ls -la /data0/stats/data/mydb/default/cpu/
+
+<span class="token-comment"># Ensure stats-service user can delete</span>
+chown -R statsservice:statsservice /data0/stats/data/</code></pre>
+        </div>
+      </div>
+
+      <h3>Disk Space Not Freed</h3>
+
+      <p>
+        If disk space isn't freed after deletion, the files may be held open:
+      </p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Check for deleted but open files</span>
+lsof +D /data0/stats/data/ | grep deleted
+
+<span class="token-comment"># Restart service to release file handles</span>
+systemctl restart stats-service</code></pre>
+        </div>
+      </div>
+
+      <h2 id="ha-considerations">High Availability Considerations</h2>
+
+      <p>
+        When running in Master-Slave HA mode, retention has special considerations:
+      </p>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; HA Retention Rules</div>
+        <ul>
+          <li><strong>Master only:</strong> Retention should only run on the master node</li>
+          <li><strong>Slave follows:</strong> Slaves receive retention operations via WAL replication</li>
+          <li><strong>Same config:</strong> Use identical retention config on all nodes</li>
+          <li><strong>After failover:</strong> Verify retention is running on the new master</li>
+        </ul>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Master config</span>
+[ha]
+enabled = true
+role = "master"
+
+[retention]
+enabled = true      <span class="token-comment"># Retention runs on master</span>
+default_days = 7
+
+<span class="token-comment"># Slave config</span>
+[ha]
+enabled = true
+role = "slave"
+
+[retention]
+enabled = false     <span class="token-comment"># Disable on slave - replicated from master</span></code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128712; Related Guides</div>
+        <p>
+          <a href="compaction.html">Compaction</a> - Understand how compaction affects storage<br>
+          <a href="high-availability.html">High Availability</a> - HA setup and configuration<br>
+          <a href="configuration.html">Configuration</a> - Full configuration reference
+        </p>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

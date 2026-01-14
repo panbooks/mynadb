@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Stats Service Line Protocol - InfluxDB Line Protocol format for writing time series data">
+  <title>Line Protocol - Stats Service</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">S</span>
+        Stats Service
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Guides</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">All Guides</a></li>
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="line-protocol.html" class="active">Line Protocol</a></li>
+          <li><a href="retention.html">Retention Policies</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="high-availability.html">High Availability</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="api.html">API Reference</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>InfluxDB Line Protocol</h1>
+
+      <p>
+        Stats Service uses the InfluxDB Line Protocol for data ingestion. This text-based format
+        is simple, human-readable, and efficient for writing time series data.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Compatibility</div>
+        <p>
+          Stats Service is compatible with InfluxDB Line Protocol v1. If you're already using
+          InfluxDB, Telegraf, or other tools that output Line Protocol, you can send data directly
+          to Stats Service with minimal changes.
+        </p>
+      </div>
+
+      <h2>Line Protocol Syntax</h2>
+
+      <p>Each line represents a single data point with the following format:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">syntax</span>
+        </div>
+        <div class="code-content">
+          <pre><code>&lt;measurement&gt;[,&lt;tag_key&gt;=&lt;tag_value&gt;...] &lt;field_key&gt;=&lt;field_value&gt;[,&lt;field_key&gt;=&lt;field_value&gt;...] [&lt;timestamp&gt;]</code></pre>
+        </div>
+      </div>
+
+      <h3>Components</h3>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Required</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>measurement</code></td>
+            <td>Yes</td>
+            <td>The name of the measurement (like a table name)</td>
+          </tr>
+          <tr>
+            <td><code>tags</code></td>
+            <td>No</td>
+            <td>Key-value pairs for metadata (indexed, used for filtering)</td>
+          </tr>
+          <tr>
+            <td><code>fields</code></td>
+            <td>Yes</td>
+            <td>Key-value pairs for actual data values</td>
+          </tr>
+          <tr>
+            <td><code>timestamp</code></td>
+            <td>No</td>
+            <td>Unix timestamp in nanoseconds (defaults to server time)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Basic Examples</h2>
+
+      <h3>Simple Data Point</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">line-protocol</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>cpu usage=75.5</code></pre>
+        </div>
+      </div>
+
+      <p>This creates a data point in the <code>cpu</code> measurement with a single field <code>usage</code>.</p>
+
+      <h3>With Tags</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>cpu,host=server01,region=us-west usage=75.5,temperature=45</code></pre>
+        </div>
+      </div>
+
+      <p>Tags are comma-separated key-value pairs after the measurement name. They're used for filtering and grouping.</p>
+
+      <h3>With Timestamp</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>cpu,host=server01 usage=75.5 1609459200000000000</code></pre>
+        </div>
+      </div>
+
+      <p>The timestamp is in nanoseconds since Unix epoch (January 1, 1970).</p>
+
+      <h3>Multiple Fields</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>system,host=server01 cpu_usage=75.5,memory_used=8589934592,disk_free=107374182400</code></pre>
+        </div>
+      </div>
+
+      <h2>Data Types</h2>
+
+      <h3>Field Value Types</h3>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Syntax</th>
+            <th>Example</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Float</td>
+            <td>Plain number or with decimal</td>
+            <td><code>value=82.5</code> or <code>value=82</code></td>
+          </tr>
+          <tr>
+            <td>Integer</td>
+            <td>Number with <code>i</code> suffix</td>
+            <td><code>count=100i</code></td>
+          </tr>
+          <tr>
+            <td>String</td>
+            <td>Quoted with double quotes</td>
+            <td><code>status="running"</code></td>
+          </tr>
+          <tr>
+            <td>Boolean</td>
+            <td><code>true</code>/<code>false</code>, <code>t</code>/<code>f</code>, <code>TRUE</code>/<code>FALSE</code></td>
+            <td><code>active=true</code></td>
+          </tr>
+          <tr>
+            <td>Unsigned Integer</td>
+            <td>Number with <code>u</code> suffix</td>
+            <td><code>bytes=1024u</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Examples by Type</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">line-protocol</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Float (default for numbers)</span>
+temperature value=23.5
+
+<span class="token-comment"># Integer</span>
+requests count=1000i
+
+<span class="token-comment"># String</span>
+event message="Server started successfully"
+
+<span class="token-comment"># Boolean</span>
+status healthy=true
+
+<span class="token-comment"># Unsigned integer</span>
+network bytes_sent=1073741824u
+
+<span class="token-comment"># Mixed types in one line</span>
+server,host=web01 cpu=75.5,memory=8192i,status="ok",active=true</code></pre>
+        </div>
+      </div>
+
+      <h2>Writing Data via API</h2>
+
+      <h3>Single Line</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/write/mydb \
+  -d 'cpu,host=server01,region=us-west usage=75.5,temperature=45'</code></pre>
+        </div>
+      </div>
+
+      <h3>Multiple Lines (Batch)</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/write/mydb -d '
+cpu,host=server01,region=us-west usage=75.5
+cpu,host=server02,region=us-east usage=82.3
+cpu,host=server03,region=eu-west usage=68.9
+memory,host=server01 used=8589934592,total=17179869184
+memory,host=server02 used=12884901888,total=17179869184
+'</code></pre>
+        </div>
+      </div>
+
+      <h3>With Timestamps</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/write/mydb -d '
+cpu,host=server01 usage=75.5 1704067200000000000
+cpu,host=server01 usage=76.2 1704067260000000000
+cpu,host=server01 usage=74.8 1704067320000000000
+'</code></pre>
+        </div>
+      </div>
+
+      <h2>Schema Strategy</h2>
+
+      <p>
+        Stats Service supports two schema strategies that determine how data is organized
+        into schemas and tables. This is configured via <code>schema.strategy</code>.
+      </p>
+
+      <h3>ServiceAsSchema (Default)</h3>
+
+      <p>The <code>service</code> tag becomes the schema name, measurement becomes the table name.</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Write with service tag</span>
+curl -X POST http://localhost:7000/write/mydb \
+  -d 'cpu,service=webserver,host=web01 usage=75.5'
+
+<span class="token-comment"># Query: catalog.schema.table = mydb.webserver.cpu</span>
+curl -X POST http://localhost:7000/query/mydb \
+  -d 'SELECT * FROM mydb.webserver.cpu'</code></pre>
+        </div>
+      </div>
+
+      <h3>ServiceAsTable</h3>
+
+      <p>The <code>service</code> tag becomes the table name, measurement is stored as a tag.</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Write with service tag</span>
+curl -X POST http://localhost:7000/write/mydb \
+  -d 'cpu,service=webserver,host=web01 usage=75.5'
+
+<span class="token-comment"># Query: catalog.schema.table = mydb.default.webserver</span>
+curl -X POST http://localhost:7000/query/mydb \
+  -d 'SELECT * FROM mydb.default.webserver WHERE measurement = '\''cpu'\'''</code></pre>
+        </div>
+      </div>
+
+      <h2>Special Characters</h2>
+
+      <h3>Escaping Rules</h3>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Location</th>
+            <th>Characters to Escape</th>
+            <th>Escape With</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Measurement name</td>
+            <td>Comma, Space</td>
+            <td>Backslash (<code>\,</code> <code>\ </code>)</td>
+          </tr>
+          <tr>
+            <td>Tag key/value</td>
+            <td>Comma, Equals, Space</td>
+            <td>Backslash (<code>\,</code> <code>\=</code> <code>\ </code>)</td>
+          </tr>
+          <tr>
+            <td>Field key</td>
+            <td>Comma, Equals, Space</td>
+            <td>Backslash (<code>\,</code> <code>\=</code> <code>\ </code>)</td>
+          </tr>
+          <tr>
+            <td>String field value</td>
+            <td>Double quote, Backslash</td>
+            <td>Backslash (<code>\"</code> <code>\\</code>)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Examples</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Escaped comma in measurement name</span>
+cpu\,usage,host=server01 value=75.5
+
+<span class="token-comment"># Escaped equals in tag value</span>
+event,equation=a\=b result=42
+
+<span class="token-comment"># Escaped quotes in string field</span>
+log,host=server01 message="Error: \"Connection refused\""
+
+<span class="token-comment"># Escaped backslash</span>
+path,host=server01 value="C:\\Users\\admin"</code></pre>
+        </div>
+      </div>
+
+      <h2>Timestamps</h2>
+
+      <h3>Precision</h3>
+
+      <p>Stats Service accepts timestamps in nanosecond precision by default:</p>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Precision</th>
+            <th>Example Value</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Nanoseconds</td>
+            <td><code>1704067200000000000</code></td>
+            <td>Default precision (19 digits)</td>
+          </tr>
+          <tr>
+            <td>Microseconds</td>
+            <td><code>1704067200000000</code></td>
+            <td>16 digits</td>
+          </tr>
+          <tr>
+            <td>Milliseconds</td>
+            <td><code>1704067200000</code></td>
+            <td>13 digits</td>
+          </tr>
+          <tr>
+            <td>Seconds</td>
+            <td><code>1704067200</code></td>
+            <td>10 digits</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Generating Timestamps</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Current time in nanoseconds (Linux)</span>
+date +%s%N
+
+<span class="token-comment"># Current time in nanoseconds (macOS)</span>
+python3 -c "import time; print(int(time.time() * 1e9))"
+
+<span class="token-comment"># Specific date to nanoseconds</span>
+date -d "2024-01-01 00:00:00" +%s%N</code></pre>
+        </div>
+      </div>
+
+      <h2>Best Practices</h2>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; Performance Tips</div>
+        <ul>
+          <li><strong>Batch writes:</strong> Send multiple lines in a single request for better throughput</li>
+          <li><strong>Limit tags:</strong> Use tags for low-cardinality metadata (host, region, service)</li>
+          <li><strong>Use fields for values:</strong> Numeric data should be fields, not tags</li>
+          <li><strong>Consistent schemas:</strong> Keep field types consistent across data points</li>
+          <li><strong>Reasonable batch size:</strong> 5,000-10,000 lines per request is optimal</li>
+        </ul>
+      </div>
+
+      <h3>Good vs Bad Examples</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">line-protocol</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># GOOD: Low-cardinality tags, numeric fields</span>
+cpu,host=server01,region=us-west usage=75.5,cores=8i
+
+<span class="token-comment"># BAD: High-cardinality tag (user_id has millions of values)</span>
+pageview,user_id=12345678 count=1
+
+<span class="token-comment"># GOOD: User ID as field instead</span>
+pageview,page=/home user_id="12345678",count=1i
+
+<span class="token-comment"># BAD: Numeric value as tag</span>
+temperature,value=75.5 dummy=1
+
+<span class="token-comment"># GOOD: Numeric value as field</span>
+temperature,sensor=outdoor value=75.5</code></pre>
+        </div>
+      </div>
+
+      <h2>Validation Errors</h2>
+
+      <p>Common errors when writing line protocol data:</p>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Error</th>
+            <th>Cause</th>
+            <th>Solution</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Missing field</td>
+            <td>No field values provided</td>
+            <td>Add at least one field: <code>cpu usage=75</code></td>
+          </tr>
+          <tr>
+            <td>Invalid timestamp</td>
+            <td>Non-numeric timestamp</td>
+            <td>Use Unix nanoseconds: <code>1704067200000000000</code></td>
+          </tr>
+          <tr>
+            <td>Type conflict</td>
+            <td>Field type changed (e.g., float to string)</td>
+            <td>Keep field types consistent</td>
+          </tr>
+          <tr>
+            <td>Empty measurement</td>
+            <td>Line starts with comma or space</td>
+            <td>Provide measurement name first</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Integration with Telegraf</h2>
+
+      <p>Configure Telegraf to send data to Stats Service:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[[outputs.influxdb]]
+  urls = ["http://localhost:7000"]
+  database = "mydb"
+  skip_database_creation = true
+
+  <span class="token-comment"># Use /write endpoint</span>
+  [outputs.influxdb.tagpass]
+
+[[inputs.cpu]]
+  percpu = true
+  totalcpu = true
+
+[[inputs.mem]]
+
+[[inputs.disk]]
+  ignore_fs = ["tmpfs", "devtmpfs"]</code></pre>
+        </div>
+      </div>
+
+      <h2>See Also</h2>
+
+      <div class="cards-grid">
+        <a href="api.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>API Reference</h3>
+          <p>Complete write API documentation</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="sql-queries.html" class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>SQL Queries</h3>
+          <p>Query the data you've written</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="examples.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>Examples</h3>
+          <p>More write and query examples</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>
