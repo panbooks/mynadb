@@ -108,11 +108,6 @@ func doRequestWithRetry(client *http.Client, url string, maxRetries int, retryDe
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			log.Printf("Request returned status %d (attempt %d)", resp.StatusCode, attempt+1)
 		}
-
-// 		// Don't retry on client errors (4xx)
-// 		if resp != nil && resp.StatusCode >= 400 && resp.StatusCode < 500 {
-// 			return nil, lastErr
-// 		}
 	}
 
 	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
@@ -154,24 +149,26 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// Create ticker with configured interval
-	interval := time.Duration(config.IntervalMinutes) * time.Minute
-	ticker := time.NewTicker(interval)
+	// Create ticker that checks every minute
+	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	fmt.Printf("Metric sender started. Running every %d minutes.\n", config.IntervalMinutes)
+	fmt.Printf("Metric sender started. Running at :%02d intervals (e.g., :00, :%02d, :%02d, ...).\n",
+		config.IntervalMinutes, config.IntervalMinutes, config.IntervalMinutes*2%60)
 	fmt.Printf("URL: %s\n", config.URL)
 	fmt.Printf("Database: %s\n", config.Database)
 	fmt.Printf("Press Ctrl+C to stop.\n\n")
 
-	// Run immediately on start
+	// Run immediately at start
 	runQuery(config)
 
-	// Run on ticker
+	// Check every minute, run when aligned to interval
 	for {
 		select {
-		case <-ticker.C:
-			runQuery(config)
+		case t := <-ticker.C:
+			if t.Minute()%config.IntervalMinutes == 0 {
+				runQuery(config)
+			}
 		case sig := <-sigChan:
 			fmt.Printf("\n\nReceived signal %v. Shutting down gracefully...\n", sig)
 			return
