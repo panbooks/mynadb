@@ -14,8 +14,6 @@ mod profiling;
 mod query_engine;
 mod rate_limiter;
 mod retention_manager;
-mod series_dedup;
-mod series_tracker;
 mod wal;
 
 use axum::{
@@ -26,7 +24,6 @@ use clap::{Parser, Subcommand};
 use config::Config;
 use flight_service::StatsFlightService;
 use mysql_service::MysqlService;
-use series_tracker::{SeriesTracker, SCHEMA_PMC, SCHEMA_UMC};
 use std::sync::Arc;
 use tonic::transport::Server;
 use tracing::{debug, error, info, warn};
@@ -117,125 +114,10 @@ fn initialize_wal(config: &Config) -> Option<Arc<wal::Wal>> {
     }
 }
 
-/// Load existing series cache from disk for both PMC and UMC schemas (parallel)
-async fn load_series_cache(series_tracker: &Arc<SeriesTracker>, config: &Config) {
-    use std::time::Instant;
-
-    let start = Instant::now();
-    info!("Loading series cache from disk (PMC and UMC) in parallel...");
-
-    // Load PMC and UMC in parallel (Phase 1)
-    let (pmc_result, umc_result) = tokio::join!(
-        load_schema_cache(series_tracker, config, SCHEMA_PMC),
-        load_schema_cache(series_tracker, config, SCHEMA_UMC)
-    );
-
-    if let Err(e) = pmc_result {
-        warn!("Failed to load PMC schema cache: {}", e);
-    }
-    if let Err(e) = umc_result {
-        warn!("Failed to load UMC schema cache: {}", e);
-    }
-
-    let elapsed = start.elapsed();
-    info!("Series cache loading completed in {:.2}s", elapsed.as_secs_f64());
-}
-
-/// Load all tables for a specific schema in parallel
-async fn load_schema_cache(
-    series_tracker: &Arc<SeriesTracker>,
-    config: &Config,
-    schema: &str,
-) -> Result<(), String> {
-    use futures::stream::{FuturesUnordered, StreamExt};
-    use std::time::Instant;
-
-    let start = Instant::now();
-    let stats_schema_dir = std::path::Path::new(&config.storage.data_dir)
-        .join(&config.storage.system_dir)
-        .join(schema);
-
-    if !stats_schema_dir.exists() {
-        debug!("Stats schema directory does not exist yet for '{}': {}", schema, stats_schema_dir.display());
-        return Ok(());
-    }
-
-    let entries = std::fs::read_dir(&stats_schema_dir)
-        .map_err(|e| format!("Failed to read stats schema directory for '{}': {}", schema, e))?;
-
-    // Collect all table directories
-    let mut table_names = Vec::new();
-    for entry in entries.flatten() {
-        if entry.path().is_dir() {
-            if let Some(table_name) = entry.file_name().to_str() {
-                table_names.push(table_name.to_string());
-            }
-        }
-    }
-
-    if table_names.is_empty() {
-        debug!("No tables found for schema '{}'", schema);
-        return Ok(());
-    }
-
-    info!("Loading {} table(s) for schema '{}' with concurrency {}",
-          table_names.len(), schema, config.series_tracker.max_concurrent_tables);
-
-    // Load tables in parallel (Phase 2)
-    let max_concurrent = config.series_tracker.max_concurrent_tables;
-    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
-    let mut tasks = FuturesUnordered::new();
-
-    for table_name in table_names {
-        let tracker = Arc::clone(series_tracker);
-        let schema_owned = schema.to_string();
-        let sem = Arc::clone(&semaphore);
-
-        tasks.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
-
-            debug!("Loading series cache for schema '{}', table '{}'", schema_owned, table_name);
-            match tracker.load_cache(&schema_owned, &table_name).await {
-                Ok(()) => {
-                    debug!("Series cache loaded for schema '{}', table '{}'", schema_owned, table_name);
-                    Ok(())
-                }
-                Err(e) => {
-                    warn!("Failed to load series cache for schema '{}', table '{}': {}",
-                          schema_owned, table_name, e);
-                    Err(e)
-                }
-            }
-        }));
-    }
-
-    // Await all tasks
-    let mut success_count = 0;
-    let mut error_count = 0;
-
-    while let Some(result) = tasks.next().await {
-        match result {
-            Ok(Ok(())) => success_count += 1,
-            Ok(Err(_)) => error_count += 1,
-            Err(e) => {
-                warn!("Table loading task panicked: {}", e);
-                error_count += 1;
-            }
-        }
-    }
-
-    let elapsed = start.elapsed();
-    info!("Schema '{}' loaded: {} successful, {} errors, took {:.2}s",
-          schema, success_count, error_count, elapsed.as_secs_f64());
-
-    Ok(())
-}
-
 /// Perform WAL recovery by replaying unflushed writes
 async fn perform_wal_recovery(
     wal: &Arc<wal::Wal>,
     cache: &cache::DataCache,
-    series_tracker: &Arc<SeriesTracker>,
     query_engine: &Arc<query_engine::QueryEngine>,
     config: &Arc<Config>,
 ) {
@@ -246,7 +128,6 @@ async fn perform_wal_recovery(
     wal.set_recovery_mode(true);
 
     let cache_for_recovery = cache.clone();
-    let series_tracker_for_recovery = Arc::clone(series_tracker);
     let query_engine_for_recovery = Arc::clone(query_engine);
     let config_for_recovery = config.clone();
 
@@ -259,10 +140,8 @@ async fn perform_wal_recovery(
                     db,
                     line_protocol,
                     &cache_for_recovery,
-                    Some(&series_tracker_for_recovery),
                     Some(&query_engine_for_recovery),
                     &config_for_recovery.schema,
-                    &config_for_recovery.series_tracker,
                 ))
             }) {
                 Ok(count) => {
@@ -414,8 +293,6 @@ fn build_router(
             "/retention/:catalog/:schema/:table",
             post(api::delete_old_partitions_handler),
         )
-        // Series cardinality tracking
-        .route("/pmc/:db", get(api::series_stats_handler))
         .fallback(api::log_request)
         .with_state(state);
 
@@ -443,10 +320,6 @@ fn print_server_info(config: &Config) {
     info!(
         "Cache flush interval: {} seconds",
         config.cache.flush_interval_secs
-    );
-    info!(
-        "Series tracker flush interval: {} seconds",
-        config.series_tracker.flush_interval_secs
     );
     if config.compaction.interval_secs > 0 {
         info!(
@@ -529,19 +402,9 @@ async fn main() {
         );
     }
 
-    // Initialize series tracker
-    info!("Initializing series tracker");
-    let series_tracker = Arc::new(SeriesTracker::new(
-        &config.storage,
-        &config.series_tracker,
-    ));
-
-    load_series_cache(&series_tracker, &config).await;
-    Arc::clone(&series_tracker).start_background_flush(config.series_tracker.flush_interval_secs);
-
     // WAL Recovery
     if let Some(ref wal_arc) = wal {
-        perform_wal_recovery(wal_arc, &cache, &series_tracker, &query_engine, &config).await;
+        perform_wal_recovery(wal_arc, &cache, &query_engine, &config).await;
     } else {
         info!("WAL disabled, skipping recovery");
         welcome!("");
@@ -598,7 +461,6 @@ async fn main() {
         query_engine: query_engine.clone(),
         db_manager,
         compactor,
-        series_tracker,
         config: config.clone(),
         wal,
         ha_manager: ha_manager.clone(),
@@ -635,11 +497,9 @@ async fn main() {
     // Start HA slave replay task (applies replicated entries to local cache)
     if let Some(mut entry_rx) = ha_entry_rx {
         let cache_for_ha = state.cache.clone();
-        let series_tracker_for_ha = state.series_tracker.clone();
         let query_engine_for_ha = state.query_engine.clone();
         let wal_for_ha = state.wal.clone();
         let schema_config = config.schema.clone();
-        let series_tracker_config = config.series_tracker.clone();
 
         tokio::spawn(async move {
             info!("HA slave replay task started");
@@ -673,10 +533,8 @@ async fn main() {
                     &entry.db_name,
                     &line_protocol,
                     &cache_for_ha,
-                    Some(&series_tracker_for_ha),
                     Some(&query_engine_for_ha),
                     &schema_config,
-                    &series_tracker_config,
                 )
                 .await
                 {
