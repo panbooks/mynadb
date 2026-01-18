@@ -200,6 +200,8 @@ SELECT * FROM mydb.default.service_1 WHERE measurement = 'cpu'
 |----------|--------|-------------|
 | `/write/:db` | POST | Write data (InfluxDB line protocol) |
 | `/query/:db` | GET/POST | SQL queries |
+| `/explain/:db` | GET/POST | Query execution plan (predicate pushdown, pruning info) |
+| `/analyze/:db` | GET/POST | Query analysis (partitions, files, optimizations) |
 | `/compact/:db[/:measurement]` | POST | Trigger compaction |
 | `/flush` | POST | Manual cache flush |
 | `/stats` | GET | Cache statistics |
@@ -209,6 +211,42 @@ SELECT * FROM mydb.default.service_1 WHERE measurement = 'cpu'
 | `/partitions/:catalog/:schema/:table/:date` | DELETE | Delete specific partition |
 | `/retention/:catalog/:schema/:table` | POST | Delete old partitions (body: `{older_than_days: N}` or `{before_date: "YYYY-MM-DD"}`) |
 | `/health` | GET | Health check |
+
+## Query Performance Optimizations
+
+The query engine is configured with the following optimizations enabled by default:
+
+### Predicate Push-down
+- **Parquet pushdown filters**: Filter predicates are pushed down to the Parquet reader
+- **Filter reordering**: Filters are reordered for optimal execution
+- **Row group pruning**: Uses Parquet statistics to skip row groups that don't match predicates
+- **Page-level pruning**: Uses page index for finer-grained filtering
+- **Bloom filter**: Uses Bloom filters for string column filtering (if available in Parquet files)
+
+### EXPLAIN Endpoint
+```bash
+# Get execution plan for a query
+curl "http://localhost:7000/explain/mydb?sql=SELECT%20*%20FROM%20cpu%20WHERE%20timestamp%20%3E%201704067200000000000&verbose=true"
+
+# Response includes:
+# - logical_plan: DataFusion logical plan
+# - physical_plan: Physical execution plan showing pushdown
+# - optimizations: Which optimizations are applied
+```
+
+### ANALYZE Endpoint
+```bash
+# Get query analysis with partition and file counts
+curl "http://localhost:7000/analyze/mydb?sql=SELECT%20*%20FROM%20cpu%20WHERE%20date%20%3E%3D%20'2024-01-10'"
+
+# Response includes:
+# - tables: Referenced tables
+# - time_range: Extracted time/date filters
+# - partitions_to_scan: Number of partitions after pruning
+# - files_to_scan: Number of Parquet files to read
+# - optimizations: Applied optimizations
+# - plan_summary: Brief execution summary
+```
 
 ## Retention Policy
 

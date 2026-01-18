@@ -255,6 +255,11 @@ fn build_router(
         // Query endpoints
         .route("/query/:db", get(api::query_handler))
         .route("/query/:db", post(api::query_handler_post))
+        // Query analysis endpoints
+        .route("/explain/:db", get(api::explain_handler))
+        .route("/explain/:db", post(api::explain_handler_post))
+        .route("/analyze/:db", get(api::analyze_handler))
+        .route("/analyze/:db", post(api::analyze_handler_post))
         // Database management
         .route("/databases", get(api::list_databases_handler))
         .route("/databases", post(api::create_database_handler))
