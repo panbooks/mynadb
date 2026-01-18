@@ -432,8 +432,11 @@ async fn main() {
             .start_background_retention(config.retention.clone());
     }
 
-    // Start background WAL cleanup
+    // Start background WAL tasks
     if let Some(ref wal_arc) = wal {
+        // Start periodic flush (every second)
+        wal_arc.start_background_flush();
+        // Start cleanup task
         start_wal_cleanup_task(wal_arc, &config);
     }
 
