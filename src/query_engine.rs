@@ -1,3 +1,4 @@
+use crate::storage::Storage;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::catalog_common::MemoryCatalogProvider;
 use datafusion::catalog_common::MemorySchemaProvider;
@@ -17,6 +18,7 @@ const DEFAULT_SCHEMA: &str = "default";
 pub struct QueryEngine {
     ctx: SessionContext,
     data_dir: String,
+    storage: Option<Arc<Storage>>,
     // Track registered catalogs (databases) and their schemas (services)
     registered_catalogs: Arc<RwLock<HashMap<String, HashSet<String>>>>,
 }
@@ -27,6 +29,27 @@ impl QueryEngine {
         QueryEngine {
             ctx,
             data_dir: data_dir.to_string(),
+            storage: None,
+            registered_catalogs: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub fn new_with_storage(data_dir: &str, storage: Arc<Storage>) -> Self {
+        let ctx = SessionContext::new();
+
+        // Register object store with DataFusion runtime
+        if !storage.is_local() {
+            let url = url::Url::parse(storage.url_prefix())
+                .expect("Failed to parse storage URL prefix");
+            ctx.runtime_env()
+                .register_object_store(&url, storage.object_store());
+            info!("Registered object store with DataFusion: {}", storage.url_prefix());
+        }
+
+        QueryEngine {
+            ctx,
+            data_dir: data_dir.to_string(),
+            storage: Some(storage),
             registered_catalogs: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -71,14 +94,27 @@ impl QueryEngine {
         schema_name: &str,
         table_name: &str,
     ) -> Result<(), String> {
-        // Build path: data_dir/catalog/schema/table/
+        // Build table URL based on storage backend
+        let table_url = if let Some(ref storage) = self.storage {
+            storage.table_url(catalog_name, schema_name, table_name)
+        } else {
+            format!(
+                "file://{}/{}/{}/{}",
+                self.data_dir, catalog_name, schema_name, table_name
+            )
+        };
+
+        // Build local path for existence check (only for local storage)
         let table_path = format!(
             "{}/{}/{}/{}",
             self.data_dir, catalog_name, schema_name, table_name
         );
 
-        if !std::path::Path::new(&table_path).exists() {
-            return Err(format!("Table path not found: {}", table_path));
+        // For local storage, check if path exists
+        if self.storage.is_none() || self.storage.as_ref().map(|s| s.is_local()).unwrap_or(true) {
+            if !std::path::Path::new(&table_path).exists() {
+                return Err(format!("Table path not found: {}", table_path));
+            }
         }
 
         // Ensure catalog and schema exist
@@ -95,23 +131,26 @@ impl QueryEngine {
             }
         }
 
-        // Check if table has Hive-style partitions
-        let partitions = self.discover_table_partitions(&table_path)?;
+        // Check if table has Hive-style partitions (for local storage)
+        let has_partitions = if self.storage.is_none() || self.storage.as_ref().map(|s| s.is_local()).unwrap_or(true) {
+            let partitions = self.discover_table_partitions(&table_path)?;
+            !partitions.is_empty()
+        } else {
+            // For object storage, assume partitioned
+            true
+        };
 
-        if !partitions.is_empty() {
+        if has_partitions {
             // Register partitioned table using ListingTable API
-            self.register_partitioned_table(catalog_name, schema_name, table_name, &table_path)
+            self.register_partitioned_table(catalog_name, schema_name, table_name, &table_url)
                 .await?;
             debug!(
-                "Registered partitioned table: {}.{}.{} with {} partitions",
-                catalog_name,
-                schema_name,
-                table_name,
-                partitions.len()
+                "Registered partitioned table: {}.{}.{}",
+                catalog_name, schema_name, table_name
             );
         } else {
             // No partitions, use standard registration
-            self.register_simple_table(catalog_name, schema_name, table_name, &table_path)
+            self.register_simple_table(catalog_name, schema_name, table_name, &table_url)
                 .await?;
             debug!(
                 "Registered non-partitioned table: {}.{}.{}",

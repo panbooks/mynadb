@@ -1,5 +1,6 @@
 use crate::config::RetentionConfig;
 use crate::database_manager::DatabaseManager;
+use crate::storage::Storage;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -9,6 +10,9 @@ use tracing::{debug, error, info, warn};
 pub struct RetentionManager {
     db_manager: Arc<DatabaseManager>,
     data_dir: String,
+    /// Storage backend (for future S3 support)
+    #[allow(dead_code)]
+    storage: Option<Arc<Storage>>,
 }
 
 impl RetentionManager {
@@ -16,6 +20,19 @@ impl RetentionManager {
         RetentionManager {
             db_manager,
             data_dir: data_dir.to_string(),
+            storage: None,
+        }
+    }
+
+    pub fn with_storage(
+        db_manager: Arc<DatabaseManager>,
+        data_dir: &str,
+        storage: Arc<Storage>,
+    ) -> Self {
+        RetentionManager {
+            db_manager,
+            data_dir: data_dir.to_string(),
+            storage: Some(storage),
         }
     }
 

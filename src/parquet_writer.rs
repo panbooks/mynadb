@@ -1,10 +1,10 @@
 use crate::line_protocol::format_date32_as_partition;
+use crate::storage::Storage;
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{Field, Schema};
+use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
-use std::fs::{create_dir_all, File};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 // File naming constants
@@ -13,28 +13,34 @@ const LEVEL_PREFIX: &str = "L";
 const RAW_FILE_LEVEL: u32 = 0;
 
 pub struct ParquetWriter {
-    data_dir: String,
+    storage: Arc<Storage>,
 }
 
 impl ParquetWriter {
-    pub fn new(data_dir: &str) -> Self {
-        ParquetWriter {
-            data_dir: data_dir.to_string(),
-        }
+    pub fn new(storage: Arc<Storage>) -> Self {
+        ParquetWriter { storage }
     }
 
-    /// Get table directory path: data_dir/catalog/schema/table/
-    fn get_table_path(&self, catalog: &str, schema: &str, table: &str) -> PathBuf {
-        Path::new(&self.data_dir)
-            .join(catalog)
-            .join(schema)
-            .join(table)
+    /// Create from data directory (local storage only, for backward compatibility)
+    pub fn new_local(data_dir: &str) -> Result<Self, String> {
+        let storage = Storage::new_local(data_dir)?;
+        Ok(ParquetWriter {
+            storage: Arc::new(storage),
+        })
     }
 
-    /// Get partition directory path: data_dir/catalog/schema/table/date=YYYY-MM-DD/
-    fn get_partition_path(&self, catalog: &str, schema: &str, table: &str, date: i32) -> PathBuf {
-        self.get_table_path(catalog, schema, table)
-            .join(format_date32_as_partition(date))
+    /// Get table path: catalog/schema/table/
+    fn get_table_path(catalog: &str, schema: &str, table: &str) -> String {
+        format!("{}/{}/{}", catalog, schema, table)
+    }
+
+    /// Get partition path: catalog/schema/table/date=YYYY-MM-DD/
+    fn get_partition_path(catalog: &str, schema: &str, table: &str, date: i32) -> String {
+        format!(
+            "{}/{}",
+            Self::get_table_path(catalog, schema, table),
+            format_date32_as_partition(date)
+        )
     }
 
     /// Generate a leveled parquet filename
@@ -46,8 +52,8 @@ impl ParquetWriter {
     }
 
     /// Write batches to a partitioned directory structure
-    /// Directory: data_dir/catalog/schema/table/date=YYYY-MM-DD/
-    pub fn write_batches_partitioned(
+    /// Directory: catalog/schema/table/date=YYYY-MM-DD/
+    pub async fn write_batches_partitioned(
         &self,
         catalog: &str,
         schema: &str,
@@ -59,34 +65,32 @@ impl ParquetWriter {
             return Err("No batches to write".to_string());
         }
 
-        // Create directory structure: data/catalog/schema/table/date=YYYY-MM-DD/
-        let partition_path = self.get_partition_path(catalog, schema, table, date);
-        create_dir_all(&partition_path)
-            .map_err(|e| format!("Failed to create partition directory: {}", e))?;
+        // Create directory structure
+        let partition_path = Self::get_partition_path(catalog, schema, table, date);
+        self.storage.create_dir(&partition_path).await?;
 
         // Generate filename with L0 prefix (Level 0 - raw files)
         let timestamp = chrono::Utc::now().timestamp_millis();
-        let filename = partition_path.join(Self::generate_filename(RAW_FILE_LEVEL, timestamp));
+        let filename = Self::generate_filename(RAW_FILE_LEVEL, timestamp);
+        let full_path = format!("{}/{}", partition_path, filename);
 
         // Merge schemas from all batches to create unified schema
         let merged_schema = Self::merge_schemas(&batches)?;
         let schema_ref = Arc::new(merged_schema);
 
-        // Write to Parquet
-        let file = File::create(&filename).map_err(|e| format!("Failed to create file: {}", e))?;
+        // Write to Parquet in memory buffer
+        let mut buffer = Vec::new();
         let props = WriterProperties::builder().build();
-        let mut writer = ArrowWriter::try_new(file, schema_ref.clone(), Some(props))
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema_ref.clone(), Some(props))
             .map_err(|e| format!("Failed to create writer: {}", e))?;
 
         // Write all batches (may need to be adapted to merged schema)
         for batch in batches {
-            // If batch schema matches merged schema, write directly
             if batch.schema() == schema_ref {
                 writer
                     .write(&batch)
                     .map_err(|e| format!("Failed to write batch: {}", e))?;
             } else {
-                // Adapt batch to merged schema
                 let adapted = Self::adapt_batch_to_schema(&batch, &schema_ref)?;
                 writer
                     .write(&adapted)
@@ -98,7 +102,27 @@ impl ParquetWriter {
             .close()
             .map_err(|e| format!("Failed to close writer: {}", e))?;
 
-        Ok(filename.to_string_lossy().to_string())
+        // Write buffer to storage
+        self.storage.put(&full_path, Bytes::from(buffer)).await?;
+
+        Ok(full_path)
+    }
+
+    /// Write batches synchronously (for backward compatibility with cache.rs)
+    pub fn write_batches_partitioned_sync(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date: i32,
+        batches: Vec<RecordBatch>,
+    ) -> Result<String, String> {
+        // Use tokio runtime to run async code
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(
+                self.write_batches_partitioned(catalog, schema, table, date, batches),
+            )
+        })
     }
 
     /// Merge schemas from multiple batches, keeping all unique fields
@@ -111,7 +135,6 @@ impl ParquetWriter {
             for field in batch.schema().fields() {
                 let name = field.name().clone();
                 if let Some(existing) = field_map.get(&name) {
-                    // Check type compatibility
                     if existing.data_type() != field.data_type() {
                         return Err(format!(
                             "Incompatible types for field '{}': {:?} vs {:?}",
@@ -129,7 +152,6 @@ impl ParquetWriter {
         // Maintain field order: timestamp, date, measurement, tags (sorted), fields (sorted)
         let mut fields = Vec::new();
 
-        // Add in priority order
         if let Some(f) = field_map.remove("timestamp") {
             fields.push(f);
         }
@@ -140,7 +162,6 @@ impl ParquetWriter {
             fields.push(f);
         }
 
-        // Add remaining fields in sorted order
         let mut remaining: Vec<_> = field_map.into_iter().collect();
         remaining.sort_by(|a, b| a.0.cmp(&b.0));
         for (_, field) in remaining {
@@ -162,11 +183,9 @@ impl ParquetWriter {
         for target_field in target_schema.fields() {
             let field_name = target_field.name();
 
-            // Check if field exists in source batch
             if let Some(column) = batch.column_by_name(field_name) {
                 arrays.push(column.clone());
             } else {
-                // Field doesn't exist, create null array
                 let null_array = new_null_array(target_field.data_type(), batch.num_rows());
                 arrays.push(null_array);
             }
@@ -174,5 +193,10 @@ impl ParquetWriter {
 
         RecordBatch::try_new(target_schema.clone(), arrays)
             .map_err(|e| format!("Failed to create adapted batch: {}", e))
+    }
+
+    /// Get the underlying storage
+    pub fn storage(&self) -> &Arc<Storage> {
+        &self.storage
     }
 }

@@ -13,6 +13,7 @@ mod profiling;
 mod query_engine;
 mod rate_limiter;
 mod retention_manager;
+mod storage;
 mod wal;
 
 use axum::{
@@ -348,13 +349,23 @@ async fn main() {
     // Initialize WAL
     let wal = initialize_wal(&config);
 
+    // Initialize storage backend
+    info!(
+        "Initializing storage backend: {}",
+        config.storage.object_store.backend
+    );
+    let storage = Arc::new(
+        storage::Storage::from_config(&config.storage.object_store)
+            .expect("Failed to initialize storage"),
+    );
+
     // Initialize cache
     info!(
         "Initializing data cache (max: {}MB, flush threshold: 80%)",
         config.cache.max_size_mb
     );
-    let cache = cache::DataCache::with_max_size_and_wal(
-        &config.storage.data_dir,
+    let cache = cache::DataCache::new(
+        storage.clone(),
         config.cache.max_size_mb,
         wal.as_ref().map(Arc::clone),
     );
@@ -364,14 +375,24 @@ async fn main() {
 
     // Initialize core components
     info!("Initializing query engine");
-    let query_engine = Arc::new(query_engine::QueryEngine::new(&config.storage.data_dir));
+    let query_engine = Arc::new(query_engine::QueryEngine::new_with_storage(
+        &config.storage.data_dir,
+        storage.clone(),
+    ));
 
     info!("Initializing database manager");
-    let db_manager = Arc::new(database_manager::DatabaseManager::new(&config.storage.data_dir));
+    let db_manager = Arc::new(database_manager::DatabaseManager::with_storage(
+        &config.storage.data_dir,
+        storage.clone(),
+    ));
 
     info!("Initializing compactor");
     let compaction_config = compactor::CompactionConfig::from(&config.compaction);
-    let compactor = Arc::new(compactor::Compactor::with_config(&config.storage.data_dir, &compaction_config));
+    let compactor = Arc::new(compactor::Compactor::with_storage(
+        &config.storage.data_dir,
+        storage.clone(),
+        &compaction_config,
+    ));
 
     if config.compaction.interval_secs > 0 {
         Arc::clone(&compactor).start_background_lsm_compaction(
@@ -398,9 +419,10 @@ async fn main() {
 
     // Initialize retention manager
     info!("Initializing retention manager");
-    let retention_manager = Arc::new(retention_manager::RetentionManager::new(
+    let retention_manager = Arc::new(retention_manager::RetentionManager::with_storage(
         Arc::clone(&db_manager),
         &config.storage.data_dir,
+        storage.clone(),
     ));
 
     if config.retention.enabled && config.retention.interval_secs > 0 {

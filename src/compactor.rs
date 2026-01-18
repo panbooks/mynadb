@@ -18,6 +18,7 @@ use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, error, info, warn};
 
 use crate::rate_limiter::RateLimiter;
+use crate::storage::Storage;
 
 // Compaction constants
 const LEVEL_PREFIX: char = 'L';
@@ -40,6 +41,9 @@ type CompactionLocks =
 /// using a leveled compaction strategy (similar to LSM-tree)
 pub struct Compactor {
     data_dir: String,
+    /// Storage backend (for future S3 support)
+    #[allow(dead_code)]
+    storage: Option<Arc<Storage>>,
     /// Lock to prevent concurrent compaction and read/write operations
     locks: CompactionLocks,
     /// Semaphore to limit concurrent LSM compaction operations
@@ -190,6 +194,18 @@ impl ParquetFileInfo {
 
 impl Compactor {
     pub fn with_config(data_dir: &str, config: &CompactionConfig) -> Self {
+        Self::with_storage_and_config(data_dir, None, config)
+    }
+
+    pub fn with_storage(data_dir: &str, storage: Arc<Storage>, config: &CompactionConfig) -> Self {
+        Self::with_storage_and_config(data_dir, Some(storage), config)
+    }
+
+    fn with_storage_and_config(
+        data_dir: &str,
+        storage: Option<Arc<Storage>>,
+        config: &CompactionConfig,
+    ) -> Self {
         // Create semaphore if max_concurrent_compactions > 0
         let compaction_semaphore = if config.max_concurrent_compactions > 0 {
             Some(Arc::new(Semaphore::new(config.max_concurrent_compactions)))
@@ -219,6 +235,7 @@ impl Compactor {
 
         Compactor {
             data_dir: data_dir.to_string(),
+            storage,
             locks: Arc::new(RwLock::new(HashMap::new())),
             compaction_semaphore,
             full_compaction_semaphore,
