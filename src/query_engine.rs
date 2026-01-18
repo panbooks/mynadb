@@ -1,7 +1,8 @@
 use crate::storage::Storage;
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{Array, RecordBatch};
 use datafusion::catalog_common::MemoryCatalogProvider;
 use datafusion::catalog_common::MemorySchemaProvider;
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -11,9 +12,72 @@ use datafusion::sql::TableReference;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 const DEFAULT_SCHEMA: &str = "default";
+
+/// Query optimization flags detected from the execution plan
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryOptimizations {
+    /// Whether predicate push-down to Parquet is used
+    pub predicate_pushdown: bool,
+    /// Whether partition pruning is applied
+    pub partition_pruning: bool,
+    /// Whether row group pruning using statistics is enabled
+    pub row_group_pruning: bool,
+    /// Whether projection push-down is used
+    pub projection_pushdown: bool,
+    /// Whether LIMIT is pushed down
+    pub limit_pushdown: bool,
+}
+
+/// Time range extracted from query WHERE clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeRange {
+    /// Start timestamp (nanoseconds since epoch)
+    pub start_timestamp: Option<i64>,
+    /// End timestamp (nanoseconds since epoch)
+    pub end_timestamp: Option<i64>,
+    /// Start date for partition filtering (YYYY-MM-DD)
+    pub start_date: Option<String>,
+    /// End date for partition filtering (YYYY-MM-DD)
+    pub end_date: Option<String>,
+}
+
+/// Result of EXPLAIN query
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryExplainResult {
+    /// Original SQL query
+    pub sql: String,
+    /// Qualified SQL (with full table paths)
+    pub qualified_sql: String,
+    /// Logical execution plan
+    pub logical_plan: String,
+    /// Physical execution plan
+    pub physical_plan: String,
+    /// Detected optimizations
+    pub optimizations: QueryOptimizations,
+}
+
+/// Query analysis result with statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryAnalysis {
+    /// Original SQL query
+    pub sql: String,
+    /// Tables referenced in query
+    pub tables: Vec<String>,
+    /// Extracted time range (if any)
+    pub time_range: Option<TimeRange>,
+    /// Number of partitions to scan
+    pub partitions_to_scan: usize,
+    /// Number of Parquet files to scan
+    pub files_to_scan: usize,
+    /// Detected optimizations
+    pub optimizations: QueryOptimizations,
+    /// Brief summary of execution plan
+    pub plan_summary: String,
+}
 
 pub struct QueryEngine {
     ctx: SessionContext,
@@ -24,8 +88,34 @@ pub struct QueryEngine {
 }
 
 impl QueryEngine {
+    /// Create optimized SessionContext with predicate push-down and pruning enabled
+    fn create_optimized_context() -> SessionContext {
+        let mut config = ConfigOptions::new();
+
+        // Enable predicate push-down to Parquet
+        config.execution.parquet.pushdown_filters = true;
+        config.execution.parquet.reorder_filters = true;
+
+        // Enable row group pruning using Parquet statistics
+        config.execution.parquet.pruning = true;
+
+        // Enable page-level pruning for better performance
+        config.execution.parquet.enable_page_index = true;
+
+        // Enable bloom filter for string columns if available
+        config.execution.parquet.bloom_filter_on_read = true;
+
+        // Optimize for time-series workloads
+        config.optimizer.enable_round_robin_repartition = false;
+        config.optimizer.repartition_file_scans = false;
+
+        // Create session state with optimized config
+        let session_config = SessionConfig::from(config);
+        SessionContext::new_with_config(session_config)
+    }
+
     pub fn new(data_dir: &str) -> Self {
-        let ctx = SessionContext::new();
+        let ctx = Self::create_optimized_context();
         QueryEngine {
             ctx,
             data_dir: data_dir.to_string(),
@@ -35,7 +125,7 @@ impl QueryEngine {
     }
 
     pub fn new_with_storage(data_dir: &str, storage: Arc<Storage>) -> Self {
-        let ctx = SessionContext::new();
+        let ctx = Self::create_optimized_context();
 
         // Register object store with DataFusion runtime
         if !storage.is_local() {
@@ -431,6 +521,345 @@ impl QueryEngine {
             .map_err(|e| format!("SQL error: {}", e))?;
 
         Ok(df.schema().inner().clone())
+    }
+
+    /// EXPLAIN a SQL query - returns the logical and physical execution plan
+    /// This shows how DataFusion will execute the query including:
+    /// - Predicate push-down decisions
+    /// - Partition pruning
+    /// - File scanning strategy
+    pub async fn explain_query(
+        &self,
+        sql: &str,
+        db_name: &str,
+        verbose: bool,
+        analyze: bool,
+    ) -> Result<QueryExplainResult, String> {
+        // Extract table references and register tables
+        let table_refs = self.extract_table_references(sql, db_name);
+        for (catalog, schema, table) in table_refs {
+            let _ = self.register_table(&catalog, &schema, &table).await;
+        }
+
+        // Qualify table names
+        let qualified_sql = self.qualify_table_names(sql, db_name);
+
+        let df = self
+            .ctx
+            .sql(&qualified_sql)
+            .await
+            .map_err(|e| format!("SQL error: {}", e))?;
+
+        // Get logical plan
+        let logical_plan = format!("{:?}", df.logical_plan());
+
+        // Get physical plan explanation
+        let explain_df = if analyze {
+            df.explain(verbose, true)
+                .map_err(|e| format!("Explain error: {}", e))?
+        } else {
+            df.explain(verbose, false)
+                .map_err(|e| format!("Explain error: {}", e))?
+        };
+
+        let batches = explain_df
+            .collect()
+            .await
+            .map_err(|e| format!("Collect error: {}", e))?;
+
+        // Convert explain output to string
+        let mut plan_lines = Vec::new();
+        for batch in &batches {
+            let plan_type_col = batch.column(0);
+            let plan_col = batch.column(1);
+
+            let plan_types = plan_type_col
+                .as_any()
+                .downcast_ref::<datafusion::arrow::array::StringArray>()
+                .ok_or("Failed to get plan_type column")?;
+            let plans = plan_col
+                .as_any()
+                .downcast_ref::<datafusion::arrow::array::StringArray>()
+                .ok_or("Failed to get plan column")?;
+
+            for i in 0..batch.num_rows() {
+                let plan_type = plans.is_valid(i).then(|| plan_types.value(i)).unwrap_or("");
+                let plan = plans.is_valid(i).then(|| plans.value(i)).unwrap_or("");
+                plan_lines.push(format!("{}:\n{}", plan_type, plan));
+            }
+        }
+
+        // Extract optimization hints from the plan
+        let physical_plan = plan_lines.join("\n\n");
+        let optimizations = self.extract_optimization_info(&physical_plan);
+
+        Ok(QueryExplainResult {
+            sql: sql.to_string(),
+            qualified_sql,
+            logical_plan,
+            physical_plan,
+            optimizations,
+        })
+    }
+
+    /// Extract optimization information from the physical plan
+    fn extract_optimization_info(&self, plan: &str) -> QueryOptimizations {
+        let plan_lower = plan.to_lowercase();
+
+        QueryOptimizations {
+            predicate_pushdown: plan_lower.contains("pushdown")
+                || plan_lower.contains("predicate=")
+                || plan_lower.contains("filter:"),
+            partition_pruning: plan_lower.contains("partition")
+                || plan_lower.contains("pruning")
+                || plan_lower.contains("date="),
+            row_group_pruning: plan_lower.contains("row_group")
+                || plan_lower.contains("statistics")
+                || plan_lower.contains("skip"),
+            projection_pushdown: plan_lower.contains("projection=")
+                || plan_lower.contains("project:"),
+            limit_pushdown: plan_lower.contains("limit")
+                || plan_lower.contains("topk")
+                || plan_lower.contains("fetch="),
+        }
+    }
+
+    /// Extract time range from WHERE clause for partition pruning hints
+    /// Returns (start_timestamp, end_timestamp) if found
+    pub fn extract_time_range(&self, sql: &str) -> Option<TimeRange> {
+        let sql_upper = sql.to_uppercase();
+
+        // Look for timestamp conditions in WHERE clause
+        if let Some(where_pos) = sql_upper.find("WHERE") {
+            let where_clause = &sql[where_pos + 5..];
+
+            // Common patterns:
+            // timestamp > X, timestamp >= X, timestamp < X, timestamp <= X
+            // timestamp BETWEEN X AND Y
+            // time > X, time >= X (common alias)
+
+            let mut start_ts: Option<i64> = None;
+            let mut end_ts: Option<i64> = None;
+            let mut start_date: Option<String> = None;
+            let mut end_date: Option<String> = None;
+
+            // Look for timestamp/time comparisons
+            let time_patterns = ["TIMESTAMP", "TIME", "TS"];
+            for pattern in time_patterns {
+                // Check for >= or >
+                if let Some(pos) = where_clause.to_uppercase().find(&format!("{} >", pattern)) {
+                    let after = &where_clause[pos + pattern.len() + 2..];
+                    if let Some(val) = Self::extract_numeric_value(after) {
+                        start_ts = Some(val);
+                    }
+                }
+                if let Some(pos) = where_clause.to_uppercase().find(&format!("{} >=", pattern)) {
+                    let after = &where_clause[pos + pattern.len() + 3..];
+                    if let Some(val) = Self::extract_numeric_value(after) {
+                        start_ts = Some(val);
+                    }
+                }
+                // Check for <= or <
+                if let Some(pos) = where_clause.to_uppercase().find(&format!("{} <", pattern)) {
+                    let after = &where_clause[pos + pattern.len() + 2..];
+                    if let Some(val) = Self::extract_numeric_value(after) {
+                        end_ts = Some(val);
+                    }
+                }
+                if let Some(pos) = where_clause.to_uppercase().find(&format!("{} <=", pattern)) {
+                    let after = &where_clause[pos + pattern.len() + 3..];
+                    if let Some(val) = Self::extract_numeric_value(after) {
+                        end_ts = Some(val);
+                    }
+                }
+            }
+
+            // Look for date partition filter (date = 'YYYY-MM-DD')
+            if let Some(pos) = where_clause.to_uppercase().find("DATE =") {
+                let after = &where_clause[pos + 6..];
+                if let Some(date) = Self::extract_date_value(after) {
+                    start_date = Some(date.clone());
+                    end_date = Some(date);
+                }
+            }
+            if let Some(pos) = where_clause.to_uppercase().find("DATE >=") {
+                let after = &where_clause[pos + 7..];
+                if let Some(date) = Self::extract_date_value(after) {
+                    start_date = Some(date);
+                }
+            }
+            if let Some(pos) = where_clause.to_uppercase().find("DATE <=") {
+                let after = &where_clause[pos + 7..];
+                if let Some(date) = Self::extract_date_value(after) {
+                    end_date = Some(date);
+                }
+            }
+
+            if start_ts.is_some() || end_ts.is_some() || start_date.is_some() || end_date.is_some()
+            {
+                return Some(TimeRange {
+                    start_timestamp: start_ts,
+                    end_timestamp: end_ts,
+                    start_date,
+                    end_date,
+                });
+            }
+        }
+
+        None
+    }
+
+    /// Extract numeric value from SQL fragment
+    fn extract_numeric_value(s: &str) -> Option<i64> {
+        let trimmed = s.trim();
+        let mut num_str = String::new();
+
+        for ch in trimmed.chars() {
+            if ch.is_ascii_digit() || ch == '-' {
+                num_str.push(ch);
+            } else if !num_str.is_empty() {
+                break;
+            }
+        }
+
+        num_str.parse().ok()
+    }
+
+    /// Extract date value from SQL fragment (e.g., '2024-01-15')
+    fn extract_date_value(s: &str) -> Option<String> {
+        let trimmed = s.trim();
+
+        // Look for quoted date string
+        if let Some(start) = trimmed.find('\'') {
+            if let Some(end) = trimmed[start + 1..].find('\'') {
+                let date = &trimmed[start + 1..start + 1 + end];
+                // Validate date format (YYYY-MM-DD)
+                if date.len() == 10 && date.chars().nth(4) == Some('-') && date.chars().nth(7) == Some('-') {
+                    return Some(date.to_string());
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Get query analysis including estimated rows and partitions
+    pub async fn analyze_query(
+        &self,
+        sql: &str,
+        db_name: &str,
+    ) -> Result<QueryAnalysis, String> {
+        // Get explain result first
+        let explain = self.explain_query(sql, db_name, true, false).await?;
+
+        // Extract time range
+        let time_range = self.extract_time_range(sql);
+
+        // Get referenced tables
+        let table_refs = self.extract_table_references(sql, db_name);
+
+        // Count partitions that would be scanned
+        let mut partition_count = 0;
+        let mut total_files = 0;
+
+        for (catalog, schema, table) in &table_refs {
+            let table_path = format!("{}/{}/{}/{}", self.data_dir, catalog, schema, table);
+            if let Ok(partitions) = self.discover_table_partitions(&table_path) {
+                // If we have time range, filter partitions
+                if let Some(ref tr) = time_range {
+                    for partition in &partitions {
+                        // Extract date from partition name (date=YYYY-MM-DD)
+                        if let Some(date) = partition.strip_prefix("date=") {
+                            let include = match (&tr.start_date, &tr.end_date) {
+                                (Some(start), Some(end)) => date >= start.as_str() && date <= end.as_str(),
+                                (Some(start), None) => date >= start.as_str(),
+                                (None, Some(end)) => date <= end.as_str(),
+                                (None, None) => true,
+                            };
+                            if include {
+                                partition_count += 1;
+                                // Count files in partition
+                                let partition_path = format!("{}/{}", table_path, partition);
+                                if let Ok(entries) = std::fs::read_dir(&partition_path) {
+                                    total_files += entries
+                                        .filter_map(|e| e.ok())
+                                        .filter(|e| {
+                                            e.path()
+                                                .extension()
+                                                .map(|ext| ext == "parquet")
+                                                .unwrap_or(false)
+                                        })
+                                        .count();
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    partition_count += partitions.len();
+                    // Count all files
+                    for partition in &partitions {
+                        let partition_path = format!("{}/{}", table_path, partition);
+                        if let Ok(entries) = std::fs::read_dir(&partition_path) {
+                            total_files += entries
+                                .filter_map(|e| e.ok())
+                                .filter(|e| {
+                                    e.path()
+                                        .extension()
+                                        .map(|ext| ext == "parquet")
+                                        .unwrap_or(false)
+                                })
+                                .count();
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(QueryAnalysis {
+            sql: sql.to_string(),
+            tables: table_refs
+                .iter()
+                .map(|(c, s, t)| format!("{}.{}.{}", c, s, t))
+                .collect(),
+            time_range,
+            partitions_to_scan: partition_count,
+            files_to_scan: total_files,
+            optimizations: explain.optimizations,
+            plan_summary: Self::summarize_plan(&explain.physical_plan),
+        })
+    }
+
+    /// Create a brief summary of the physical plan
+    fn summarize_plan(plan: &str) -> String {
+        let mut summary = Vec::new();
+
+        if plan.contains("ParquetExec") || plan.contains("ParquetScan") {
+            summary.push("Parquet scan");
+        }
+        if plan.contains("FilterExec") || plan.contains("filter=") {
+            summary.push("Filter applied");
+        }
+        if plan.contains("ProjectionExec") || plan.contains("projection=") {
+            summary.push("Projection pushdown");
+        }
+        if plan.contains("AggregateExec") || plan.contains("aggregate=") {
+            summary.push("Aggregation");
+        }
+        if plan.contains("SortExec") || plan.contains("sort=") {
+            summary.push("Sort");
+        }
+        if plan.contains("HashJoin") || plan.contains("MergeJoin") {
+            summary.push("Join");
+        }
+        if plan.contains("GlobalLimitExec") || plan.contains("LocalLimitExec") {
+            summary.push("Limit");
+        }
+
+        if summary.is_empty() {
+            "Simple scan".to_string()
+        } else {
+            summary.join(" → ")
+        }
     }
 
     /// Parse a table reference considering quoted identifiers
@@ -1227,5 +1656,69 @@ mod tests {
         let sql = r#"SELECT * FROM default."cat.transaction""#;
         let refs = engine.extract_table_references(sql, "testdb");
         assert_eq!(refs, vec![("testdb".to_string(), "default".to_string(), "cat.transaction".to_string())]);
+    }
+
+    #[test]
+    fn test_extract_time_range_timestamp() {
+        let engine = QueryEngine::new("./data");
+
+        // Test timestamp range extraction
+        let sql = "SELECT * FROM cpu WHERE timestamp >= 1704067200000000000 AND timestamp < 1704153600000000000";
+        let range = engine.extract_time_range(sql);
+        assert!(range.is_some());
+        let range = range.unwrap();
+        assert_eq!(range.start_timestamp, Some(1704067200000000000));
+        assert_eq!(range.end_timestamp, Some(1704153600000000000));
+    }
+
+    #[test]
+    fn test_extract_time_range_date() {
+        let engine = QueryEngine::new("./data");
+
+        // Test date range extraction
+        let sql = "SELECT * FROM cpu WHERE date = '2024-01-15'";
+        let range = engine.extract_time_range(sql);
+        assert!(range.is_some());
+        let range = range.unwrap();
+        assert_eq!(range.start_date, Some("2024-01-15".to_string()));
+        assert_eq!(range.end_date, Some("2024-01-15".to_string()));
+    }
+
+    #[test]
+    fn test_extract_time_range_date_range() {
+        let engine = QueryEngine::new("./data");
+
+        // Test date range extraction
+        let sql = "SELECT * FROM cpu WHERE date >= '2024-01-10' AND date <= '2024-01-20'";
+        let range = engine.extract_time_range(sql);
+        assert!(range.is_some());
+        let range = range.unwrap();
+        assert_eq!(range.start_date, Some("2024-01-10".to_string()));
+        assert_eq!(range.end_date, Some("2024-01-20".to_string()));
+    }
+
+    #[test]
+    fn test_extract_time_range_none() {
+        let engine = QueryEngine::new("./data");
+
+        // Test query without time range
+        let sql = "SELECT * FROM cpu WHERE usage > 50";
+        let range = engine.extract_time_range(sql);
+        assert!(range.is_none());
+    }
+
+    #[test]
+    fn test_optimized_context_settings() {
+        // Verify optimized context is created with correct settings
+        let ctx = QueryEngine::create_optimized_context();
+        let state = ctx.state();
+        let config = state.config();
+
+        // Check that pushdown filters are enabled
+        assert!(config.options().execution.parquet.pushdown_filters);
+        assert!(config.options().execution.parquet.reorder_filters);
+        assert!(config.options().execution.parquet.pruning);
+        assert!(config.options().execution.parquet.enable_page_index);
+        assert!(config.options().execution.parquet.bloom_filter_on_read);
     }
 }

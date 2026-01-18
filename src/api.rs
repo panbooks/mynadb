@@ -673,6 +673,119 @@ async fn execute_query(db: String, sql: String, state: AppState) -> impl IntoRes
     }
 }
 
+// ===== EXPLAIN/ANALYZE Query Handlers =====
+
+/// Query parameters for EXPLAIN endpoint
+#[derive(Debug, Deserialize)]
+pub struct ExplainParams {
+    pub sql: String,
+    #[serde(default)]
+    pub verbose: bool,
+    #[serde(default)]
+    pub analyze: bool,
+}
+
+/// EXPLAIN query handler - returns execution plan
+pub async fn explain_handler(
+    Path(db): Path<String>,
+    AxumQuery(params): AxumQuery<ExplainParams>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    debug!("Explain Request: db={}, sql={}, verbose={}, analyze={}",
+           db, params.sql, params.verbose, params.analyze);
+
+    match state
+        .query_engine
+        .explain_query(&params.sql, &db, params.verbose, params.analyze)
+        .await
+    {
+        Ok(result) => {
+            info!("Explain executed successfully");
+            match serde_json::to_string_pretty(&result) {
+                Ok(json) => (StatusCode::OK, json),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("JSON error: {}", e)),
+            }
+        }
+        Err(e) => {
+            error!("Explain error: {}", e);
+            (StatusCode::BAD_REQUEST, format!("Explain error: {}", e))
+        }
+    }
+}
+
+/// EXPLAIN query handler (POST)
+pub async fn explain_handler_post(
+    Path(db): Path<String>,
+    State(state): State<AppState>,
+    axum::Json(params): axum::Json<ExplainParams>,
+) -> impl IntoResponse {
+    debug!("Explain Request (POST): db={}, sql={}", db, params.sql);
+
+    match state
+        .query_engine
+        .explain_query(&params.sql, &db, params.verbose, params.analyze)
+        .await
+    {
+        Ok(result) => {
+            info!("Explain executed successfully");
+            match serde_json::to_string_pretty(&result) {
+                Ok(json) => (StatusCode::OK, json),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("JSON error: {}", e)),
+            }
+        }
+        Err(e) => {
+            error!("Explain error: {}", e);
+            (StatusCode::BAD_REQUEST, format!("Explain error: {}", e))
+        }
+    }
+}
+
+/// ANALYZE query handler - returns query analysis with statistics
+pub async fn analyze_handler(
+    Path(db): Path<String>,
+    AxumQuery(params): AxumQuery<QueryParams>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    debug!("Analyze Request: db={}, sql={}", db, params.sql);
+
+    match state.query_engine.analyze_query(&params.sql, &db).await {
+        Ok(result) => {
+            info!("Analyze executed successfully");
+            match serde_json::to_string_pretty(&result) {
+                Ok(json) => (StatusCode::OK, json),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("JSON error: {}", e)),
+            }
+        }
+        Err(e) => {
+            error!("Analyze error: {}", e);
+            (StatusCode::BAD_REQUEST, format!("Analyze error: {}", e))
+        }
+    }
+}
+
+/// ANALYZE query handler (POST)
+pub async fn analyze_handler_post(
+    Path(db): Path<String>,
+    State(state): State<AppState>,
+    body: String,
+) -> impl IntoResponse {
+    debug!("Analyze Request (POST): db={}, sql={}", db, body);
+
+    match state.query_engine.analyze_query(&body, &db).await {
+        Ok(result) => {
+            info!("Analyze executed successfully");
+            match serde_json::to_string_pretty(&result) {
+                Ok(json) => (StatusCode::OK, json),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("JSON error: {}", e)),
+            }
+        }
+        Err(e) => {
+            error!("Analyze error: {}", e);
+            (StatusCode::BAD_REQUEST, format!("Analyze error: {}", e))
+        }
+    }
+}
+
 // ===== Write Handlers =====
 
 pub async fn write_handler(
