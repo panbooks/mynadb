@@ -16,8 +16,6 @@ pub struct Config {
     #[serde(default)]
     pub compaction: CompactionConfig,
     #[serde(default)]
-    pub series_tracker: SeriesTrackerConfig,
-    #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
     pub retention: RetentionConfig,
@@ -179,86 +177,6 @@ pub struct CompactionConfig {
     /// Throttles parquet file writes to prevent I/O saturation
     #[serde(default = "default_compaction_write_rate_limit")]
     pub write_rate_limit_mb_per_sec: u64,
-}
-
-/// Series tracker configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SeriesTrackerConfig {
-    /// Track-only mode: only track series cardinality, skip data ingestion
-    /// When enabled, writes only update series stats without storing data
-    #[serde(default = "default_series_track_only")]
-    pub track_only: bool,
-
-    /// Background flush interval in seconds
-    #[serde(default = "default_series_flush_interval")]
-    pub flush_interval_secs: u64,
-
-    /// System tags to exclude for UMC (user metric count) calculation
-    /// These tags are excluded when calculating UMC hash
-    /// PMC (physical metric count) includes all tags
-    /// Examples: ["MONITOR.ip", "MONITOR.hostName", "MONITOR.hostIP"]
-    #[serde(default)]
-    pub system_tags: Vec<String>,
-
-    /// Number of days to keep in cache (and load on startup)
-    #[serde(default = "default_series_cache_retention_days")]
-    pub cache_retention_days: u32,
-
-    /// Maximum concurrent tables to load during startup (default: 8)
-    /// Higher values speed up startup but use more memory and file handles
-    #[serde(default = "default_series_max_concurrent_tables")]
-    pub max_concurrent_tables: usize,
-
-    /// Maximum concurrent files to read per table during cache loading (default: 4)
-    /// Higher values speed up I/O but use more threads and memory
-    #[serde(default = "default_series_max_concurrent_files")]
-    pub max_concurrent_files: usize,
-
-    /// Default deduplication strategy: "hashset" or "bloom"
-    #[serde(default = "default_dedup_strategy")]
-    pub default_strategy: String,
-
-    /// Databases that use bloom filter (supports wildcards like "prod_*")
-    #[serde(default)]
-    pub bloom_databases: Vec<String>,
-
-    /// Default bloom filter settings
-    #[serde(default)]
-    pub bloom: BloomConfig,
-
-    /// Per-database bloom filter customization
-    #[serde(default)]
-    pub bloom_custom: Vec<BloomDatabaseConfig>,
-}
-
-/// Bloom filter configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BloomConfig {
-    #[serde(default = "default_bloom_expected_series")]
-    pub expected_series_per_day: usize,
-
-    #[serde(default = "default_bloom_fp_rate")]
-    pub false_positive_rate: f64,
-}
-
-impl Default for BloomConfig {
-    fn default() -> Self {
-        Self {
-            expected_series_per_day: default_bloom_expected_series(),
-            false_positive_rate: default_bloom_fp_rate(),
-        }
-    }
-}
-
-/// Per-database bloom filter customization
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BloomDatabaseConfig {
-    pub database: String,
-    /// Optional schema filter (pmc or umc). If not specified, applies to all schemas.
-    #[serde(default)]
-    pub schema: Option<String>,
-    pub expected_series_per_day: usize,
-    pub false_positive_rate: f64,
 }
 
 /// Logging configuration
@@ -627,38 +545,6 @@ fn default_compaction_write_rate_limit() -> u64 {
     0
 }
 
-fn default_series_track_only() -> bool {
-    false
-}
-
-fn default_series_flush_interval() -> u64 {
-    60
-}
-
-fn default_series_cache_retention_days() -> u32 {
-    2
-}
-
-fn default_series_max_concurrent_tables() -> usize {
-    8
-}
-
-fn default_series_max_concurrent_files() -> usize {
-    4
-}
-
-fn default_dedup_strategy() -> String {
-    "hashset".to_string()
-}
-
-fn default_bloom_expected_series() -> usize {
-    1_000_000_000 // 1 billion series per day
-}
-
-fn default_bloom_fp_rate() -> f64 {
-    0.01 // 1% false positive rate
-}
-
 fn default_log_level() -> String {
     "info".to_string()
 }
@@ -881,23 +767,6 @@ impl Default for CompactionConfig {
     }
 }
 
-impl Default for SeriesTrackerConfig {
-    fn default() -> Self {
-        Self {
-            track_only: default_series_track_only(),
-            flush_interval_secs: default_series_flush_interval(),
-            system_tags: vec![],
-            cache_retention_days: default_series_cache_retention_days(),
-            max_concurrent_tables: default_series_max_concurrent_tables(),
-            max_concurrent_files: default_series_max_concurrent_files(),
-            default_strategy: default_dedup_strategy(),
-            bloom_databases: vec![],
-            bloom: BloomConfig::default(),
-            bloom_custom: vec![],
-        }
-    }
-}
-
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
@@ -931,7 +800,6 @@ impl Default for Config {
             schema: SchemaConfig::default(),
             cache: CacheConfig::default(),
             compaction: CompactionConfig::default(),
-            series_tracker: SeriesTrackerConfig::default(),
             logging: LoggingConfig::default(),
             retention: RetentionConfig::default(),
             wal: WalConfig::default(),

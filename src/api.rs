@@ -8,7 +8,6 @@
 /// - Profiling (pprof-compatible)
 /// - Compaction
 /// - Partition management
-/// - Series cardinality tracking
 
 use axum::{
     extract::{Path, Query as AxumQuery, Request, State},
@@ -27,7 +26,6 @@ use crate::config;
 use crate::line_protocol::parse_multiple_lines;
 use crate::profiling;
 use crate::query_engine::QueryEngine;
-use crate::series_tracker::{SeriesTracker, SCHEMA_PMC};
 
 // ===== Types and State =====
 
@@ -37,7 +35,6 @@ pub struct AppState {
     pub query_engine: Arc<QueryEngine>,
     pub db_manager: Arc<crate::database_manager::DatabaseManager>,
     pub compactor: Arc<crate::compactor::Compactor>,
-    pub series_tracker: Arc<SeriesTracker>,
     pub config: Arc<config::Config>,
     pub wal: Option<Arc<crate::wal::Wal>>,
     pub ha_manager: Option<Arc<crate::ha::HaManager>>,
@@ -420,8 +417,6 @@ pub async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 pub async fn memory_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let dedup_stats = state.series_tracker.get_dedup_stats().await;
-    let total_dedup = state.series_tracker.total_dedup_memory_bytes().await;
     let cache_stats = state.cache.stats().await;
 
     // Format bytes
@@ -448,31 +443,9 @@ pub async fn memory_handler(State(state): State<AppState>) -> impl IntoResponse 
     output.push_str(&format!("  Limit: {} ({} bytes)\n\n",
         format_bytes(cache_stats.max_size_bytes), cache_stats.max_size_bytes));
 
-    // Deduplication memory
-    output.push_str(&format!("Series Deduplication (Bloom/HashSet):\n"));
-    output.push_str(&format!("  Total: {} ({} bytes)\n\n",
-        format_bytes(total_dedup), total_dedup));
-
-    if !dedup_stats.is_empty() {
-        output.push_str("  Per Database:\n");
-        let mut db_vec: Vec<_> = dedup_stats.iter().collect();
-        db_vec.sort_by_key(|(name, _)| *name);
-
-        for (db_name, stats) in db_vec {
-            output.push_str(&format!("    {:<30} {:>12} ({:>15} bytes, strategy: {})\n",
-                db_name,
-                format_bytes(stats.memory_bytes),
-                stats.memory_bytes,
-                stats.strategy_type));
-        }
-        output.push_str("\n");
-    }
-
-    // Total estimate
-    let total_approx = cache_stats.size_bytes + total_dedup;
     output.push_str("──────────────────────────────────────────\n");
-    output.push_str(&format!("Approximate Total: {} ({} bytes)\n",
-        format_bytes(total_approx), total_approx));
+    output.push_str(&format!("Total: {} ({} bytes)\n",
+        format_bytes(cache_stats.size_bytes), cache_stats.size_bytes));
     output.push_str("══════════════════════════════════════════\n");
 
     (StatusCode::OK, output)
@@ -803,10 +776,8 @@ async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCod
         db,
         data,
         &state.cache,
-        Some(&state.series_tracker),
         Some(&state.query_engine),
         &state.config.schema,
-        &state.config.series_tracker,
     )
     .await
     {
@@ -831,10 +802,8 @@ pub async fn ingest_line_protocol_to_cache(
     db: &str,
     line_protocol: &str,
     cache: &DataCache,
-    series_tracker: Option<&SeriesTracker>,
     query_engine: Option<&Arc<QueryEngine>>,
     schema_config: &config::SchemaConfig,
-    series_tracker_config: &config::SeriesTrackerConfig,
 ) -> Result<usize, String> {
     // Parse line protocol
     let points = parse_multiple_lines(line_protocol, schema_config);
@@ -844,20 +813,6 @@ pub async fn ingest_line_protocol_to_cache(
     }
 
     let point_count = points.len();
-
-    // Track series cardinality (if tracker provided)
-    if let Some(tracker) = series_tracker {
-        tracker.track_points(db, &points).await;
-    }
-
-    // If track_only mode is enabled, skip data ingestion
-    if series_tracker_config.track_only {
-        debug!(
-            "Track-only mode enabled: skipping ingestion of {} points for database={}",
-            point_count, db
-        );
-        return Ok(point_count);
-    }
 
     // Group by schema and table based on strategy
     let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::new();
@@ -1205,68 +1160,6 @@ pub async fn delete_old_partitions_handler(
         Err(e) => {
             error!("Delete partitions error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
-        }
-    }
-}
-
-// ===== Series Cardinality Handler =====
-
-pub async fn series_stats_handler(
-    Path(db): Path<String>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    debug!("Series Stats Request: db={}", db);
-
-    // Default to PMC (physical metric count) for backward compatibility
-    // TODO: Add query parameter to select PMC or UMC
-    match state.series_tracker.get_series_stats(SCHEMA_PMC, &db).await {
-        Ok(stats) => {
-            if stats.is_empty() {
-                return (
-                    StatusCode::OK,
-                    Json(serde_json::json!({
-                        "database": db,
-                        "services": {},
-                        "total_series": 0,
-                        "message": "No series data available"
-                    }))
-                    .to_string(),
-                );
-            }
-
-            // Calculate total series across all services
-            let total_series: usize = stats.values().map(|s| s.total_series).sum();
-
-            // Format response
-            let response = serde_json::json!({
-                "database": db,
-                "total_series": total_series,
-                "service_count": stats.len(),
-                "services": stats.iter().map(|(service, stats)| {
-                    serde_json::json!({
-                        "service": service,
-                        "total_series": stats.total_series,
-                        "metrics": stats.metrics
-                    })
-                }).collect::<Vec<_>>()
-            });
-
-            info!(
-                "Returned stats for {} services, {} total series",
-                stats.len(),
-                total_series
-            );
-            (
-                StatusCode::OK,
-                serde_json::to_string_pretty(&response).unwrap(),
-            )
-        }
-        Err(e) => {
-            error!("Error getting series stats: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Error getting series stats: {}", e),
-            )
         }
     }
 }
