@@ -1,11 +1,12 @@
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufReader, BufWriter, Read, Write};
-use std::path::{Path, PathBuf};
+use bytes::Bytes;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
+
+use crate::config::WalConfig;
+use crate::storage::Storage;
 
 /// WAL entry type discriminator
 #[repr(u8)]
@@ -145,115 +146,143 @@ impl WalEntry {
     }
 }
 
-/// WAL writer for a single file
-struct WalWriter {
-    file: BufWriter<File>,
-    path: PathBuf,
-    bytes_written: u64,
-    sync_on_write: bool,
+/// Buffered WAL segment for object store writes
+/// Since object stores don't support append, we buffer entries and write complete segments
+struct WalSegment {
+    /// Segment file name (without path)
+    filename: String,
+    /// Buffered encoded entries with length prefixes
+    buffer: Vec<u8>,
+    /// Number of entries in this segment
+    entry_count: usize,
+    /// Maximum buffer size in bytes
+    max_size_bytes: u64,
+    /// Maximum entries before forcing write
+    max_entries: usize,
+    /// Whether this segment has been persisted
+    persisted: bool,
 }
 
-impl WalWriter {
-    fn new(path: PathBuf, sync_on_write: bool) -> io::Result<Self> {
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
-
-        // Get current file size
-        let metadata = file.metadata()?;
-        let bytes_written = metadata.len();
-
-        Ok(WalWriter {
-            file: BufWriter::new(file),
-            path,
-            bytes_written,
-            sync_on_write,
-        })
+impl WalSegment {
+    fn new(filename: String, max_size_mb: u64, max_entries: usize) -> Self {
+        WalSegment {
+            filename,
+            buffer: Vec::new(),
+            entry_count: 0,
+            max_size_bytes: max_size_mb * 1024 * 1024,
+            max_entries,
+            persisted: false,
+        }
     }
 
-    fn append(&mut self, entry: &WalEntry) -> io::Result<()> {
+    /// Add entry to buffer
+    fn append(&mut self, entry: &WalEntry) {
         let encoded = entry.encode();
         let entry_len = encoded.len() as u32;
 
         // Write entry length prefix (4 bytes)
-        self.file.write_all(&entry_len.to_le_bytes())?;
+        self.buffer.extend_from_slice(&entry_len.to_le_bytes());
 
         // Write entry data
-        self.file.write_all(&encoded)?;
+        self.buffer.extend_from_slice(&encoded);
 
-        self.bytes_written += 4 + entry_len as u64;
-
-        // Sync if configured
-        if self.sync_on_write {
-            self.file.flush()?;
-            self.file.get_ref().sync_all()?;
-        }
-
-        Ok(())
+        self.entry_count += 1;
     }
 
-    fn flush(&mut self) -> io::Result<()> {
-        self.file.flush()?;
-        self.file.get_ref().sync_all()
+    /// Check if segment needs rotation
+    fn needs_rotation(&self) -> bool {
+        self.buffer.len() as u64 >= self.max_size_bytes || self.entry_count >= self.max_entries
     }
 
+    /// Get buffer size
     fn size(&self) -> u64 {
-        self.bytes_written
+        self.buffer.len() as u64
+    }
+
+    /// Get entry count
+    fn entries(&self) -> usize {
+        self.entry_count
+    }
+
+    /// Take the buffer contents (for writing to storage)
+    fn take_buffer(&mut self) -> Vec<u8> {
+        self.persisted = true;
+        std::mem::take(&mut self.buffer)
+    }
+
+    /// Check if buffer is empty
+    fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
     }
 }
 
-/// Main WAL manager
+/// Main WAL manager with object store support
 pub struct Wal {
-    wal_dir: PathBuf,
-    data_writer: Arc<Mutex<WalWriter>>,
-    series_writer: Arc<Mutex<WalWriter>>,
-    rotate_size_bytes: u64,
+    storage: Arc<Storage>,
+    wal_dir: String,
+    data_segment: Arc<Mutex<WalSegment>>,
+    series_segment: Arc<Mutex<WalSegment>>,
+    rotate_size_mb: u64,
+    buffer_entries: usize,
     /// Sequence counter to ensure unique filenames even within the same millisecond
     sequence: AtomicU64,
     /// Recovery mode flag - prevents WAL deletion during startup recovery
     recovery_mode: Arc<std::sync::atomic::AtomicBool>,
+    /// Sync on write flag
+    sync_on_write: bool,
 }
 
 impl Wal {
-    pub fn new(wal_dir: &str, sync_on_write: bool, rotate_size_mb: u64) -> Result<Self, String> {
-        let wal_path = Path::new(wal_dir);
+    pub async fn new(storage: Arc<Storage>, config: &WalConfig) -> Result<Self, String> {
+        let wal_dir = config.wal_dir.clone();
 
-        // Create WAL directory if it doesn't exist
-        fs::create_dir_all(wal_path).map_err(|e| format!("Failed to create WAL dir: {}", e))?;
+        // Create WAL directory if needed (no-op for object stores)
+        storage
+            .create_dir(&wal_dir)
+            .await
+            .map_err(|e| format!("Failed to create WAL dir: {}", e))?;
 
-        let rotate_size_bytes = rotate_size_mb * 1024 * 1024;
+        let rotate_size_mb = config.rotate_size_mb;
+        let buffer_entries = config.buffer_entries;
 
         // Initialize sequence counter
         let sequence = AtomicU64::new(0);
 
-        // Create initial WAL files
-        let data_file = Self::create_wal_file_with_seq(wal_path, "data", &sequence)?;
-        let series_file = Self::create_wal_file_with_seq(wal_path, "series", &sequence)?;
+        // Create initial WAL segments
+        let data_filename = Self::create_wal_filename("data", &sequence);
+        let series_filename = Self::create_wal_filename("series", &sequence);
 
-        let data_writer = Arc::new(Mutex::new(
-            WalWriter::new(data_file, sync_on_write)
-                .map_err(|e| format!("Failed to create data WAL writer: {}", e))?,
-        ));
+        let data_segment = Arc::new(Mutex::new(WalSegment::new(
+            data_filename,
+            rotate_size_mb,
+            buffer_entries,
+        )));
 
-        let series_writer = Arc::new(Mutex::new(
-            WalWriter::new(series_file, sync_on_write)
-                .map_err(|e| format!("Failed to create series WAL writer: {}", e))?,
-        ));
+        let series_segment = Arc::new(Mutex::new(WalSegment::new(
+            series_filename,
+            rotate_size_mb,
+            buffer_entries,
+        )));
 
-        info!("WAL initialized at {} (sync_on_write={})", wal_dir, sync_on_write);
+        info!(
+            "WAL initialized at {} (sync_on_write={}, rotate_size={}MB, buffer_entries={})",
+            wal_dir, config.sync_on_write, rotate_size_mb, buffer_entries
+        );
 
         Ok(Wal {
-            wal_dir: wal_path.to_path_buf(),
-            data_writer,
-            series_writer,
-            rotate_size_bytes,
+            storage,
+            wal_dir,
+            data_segment,
+            series_segment,
+            rotate_size_mb,
+            buffer_entries,
             sequence,
             recovery_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            sync_on_write: config.sync_on_write,
         })
     }
 
-    fn create_wal_file_with_seq(dir: &Path, prefix: &str, sequence: &AtomicU64) -> Result<PathBuf, String> {
+    fn create_wal_filename(prefix: &str, sequence: &AtomicU64) -> String {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -262,17 +291,22 @@ impl Wal {
         // Fetch and increment sequence to ensure uniqueness even within same millisecond
         let seq = sequence.fetch_add(1, Ordering::Relaxed);
 
-        let filename = format!("{}_{}_{}.wal", prefix, timestamp, seq);
-        Ok(dir.join(filename))
+        format!("{}_{}_{}.wal", prefix, timestamp, seq)
     }
 
-    fn create_wal_file(&self, prefix: &str) -> Result<PathBuf, String> {
-        Self::create_wal_file_with_seq(&self.wal_dir, prefix, &self.sequence)
+    fn create_new_filename(&self, prefix: &str) -> String {
+        Self::create_wal_filename(prefix, &self.sequence)
+    }
+
+    /// Get full path for a WAL file
+    fn wal_path(&self, filename: &str) -> String {
+        format!("{}/{}", self.wal_dir, filename)
     }
 
     /// Set recovery mode (true during WAL replay at startup)
     pub fn set_recovery_mode(&self, enabled: bool) {
-        self.recovery_mode.store(enabled, std::sync::atomic::Ordering::Relaxed);
+        self.recovery_mode
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
         if enabled {
             info!("WAL recovery mode: ENABLED (WAL files will not be deleted during recovery)");
         } else {
@@ -282,7 +316,8 @@ impl Wal {
 
     /// Check if in recovery mode
     pub fn is_recovery_mode(&self) -> bool {
-        self.recovery_mode.load(std::sync::atomic::Ordering::Relaxed)
+        self.recovery_mode
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Log a data write operation
@@ -297,17 +332,38 @@ impl Wal {
             payload: line_protocol.as_bytes().to_vec(),
         };
 
-        let mut writer = self.data_writer.lock().await;
-        writer
-            .append(&entry)
-            .map_err(|e| format!("Failed to write to WAL: {}", e))?;
+        let needs_rotation = {
+            let mut segment = self.data_segment.lock().await;
+            segment.append(&entry);
+
+            // If sync_on_write, persist immediately
+            if self.sync_on_write {
+                self.persist_segment_locked(&mut segment).await?;
+            }
+
+            segment.needs_rotation()
+        };
 
         // Check if rotation is needed
-        if writer.size() >= self.rotate_size_bytes {
-            drop(writer); // Release lock before rotating
+        if needs_rotation {
             self.rotate_data_wal().await?;
         }
 
+        Ok(())
+    }
+
+    /// Persist a segment to storage (must hold lock)
+    async fn persist_segment_locked(&self, segment: &mut WalSegment) -> Result<(), String> {
+        if segment.is_empty() {
+            return Ok(());
+        }
+
+        let path = self.wal_path(&segment.filename);
+        let data = Bytes::from(segment.take_buffer());
+
+        self.storage.put(&path, data).await?;
+
+        debug!("Persisted WAL segment: {} ({} entries)", path, segment.entries());
         Ok(())
     }
 
@@ -318,23 +374,32 @@ impl Wal {
     /// This handles high write throughput where multiple WAL files accumulate between flushes.
     /// During recovery mode, rotation happens but deletion is skipped.
     pub async fn rotate_and_delete_old_wal(&self) -> Result<(), String> {
-        let new_file = self.create_wal_file("data")?;
+        let new_filename = self.create_new_filename("data");
 
-        // First rotate to new file
-        {
-            let mut writer = self.data_writer.lock().await;
+        // Persist current segment and rotate to new one
+        let _old_filename = {
+            let mut segment = self.data_segment.lock().await;
 
-            // Flush current file
-            writer
-                .flush()
-                .map_err(|e| format!("Failed to flush before rotation: {}", e))?;
+            // Persist current buffer if not empty
+            if !segment.is_empty() {
+                self.persist_segment_locked(&mut segment).await?;
+            }
 
-            info!("Rotating data WAL: {} -> {}", writer.path.display(), new_file.display());
+            let old = segment.filename.clone();
+            info!(
+                "Rotating data WAL: {} -> {}",
+                old, new_filename
+            );
 
-            // Create new writer
-            *writer = WalWriter::new(new_file, writer.sync_on_write)
-                .map_err(|e| format!("Failed to create new WAL writer: {}", e))?;
-        }
+            // Create new segment
+            *segment = WalSegment::new(
+                new_filename,
+                self.rotate_size_mb,
+                self.buffer_entries,
+            );
+
+            old
+        };
 
         // Skip deletion if in recovery mode (WAL files needed for potential re-replay)
         if self.is_recovery_mode() {
@@ -344,29 +409,32 @@ impl Wal {
 
         // Now delete ALL old data WAL files (not just the one we rotated)
         // This handles high write throughput where multiple WAL files accumulate between flushes
-        let current_data_path = {
-            let writer = self.data_writer.lock().await;
-            writer.path.clone()
+        let current_filename = {
+            let segment = self.data_segment.lock().await;
+            segment.filename.clone()
         };
 
-        let files = self.list_wal_files("data")?;
+        let files = self.list_wal_files("data").await?;
         let mut deleted = 0;
 
         for file_path in files {
+            // Extract filename from path
+            let filename = file_path.split('/').last().unwrap_or(&file_path);
+
             // Skip the current active file
-            if file_path == current_data_path {
-                debug!("Keeping active WAL file: {}", file_path.display());
+            if filename == current_filename {
+                debug!("Keeping active WAL file: {}", file_path);
                 continue;
             }
 
             // Delete old file (data is now flushed to Parquet)
-            match fs::remove_file(&file_path) {
+            match self.storage.delete(&file_path).await {
                 Ok(_) => {
-                    info!("Deleted old WAL file after flush: {}", file_path.display());
+                    info!("Deleted old WAL file after flush: {}", file_path);
                     deleted += 1;
                 }
                 Err(e) => {
-                    warn!("Failed to delete old WAL file {}: {}", file_path.display(), e);
+                    warn!("Failed to delete old WAL file {}: {}", file_path, e);
                     // Don't fail - rotation succeeded, deletion is best-effort
                 }
             }
@@ -390,43 +458,38 @@ impl Wal {
     async fn cleanup_empty_files(&self) -> Result<usize, String> {
         let mut deleted = 0;
 
-        // Get current file paths to avoid deleting active files
-        let current_data_path = {
-            let writer = self.data_writer.lock().await;
-            writer.path.clone()
+        // Get current file names to avoid deleting active files
+        let current_data_filename = {
+            let segment = self.data_segment.lock().await;
+            segment.filename.clone()
         };
-        let current_series_path = {
-            let writer = self.series_writer.lock().await;
-            writer.path.clone()
+        let current_series_filename = {
+            let segment = self.series_segment.lock().await;
+            segment.filename.clone()
         };
 
-        let entries = fs::read_dir(&self.wal_dir)
-            .map_err(|e| format!("Failed to read WAL directory: {}", e))?;
+        let files = self.storage.list(&self.wal_dir).await?;
 
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-            let path = entry.path();
+        for file_path in files {
+            let filename = file_path.split('/').last().unwrap_or(&file_path);
 
             // Skip if it's the current active file
-            if path == current_data_path || path == current_series_path {
+            if filename == current_data_filename || filename == current_series_filename {
                 continue;
             }
 
-            if path.is_file() {
-                if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                    if filename.ends_with(".wal") {
-                        // Check if file is empty
-                        if let Ok(metadata) = fs::metadata(&path) {
-                            if metadata.len() == 0 {
-                                debug!("Deleting empty WAL file: {}", path.display());
-                                if let Err(e) = fs::remove_file(&path) {
-                                    warn!("Failed to delete empty WAL file {}: {}", path.display(), e);
-                                } else {
-                                    deleted += 1;
-                                }
-                            }
+            if filename.ends_with(".wal") {
+                // Check if file is empty
+                match self.storage.size(&file_path).await {
+                    Ok(size) if size == 0 => {
+                        debug!("Deleting empty WAL file: {}", file_path);
+                        if let Err(e) = self.storage.delete(&file_path).await {
+                            warn!("Failed to delete empty WAL file {}: {}", file_path, e);
+                        } else {
+                            deleted += 1;
                         }
                     }
+                    _ => {}
                 }
             }
         }
@@ -440,20 +503,31 @@ impl Wal {
 
     /// Rotate data WAL file (public for post-flush rotation)
     pub async fn rotate_data_wal(&self) -> Result<(), String> {
-        let new_file = self.create_wal_file("data")?;
-        let mut writer = self.data_writer.lock().await;
+        let new_filename = self.create_new_filename("data");
+        let mut segment = self.data_segment.lock().await;
 
-        // Flush current file
-        writer
-            .flush()
-            .map_err(|e| format!("Failed to flush before rotation: {}", e))?;
+        // Persist current buffer if not empty
+        if !segment.is_empty() {
+            self.persist_segment_locked(&mut segment).await?;
+        }
 
-        info!("Rotating data WAL: {} -> {}", writer.path.display(), new_file.display());
+        info!(
+            "Rotating data WAL: {} -> {}",
+            segment.filename, new_filename
+        );
 
-        // Create new writer
-        *writer = WalWriter::new(new_file, writer.sync_on_write)
-            .map_err(|e| format!("Failed to create new WAL writer: {}", e))?;
+        // Create new segment
+        *segment = WalSegment::new(new_filename, self.rotate_size_mb, self.buffer_entries);
 
+        Ok(())
+    }
+
+    /// Flush current segment to storage without rotation
+    pub async fn flush(&self) -> Result<(), String> {
+        let mut segment = self.data_segment.lock().await;
+        if !segment.is_empty() {
+            self.persist_segment_locked(&mut segment).await?;
+        }
         Ok(())
     }
 
@@ -462,11 +536,11 @@ impl Wal {
     where
         F: FnMut(&str, &str) -> Result<(), String>,
     {
-        let files = self.list_wal_files("data")?;
+        let files = self.list_wal_files("data").await?;
         let mut count = 0;
 
         for file_path in files {
-            debug!("Replaying data WAL: {}", file_path.display());
+            debug!("Replaying data WAL: {}", file_path);
             count += self.replay_file(&file_path, |entry| {
                 if entry.entry_type == EntryType::DataWrite {
                     let line_protocol = String::from_utf8(entry.payload.clone())
@@ -474,7 +548,7 @@ impl Wal {
                     callback(&entry.db_name, &line_protocol)?;
                 }
                 Ok(())
-            })?;
+            }).await?;
         }
 
         // NOTE: Do NOT delete old WAL files here!
@@ -489,29 +563,31 @@ impl Wal {
     /// Deletes all data WAL files except the current active one
     /// Called after recovered data has been safely flushed to Parquet
     pub async fn cleanup_old_data_wal_files(&self) -> Result<(), String> {
-        let current_data_path = {
-            let writer = self.data_writer.lock().await;
-            writer.path.clone()
+        let current_filename = {
+            let segment = self.data_segment.lock().await;
+            segment.filename.clone()
         };
 
-        let files = self.list_wal_files("data")?;
+        let files = self.list_wal_files("data").await?;
         let mut deleted = 0;
 
         for file_path in files {
+            let filename = file_path.split('/').last().unwrap_or(&file_path);
+
             // Skip the current active file
-            if file_path == current_data_path {
-                debug!("Keeping active WAL file: {}", file_path.display());
+            if filename == current_filename {
+                debug!("Keeping active WAL file: {}", file_path);
                 continue;
             }
 
             // Delete old replayed file (data is now safe in Parquet)
-            match fs::remove_file(&file_path) {
+            match self.storage.delete(&file_path).await {
                 Ok(_) => {
-                    info!("Deleted old WAL file (data in Parquet): {}", file_path.display());
+                    info!("Deleted old WAL file (data in Parquet): {}", file_path);
                     deleted += 1;
                 }
                 Err(e) => {
-                    warn!("Failed to delete old WAL file {}: {}", file_path.display(), e);
+                    warn!("Failed to delete old WAL file {}: {}", file_path, e);
                 }
             }
         }
@@ -523,34 +599,47 @@ impl Wal {
         Ok(())
     }
 
-    /// Replay a single WAL file
-    fn replay_file<F>(&self, path: &Path, mut callback: F) -> Result<usize, String>
+    /// Replay a single WAL file from storage
+    async fn replay_file<F>(&self, path: &str, mut callback: F) -> Result<usize, String>
     where
         F: FnMut(&WalEntry) -> Result<(), String>,
     {
-        let file = File::open(path).map_err(|e| format!("Failed to open WAL file: {}", e))?;
-        let mut reader = BufReader::new(file);
-        let mut count = 0;
+        let data = match self.storage.get(path).await {
+            Ok(d) => d,
+            Err(e) => {
+                // File might not exist if it was just created but never written
+                warn!("Could not read WAL file {}: {}", path, e);
+                return Ok(0);
+            }
+        };
 
-        loop {
+        let mut count = 0;
+        let mut pos = 0;
+
+        while pos < data.len() {
             // Read entry length prefix
-            let mut len_buf = [0u8; 4];
-            match reader.read_exact(&mut len_buf) {
-                Ok(_) => {}
-                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break, // End of file
-                Err(e) => return Err(format!("Failed to read entry length: {}", e)),
+            if pos + 4 > data.len() {
+                break; // End of file or corrupted
             }
 
-            let entry_len = u32::from_le_bytes(len_buf) as usize;
+            let entry_len = u32::from_le_bytes(
+                data[pos..pos + 4]
+                    .try_into()
+                    .map_err(|_| "Invalid entry length")?,
+            ) as usize;
+            pos += 4;
 
             // Read entry data
-            let mut entry_buf = vec![0u8; entry_len];
-            reader
-                .read_exact(&mut entry_buf)
-                .map_err(|e| format!("Failed to read entry data: {}", e))?;
+            if pos + entry_len > data.len() {
+                warn!("Truncated entry in WAL file {}", path);
+                break;
+            }
+
+            let entry_data = &data[pos..pos + entry_len];
+            pos += entry_len;
 
             // Decode entry
-            match WalEntry::decode(&entry_buf) {
+            match WalEntry::decode(entry_data) {
                 Ok(entry) => {
                     callback(&entry)?;
                     count += 1;
@@ -565,27 +654,20 @@ impl Wal {
     }
 
     /// List WAL files with given prefix, sorted by creation time
-    fn list_wal_files(&self, prefix: &str) -> Result<Vec<PathBuf>, String> {
-        let entries = fs::read_dir(&self.wal_dir)
-            .map_err(|e| format!("Failed to read WAL directory: {}", e))?;
+    async fn list_wal_files(&self, prefix: &str) -> Result<Vec<String>, String> {
+        let files = self.storage.list(&self.wal_dir).await?;
 
-        let mut files = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-            let path = entry.path();
-
-            if path.is_file() {
-                if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                    if filename.starts_with(prefix) && filename.ends_with(".wal") {
-                        files.push(path);
-                    }
-                }
-            }
-        }
+        let mut wal_files: Vec<String> = files
+            .into_iter()
+            .filter(|path| {
+                let filename = path.split('/').last().unwrap_or(path);
+                filename.starts_with(prefix) && filename.ends_with(".wal")
+            })
+            .collect();
 
         // Sort by filename (which includes timestamp)
-        files.sort();
-        Ok(files)
+        wal_files.sort();
+        Ok(wal_files)
     }
 
     /// Clean up old WAL files
@@ -599,74 +681,68 @@ impl Wal {
 
         let mut deleted = 0;
 
-        // Get current file paths to avoid deleting active files
-        let current_data_path = {
-            let writer = self.data_writer.lock().await;
-            writer.path.clone()
+        // Get current file names to avoid deleting active files
+        let current_data_filename = {
+            let segment = self.data_segment.lock().await;
+            segment.filename.clone()
         };
-        let current_series_path = {
-            let writer = self.series_writer.lock().await;
-            writer.path.clone()
+        let current_series_filename = {
+            let segment = self.series_segment.lock().await;
+            segment.filename.clone()
         };
 
-        let entries = fs::read_dir(&self.wal_dir)
-            .map_err(|e| format!("Failed to read WAL directory: {}", e))?;
+        let files = self.storage.list(&self.wal_dir).await?;
 
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-            let path = entry.path();
+        for file_path in files {
+            let filename = file_path.split('/').last().unwrap_or(&file_path);
 
             // Skip if it's the current active file
-            if path == current_data_path || path == current_series_path {
+            if filename == current_data_filename || filename == current_series_filename {
                 continue;
             }
 
-            if path.is_file() {
-                if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                    if filename.ends_with(".wal") {
-                        // Get file metadata to check size and age
-                        let metadata = fs::metadata(&path)
-                            .map_err(|e| format!("Failed to read metadata for {}: {}", path.display(), e))?;
+            if filename.ends_with(".wal") {
+                // Get file size
+                let file_size = self.storage.size(&file_path).await.unwrap_or(0);
 
-                        let file_size = metadata.len();
-                        let should_delete = if file_size == 0 {
-                            // Delete empty files immediately (no data to preserve)
-                            debug!("Deleting empty WAL file: {}", path.display());
-                            true
-                        } else {
-                            // Delete old files based on retention policy
-                            // Parse filename: data_1767670539.wal (old seconds format)
-                            //             or: data_1767670539000.wal (old milliseconds format)
-                            //             or: data_1767670539000_0.wal (new format with sequence)
-                            let parts: Vec<&str> = filename.split('_').collect();
-                            if parts.len() >= 2 {
-                                // Get timestamp (second element)
-                                let timestamp_str = parts[1].trim_end_matches(".wal");
-                                if let Ok(file_timestamp) = timestamp_str.parse::<u128>() {
-                                    // Handle both old and new timestamp formats
-                                    // Old seconds: ~1767670539 (10 digits)
-                                    // Old/new milliseconds: ~1767670539000 (13 digits)
-                                    let is_old = file_timestamp < cutoff_millis;
-                                    if is_old {
-                                        debug!("Deleting old WAL file: {}", path.display());
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    false
-                                }
+                let should_delete = if file_size == 0 {
+                    // Delete empty files immediately (no data to preserve)
+                    debug!("Deleting empty WAL file: {}", file_path);
+                    true
+                } else {
+                    // Delete old files based on retention policy
+                    // Parse filename: data_1767670539.wal (old seconds format)
+                    //             or: data_1767670539000.wal (old milliseconds format)
+                    //             or: data_1767670539000_0.wal (new format with sequence)
+                    let parts: Vec<&str> = filename.split('_').collect();
+                    if parts.len() >= 2 {
+                        // Get timestamp (second element)
+                        let timestamp_str = parts[1].trim_end_matches(".wal");
+                        if let Ok(file_timestamp) = timestamp_str.parse::<u128>() {
+                            // Handle both old and new timestamp formats
+                            // Old seconds: ~1767670539 (10 digits)
+                            // Old/new milliseconds: ~1767670539000 (13 digits)
+                            let is_old = file_timestamp < cutoff_millis;
+                            if is_old {
+                                debug!("Deleting old WAL file: {}", file_path);
+                                true
                             } else {
                                 false
                             }
-                        };
-
-                        if should_delete {
-                            fs::remove_file(&path)
-                                .map_err(|e| format!("Failed to delete WAL file: {}", e))?;
-                            deleted += 1;
+                        } else {
+                            false
                         }
+                    } else {
+                        false
                     }
+                };
+
+                if should_delete {
+                    self.storage
+                        .delete(&file_path)
+                        .await
+                        .map_err(|e| format!("Failed to delete WAL file: {}", e))?;
+                    deleted += 1;
                 }
             }
         }
