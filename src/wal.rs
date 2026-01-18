@@ -159,8 +159,10 @@ struct WalSegment {
     max_size_bytes: u64,
     /// Maximum entries before forcing write
     max_entries: usize,
-    /// Whether this segment has been persisted
-    persisted: bool,
+    /// Bytes already persisted (for incremental writes)
+    persisted_bytes: usize,
+    /// Entries already persisted
+    persisted_entries: usize,
 }
 
 impl WalSegment {
@@ -171,7 +173,8 @@ impl WalSegment {
             entry_count: 0,
             max_size_bytes: max_size_mb * 1024 * 1024,
             max_entries,
-            persisted: false,
+            persisted_bytes: 0,
+            persisted_entries: 0,
         }
     }
 
@@ -189,9 +192,24 @@ impl WalSegment {
         self.entry_count += 1;
     }
 
-    /// Check if segment needs rotation
+    /// Check if segment needs rotation (based on size)
     fn needs_rotation(&self) -> bool {
-        self.buffer.len() as u64 >= self.max_size_bytes || self.entry_count >= self.max_entries
+        self.buffer.len() as u64 >= self.max_size_bytes
+    }
+
+    /// Check if buffer reached max entries and needs persistence
+    fn needs_persist(&self) -> bool {
+        self.unpersisted_entries() >= self.max_entries
+    }
+
+    /// Get unpersisted entry count
+    fn unpersisted_entries(&self) -> usize {
+        self.entry_count.saturating_sub(self.persisted_entries)
+    }
+
+    /// Check if there are unpersisted entries
+    fn has_unpersisted(&self) -> bool {
+        self.buffer.len() > self.persisted_bytes
     }
 
     /// Get buffer size
@@ -204,9 +222,23 @@ impl WalSegment {
         self.entry_count
     }
 
-    /// Take the buffer contents (for writing to storage)
+    /// Get the full buffer for writing (used when persisting)
+    /// After calling this, mark_persisted() should be called
+    fn get_buffer(&self) -> &[u8] {
+        &self.buffer
+    }
+
+    /// Mark all current data as persisted
+    fn mark_persisted(&mut self) {
+        self.persisted_bytes = self.buffer.len();
+        self.persisted_entries = self.entry_count;
+    }
+
+    /// Take the buffer contents and reset (for rotation)
     fn take_buffer(&mut self) -> Vec<u8> {
-        self.persisted = true;
+        self.persisted_bytes = 0;
+        self.persisted_entries = 0;
+        self.entry_count = 0;
         std::mem::take(&mut self.buffer)
     }
 
@@ -320,6 +352,36 @@ impl Wal {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Start background periodic flush task (every second)
+    pub fn start_background_flush(self: &Arc<Self>) {
+        let wal = Arc::clone(self);
+
+        tokio::spawn(async move {
+            use tokio::time::{interval, Duration};
+            let mut ticker = interval(Duration::from_secs(1));
+
+            debug!("WAL background flush started: every 1 second");
+
+            loop {
+                ticker.tick().await;
+
+                // Persist data segment if there are unpersisted entries
+                if let Err(e) = wal.persist_if_needed().await {
+                    warn!("Background WAL persist failed: {}", e);
+                }
+            }
+        });
+    }
+
+    /// Persist buffer if there are unpersisted entries
+    async fn persist_if_needed(&self) -> Result<(), String> {
+        let mut segment = self.data_segment.lock().await;
+        if segment.has_unpersisted() {
+            self.persist_segment_locked(&mut segment).await?;
+        }
+        Ok(())
+    }
+
     /// Log a data write operation
     pub async fn log_data_write(&self, db: &str, line_protocol: &str) -> Result<(), String> {
         let entry = WalEntry {
@@ -332,7 +394,7 @@ impl Wal {
             payload: line_protocol.as_bytes().to_vec(),
         };
 
-        let needs_rotation = {
+        let (needs_rotation, needs_persist) = {
             let mut segment = self.data_segment.lock().await;
             segment.append(&entry);
 
@@ -341,19 +403,41 @@ impl Wal {
                 self.persist_segment_locked(&mut segment).await?;
             }
 
-            segment.needs_rotation()
+            (segment.needs_rotation(), segment.needs_persist())
         };
 
-        // Check if rotation is needed
+        // Check if rotation is needed (size limit)
         if needs_rotation {
             self.rotate_data_wal().await?;
+        } else if needs_persist {
+            // Persist when buffer_entries is reached (without rotation)
+            let mut segment = self.data_segment.lock().await;
+            self.persist_segment_locked(&mut segment).await?;
         }
 
         Ok(())
     }
 
     /// Persist a segment to storage (must hold lock)
+    /// This writes the full buffer and marks it as persisted (for incremental writes)
     async fn persist_segment_locked(&self, segment: &mut WalSegment) -> Result<(), String> {
+        if segment.is_empty() || !segment.has_unpersisted() {
+            return Ok(());
+        }
+
+        let path = self.wal_path(&segment.filename);
+        let data = Bytes::from(segment.get_buffer().to_vec());
+        let entries = segment.entries();
+
+        self.storage.put(&path, data).await?;
+        segment.mark_persisted();
+
+        debug!("Persisted WAL segment: {} ({} entries)", path, entries);
+        Ok(())
+    }
+
+    /// Persist and take buffer for rotation (clears the segment)
+    async fn persist_and_take_segment(&self, segment: &mut WalSegment) -> Result<(), String> {
         if segment.is_empty() {
             return Ok(());
         }
@@ -363,7 +447,7 @@ impl Wal {
 
         self.storage.put(&path, data).await?;
 
-        debug!("Persisted WAL segment: {} ({} entries)", path, segment.entries());
+        debug!("Persisted and rotated WAL segment: {}", path);
         Ok(())
     }
 
@@ -380,9 +464,9 @@ impl Wal {
         let _old_filename = {
             let mut segment = self.data_segment.lock().await;
 
-            // Persist current buffer if not empty
+            // Persist current buffer if not empty (and take it for rotation)
             if !segment.is_empty() {
-                self.persist_segment_locked(&mut segment).await?;
+                self.persist_and_take_segment(&mut segment).await?;
             }
 
             let old = segment.filename.clone();
@@ -506,9 +590,9 @@ impl Wal {
         let new_filename = self.create_new_filename("data");
         let mut segment = self.data_segment.lock().await;
 
-        // Persist current buffer if not empty
+        // Persist current buffer if not empty (and take it for rotation)
         if !segment.is_empty() {
-            self.persist_segment_locked(&mut segment).await?;
+            self.persist_and_take_segment(&mut segment).await?;
         }
 
         info!(
