@@ -296,13 +296,22 @@ pub struct WalConfig {
     #[serde(default = "default_wal_enabled")]
     pub enabled: bool,
 
+    /// WAL directory path (relative to storage root, default: "_wal")
+    #[serde(default = "default_wal_dir")]
+    pub wal_dir: String,
+
     /// Sync to disk after each write (true=durable, false=faster)
+    /// Note: For object stores, this controls whether to flush buffer after each write
     #[serde(default = "default_wal_sync_on_write")]
     pub sync_on_write: bool,
 
     /// Rotate WAL file when it exceeds this size (MB)
     #[serde(default = "default_wal_rotate_size_mb")]
     pub rotate_size_mb: u64,
+
+    /// Maximum entries to buffer before forcing a write (for object stores)
+    #[serde(default = "default_wal_buffer_entries")]
+    pub buffer_entries: usize,
 
     /// Background cleanup interval in seconds
     #[serde(default = "default_wal_cleanup_interval_secs")]
@@ -502,12 +511,20 @@ fn default_wal_enabled() -> bool {
     true
 }
 
+fn default_wal_dir() -> String {
+    "_wal".to_string()
+}
+
 fn default_wal_sync_on_write() -> bool {
-    false // Default to durable mode
+    false // Default to faster mode
 }
 
 fn default_wal_rotate_size_mb() -> u64 {
     64
+}
+
+fn default_wal_buffer_entries() -> usize {
+    1000 // Buffer up to 1000 entries before forcing write (for object stores)
 }
 
 fn default_wal_cleanup_interval_secs() -> u64 {
@@ -585,8 +602,10 @@ impl Default for WalConfig {
     fn default() -> Self {
         Self {
             enabled: default_wal_enabled(),
+            wal_dir: default_wal_dir(),
             sync_on_write: default_wal_sync_on_write(),
             rotate_size_mb: default_wal_rotate_size_mb(),
+            buffer_entries: default_wal_buffer_entries(),
             cleanup_interval_secs: default_wal_cleanup_interval_secs(),
             retention_hours: default_wal_retention_hours(),
         }

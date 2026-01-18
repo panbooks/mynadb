@@ -89,20 +89,22 @@ fn print_welcome_banner(config: &Config) {
     welcome!("");
 }
 
-/// Initialize WAL (Write-Ahead Log)
-fn initialize_wal(config: &Config) -> Option<Arc<wal::Wal>> {
+/// Initialize WAL (Write-Ahead Log) with object store support
+async fn initialize_wal(config: &Config, storage: Arc<storage::Storage>) -> Option<Arc<wal::Wal>> {
     if !config.wal.enabled {
         info!("WAL is disabled");
         return None;
     }
 
-    let wal_dir = format!("{}/{}", config.storage.data_dir, "_wal");
     info!(
-        "Initializing WAL at {} (sync_on_write={}, rotate_size={}MB)",
-        wal_dir, config.wal.sync_on_write, config.wal.rotate_size_mb
+        "Initializing WAL at {} (sync_on_write={}, rotate_size={}MB, buffer_entries={})",
+        config.wal.wal_dir,
+        config.wal.sync_on_write,
+        config.wal.rotate_size_mb,
+        config.wal.buffer_entries
     );
 
-    match wal::Wal::new(&wal_dir, config.wal.sync_on_write, config.wal.rotate_size_mb) {
+    match wal::Wal::new(storage, &config.wal).await {
         Ok(w) => {
             info!("WAL initialized successfully - recovery will happen after components initialize");
             Some(Arc::new(w))
@@ -346,10 +348,7 @@ async fn main() {
 
     std::fs::create_dir_all(&config.storage.data_dir).expect("Failed to create data directory");
 
-    // Initialize WAL
-    let wal = initialize_wal(&config);
-
-    // Initialize storage backend
+    // Initialize storage backend first (WAL depends on it)
     info!(
         "Initializing storage backend: {}",
         config.storage.object_store.backend
@@ -358,6 +357,9 @@ async fn main() {
         storage::Storage::from_config(&config.storage.object_store)
             .expect("Failed to initialize storage"),
     );
+
+    // Initialize WAL (requires storage)
+    let wal = initialize_wal(&config, storage.clone()).await;
 
     // Initialize cache
     info!(
