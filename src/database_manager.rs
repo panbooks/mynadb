@@ -1,6 +1,8 @@
+use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::fs::{create_dir_all, read_to_string, write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 // Database configuration constants
 const DB_CONFIG_FILENAME: &str = "config.json";
@@ -19,12 +21,23 @@ pub struct TableConfig {
 
 pub struct DatabaseManager {
     data_dir: String,
+    /// Storage backend (for future S3 support)
+    #[allow(dead_code)]
+    storage: Option<Arc<Storage>>,
 }
 
 impl DatabaseManager {
     pub fn new(data_dir: &str) -> Self {
         DatabaseManager {
             data_dir: data_dir.to_string(),
+            storage: None,
+        }
+    }
+
+    pub fn with_storage(data_dir: &str, storage: Arc<Storage>) -> Self {
+        DatabaseManager {
+            data_dir: data_dir.to_string(),
+            storage: Some(storage),
         }
     }
 

@@ -14,6 +14,30 @@ data_dir = "/data0/stats/data"
 # System directory name (for metadata like series stats, retention exclusions)
 system_dir = "_system"
 
+# Object store configuration
+[storage.object_store]
+# Storage backend: "local" (default), "s3", "minio", "oss"
+backend = "local"
+
+# Data directory for local storage
+data_dir = "/data0/stats/data"
+
+# S3/MinIO/OSS configuration (only used when backend != "local")
+# bucket = "my-bucket"
+# region = "us-east-1"
+# access_key = "your-access-key"
+# secret_key = "your-secret-key"
+
+# Custom endpoint for MinIO or Aliyun OSS
+# endpoint = "http://localhost:9000"  # MinIO example
+# endpoint = "https://oss-cn-hangzhou.aliyuncs.com"  # Aliyun OSS example
+
+# Allow HTTP connections (for local MinIO without TLS)
+# allow_http = true
+
+# Optional prefix for all paths in the bucket
+# prefix = "stats-data"
+
 [schema]
 # Schema/Table naming strategy
 # - "service_as_schema": service tag → schema, measurement → table (default)
@@ -80,89 +104,6 @@ read_rate_limit_mb_per_sec = 0
 # Less critical than read limiting (writes are buffered)
 # Example: 100 MB/s = write_rate_limit_mb_per_sec = 100
 write_rate_limit_mb_per_sec = 0
-
-[series_tracker]
-# Track-only mode: only track series cardinality, skip data ingestion (default: false)
-# When enabled, writes only update series stats without storing data to disk
-# Useful for monitoring cardinality without the storage overhead
-track_only = false
-
-# Background flush interval in seconds
-flush_interval_secs = 60
-
-# System tags to exclude for UMC (User Metric Count) calculation
-# PMC (Physical Metric Count) includes all tags
-# UMC excludes service tags + these system tags for user-visible cardinality
-system_tags = [
-    "MONITOR.ip",
-    "MONITOR.endpoint",
-    "MONITOR.hostName",
-    "MONITOR.hostIP",
-    "MONITOR.set",
-    "MONITOR.dc",
-    "MONITOR.dr"
-]
-
-# Number of days to keep in cache (and load on startup)
-cache_retention_days = 1
-
-# Default deduplication strategy: "hashset" or "bloom"
-# - hashset: Exact deduplication, ~24 bytes per series (best for < 100M series)
-# - bloom: Probabilistic deduplication, ~1.4 bytes per series (best for > 100M series)
-default_strategy = "hashset"
-
-# Databases that use bloom filter (supports wildcards)
-# Example: ["production", "metrics_*", "monitoring"]
-bloom_databases = ["arch_monitor_roc", "arch_monitor_rec"]
-
-# Default bloom filter configuration (for all bloom databases)
-[series_tracker.bloom]
-expected_series_per_day = 100000000  # 100 million
-false_positive_rate = 0.01            # 1% (lower = more accurate but more memory)
-
-# Per-database bloom filter customization (optional)
-# Allows fine-tuning for databases with different cardinality
-# Can optionally specify 'schema = "pmc"' or 'schema = "umc"' to configure schemas separately
-# PMC (Physical Metric Count) includes ALL tags → higher cardinality
-# UMC (User Metric Count) excludes system tags → lower cardinality
-
-# Example 1: Database-wide config (applies to both PMC and UMC)
-#[[series_tracker.bloom_custom]]
-#database = "arch_monitor_roc"
-#expected_series_per_day = 2000000000  # 2 billion series
-#false_positive_rate = 0.01           # 1%
-
-# Example 2: Schema-specific config (different settings for PMC vs UMC)
-# [[series_tracker.bloom_custom]]
-# database = "arch_monitor_roc"
-# schema = "pmc"                       # PMC: includes all tags
-# expected_series_per_day = 2000000000 # Higher cardinality
-# false_positive_rate = 0.01
-#
-
-[[series_tracker.bloom_custom]]
-database = "arch_monitor_roc"
-schema = "pmc"
-expected_series_per_day = 2000000000  # 2 billion series
-false_positive_rate = 0.01           # 1%
-
-[[series_tracker.bloom_custom]]
-database = "arch_monitor_roc"
-schema = "umc"                       # UMC: excludes system tags
-expected_series_per_day = 500000000  # Lower cardinality, 500 million series
-false_positive_rate = 0.01
-
-[[series_tracker.bloom_custom]]
-database = "arch_monitor_rec"
-schema = "pmc"
-expected_series_per_day = 5000000000 # 5 billion series
-false_positive_rate = 0.01
-
-[[series_tracker.bloom_custom]]
-database = "arch_monitor_rec"
-schema = "umc"
-expected_series_per_day = 1000000000 # 1 billion series
-false_positive_rate = 0.01
 
 [logging]
 # Log level: trace, debug, info, warn, error

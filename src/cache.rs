@@ -1,5 +1,6 @@
 use crate::line_protocol::{format_date32_as_partition, Point};
 use crate::parquet_writer::ParquetWriter;
+use crate::storage::Storage;
 use crate::wal::Wal;
 use arrow::array::{RecordBatch, StringArray, TimestampNanosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -33,9 +34,10 @@ pub struct DataCache {
 }
 
 impl DataCache {
-    pub fn with_max_size_and_wal(data_dir: &str, max_size_mb: u64, wal: Option<Arc<Wal>>) -> Self {
+    /// Create with storage backend
+    pub fn new(storage: Arc<Storage>, max_size_mb: u64, wal: Option<Arc<Wal>>) -> Self {
         let cache = Arc::new(Mutex::new(HashMap::new()));
-        let writer = Arc::new(ParquetWriter::new(data_dir));
+        let writer = Arc::new(ParquetWriter::new(storage));
         let max_size_bytes = (max_size_mb as usize) * 1024 * 1024;
 
         DataCache {
@@ -46,6 +48,12 @@ impl DataCache {
             flush_notify: Arc::new(Notify::new()),
             wal,
         }
+    }
+
+    /// Create with local storage (backward compatibility)
+    pub fn with_max_size_and_wal(data_dir: &str, max_size_mb: u64, wal: Option<Arc<Wal>>) -> Self {
+        let storage = Storage::new_local(data_dir).expect("Failed to create local storage");
+        Self::new(Arc::new(storage), max_size_mb, wal)
     }
 
     /// Add points to the in-memory cache as RecordBatch
@@ -215,7 +223,7 @@ impl DataCache {
 
             match self
                 .writer
-                .write_batches_partitioned(&catalog, &schema, &table, date, batches)
+                .write_batches_partitioned_sync(&catalog, &schema, &table, date, batches)
             {
                 Ok(filename) => {
                     debug!("Written to: {}", filename);

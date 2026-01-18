@@ -60,13 +60,73 @@ pub struct ServerConfig {
 /// Storage configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
-    /// Data directory path
+    /// Data directory path (for local storage)
     #[serde(default = "default_data_dir")]
     pub data_dir: String,
 
     /// System directory name (for metadata like series stats, retention exclusions)
     #[serde(default = "default_system_dir")]
     pub system_dir: String,
+
+    /// Object store configuration
+    #[serde(default)]
+    pub object_store: ObjectStoreConfig,
+}
+
+/// Object store configuration for S3-compatible storage
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectStoreConfig {
+    /// Storage backend: "local", "s3", "minio", "oss"
+    #[serde(default = "default_storage_backend")]
+    pub backend: String,
+
+    /// Data directory for local storage
+    #[serde(default = "default_data_dir")]
+    pub data_dir: String,
+
+    /// S3 bucket name
+    #[serde(default)]
+    pub bucket: String,
+
+    /// S3 region
+    #[serde(default = "default_s3_region")]
+    pub region: String,
+
+    /// S3 access key ID
+    #[serde(default)]
+    pub access_key: Option<String>,
+
+    /// S3 secret access key
+    #[serde(default)]
+    pub secret_key: Option<String>,
+
+    /// Custom endpoint URL (for MinIO, Aliyun OSS)
+    #[serde(default)]
+    pub endpoint: Option<String>,
+
+    /// Path prefix within bucket
+    #[serde(default)]
+    pub prefix: Option<String>,
+
+    /// Allow HTTP connections (for local MinIO)
+    #[serde(default)]
+    pub allow_http: bool,
+}
+
+impl Default for ObjectStoreConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_storage_backend(),
+            data_dir: default_data_dir(),
+            bucket: String::new(),
+            region: default_s3_region(),
+            access_key: None,
+            secret_key: None,
+            endpoint: None,
+            prefix: None,
+            allow_http: false,
+        }
+    }
 }
 
 /// Schema/Table naming strategy
@@ -310,6 +370,14 @@ fn default_system_dir() -> String {
     "_system".to_string()
 }
 
+fn default_storage_backend() -> String {
+    "local".to_string()
+}
+
+fn default_s3_region() -> String {
+    "us-east-1".to_string()
+}
+
 fn default_cache_flush_interval() -> u64 {
     30
 }
@@ -488,6 +556,7 @@ impl Default for StorageConfig {
         Self {
             data_dir: default_data_dir(),
             system_dir: default_system_dir(),
+            object_store: ObjectStoreConfig::default(),
         }
     }
 }
