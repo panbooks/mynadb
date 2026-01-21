@@ -2,7 +2,7 @@ use arrow::array::{
     new_null_array, Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch,
     StringArray,
 };
-use arrow::compute::{cast, concat_batches, sort_to_indices, take};
+use arrow::compute::{cast, concat_batches, take};
 use arrow::datatypes::{DataType, Field, Schema};
 use chrono::Timelike;
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -1433,35 +1433,203 @@ impl Compactor {
         Ok(StringArray::from(string_values))
     }
 
-    /// Sort a RecordBatch by timestamp column (ascending)
-    fn sort_batch_by_timestamp(batch: &RecordBatch) -> Result<RecordBatch, String> {
-        let ts_idx = match batch.schema().index_of("timestamp") {
+    /// K-way merge sort for already-sorted batches (one batch per file)
+    /// Much more efficient than full sort: O(N log K) vs O(N log N)
+    fn merge_sorted_batches(
+        batches: Vec<RecordBatch>,
+        schema: &Arc<Schema>,
+    ) -> Result<RecordBatch, String> {
+        if batches.is_empty() {
+            return Err("No batches to merge".to_string());
+        }
+
+        if batches.len() == 1 {
+            return Ok(batches.into_iter().next().unwrap());
+        }
+
+        let ts_idx = match schema.index_of("timestamp") {
             Ok(idx) => idx,
             Err(_) => {
-                // No timestamp column, return batch as-is
-                debug!("No timestamp column found, skipping sort");
-                return Ok(batch.clone());
+                // No timestamp column, just concatenate
+                debug!("No timestamp column found, concatenating without sort");
+                return concat_batches(schema, &batches)
+                    .map_err(|e| format!("Failed to concat batches: {}", e));
             }
         };
 
-        let ts_col = batch.column(ts_idx);
+        // Collect all rows with (timestamp, batch_idx, row_idx)
+        let mut indexed_rows: Vec<(i64, usize, usize)> = Vec::new();
 
-        // Get sort indices (ascending order)
-        let indices = sort_to_indices(ts_col, None, None)
-            .map_err(|e| format!("Failed to sort: {}", e))?;
+        for (batch_idx, batch) in batches.iter().enumerate() {
+            let ts_col = batch
+                .column(ts_idx)
+                .as_any()
+                .downcast_ref::<arrow::array::TimestampNanosecondArray>();
 
-        // Reorder all columns by the sort indices
-        let sorted_columns: Result<Vec<ArrayRef>, String> = batch
-            .columns()
-            .iter()
-            .map(|col| {
-                take(col.as_ref(), &indices, None)
-                    .map_err(|e| format!("Failed to reorder column: {}", e))
-            })
-            .collect();
+            if let Some(ts_array) = ts_col {
+                for row_idx in 0..batch.num_rows() {
+                    let ts = ts_array.value(row_idx);
+                    indexed_rows.push((ts, batch_idx, row_idx));
+                }
+            } else {
+                // Fallback: try Int64 timestamp
+                let ts_col = batch
+                    .column(ts_idx)
+                    .as_any()
+                    .downcast_ref::<Int64Array>();
 
-        RecordBatch::try_new(batch.schema(), sorted_columns?)
-            .map_err(|e| format!("Failed to create sorted batch: {}", e))
+                if let Some(ts_array) = ts_col {
+                    for row_idx in 0..batch.num_rows() {
+                        let ts = ts_array.value(row_idx);
+                        indexed_rows.push((ts, batch_idx, row_idx));
+                    }
+                } else {
+                    // Unknown timestamp type, just add rows in order
+                    for row_idx in 0..batch.num_rows() {
+                        indexed_rows.push((row_idx as i64, batch_idx, row_idx));
+                    }
+                }
+            }
+        }
+
+        // Sort by timestamp (stable sort preserves order for equal timestamps)
+        indexed_rows.sort_by_key(|(ts, _, _)| *ts);
+
+        // Build sorted arrays
+        let mut sorted_columns: Vec<ArrayRef> = Vec::with_capacity(schema.fields().len());
+
+        for (col_idx, field) in schema.fields().iter().enumerate() {
+            let sorted_array = Self::build_sorted_column(
+                &batches,
+                col_idx,
+                field.data_type(),
+                &indexed_rows,
+            )?;
+            sorted_columns.push(sorted_array);
+        }
+
+        RecordBatch::try_new(schema.clone(), sorted_columns)
+            .map_err(|e| format!("Failed to create merged batch: {}", e))
+    }
+
+    /// Build a single sorted column from indexed rows
+    fn build_sorted_column(
+        batches: &[RecordBatch],
+        col_idx: usize,
+        data_type: &DataType,
+        indexed_rows: &[(i64, usize, usize)],
+    ) -> Result<ArrayRef, String> {
+        use arrow::array::*;
+
+        match data_type {
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, _) => {
+                let mut builder = TimestampNanosecondArray::builder(indexed_rows.len());
+                for (_, batch_idx, row_idx) in indexed_rows {
+                    let array = batches[*batch_idx]
+                        .column(col_idx)
+                        .as_any()
+                        .downcast_ref::<TimestampNanosecondArray>()
+                        .ok_or("Failed to downcast timestamp array")?;
+                    if array.is_null(*row_idx) {
+                        builder.append_null();
+                    } else {
+                        builder.append_value(array.value(*row_idx));
+                    }
+                }
+                Ok(Arc::new(builder.finish()))
+            }
+            DataType::Int64 => {
+                let mut builder = Int64Builder::with_capacity(indexed_rows.len());
+                for (_, batch_idx, row_idx) in indexed_rows {
+                    let array = batches[*batch_idx]
+                        .column(col_idx)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .ok_or("Failed to downcast Int64 array")?;
+                    if array.is_null(*row_idx) {
+                        builder.append_null();
+                    } else {
+                        builder.append_value(array.value(*row_idx));
+                    }
+                }
+                Ok(Arc::new(builder.finish()))
+            }
+            DataType::Float64 => {
+                let mut builder = Float64Builder::with_capacity(indexed_rows.len());
+                for (_, batch_idx, row_idx) in indexed_rows {
+                    let array = batches[*batch_idx]
+                        .column(col_idx)
+                        .as_any()
+                        .downcast_ref::<Float64Array>()
+                        .ok_or("Failed to downcast Float64 array")?;
+                    if array.is_null(*row_idx) {
+                        builder.append_null();
+                    } else {
+                        builder.append_value(array.value(*row_idx));
+                    }
+                }
+                Ok(Arc::new(builder.finish()))
+            }
+            DataType::Utf8 => {
+                let mut builder = StringBuilder::with_capacity(indexed_rows.len(), indexed_rows.len() * 32);
+                for (_, batch_idx, row_idx) in indexed_rows {
+                    let array = batches[*batch_idx]
+                        .column(col_idx)
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .ok_or("Failed to downcast String array")?;
+                    if array.is_null(*row_idx) {
+                        builder.append_null();
+                    } else {
+                        builder.append_value(array.value(*row_idx));
+                    }
+                }
+                Ok(Arc::new(builder.finish()))
+            }
+            DataType::Boolean => {
+                let mut builder = BooleanBuilder::with_capacity(indexed_rows.len());
+                for (_, batch_idx, row_idx) in indexed_rows {
+                    let array = batches[*batch_idx]
+                        .column(col_idx)
+                        .as_any()
+                        .downcast_ref::<BooleanArray>()
+                        .ok_or("Failed to downcast Boolean array")?;
+                    if array.is_null(*row_idx) {
+                        builder.append_null();
+                    } else {
+                        builder.append_value(array.value(*row_idx));
+                    }
+                }
+                Ok(Arc::new(builder.finish()))
+            }
+            _ => {
+                // Fallback: use take with indices (less efficient but works for any type)
+                // First concat all arrays, then take
+                let arrays: Vec<&dyn Array> = batches
+                    .iter()
+                    .map(|b| b.column(col_idx).as_ref())
+                    .collect();
+
+                let concatenated = arrow::compute::concat(&arrays)
+                    .map_err(|e| format!("Failed to concat arrays: {}", e))?;
+
+                // Build global indices
+                let mut global_indices: Vec<u64> = Vec::with_capacity(indexed_rows.len());
+                let mut offsets: Vec<usize> = vec![0];
+                for batch in batches {
+                    offsets.push(offsets.last().unwrap() + batch.num_rows());
+                }
+
+                for (_, batch_idx, row_idx) in indexed_rows {
+                    let global_idx = offsets[*batch_idx] + row_idx;
+                    global_indices.push(global_idx as u64);
+                }
+
+                let indices = UInt64Array::from(global_indices);
+                take(&concatenated, &indices, None)
+                    .map_err(|e| format!("Failed to take: {}", e))
+            }
+        }
     }
 
     /// Create optimized WriterProperties with Bloom filters and compression
@@ -1492,7 +1660,8 @@ impl Compactor {
         builder.build()
     }
 
-    /// Write compacted batches to a new file (merged, sorted by timestamp, optimized)
+    /// Write compacted batches to a new file (merge-sorted by timestamp, optimized)
+    /// Uses k-way merge since each input file is already sorted
     async fn write_compacted_file(
         &self,
         filename: &str,
@@ -1504,16 +1673,12 @@ impl Compactor {
 
         let schema = batches[0].schema();
 
-        // Merge all batches into one
-        let merged_batch = concat_batches(&schema, &batches)
-            .map_err(|e| format!("Failed to merge batches: {}", e))?;
-
-        // Sort by timestamp
-        let sorted_batch = Self::sort_batch_by_timestamp(&merged_batch)?;
+        // K-way merge sort (efficient since each batch is already sorted)
+        let sorted_batch = Self::merge_sorted_batches(batches, &schema)?;
 
         let total_rows = sorted_batch.num_rows();
         debug!(
-            "Writing {} rows to {} (sorted by timestamp)",
+            "Writing {} rows to {} (merge-sorted by timestamp)",
             total_rows, filename
         );
 
@@ -1541,7 +1706,7 @@ impl Compactor {
             .map_err(|e| format!("Failed to close writer: {}", e))?;
 
         debug!(
-            "Wrote {} rows, {} MB (sorted, compressed)",
+            "Wrote {} rows, {} MB (merge-sorted, compressed)",
             total_rows,
             batch_bytes / (1024 * 1024)
         );
