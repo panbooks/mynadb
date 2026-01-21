@@ -520,11 +520,11 @@ fn default_wal_sync_on_write() -> bool {
 }
 
 fn default_wal_rotate_size_mb() -> u64 {
-    64
+    256
 }
 
 fn default_wal_buffer_entries() -> usize {
-    1000 // Buffer up to 1000 entries before forcing write (for object stores)
+    1000_000 // Buffer up to 1000000 entries before forcing write (for object stores)
 }
 
 fn default_wal_cleanup_interval_secs() -> u64 {

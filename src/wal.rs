@@ -314,6 +314,11 @@ impl Wal {
         })
     }
 
+    /// Check if sync_on_write is enabled (strict durability mode)
+    pub fn is_sync_on_write(&self) -> bool {
+        self.sync_on_write
+    }
+
     fn create_wal_filename(prefix: &str, sequence: &AtomicU64) -> String {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
