@@ -889,7 +889,8 @@ async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCod
     let point_count = points.len();
 
     // STEP 3: Group and add to cache
-    let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::new();
+    // Pre-size: typically few unique (schema, table) combinations per request
+    let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::with_capacity(8);
     for point in points {
         let (schema, table) = match state.config.schema.strategy {
             config::SchemaTableStrategy::ServiceAsSchema => {
@@ -899,7 +900,10 @@ async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCod
                 (state.config.schema.default_name.clone(), point.service.clone())
             }
         };
-        grouped.entry((schema, table)).or_default().push(point);
+        grouped
+            .entry((schema, table))
+            .or_insert_with(|| Vec::with_capacity(point_count / 4))
+            .push(point);
     }
 
     // Add to cache (sharded, fast)

@@ -4,7 +4,7 @@ use crate::storage::Storage;
 use crate::wal::Wal;
 use arrow::array::{RecordBatch, StringArray, TimestampNanosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -12,6 +12,12 @@ use std::time::Instant;
 use tokio::sync::Notify;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
+
+/// Global schema cache to avoid rebuilding schemas for the same tag set
+/// Key: sorted tag keys joined by comma (e.g., "host,region,service")
+/// Value: Arc<Schema> for reuse
+static SCHEMA_CACHE: std::sync::LazyLock<RwLock<HashMap<String, Arc<Schema>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::with_capacity(1024)));
 
 /// Cache key: (catalog/database, schema/service, table/measurement, date)
 type CacheKey = (String, String, String, i32);
@@ -180,16 +186,29 @@ impl DataCache {
         Ok(())
     }
 
-    /// Convert Points to RecordBatch
-    fn points_to_record_batch(points: &[Point]) -> Result<RecordBatch, String> {
-        if points.is_empty() {
-            return Err("No points to convert".to_string());
+    /// Get or create schema from cache based on tag keys
+    fn get_or_create_schema(tag_keys: &[String]) -> Arc<Schema> {
+        // Create cache key from sorted tag keys
+        let cache_key = tag_keys.join(",");
+
+        // Try read lock first (fast path)
+        {
+            let cache = SCHEMA_CACHE.read();
+            if let Some(schema) = cache.get(&cache_key) {
+                return schema.clone();
+            }
         }
 
-        let first_point = &points[0];
+        // Need to create schema - take write lock
+        let mut cache = SCHEMA_CACHE.write();
+
+        // Double-check after acquiring write lock
+        if let Some(schema) = cache.get(&cache_key) {
+            return schema.clone();
+        }
 
         // Build schema
-        let mut fields = Vec::new();
+        let mut fields = Vec::with_capacity(2 + tag_keys.len());
 
         // Timestamp
         fields.push(Field::new(
@@ -202,37 +221,55 @@ impl DataCache {
         fields.push(Field::new("measurement", DataType::Utf8, false));
 
         // Tags
-        let mut tag_keys: Vec<_> = first_point.tags.keys().cloned().collect();
-        tag_keys.sort();
-        for key in &tag_keys {
+        for key in tag_keys {
             fields.push(Field::new(key, DataType::Utf8, true));
         }
 
         let schema = Arc::new(Schema::new(fields));
+        cache.insert(cache_key, schema.clone());
+        schema
+    }
 
-        // Build arrays
-        let mut arrays: Vec<Arc<dyn arrow::array::Array>> = Vec::new();
+    /// Convert Points to RecordBatch with schema caching and pre-sized vectors
+    fn points_to_record_batch(points: &[Point]) -> Result<RecordBatch, String> {
+        if points.is_empty() {
+            return Err("No points to convert".to_string());
+        }
 
-        // Timestamp array
-        let timestamps: Vec<i64> = points
-            .iter()
-            .map(|p| {
-                p.timestamp
-                    .unwrap_or_else(|| chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0))
-            })
-            .collect();
+        let num_points = points.len();
+        let first_point = &points[0];
+
+        // Get sorted tag keys
+        let mut tag_keys: Vec<_> = first_point.tags.keys().cloned().collect();
+        tag_keys.sort();
+
+        // Get or create cached schema
+        let schema = Self::get_or_create_schema(&tag_keys);
+
+        // Pre-size arrays vector
+        let mut arrays: Vec<Arc<dyn arrow::array::Array>> = Vec::with_capacity(2 + tag_keys.len());
+
+        // Timestamp array (pre-sized)
+        let mut timestamps = Vec::with_capacity(num_points);
+        let now = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+        for p in points {
+            timestamps.push(p.timestamp.unwrap_or(now));
+        }
         arrays.push(Arc::new(TimestampNanosecondArray::from(timestamps)));
 
-        // Measurement array
-        let measurements: Vec<&str> = points.iter().map(|p| p.measurement.as_str()).collect();
+        // Measurement array (pre-sized)
+        let mut measurements = Vec::with_capacity(num_points);
+        for p in points {
+            measurements.push(p.measurement.as_str());
+        }
         arrays.push(Arc::new(StringArray::from(measurements)));
 
-        // Tag arrays
+        // Tag arrays (pre-sized)
         for key in &tag_keys {
-            let values: Vec<Option<&str>> = points
-                .iter()
-                .map(|p| p.tags.get(key).map(|s| s.as_str()))
-                .collect();
+            let mut values = Vec::with_capacity(num_points);
+            for p in points {
+                values.push(p.tags.get(key).map(|s| s.as_str()));
+            }
             arrays.push(Arc::new(StringArray::from(values)));
         }
 
