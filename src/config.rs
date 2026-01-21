@@ -14,6 +14,8 @@ pub struct Config {
     #[serde(default)]
     pub cache: CacheConfig,
     #[serde(default)]
+    pub query_cache: QueryCacheConfig,
+    #[serde(default)]
     pub compaction: CompactionConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
@@ -162,7 +164,7 @@ pub struct SchemaConfig {
     pub prefix_numeric: bool,
 }
 
-/// Cache configuration
+/// Cache configuration (write cache)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheConfig {
     /// Background flush interval in seconds
@@ -172,6 +174,63 @@ pub struct CacheConfig {
     /// Maximum cache size in MB before forcing flush
     #[serde(default = "default_cache_max_size_mb")]
     pub max_size_mb: u64,
+}
+
+/// Query result cache configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryCacheConfig {
+    /// Enable query result caching
+    #[serde(default = "default_query_cache_enabled")]
+    pub enabled: bool,
+
+    /// Maximum cache size in MB
+    #[serde(default = "default_query_cache_max_size_mb")]
+    pub max_size_mb: u64,
+
+    /// Maximum number of cached entries
+    #[serde(default = "default_query_cache_max_entries")]
+    pub max_entries: usize,
+
+    /// TTL for cached entries in seconds
+    #[serde(default = "default_query_cache_ttl_secs")]
+    pub ttl_secs: u64,
+
+    /// Minimum query execution time (ms) to cache result
+    /// Only cache queries that take longer than this threshold
+    #[serde(default = "default_query_cache_min_query_time_ms")]
+    pub min_query_time_ms: u64,
+}
+
+impl Default for QueryCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_query_cache_enabled(),
+            max_size_mb: default_query_cache_max_size_mb(),
+            max_entries: default_query_cache_max_entries(),
+            ttl_secs: default_query_cache_ttl_secs(),
+            min_query_time_ms: default_query_cache_min_query_time_ms(),
+        }
+    }
+}
+
+fn default_query_cache_enabled() -> bool {
+    true
+}
+
+fn default_query_cache_max_size_mb() -> u64 {
+    256
+}
+
+fn default_query_cache_max_entries() -> usize {
+    1000
+}
+
+fn default_query_cache_ttl_secs() -> u64 {
+    300 // 5 minutes
+}
+
+fn default_query_cache_min_query_time_ms() -> u64 {
+    10
 }
 
 /// Compaction configuration
@@ -675,6 +734,7 @@ impl Default for Config {
             storage: StorageConfig::default(),
             schema: SchemaConfig::default(),
             cache: CacheConfig::default(),
+            query_cache: QueryCacheConfig::default(),
             compaction: CompactionConfig::default(),
             logging: LoggingConfig::default(),
             retention: RetentionConfig::default(),

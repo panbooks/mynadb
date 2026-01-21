@@ -67,6 +67,25 @@ flush_interval_secs = 30
 # Maximum cache size in MB before forcing flush
 max_size_mb = 4096
 
+[query_cache]
+# Enable query result caching (default: true)
+# Caches query results to speed up repeated identical queries
+enabled = true
+
+# Maximum cache size in MB (default: 256)
+max_size_mb = 256
+
+# Maximum number of cached entries (default: 1000)
+max_entries = 1000
+
+# TTL for cached entries in seconds (default: 300 = 5 minutes)
+ttl_secs = 300
+
+# Minimum query execution time (ms) to cache result (default: 10)
+# Only cache queries that take longer than this threshold
+# Set to 0 to cache all queries
+min_query_time_ms = 10
+
 [compaction]
 # Minimum number of files to trigger compaction
 min_files = 5

@@ -124,6 +124,18 @@ impl Default for QueryCacheConfig {
     }
 }
 
+impl From<&crate::config::QueryCacheConfig> for QueryCacheConfig {
+    fn from(config: &crate::config::QueryCacheConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+            max_size_bytes: (config.max_size_mb as usize) * 1024 * 1024,
+            max_entries: config.max_entries,
+            default_ttl_secs: config.ttl_secs,
+            min_query_time_ms: config.min_query_time_ms,
+        }
+    }
+}
+
 /// Statistics for query result cache
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryCacheStats {

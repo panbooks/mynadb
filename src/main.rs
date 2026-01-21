@@ -390,9 +390,11 @@ async fn main() {
 
     // Initialize core components
     info!("Initializing query engine");
-    let query_engine = Arc::new(query_engine::QueryEngine::new_with_storage(
+    let query_cache_config = query_cache::QueryCacheConfig::from(&config.query_cache);
+    let query_engine = Arc::new(query_engine::QueryEngine::new_with_query_cache(
         &config.storage.data_dir,
-        storage.clone(),
+        Some(storage.clone()),
+        query_cache_config,
     ));
 
     info!("Initializing database manager");
