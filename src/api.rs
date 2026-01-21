@@ -874,7 +874,7 @@ async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCod
     {
         Ok(count) => {
             debug!("Added {} points to cache", count);
-            (StatusCode::OK, "Data added to cache\n".to_string())
+            (StatusCode::NO_CONTENT, "".to_string())
         }
         Err(e) if e.contains("Cache error") => {
             error!("Cache write failed: {}", e);
