@@ -111,6 +111,13 @@ prefix_numeric = true  # "1" → "service_1"
 [cache]
 flush_interval_secs = 30
 
+[query_cache]
+enabled = true           # Enable query result caching
+max_size_mb = 256        # Maximum cache size
+max_entries = 1000       # Maximum cached queries
+ttl_secs = 300           # Cache TTL (5 minutes)
+min_query_time_ms = 10   # Only cache queries >10ms
+
 [compaction]
 min_files = 4
 max_level = 5
