@@ -4,46 +4,94 @@ use crate::storage::Storage;
 use crate::wal::Wal;
 use arrow::array::{RecordBatch, StringArray, TimestampNanosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Notify;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
 
 /// Cache key: (catalog/database, schema/service, table/measurement, date)
 type CacheKey = (String, String, String, i32);
 
+/// Internal cache data structure
+type CacheData = HashMap<CacheKey, Vec<RecordBatch>>;
+
 /// Flush threshold percentage (trigger flush at 80% capacity)
 const FLUSH_THRESHOLD_PERCENT: usize = 80;
 
+/// Number of shards for reducing lock contention
+const NUM_SHARDS: usize = 32;
+
+/// A single shard of the cache
+struct CacheShard {
+    data: Mutex<CacheData>,
+    size_bytes: AtomicUsize,
+}
+
+impl CacheShard {
+    fn new() -> Self {
+        CacheShard {
+            data: Mutex::new(HashMap::new()),
+            size_bytes: AtomicUsize::new(0),
+        }
+    }
+
+    /// Add batch to this shard, returns batch size
+    fn add(&self, key: CacheKey, batch: RecordBatch) -> usize {
+        let batch_size = batch.get_array_memory_size();
+        {
+            let mut data = self.data.lock();
+            data.entry(key).or_insert_with(Vec::new).push(batch);
+        }
+        self.size_bytes.fetch_add(batch_size, Ordering::Relaxed);
+        batch_size
+    }
+
+    /// Take all data from this shard (for flushing)
+    fn take(&self) -> CacheData {
+        let mut data = self.data.lock();
+        self.size_bytes.store(0, Ordering::Relaxed);
+        std::mem::take(&mut *data)
+    }
+
+    fn size(&self) -> usize {
+        self.size_bytes.load(Ordering::Relaxed)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.data.lock().is_empty()
+    }
+}
+
 #[derive(Clone)]
 pub struct DataCache {
-    // Store RecordBatches instead of Points for better performance
-    cache: Arc<Mutex<HashMap<CacheKey, Vec<RecordBatch>>>>,
+    /// Sharded cache for reduced lock contention
+    shards: Arc<Vec<CacheShard>>,
     writer: Arc<ParquetWriter>,
-    // Track current cache size in bytes (atomic for lock-free reads)
-    cache_size_bytes: Arc<AtomicUsize>,
-    // Maximum cache size in bytes
+    /// Total cache size (sum of all shards)
+    total_size_bytes: Arc<AtomicUsize>,
+    /// Maximum cache size in bytes
     max_size_bytes: usize,
-    // Notify channel for size-based flush trigger
+    /// Notify channel for size-based flush trigger
     flush_notify: Arc<Notify>,
-    // WAL for durability (optional)
+    /// WAL for durability (optional)
     wal: Option<Arc<Wal>>,
 }
 
 impl DataCache {
     /// Create with storage backend
     pub fn new(storage: Arc<Storage>, max_size_mb: u64, wal: Option<Arc<Wal>>) -> Self {
-        let cache = Arc::new(Mutex::new(HashMap::new()));
+        let shards: Vec<CacheShard> = (0..NUM_SHARDS).map(|_| CacheShard::new()).collect();
         let writer = Arc::new(ParquetWriter::new(storage));
         let max_size_bytes = (max_size_mb as usize) * 1024 * 1024;
 
         DataCache {
-            cache,
+            shards: Arc::new(shards),
             writer,
-            cache_size_bytes: Arc::new(AtomicUsize::new(0)),
+            total_size_bytes: Arc::new(AtomicUsize::new(0)),
             max_size_bytes,
             flush_notify: Arc::new(Notify::new()),
             wal,
@@ -54,6 +102,15 @@ impl DataCache {
     pub fn with_max_size_and_wal(data_dir: &str, max_size_mb: u64, wal: Option<Arc<Wal>>) -> Self {
         let storage = Storage::new_local(data_dir).expect("Failed to create local storage");
         Self::new(Arc::new(storage), max_size_mb, wal)
+    }
+
+    /// Get shard index for a key (hash-based distribution)
+    #[inline]
+    fn shard_index(&self, key: &CacheKey) -> usize {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut hasher);
+        (hasher.finish() as usize) % NUM_SHARDS
     }
 
     /// Add points to the in-memory cache as RecordBatch
@@ -84,7 +141,7 @@ impl DataCache {
         })?;
 
         let batch_size = batch.get_array_memory_size();
-        let current_size = self.cache_size_bytes.load(Ordering::Relaxed);
+        let current_size = self.total_size_bytes.load(Ordering::Relaxed);
 
         // P0: Reject write if cache is full
         if current_size + batch_size > self.max_size_bytes {
@@ -101,14 +158,12 @@ impl DataCache {
             });
         }
 
-        // Add to cache
-        {
-            let mut cache = self.cache.lock().await;
-            cache.entry(key).or_insert_with(Vec::new).push(batch);
-        }
+        // Add to appropriate shard (minimal lock contention)
+        let shard_idx = self.shard_index(&key);
+        let added_size = self.shards[shard_idx].add(key, batch);
 
-        // Update size counter
-        let new_size = self.cache_size_bytes.fetch_add(batch_size, Ordering::Relaxed) + batch_size;
+        // Update total size counter
+        let new_size = self.total_size_bytes.fetch_add(added_size, Ordering::Relaxed) + added_size;
 
         // P1: Trigger flush if threshold exceeded (80% capacity)
         let threshold = self.max_size_bytes * FLUSH_THRESHOLD_PERCENT / 100;
@@ -121,14 +176,6 @@ impl DataCache {
             );
             self.flush_notify.notify_one();
         }
-
-        debug!(
-            "Cache: added {}KB, total {}MB/{}MB ({}%)",
-            batch_size / 1024,
-            new_size / 1024 / 1024,
-            self.max_size_bytes / 1024 / 1024,
-            new_size * 100 / self.max_size_bytes
-        );
 
         Ok(())
     }
@@ -194,26 +241,44 @@ impl DataCache {
     }
 
     /// Flush all cached data to disk
+    /// Uses swap-and-flush pattern: takes data from shards instantly, then writes without blocking
     pub async fn flush(&self) -> Result<usize, String> {
         let start = Instant::now();
-        let mut cache = self.cache.lock().await;
 
-        if cache.is_empty() {
+        // Phase 1: Quickly take data from all shards (very fast, minimal blocking)
+        let mut all_data: CacheData = HashMap::new();
+        let mut flushed_size = 0usize;
+
+        for shard in self.shards.iter() {
+            let shard_size = shard.size();
+            if shard_size > 0 {
+                let shard_data = shard.take();
+                flushed_size += shard_size;
+                for (key, mut batches) in shard_data {
+                    all_data.entry(key).or_insert_with(Vec::new).append(&mut batches);
+                }
+            }
+        }
+
+        // Reset total size counter
+        self.total_size_bytes.store(0, Ordering::Relaxed);
+
+        if all_data.is_empty() {
             debug!("Flush: Cache is empty, nothing to write");
             return Ok(0);
         }
 
-        let flushed_size = self.cache_size_bytes.load(Ordering::Relaxed);
         info!(
-            "Flushing cache to disk: {}KB in {} table(s)...",
-            flushed_size / 1024,
-            cache.len()
+            "Flushing cache to disk: {}MB in {} table(s)...",
+            flushed_size / 1024 / 1024,
+            all_data.len()
         );
 
+        // Phase 2: Write to disk (no locks held, writers can continue)
         let mut files_written = 0;
         let mut errors = Vec::new();
 
-        for ((catalog, schema, table, date), batches) in cache.drain() {
+        for ((catalog, schema, table, date), batches) in all_data {
             let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
             let date_partition = format_date32_as_partition(date);
             debug!(
@@ -242,9 +307,6 @@ impl DataCache {
             }
         }
 
-        // Reset size counter after successful flush
-        self.cache_size_bytes.store(0, Ordering::Relaxed);
-
         let elapsed = start.elapsed();
 
         if !errors.is_empty() {
@@ -256,9 +318,9 @@ impl DataCache {
         }
 
         info!(
-            "Flush complete: {} file(s), {}KB written in {:?}",
+            "Flush complete: {} file(s), {}MB written in {:?}",
             files_written,
-            flushed_size / 1024,
+            flushed_size / 1024 / 1024,
             elapsed
         );
 
@@ -279,13 +341,18 @@ impl DataCache {
 
     /// Get current cache statistics
     pub async fn stats(&self) -> CacheStats {
-        let cache = self.cache.lock().await;
-        let total_rows: usize = cache
-            .values()
-            .map(|batches| batches.iter().map(|b| b.num_rows()).sum::<usize>())
-            .sum();
-        let num_measurements = cache.len();
-        let size_bytes = self.cache_size_bytes.load(Ordering::Relaxed);
+        let mut total_rows = 0usize;
+        let mut num_measurements = 0usize;
+
+        for shard in self.shards.iter() {
+            let data = shard.data.lock();
+            for batches in data.values() {
+                total_rows += batches.iter().map(|b| b.num_rows()).sum::<usize>();
+            }
+            num_measurements += data.len();
+        }
+
+        let size_bytes = self.total_size_bytes.load(Ordering::Relaxed);
 
         CacheStats {
             total_rows,
@@ -303,10 +370,11 @@ impl DataCache {
             let mut ticker = interval(Duration::from_secs(flush_interval_secs));
 
             info!(
-                "Background flush started: every {}s or at {}% capacity ({}MB)",
+                "Background flush started: every {}s or at {}% capacity ({}MB), {} shards",
                 flush_interval_secs,
                 FLUSH_THRESHOLD_PERCENT,
-                self.max_size_bytes * FLUSH_THRESHOLD_PERCENT / 100 / 1024 / 1024
+                self.max_size_bytes * FLUSH_THRESHOLD_PERCENT / 100 / 1024 / 1024,
+                NUM_SHARDS
             );
 
             // Skip the first immediate tick to avoid flushing right after startup/recovery
