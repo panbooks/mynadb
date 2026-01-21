@@ -470,27 +470,43 @@ pub async fn flush_handler(State(state): State<AppState>) -> impl IntoResponse {
 
 // ===== Query Cache Management Handlers =====
 
-/// Get query cache statistics
+/// Get query cache statistics (metadata + query result caches)
 pub async fn query_cache_stats_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let stats = state.query_engine.get_cache_stats();
+    let metadata_stats = state.query_engine.get_cache_stats();
+    let query_stats = state.query_engine.get_query_cache_stats();
 
     let response = serde_json::json!({
-        "table_cache": {
-            "size": stats.table_cache_size,
-            "hits": stats.table_hits,
-            "misses": stats.table_misses,
-            "hit_rate_percent": format!("{:.2}", stats.table_hit_rate())
+        "metadata_cache": {
+            "table_cache": {
+                "size": metadata_stats.table_cache_size,
+                "hits": metadata_stats.table_hits,
+                "misses": metadata_stats.table_misses,
+                "hit_rate_percent": format!("{:.2}", metadata_stats.table_hit_rate())
+            },
+            "file_listing_cache": {
+                "size": metadata_stats.file_listing_cache_size,
+                "hits": metadata_stats.file_listing_hits,
+                "misses": metadata_stats.file_listing_misses
+            },
+            "parquet_metadata_cache": {
+                "size": metadata_stats.parquet_metadata_cache_size,
+                "hits": metadata_stats.parquet_metadata_hits,
+                "misses": metadata_stats.parquet_metadata_misses,
+                "hit_rate_percent": format!("{:.2}", metadata_stats.parquet_hit_rate())
+            }
         },
-        "file_listing_cache": {
-            "size": stats.file_listing_cache_size,
-            "hits": stats.file_listing_hits,
-            "misses": stats.file_listing_misses
-        },
-        "parquet_metadata_cache": {
-            "size": stats.parquet_metadata_cache_size,
-            "hits": stats.parquet_metadata_hits,
-            "misses": stats.parquet_metadata_misses,
-            "hit_rate_percent": format!("{:.2}", stats.parquet_hit_rate())
+        "query_result_cache": {
+            "enabled": query_stats.enabled,
+            "entry_count": query_stats.entry_count,
+            "size_bytes": query_stats.size_bytes,
+            "size_mb": format!("{:.2}", query_stats.size_bytes as f64 / 1024.0 / 1024.0),
+            "max_size_mb": format!("{:.2}", query_stats.max_size_bytes as f64 / 1024.0 / 1024.0),
+            "usage_percent": format!("{:.2}", query_stats.usage_percent()),
+            "hits": query_stats.hits,
+            "misses": query_stats.misses,
+            "hit_rate_percent": format!("{:.2}", query_stats.hit_rate()),
+            "evictions": query_stats.evictions,
+            "invalidations": query_stats.invalidations
         }
     });
 
@@ -551,13 +567,23 @@ pub async fn prewarm_table_cache_handler(
     }
 }
 
-/// Clear all query caches
+/// Clear all caches (metadata + query results)
 pub async fn clear_query_cache_handler(State(state): State<AppState>) -> impl IntoResponse {
-    info!("Clearing all query caches");
+    info!("Clearing all caches");
     state.query_engine.clear_all_caches();
     (StatusCode::OK, axum::Json(serde_json::json!({
         "status": "success",
-        "message": "All query caches cleared"
+        "message": "All caches cleared (metadata + query results)"
+    })))
+}
+
+/// Clear only query result cache (keeps metadata cache)
+pub async fn clear_query_result_cache_handler(State(state): State<AppState>) -> impl IntoResponse {
+    info!("Clearing query result cache");
+    state.query_engine.clear_query_cache();
+    (StatusCode::OK, axum::Json(serde_json::json!({
+        "status": "success",
+        "message": "Query result cache cleared"
     })))
 }
 

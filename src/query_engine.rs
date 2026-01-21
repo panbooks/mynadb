@@ -1,3 +1,4 @@
+use crate::query_cache::{QueryCacheConfig, QueryCacheKey, QueryCacheStats, QueryResultCache, SharedQueryResultCache};
 use crate::storage::Storage;
 use datafusion::arrow::array::{Array, RecordBatch};
 use datafusion::catalog_common::MemoryCatalogProvider;
@@ -363,6 +364,8 @@ pub struct QueryEngine {
     registered_catalogs: Arc<RwLock<HashMap<String, HashSet<String>>>>,
     // Metadata cache for tables and Parquet files
     metadata_cache: Arc<TableMetadataCache>,
+    // Query result cache
+    query_cache: SharedQueryResultCache,
 }
 
 impl QueryEngine {
@@ -393,41 +396,45 @@ impl QueryEngine {
     }
 
     pub fn new(data_dir: &str) -> Self {
-        let ctx = Self::create_optimized_context();
-        let metadata_cache = Arc::new(TableMetadataCache::new());
-        info!("QueryEngine initialized with metadata caching enabled");
-
-        QueryEngine {
-            ctx,
-            data_dir: data_dir.to_string(),
-            storage: None,
-            registered_catalogs: Arc::new(RwLock::new(HashMap::new())),
-            metadata_cache,
-        }
+        Self::new_with_query_cache(data_dir, None, QueryCacheConfig::default())
     }
 
     pub fn new_with_storage(data_dir: &str, storage: Arc<Storage>) -> Self {
+        Self::new_with_query_cache(data_dir, Some(storage), QueryCacheConfig::default())
+    }
+
+    pub fn new_with_query_cache(data_dir: &str, storage: Option<Arc<Storage>>, query_cache_config: QueryCacheConfig) -> Self {
         let ctx = Self::create_optimized_context();
         let metadata_cache = Arc::new(TableMetadataCache::new());
+        let query_cache = Arc::new(QueryResultCache::new(query_cache_config));
 
-        // Register object store with DataFusion runtime
-        if !storage.is_local() {
-            let url = url::Url::parse(storage.url_prefix())
-                .expect("Failed to parse storage URL prefix");
-            ctx.runtime_env()
-                .register_object_store(&url, storage.object_store());
-            info!("Registered object store with DataFusion: {}", storage.url_prefix());
+        // Register object store with DataFusion runtime if needed
+        if let Some(ref storage) = storage {
+            if !storage.is_local() {
+                let url = url::Url::parse(storage.url_prefix())
+                    .expect("Failed to parse storage URL prefix");
+                ctx.runtime_env()
+                    .register_object_store(&url, storage.object_store());
+                info!("Registered object store with DataFusion: {}", storage.url_prefix());
+            }
         }
 
-        info!("QueryEngine initialized with metadata caching enabled (storage: {})",
-              if storage.is_local() { "local" } else { "object_store" });
+        let storage_type = match &storage {
+            Some(s) if s.is_local() => "local",
+            Some(_) => "object_store",
+            None => "local",
+        };
+
+        info!("QueryEngine initialized: storage={}, metadata_cache=enabled, query_cache={}",
+              storage_type, if query_cache.is_enabled() { "enabled" } else { "disabled" });
 
         QueryEngine {
             ctx,
             data_dir: data_dir.to_string(),
-            storage: Some(storage),
+            storage,
             registered_catalogs: Arc::new(RwLock::new(HashMap::new())),
             metadata_cache,
+            query_cache,
         }
     }
 
@@ -436,19 +443,43 @@ impl QueryEngine {
         &self.metadata_cache
     }
 
-    /// Get cache statistics
+    /// Get metadata cache statistics
     pub fn get_cache_stats(&self) -> CacheStatistics {
         self.metadata_cache.get_stats()
     }
 
-    /// Invalidate cache for a table (call after writes)
-    pub fn invalidate_table_cache(&self, catalog: &str, schema: &str, table: &str) {
-        self.metadata_cache.invalidate_table(catalog, schema, table);
+    /// Get query result cache statistics
+    pub fn get_query_cache_stats(&self) -> QueryCacheStats {
+        self.query_cache.stats()
     }
 
-    /// Clear all caches
+    /// Get reference to the query result cache
+    pub fn query_cache(&self) -> &SharedQueryResultCache {
+        &self.query_cache
+    }
+
+    /// Invalidate cache for a table (call after writes)
+    /// This invalidates both metadata cache and query result cache
+    pub fn invalidate_table_cache(&self, catalog: &str, schema: &str, table: &str) {
+        self.metadata_cache.invalidate_table(catalog, schema, table);
+        self.query_cache.invalidate_table(catalog, schema, table);
+    }
+
+    /// Invalidate all caches for a database
+    pub fn invalidate_database_cache(&self, db: &str) {
+        self.metadata_cache.invalidate_catalog(db);
+        self.query_cache.invalidate_database(db);
+    }
+
+    /// Clear all caches (metadata + query results)
     pub fn clear_all_caches(&self) {
         self.metadata_cache.clear();
+        self.query_cache.clear();
+    }
+
+    /// Clear only query result cache
+    pub fn clear_query_cache(&self) {
+        self.query_cache.clear();
     }
 
     /// Ensure catalog exists, create if needed
@@ -1057,18 +1088,26 @@ impl QueryEngine {
 
     /// Execute a SQL query with database context
     /// Automatically qualifies unqualified table names with catalog.schema
+    /// Uses query result cache for repeated queries
     pub async fn execute_query_with_db(
         &self,
         sql: &str,
         db_name: &str,
     ) -> Result<Vec<RecordBatch>, String> {
+        // Check query cache first
+        let cache_key = QueryCacheKey::new(db_name, sql);
+        if let Some(cached_result) = self.query_cache.get(&cache_key) {
+            debug!("Query cache HIT for db={}", db_name);
+            return Ok(cached_result);
+        }
+
         // Extract table references from SQL and register only those tables
         let table_refs = self.extract_table_references(sql, db_name);
 
-        for (catalog, schema, table) in table_refs {
+        for (catalog, schema, table) in &table_refs {
             // Try to register the table (will skip if already registered)
             // Ignore errors here - DataFusion will report if table doesn't exist
-            let _ = self.register_table(&catalog, &schema, &table).await;
+            let _ = self.register_table(catalog, schema, table).await;
         }
 
         // Qualify unqualified table names with catalog.schema
@@ -1079,7 +1118,20 @@ impl QueryEngine {
             debug!("Qualified: {}", qualified_sql);
         }
 
-        self.execute_query(&qualified_sql).await
+        // Execute query and measure time
+        let start_time = Instant::now();
+        let result = self.execute_query(&qualified_sql).await?;
+        let query_time_ms = start_time.elapsed().as_millis() as u64;
+
+        // Cache the result
+        let referenced_tables: Vec<String> = table_refs
+            .iter()
+            .map(|(c, s, t)| format!("{}.{}.{}", c, s, t))
+            .collect();
+
+        self.query_cache.put(cache_key, result.clone(), referenced_tables, query_time_ms);
+
+        Ok(result)
     }
 
     /// Execute a SQL query (without DB context)

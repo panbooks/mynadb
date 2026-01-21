@@ -210,10 +210,11 @@ SELECT * FROM mydb.default.service_1 WHERE measurement = 'cpu'
 | `/partitions/:catalog/:schema/:table` | GET | List partitions |
 | `/partitions/:catalog/:schema/:table/:date` | DELETE | Delete specific partition |
 | `/retention/:catalog/:schema/:table` | POST | Delete old partitions (body: `{older_than_days: N}` or `{before_date: "YYYY-MM-DD"}`) |
-| `/cache/stats` | GET | Query cache statistics (table, file listing, Parquet metadata caches) |
-| `/cache/prewarm/:catalog` | POST | Pre-warm cache for entire catalog (database) |
-| `/cache/prewarm/:catalog/:schema/:table` | POST | Pre-warm cache for specific table |
-| `/cache/clear` | POST | Clear all query caches |
+| `/cache/stats` | GET | All cache statistics (metadata + query result caches) |
+| `/cache/prewarm/:catalog` | POST | Pre-warm metadata cache for entire catalog (database) |
+| `/cache/prewarm/:catalog/:schema/:table` | POST | Pre-warm metadata cache for specific table |
+| `/cache/clear` | POST | Clear all caches (metadata + query results) |
+| `/cache/clear/results` | POST | Clear only query result cache |
 | `/cache/parquet/:catalog/:schema/:table` | GET | Get Parquet file statistics for table |
 | `/health` | GET | Health check |
 

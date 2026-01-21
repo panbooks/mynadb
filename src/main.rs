@@ -10,6 +10,7 @@ mod logger;
 mod mysql_service;
 mod parquet_writer;
 mod profiling;
+mod query_cache;
 mod query_engine;
 mod rate_limiter;
 mod retention_manager;
@@ -252,6 +253,7 @@ fn build_router(
         .route("/cache/prewarm/:catalog", post(api::prewarm_cache_handler))
         .route("/cache/prewarm/:catalog/:schema/:table", post(api::prewarm_table_cache_handler))
         .route("/cache/clear", post(api::clear_query_cache_handler))
+        .route("/cache/clear/results", post(api::clear_query_result_cache_handler))
         .route("/cache/parquet/:catalog/:schema/:table", get(api::table_parquet_stats_handler))
         // Profiling endpoints
         .route("/debug/heap", get(api::heap_profile_handler))
