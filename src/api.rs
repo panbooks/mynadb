@@ -468,6 +468,113 @@ pub async fn flush_handler(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+// ===== Query Cache Management Handlers =====
+
+/// Get query cache statistics
+pub async fn query_cache_stats_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let stats = state.query_engine.get_cache_stats();
+
+    let response = serde_json::json!({
+        "table_cache": {
+            "size": stats.table_cache_size,
+            "hits": stats.table_hits,
+            "misses": stats.table_misses,
+            "hit_rate_percent": format!("{:.2}", stats.table_hit_rate())
+        },
+        "file_listing_cache": {
+            "size": stats.file_listing_cache_size,
+            "hits": stats.file_listing_hits,
+            "misses": stats.file_listing_misses
+        },
+        "parquet_metadata_cache": {
+            "size": stats.parquet_metadata_cache_size,
+            "hits": stats.parquet_metadata_hits,
+            "misses": stats.parquet_metadata_misses,
+            "hit_rate_percent": format!("{:.2}", stats.parquet_hit_rate())
+        }
+    });
+
+    (StatusCode::OK, axum::Json(response))
+}
+
+/// Pre-warm the query cache for a catalog (database)
+pub async fn prewarm_cache_handler(
+    State(state): State<AppState>,
+    Path(catalog): Path<String>,
+) -> impl IntoResponse {
+    info!("Pre-warming cache for catalog: {}", catalog);
+
+    match state.query_engine.prewarm_catalog_cache(&catalog).await {
+        Ok(count) => {
+            info!("Pre-warmed cache for '{}': {} files", catalog, count);
+            (StatusCode::OK, axum::Json(serde_json::json!({
+                "status": "success",
+                "catalog": catalog,
+                "files_cached": count
+            })))
+        }
+        Err(e) => {
+            error!("Cache pre-warm error for '{}': {}", catalog, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({
+                "status": "error",
+                "message": e
+            })))
+        }
+    }
+}
+
+/// Pre-warm the query cache for a specific table
+pub async fn prewarm_table_cache_handler(
+    State(state): State<AppState>,
+    Path((catalog, schema, table)): Path<(String, String, String)>,
+) -> impl IntoResponse {
+    info!("Pre-warming cache for table: {}.{}.{}", catalog, schema, table);
+
+    match state.query_engine.prewarm_table_cache(&catalog, &schema, &table).await {
+        Ok(count) => {
+            info!("Pre-warmed cache for '{}.{}.{}': {} files", catalog, schema, table, count);
+            (StatusCode::OK, axum::Json(serde_json::json!({
+                "status": "success",
+                "catalog": catalog,
+                "schema": schema,
+                "table": table,
+                "files_cached": count
+            })))
+        }
+        Err(e) => {
+            error!("Cache pre-warm error for '{}.{}.{}': {}", catalog, schema, table, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({
+                "status": "error",
+                "message": e
+            })))
+        }
+    }
+}
+
+/// Clear all query caches
+pub async fn clear_query_cache_handler(State(state): State<AppState>) -> impl IntoResponse {
+    info!("Clearing all query caches");
+    state.query_engine.clear_all_caches();
+    (StatusCode::OK, axum::Json(serde_json::json!({
+        "status": "success",
+        "message": "All query caches cleared"
+    })))
+}
+
+/// Get Parquet statistics for a table (using cached metadata)
+pub async fn table_parquet_stats_handler(
+    State(state): State<AppState>,
+    Path((catalog, schema, table)): Path<(String, String, String)>,
+) -> impl IntoResponse {
+    match state.query_engine.get_table_parquet_stats(&catalog, &schema, &table) {
+        Ok(stats) => (StatusCode::OK, axum::Json(serde_json::json!(stats))),
+        Err(e) => (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({
+            "status": "error",
+            "message": e
+        }))),
+    }
+}
+
 // ===== Profiling Handlers =====
 
 pub async fn heap_profile_handler(
