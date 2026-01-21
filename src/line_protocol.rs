@@ -72,7 +72,6 @@ fn extract_service_from_tags(tags: &HashMap<String, String>, schema_config: &Sch
 }
 
 fn parse_measurement_and_tags(part: &str) -> Result<(String, HashMap<String, String>), String> {
-    let mut tags = HashMap::new();
     let parts: Vec<&str> = part.split(',').collect();
 
     if parts.is_empty() {
@@ -80,6 +79,10 @@ fn parse_measurement_and_tags(part: &str) -> Result<(String, HashMap<String, Str
     }
 
     let measurement = parts[0].to_string();
+
+    // Pre-size HashMap based on tag count
+    let tag_count = parts.len().saturating_sub(1);
+    let mut tags = HashMap::with_capacity(tag_count);
 
     // Parse tags
     for tag_part in &parts[1..] {
@@ -119,9 +122,17 @@ pub fn format_date32_as_partition(date32: i32) -> String {
 }
 
 pub fn parse_multiple_lines(data: &str, schema_config: &SchemaConfig) -> Vec<Point> {
-    data.lines()
-        .filter_map(|line| parse_line_protocol(line, schema_config).ok())
-        .collect()
+    // Estimate line count: assume average line is ~500 bytes
+    let estimated_lines = (data.len() / 500).max(16);
+    let mut points = Vec::with_capacity(estimated_lines);
+
+    for line in data.lines() {
+        if let Ok(point) = parse_line_protocol(line, schema_config) {
+            points.push(point);
+        }
+    }
+
+    points
 }
 
 #[cfg(test)]
