@@ -852,11 +852,10 @@ async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCod
     let data_len = data.len();
     debug!("Processing write data: {} bytes", data_len);
 
-    // Check WAL sync mode
-    let sync_on_write = state.wal.as_ref().map(|w| w.is_sync_on_write()).unwrap_or(false);
-
     // STEP 1: WAL write - sync or async based on configuration
     if let Some(ref wal) = state.wal {
+        // Check WAL sync mode
+        let sync_on_write = state.wal.as_ref().map(|w| w.is_sync_on_write()).unwrap_or(false);
         if sync_on_write {
             // Strict durability: wait for WAL write before proceeding
             if let Err(e) = wal.log_data_write(db, data).await {
