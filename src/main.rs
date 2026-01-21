@@ -247,6 +247,12 @@ fn build_router(
         .route("/stats", get(api::stats_handler))
         .route("/memory", get(api::memory_handler))
         .route("/flush", post(api::flush_handler))
+        // Query cache management
+        .route("/cache/stats", get(api::query_cache_stats_handler))
+        .route("/cache/prewarm/:catalog", post(api::prewarm_cache_handler))
+        .route("/cache/prewarm/:catalog/:schema/:table", post(api::prewarm_table_cache_handler))
+        .route("/cache/clear", post(api::clear_query_cache_handler))
+        .route("/cache/parquet/:catalog/:schema/:table", get(api::table_parquet_stats_handler))
         // Profiling endpoints
         .route("/debug/heap", get(api::heap_profile_handler))
         .route("/debug/cpu", get(api::cpu_profile_handler))
