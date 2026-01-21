@@ -145,7 +145,7 @@ interval_secs = 3600  # 1 hour
 enabled = true
 
 # Sync to disk after each write (true=durable but slower, false=faster but may lose data on crash)
-sync_on_write = true
+sync_on_write = false
 
 # Rotate WAL file when it exceeds this size (MB)
 rotate_size_mb = 128

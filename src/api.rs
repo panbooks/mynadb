@@ -849,42 +849,72 @@ pub async fn write_handler_query_param(
 }
 
 async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCode, String) {
-    debug!("Processing write data: {} bytes", data.len());
+    let data_len = data.len();
+    debug!("Processing write data: {} bytes", data_len);
 
-    // STEP 1: Write to WAL first for durability
+    // Check WAL sync mode
+    let sync_on_write = state.wal.as_ref().map(|w| w.is_sync_on_write()).unwrap_or(false);
+
+    // STEP 1: WAL write - sync or async based on configuration
     if let Some(ref wal) = state.wal {
-        if let Err(e) = wal.log_data_write(db, data).await {
-            error!("WAL write failed: {}", e);
+        if sync_on_write {
+            // Strict durability: wait for WAL write before proceeding
+            if let Err(e) = wal.log_data_write(db, data).await {
+                error!("WAL write failed: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("WAL error: {}\n", e),
+                );
+            }
+        } else {
+            // High throughput: WAL write in background
+            let wal = wal.clone();
+            let db_owned = db.to_string();
+            let data_owned = data.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = wal.log_data_write(&db_owned, &data_owned).await {
+                    error!("WAL write failed (async): {}", e);
+                }
+            });
+        }
+    }
+
+    // STEP 2: Parse line protocol (fast, no need for spawn_blocking)
+    let points = parse_multiple_lines(data, &state.config.schema);
+
+    if points.is_empty() {
+        return (StatusCode::BAD_REQUEST, "No valid points to write".to_string());
+    }
+
+    let point_count = points.len();
+
+    // STEP 3: Group and add to cache
+    let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::new();
+    for point in points {
+        let (schema, table) = match state.config.schema.strategy {
+            config::SchemaTableStrategy::ServiceAsSchema => {
+                (point.service.clone(), point.measurement.clone())
+            }
+            config::SchemaTableStrategy::ServiceAsTable => {
+                (state.config.schema.default_name.clone(), point.service.clone())
+            }
+        };
+        grouped.entry((schema, table)).or_default().push(point);
+    }
+
+    // Add to cache (sharded, fast)
+    for ((schema, table), points) in grouped {
+        if let Err(e) = state.cache.add_points(db, &schema, &table, points).await {
+            error!("Cache write failed: {}", e);
             return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("WAL error: {}\n", e),
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("Cache full, try again later: {}\n", e),
             );
         }
     }
 
-    // STEP 2: Parse and ingest to cache (using shared helper function)
-    match ingest_line_protocol_to_cache(
-        db,
-        data,
-        &state.cache,
-        Some(&state.query_engine),
-        &state.config.schema,
-    )
-    .await
-    {
-        Ok(count) => {
-            debug!("Added {} points to cache", count);
-            (StatusCode::NO_CONTENT, "".to_string())
-        }
-        Err(e) if e.contains("Cache error") => {
-            error!("Cache write failed: {}", e);
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("Cache full, try again later: {}\n", e),
-            )
-        }
-        Err(e) => (StatusCode::BAD_REQUEST, e),
-    }
+    debug!("Added {} points to cache", point_count);
+    (StatusCode::NO_CONTENT, "".to_string())
 }
 
 /// Helper function to parse line protocol and add to cache
