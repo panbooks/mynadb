@@ -4110,6 +4110,7 @@ dependencies = [
  "futures",
  "msql-srv",
  "object_store",
+ "parking_lot",
  "parquet",
  "pprof",
  "prost 0.13.5",
