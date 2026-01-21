@@ -1,8 +1,10 @@
-use crate::line_protocol::{format_date32_as_partition, Point};
+use crate::line_protocol::{format_date32_as_partition, FieldValue, Point};
 use crate::parquet_writer::ParquetWriter;
 use crate::storage::Storage;
 use crate::wal::Wal;
-use arrow::array::{RecordBatch, StringArray, TimestampNanosecondArray};
+use arrow::array::{
+    BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
@@ -13,10 +15,35 @@ use tokio::sync::Notify;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
 
-/// Global schema cache to avoid rebuilding schemas for the same tag set
-/// Key: sorted tag keys joined by comma (e.g., "host,region,service")
-/// Value: Arc<Schema> for reuse
-static SCHEMA_CACHE: std::sync::LazyLock<RwLock<HashMap<String, Arc<Schema>>>> =
+/// Schema cache key includes tag keys and field keys with their types
+/// Format: "tags:host,region|fields:cpu:f,mem:i,active:b"
+#[derive(Hash, Eq, PartialEq, Clone)]
+struct SchemaCacheKey {
+    tag_keys: Vec<String>,
+    field_keys: Vec<(String, FieldType)>,
+}
+
+#[derive(Hash, Eq, PartialEq, Clone, Copy)]
+enum FieldType {
+    Float,
+    Integer,
+    String,
+    Boolean,
+}
+
+impl From<&FieldValue> for FieldType {
+    fn from(v: &FieldValue) -> Self {
+        match v {
+            FieldValue::Float(_) => FieldType::Float,
+            FieldValue::Integer(_) => FieldType::Integer,
+            FieldValue::String(_) => FieldType::String,
+            FieldValue::Boolean(_) => FieldType::Boolean,
+        }
+    }
+}
+
+/// Global schema cache to avoid rebuilding schemas for the same tag/field set
+static SCHEMA_CACHE: std::sync::LazyLock<RwLock<HashMap<SchemaCacheKey, Arc<Schema>>>> =
     std::sync::LazyLock::new(|| RwLock::new(HashMap::with_capacity(1024)));
 
 /// Cache key: (catalog/database, schema/service, table/measurement, date)
@@ -186,10 +213,15 @@ impl DataCache {
         Ok(())
     }
 
-    /// Get or create schema from cache based on tag keys
-    fn get_or_create_schema(tag_keys: &[String]) -> Arc<Schema> {
-        // Create cache key from sorted tag keys
-        let cache_key = tag_keys.join(",");
+    /// Get or create schema from cache based on tag keys and field keys with types
+    fn get_or_create_schema(
+        tag_keys: &[String],
+        field_keys: &[(String, FieldType)],
+    ) -> Arc<Schema> {
+        let cache_key = SchemaCacheKey {
+            tag_keys: tag_keys.to_vec(),
+            field_keys: field_keys.to_vec(),
+        };
 
         // Try read lock first (fast path)
         {
@@ -207,8 +239,8 @@ impl DataCache {
             return schema.clone();
         }
 
-        // Build schema
-        let mut fields = Vec::with_capacity(2 + tag_keys.len());
+        // Build schema: timestamp + measurement + tags + fields
+        let mut fields = Vec::with_capacity(2 + tag_keys.len() + field_keys.len());
 
         // Timestamp
         fields.push(Field::new(
@@ -220,9 +252,20 @@ impl DataCache {
         // Measurement
         fields.push(Field::new("measurement", DataType::Utf8, false));
 
-        // Tags
+        // Tags (all strings, nullable)
         for key in tag_keys {
             fields.push(Field::new(key, DataType::Utf8, true));
+        }
+
+        // Fields (typed, nullable)
+        for (key, field_type) in field_keys {
+            let data_type = match field_type {
+                FieldType::Float => DataType::Float64,
+                FieldType::Integer => DataType::Int64,
+                FieldType::String => DataType::Utf8,
+                FieldType::Boolean => DataType::Boolean,
+            };
+            fields.push(Field::new(key, data_type, true));
         }
 
         let schema = Arc::new(Schema::new(fields));
@@ -243,11 +286,20 @@ impl DataCache {
         let mut tag_keys: Vec<_> = first_point.tags.keys().cloned().collect();
         tag_keys.sort();
 
+        // Get sorted field keys with their types
+        let mut field_keys: Vec<(String, FieldType)> = first_point
+            .fields
+            .iter()
+            .map(|(k, v)| (k.clone(), FieldType::from(v)))
+            .collect();
+        field_keys.sort_by(|a, b| a.0.cmp(&b.0));
+
         // Get or create cached schema
-        let schema = Self::get_or_create_schema(&tag_keys);
+        let schema = Self::get_or_create_schema(&tag_keys, &field_keys);
 
         // Pre-size arrays vector
-        let mut arrays: Vec<Arc<dyn arrow::array::Array>> = Vec::with_capacity(2 + tag_keys.len());
+        let total_columns = 2 + tag_keys.len() + field_keys.len();
+        let mut arrays: Vec<Arc<dyn arrow::array::Array>> = Vec::with_capacity(total_columns);
 
         // Timestamp array (pre-sized)
         let mut timestamps = Vec::with_capacity(num_points);
@@ -271,6 +323,58 @@ impl DataCache {
                 values.push(p.tags.get(key).map(|s| s.as_str()));
             }
             arrays.push(Arc::new(StringArray::from(values)));
+        }
+
+        // Field arrays (typed, pre-sized)
+        for (key, field_type) in &field_keys {
+            match field_type {
+                FieldType::Float => {
+                    let mut values: Vec<Option<f64>> = Vec::with_capacity(num_points);
+                    for p in points {
+                        let v = p.fields.get(key).and_then(|fv| match fv {
+                            FieldValue::Float(f) => Some(*f),
+                            FieldValue::Integer(i) => Some(*i as f64),
+                            _ => None,
+                        });
+                        values.push(v);
+                    }
+                    arrays.push(Arc::new(Float64Array::from(values)));
+                }
+                FieldType::Integer => {
+                    let mut values: Vec<Option<i64>> = Vec::with_capacity(num_points);
+                    for p in points {
+                        let v = p.fields.get(key).and_then(|fv| match fv {
+                            FieldValue::Integer(i) => Some(*i),
+                            FieldValue::Float(f) => Some(*f as i64),
+                            _ => None,
+                        });
+                        values.push(v);
+                    }
+                    arrays.push(Arc::new(Int64Array::from(values)));
+                }
+                FieldType::String => {
+                    let mut values: Vec<Option<&str>> = Vec::with_capacity(num_points);
+                    for p in points {
+                        let v = p.fields.get(key).and_then(|fv| match fv {
+                            FieldValue::String(s) => Some(s.as_str()),
+                            _ => None,
+                        });
+                        values.push(v);
+                    }
+                    arrays.push(Arc::new(StringArray::from(values)));
+                }
+                FieldType::Boolean => {
+                    let mut values: Vec<Option<bool>> = Vec::with_capacity(num_points);
+                    for p in points {
+                        let v = p.fields.get(key).and_then(|fv| match fv {
+                            FieldValue::Boolean(b) => Some(*b),
+                            _ => None,
+                        });
+                        values.push(v);
+                    }
+                    arrays.push(Arc::new(BooleanArray::from(values)));
+                }
+            }
         }
 
         RecordBatch::try_new(schema, arrays)

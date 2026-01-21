@@ -2,10 +2,20 @@ use crate::config::SchemaConfig;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
+/// Field value types supported by InfluxDB line protocol
+#[derive(Debug, Clone)]
+pub enum FieldValue {
+    Float(f64),
+    Integer(i64),
+    String(String),
+    Boolean(bool),
+}
+
 #[derive(Debug, Clone)]
 pub struct Point {
     pub measurement: String,
     pub tags: HashMap<String, String>,
+    pub fields: HashMap<String, FieldValue>,
     pub timestamp: Option<i64>,
     pub date: i32, // Date32 type: days since Unix epoch (1970-01-01)
     pub service: String, // Extracted schema/service name
@@ -31,7 +41,7 @@ pub fn parse_line_protocol(line: &str, schema_config: &SchemaConfig) -> Result<P
     let (measurement, tags) = parse_measurement_and_tags(measurement_part)?;
 
     // Parse fields
-    // let fields = parse_fields(parts[1])?;
+    let fields = parse_fields(parts[1])?;
 
     // Parse timestamp (optional)
     let timestamp = if parts.len() > 2 {
@@ -49,10 +59,68 @@ pub fn parse_line_protocol(line: &str, schema_config: &SchemaConfig) -> Result<P
     Ok(Point {
         measurement,
         tags,
+        fields,
         timestamp,
         date,
         service,
     })
+}
+
+/// Parse field set from line protocol
+/// Format: field=value[,field=value...]
+/// Values can be: float (1.5), integer (1i), string ("hello"), boolean (true/false)
+fn parse_fields(field_str: &str) -> Result<HashMap<String, FieldValue>, String> {
+    let parts: Vec<&str> = field_str.split(',').collect();
+    let mut fields = HashMap::with_capacity(parts.len());
+
+    for part in parts {
+        if let Some((key, value)) = part.split_once('=') {
+            let field_value = parse_field_value(value)?;
+            fields.insert(key.to_string(), field_value);
+        }
+    }
+
+    if fields.is_empty() {
+        return Err("No fields found".to_string());
+    }
+
+    Ok(fields)
+}
+
+/// Parse a single field value
+fn parse_field_value(value: &str) -> Result<FieldValue, String> {
+    let value = value.trim();
+
+    // Boolean: true, false, t, f, TRUE, FALSE, T, F
+    match value.to_lowercase().as_str() {
+        "true" | "t" => return Ok(FieldValue::Boolean(true)),
+        "false" | "f" => return Ok(FieldValue::Boolean(false)),
+        _ => {}
+    }
+
+    // String: "..." or '...'
+    if (value.starts_with('"') && value.ends_with('"'))
+        || (value.starts_with('\'') && value.ends_with('\''))
+    {
+        let s = &value[1..value.len() - 1];
+        return Ok(FieldValue::String(s.to_string()));
+    }
+
+    // Integer: ends with 'i' (e.g., 42i)
+    if value.ends_with('i') {
+        let num_str = &value[..value.len() - 1];
+        if let Ok(n) = num_str.parse::<i64>() {
+            return Ok(FieldValue::Integer(n));
+        }
+    }
+
+    // Float: default numeric type
+    if let Ok(f) = value.parse::<f64>() {
+        return Ok(FieldValue::Float(f));
+    }
+
+    // Fallback: treat as string
+    Ok(FieldValue::String(value.to_string()))
 }
 
 /// Extract schema name from tags using schema configuration
@@ -182,5 +250,118 @@ mod tests {
         let config = get_test_schema_config();
         let point = parse_line_protocol(line, &config).unwrap();
         assert_eq!(point.service, "production"); // Text service -> as-is
+    }
+
+    #[test]
+    fn test_parse_field_float() {
+        let line = "cpu usage=23.5 1672531200000000000";
+        let config = get_test_schema_config();
+        let point = parse_line_protocol(line, &config).unwrap();
+        assert!(matches!(point.fields.get("usage"), Some(FieldValue::Float(f)) if (*f - 23.5).abs() < 0.001));
+    }
+
+    #[test]
+    fn test_parse_field_integer() {
+        let line = "cpu temp=45i 1672531200000000000";
+        let config = get_test_schema_config();
+        let point = parse_line_protocol(line, &config).unwrap();
+        assert!(matches!(point.fields.get("temp"), Some(FieldValue::Integer(45))));
+    }
+
+    #[test]
+    fn test_parse_field_boolean() {
+        let line = "system active=true,enabled=false 1672531200000000000";
+        let config = get_test_schema_config();
+        let point = parse_line_protocol(line, &config).unwrap();
+        assert!(matches!(point.fields.get("active"), Some(FieldValue::Boolean(true))));
+        assert!(matches!(point.fields.get("enabled"), Some(FieldValue::Boolean(false))));
+    }
+
+    #[test]
+    fn test_parse_field_string() {
+        // Note: strings with spaces would break whitespace-based parsing
+        // Using string without spaces for this test
+        let line = "log message=\"hello\" 1672531200000000000";
+        let config = get_test_schema_config();
+        let point = parse_line_protocol(line, &config).unwrap();
+        assert!(matches!(point.fields.get("message"), Some(FieldValue::String(s)) if s == "hello"));
+    }
+
+    #[test]
+    fn test_parse_multiple_fields() {
+        let line = "cpu,host=server01 usage=23.5,temp=45i,active=true,name=\"cpu0\" 1672531200000000000";
+        let config = get_test_schema_config();
+        let point = parse_line_protocol(line, &config).unwrap();
+
+        assert_eq!(point.measurement, "cpu");
+        assert_eq!(point.tags.get("host"), Some(&"server01".to_string()));
+        assert_eq!(point.fields.len(), 4);
+        assert!(matches!(point.fields.get("usage"), Some(FieldValue::Float(_))));
+        assert!(matches!(point.fields.get("temp"), Some(FieldValue::Integer(45))));
+        assert!(matches!(point.fields.get("active"), Some(FieldValue::Boolean(true))));
+        assert!(matches!(point.fields.get("name"), Some(FieldValue::String(s)) if s == "cpu0"));
+    }
+
+    #[test]
+    fn test_parse_field_boolean_variants() {
+        // Test various boolean representations
+        let cases = vec![
+            ("m f1=true", true),
+            ("m f1=TRUE", true),
+            ("m f1=t", true),
+            ("m f1=T", true),
+            ("m f1=false", false),
+            ("m f1=FALSE", false),
+            ("m f1=f", false),
+            ("m f1=F", false),
+        ];
+
+        let config = get_test_schema_config();
+        for (line, expected) in cases {
+            let point = parse_line_protocol(line, &config).unwrap();
+            assert!(
+                matches!(point.fields.get("f1"), Some(FieldValue::Boolean(b)) if *b == expected),
+                "Failed for line: {}",
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_field_scientific_notation() {
+        let line = "cpu value=1.5e10 1672531200000000000";
+        let config = get_test_schema_config();
+        let point = parse_line_protocol(line, &config).unwrap();
+        assert!(matches!(point.fields.get("value"), Some(FieldValue::Float(f)) if (*f - 1.5e10).abs() < 1e5));
+    }
+
+    #[test]
+    fn test_parse_field_negative_values() {
+        let line = "temp value=-10.5,count=-100i 1672531200000000000";
+        let config = get_test_schema_config();
+        let point = parse_line_protocol(line, &config).unwrap();
+        assert!(matches!(point.fields.get("value"), Some(FieldValue::Float(f)) if (*f - (-10.5)).abs() < 0.001));
+        assert!(matches!(point.fields.get("count"), Some(FieldValue::Integer(-100))));
+    }
+
+    #[test]
+    fn test_parse_no_timestamp() {
+        let line = "cpu,host=server01 usage=50.0";
+        let config = get_test_schema_config();
+        let point = parse_line_protocol(line, &config).unwrap();
+        assert_eq!(point.measurement, "cpu");
+        assert!(point.timestamp.is_none());
+        assert!(matches!(point.fields.get("usage"), Some(FieldValue::Float(_))));
+    }
+
+    #[test]
+    fn test_parse_multiple_lines_fn() {
+        let data = "cpu,host=a usage=10.0 1000000000\ncpu,host=b usage=20.0 2000000000\n# comment\n\nmem,host=a free=1024i 3000000000";
+        let config = get_test_schema_config();
+        let points = parse_multiple_lines(data, &config);
+        assert_eq!(points.len(), 3);
+        assert_eq!(points[0].measurement, "cpu");
+        assert_eq!(points[1].measurement, "cpu");
+        assert_eq!(points[2].measurement, "mem");
     }
 }
