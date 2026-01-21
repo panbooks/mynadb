@@ -2,13 +2,14 @@ use arrow::array::{
     new_null_array, Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch,
     StringArray,
 };
-use arrow::compute::cast;
+use arrow::compute::{cast, concat_batches, sort_to_indices, take};
 use arrow::datatypes::{DataType, Field, Schema};
 use chrono::Timelike;
 use futures::stream::{FuturesUnordered, StreamExt};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
-use parquet::file::properties::WriterProperties;
+use parquet::basic::{Compression, ZstdLevel};
+use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -31,6 +32,11 @@ const DEFAULT_MAJOR_MIN_FILES: usize = 4; // Minimum files for L1+ compaction
 const DEFAULT_TARGET_FILE_SIZE_MB: u64 = 500;
 const DEFAULT_MAX_LEVEL: u32 = 4; // L0, L1, L2, L3, L4
 const MB_TO_BYTES: u64 = 1024 * 1024;
+
+// Parquet optimization constants
+const ROW_GROUP_SIZE: usize = 1_000_000; // 1M rows per row group
+const BLOOM_FILTER_FPP: f64 = 0.01; // 1% false positive rate
+const BLOOM_FILTER_NDV: u64 = 10_000; // Expected distinct values
 
 /// Type alias for compaction locks map
 /// Key: (catalog, schema, table, date_partition)
@@ -1427,7 +1433,66 @@ impl Compactor {
         Ok(StringArray::from(string_values))
     }
 
-    /// Write compacted batches to a new file
+    /// Sort a RecordBatch by timestamp column (ascending)
+    fn sort_batch_by_timestamp(batch: &RecordBatch) -> Result<RecordBatch, String> {
+        let ts_idx = match batch.schema().index_of("timestamp") {
+            Ok(idx) => idx,
+            Err(_) => {
+                // No timestamp column, return batch as-is
+                debug!("No timestamp column found, skipping sort");
+                return Ok(batch.clone());
+            }
+        };
+
+        let ts_col = batch.column(ts_idx);
+
+        // Get sort indices (ascending order)
+        let indices = sort_to_indices(ts_col, None, None)
+            .map_err(|e| format!("Failed to sort: {}", e))?;
+
+        // Reorder all columns by the sort indices
+        let sorted_columns: Result<Vec<ArrayRef>, String> = batch
+            .columns()
+            .iter()
+            .map(|col| {
+                take(col.as_ref(), &indices, None)
+                    .map_err(|e| format!("Failed to reorder column: {}", e))
+            })
+            .collect();
+
+        RecordBatch::try_new(batch.schema(), sorted_columns?)
+            .map_err(|e| format!("Failed to create sorted batch: {}", e))
+    }
+
+    /// Create optimized WriterProperties with Bloom filters and compression
+    fn create_optimized_writer_props(schema: &Schema) -> WriterProperties {
+        let mut builder = WriterProperties::builder()
+            // Row group size for good statistics granularity
+            .set_max_row_group_size(ROW_GROUP_SIZE)
+            // ZSTD compression (good balance of speed and ratio)
+            .set_compression(Compression::ZSTD(
+                ZstdLevel::try_new(3).unwrap_or_default(),
+            ))
+            // Enable dictionary encoding for better compression of repeated values
+            .set_dictionary_enabled(true)
+            // Enable statistics for all columns
+            .set_statistics_enabled(EnabledStatistics::Page);
+
+        // Enable Bloom filters for string columns (tags)
+        for field in schema.fields() {
+            if field.data_type() == &DataType::Utf8 {
+                let col_path: parquet::schema::types::ColumnPath = field.name().clone().into();
+                builder = builder
+                    .set_column_bloom_filter_enabled(col_path.clone(), true)
+                    .set_column_bloom_filter_fpp(col_path.clone(), BLOOM_FILTER_FPP)
+                    .set_column_bloom_filter_ndv(col_path, BLOOM_FILTER_NDV);
+            }
+        }
+
+        builder.build()
+    }
+
+    /// Write compacted batches to a new file (merged, sorted by timestamp, optimized)
     async fn write_compacted_file(
         &self,
         filename: &str,
@@ -1438,29 +1503,37 @@ impl Compactor {
         }
 
         let schema = batches[0].schema();
+
+        // Merge all batches into one
+        let merged_batch = concat_batches(&schema, &batches)
+            .map_err(|e| format!("Failed to merge batches: {}", e))?;
+
+        // Sort by timestamp
+        let sorted_batch = Self::sort_batch_by_timestamp(&merged_batch)?;
+
+        let total_rows = sorted_batch.num_rows();
+        debug!(
+            "Writing {} rows to {} (sorted by timestamp)",
+            total_rows, filename
+        );
+
         let file = File::create(filename).map_err(|e| format!("Failed to create file: {}", e))?;
 
-        let props = WriterProperties::builder().build();
+        // Use optimized writer properties
+        let props = Self::create_optimized_writer_props(&schema);
 
         let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
             .map_err(|e| format!("Failed to create writer: {}", e))?;
 
-        let mut total_bytes_written = 0u64;
+        let batch_bytes = sorted_batch.get_array_memory_size() as u64;
 
-        for batch in batches {
-            // Calculate batch size before writing (for memory tracking)
-            let batch_bytes = batch.get_array_memory_size() as u64;
+        writer
+            .write(&sorted_batch)
+            .map_err(|e| format!("Failed to write batch: {}", e))?;
 
-            writer
-                .write(&batch)
-                .map_err(|e| format!("Failed to write batch: {}", e))?;
-
-            total_bytes_written += batch_bytes;
-
-            // Apply write rate limiting
-            if let Some(ref limiter) = self.write_rate_limiter {
-                limiter.wait_for_bytes(batch_bytes as usize).await;
-            }
+        // Apply write rate limiting
+        if let Some(ref limiter) = self.write_rate_limiter {
+            limiter.wait_for_bytes(batch_bytes as usize).await;
         }
 
         writer
@@ -1468,8 +1541,9 @@ impl Compactor {
             .map_err(|e| format!("Failed to close writer: {}", e))?;
 
         debug!(
-            "Wrote {} MB",
-            total_bytes_written / (1024 * 1024)
+            "Wrote {} rows, {} MB (sorted, compressed)",
+            total_rows,
+            batch_bytes / (1024 * 1024)
         );
 
         Ok(())

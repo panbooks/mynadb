@@ -1,16 +1,24 @@
 use crate::line_protocol::format_date32_as_partition;
 use crate::storage::Storage;
 use arrow::array::{ArrayRef, RecordBatch};
+use arrow::compute::{concat_batches, sort_to_indices, take};
 use arrow::datatypes::{Field, Schema};
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
+use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
+use tracing::debug;
 
 // File naming constants
 const PARQUET_FILE_EXT: &str = "parquet";
 const LEVEL_PREFIX: &str = "L";
 const RAW_FILE_LEVEL: u32 = 0;
+
+// Parquet optimization constants
+const ROW_GROUP_SIZE: usize = 1_000_000; // 1M rows per row group
+const BLOOM_FILTER_FPP: f64 = 0.01; // 1% false positive rate
+const BLOOM_FILTER_NDV: u64 = 10_000; // Expected distinct values
 
 pub struct ParquetWriter {
     storage: Arc<Storage>,
@@ -51,8 +59,64 @@ impl ParquetWriter {
         )
     }
 
+    /// Sort a RecordBatch by timestamp column (ascending)
+    fn sort_batch_by_timestamp(batch: &RecordBatch) -> Result<RecordBatch, String> {
+        let ts_idx = batch
+            .schema()
+            .index_of("timestamp")
+            .map_err(|_| "No timestamp column found")?;
+
+        let ts_col = batch.column(ts_idx);
+
+        // Get sort indices (ascending order)
+        let indices = sort_to_indices(ts_col, None, None)
+            .map_err(|e| format!("Failed to sort: {}", e))?;
+
+        // Reorder all columns by the sort indices
+        let sorted_columns: Result<Vec<ArrayRef>, String> = batch
+            .columns()
+            .iter()
+            .map(|col| {
+                take(col.as_ref(), &indices, None)
+                    .map_err(|e| format!("Failed to reorder column: {}", e))
+            })
+            .collect();
+
+        RecordBatch::try_new(batch.schema(), sorted_columns?)
+            .map_err(|e| format!("Failed to create sorted batch: {}", e))
+    }
+
+    /// Create optimized WriterProperties with Bloom filters and compression
+    fn create_optimized_writer_props(schema: &Schema) -> WriterProperties {
+        let mut builder = WriterProperties::builder()
+            // Row group size for good statistics granularity
+            .set_max_row_group_size(ROW_GROUP_SIZE)
+            // ZSTD compression (good balance of speed and ratio)
+            .set_compression(Compression::ZSTD(
+                ZstdLevel::try_new(3).unwrap_or_default(),
+            ))
+            // Enable dictionary encoding for better compression of repeated values
+            .set_dictionary_enabled(true)
+            // Enable statistics for all columns
+            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page);
+
+        // Enable Bloom filters for string columns (tags)
+        for field in schema.fields() {
+            if field.data_type() == &arrow::datatypes::DataType::Utf8 {
+                let col_path: parquet::schema::types::ColumnPath = field.name().clone().into();
+                builder = builder
+                    .set_column_bloom_filter_enabled(col_path.clone(), true)
+                    .set_column_bloom_filter_fpp(col_path.clone(), BLOOM_FILTER_FPP)
+                    .set_column_bloom_filter_ndv(col_path, BLOOM_FILTER_NDV);
+            }
+        }
+
+        builder.build()
+    }
+
     /// Write batches to a partitioned directory structure
     /// Directory: catalog/schema/table/date=YYYY-MM-DD/
+    /// Batches are merged, sorted by timestamp, and written with optimized settings
     pub async fn write_batches_partitioned(
         &self,
         catalog: &str,
@@ -64,6 +128,8 @@ impl ParquetWriter {
         if batches.is_empty() {
             return Err("No batches to write".to_string());
         }
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
 
         // Create directory structure
         let partition_path = Self::get_partition_path(catalog, schema, table, date);
@@ -78,25 +144,40 @@ impl ParquetWriter {
         let merged_schema = Self::merge_schemas(&batches)?;
         let schema_ref = Arc::new(merged_schema);
 
-        // Write to Parquet in memory buffer
+        // Adapt all batches to merged schema
+        let adapted_batches: Result<Vec<RecordBatch>, String> = batches
+            .into_iter()
+            .map(|batch| {
+                if batch.schema() == schema_ref {
+                    Ok(batch)
+                } else {
+                    Self::adapt_batch_to_schema(&batch, &schema_ref)
+                }
+            })
+            .collect();
+        let adapted_batches = adapted_batches?;
+
+        // Merge all batches into one
+        let merged_batch = concat_batches(&schema_ref, &adapted_batches)
+            .map_err(|e| format!("Failed to merge batches: {}", e))?;
+
+        // Sort by timestamp
+        let sorted_batch = Self::sort_batch_by_timestamp(&merged_batch)?;
+
+        debug!(
+            "Writing {} rows to {} (sorted by timestamp)",
+            total_rows, full_path
+        );
+
+        // Write to Parquet with optimized settings
         let mut buffer = Vec::new();
-        let props = WriterProperties::builder().build();
+        let props = Self::create_optimized_writer_props(&schema_ref);
         let mut writer = ArrowWriter::try_new(&mut buffer, schema_ref.clone(), Some(props))
             .map_err(|e| format!("Failed to create writer: {}", e))?;
 
-        // Write all batches (may need to be adapted to merged schema)
-        for batch in batches {
-            if batch.schema() == schema_ref {
-                writer
-                    .write(&batch)
-                    .map_err(|e| format!("Failed to write batch: {}", e))?;
-            } else {
-                let adapted = Self::adapt_batch_to_schema(&batch, &schema_ref)?;
-                writer
-                    .write(&adapted)
-                    .map_err(|e| format!("Failed to write adapted batch: {}", e))?;
-            }
-        }
+        writer
+            .write(&sorted_batch)
+            .map_err(|e| format!("Failed to write batch: {}", e))?;
 
         writer
             .close()
