@@ -1,6 +1,10 @@
 use crate::config::SchemaConfig;
 use chrono::{DateTime, Utc};
+use rayon::prelude::*;
 use std::collections::HashMap;
+
+/// Minimum lines to trigger parallel parsing (below this, sequential is faster)
+const PARALLEL_THRESHOLD: usize = 1000;
 
 /// Field value types supported by InfluxDB line protocol
 #[derive(Debug, Clone)]
@@ -189,8 +193,8 @@ pub fn format_date32_as_partition(date32: i32) -> String {
     format!("date={}", format_date32_as_string(date32))
 }
 
-pub fn parse_multiple_lines(data: &str, schema_config: &SchemaConfig) -> Vec<Point> {
-    // Estimate line count: assume average line is ~500 bytes
+/// Parse multiple lines sequentially (for small batches)
+fn parse_multiple_lines_sequential(data: &str, schema_config: &SchemaConfig) -> Vec<Point> {
     let estimated_lines = (data.len() / 500).max(16);
     let mut points = Vec::with_capacity(estimated_lines);
 
@@ -201,6 +205,40 @@ pub fn parse_multiple_lines(data: &str, schema_config: &SchemaConfig) -> Vec<Poi
     }
 
     points
+}
+
+/// Parse multiple lines in parallel using rayon (for large batches)
+fn parse_multiple_lines_parallel(data: &str, schema_config: &SchemaConfig) -> Vec<Point> {
+    let lines: Vec<&str> = data.lines().collect();
+
+    // Process lines in parallel chunks for better cache locality
+    lines
+        .par_chunks(1000)
+        .flat_map(|chunk| {
+            chunk
+                .iter()
+                .filter_map(|line| parse_line_protocol(line, schema_config).ok())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Parse multiple lines with automatic parallel/sequential selection
+/// Uses parallel parsing for batches > PARALLEL_THRESHOLD lines
+pub fn parse_multiple_lines(data: &str, schema_config: &SchemaConfig) -> Vec<Point> {
+    // Estimate line count from data size (assume ~100 bytes per line average)
+    let estimated_lines = data.len() / 100;
+
+    if estimated_lines >= PARALLEL_THRESHOLD {
+        parse_multiple_lines_parallel(data, schema_config)
+    } else {
+        parse_multiple_lines_sequential(data, schema_config)
+    }
+}
+
+/// Force parallel parsing regardless of batch size (for benchmarking)
+pub fn parse_multiple_lines_force_parallel(data: &str, schema_config: &SchemaConfig) -> Vec<Point> {
+    parse_multiple_lines_parallel(data, schema_config)
 }
 
 #[cfg(test)]
@@ -363,5 +401,32 @@ mod tests {
         assert_eq!(points[0].measurement, "cpu");
         assert_eq!(points[1].measurement, "cpu");
         assert_eq!(points[2].measurement, "mem");
+    }
+
+    #[test]
+    fn test_parse_multiple_lines_parallel() {
+        // Generate a large batch to trigger parallel parsing
+        let config = get_test_schema_config();
+        let mut lines = Vec::with_capacity(2000);
+        for i in 0..2000 {
+            let ts: i64 = 1700000000000000000 + (i as i64 * 1000000);
+            lines.push(format!("cpu,host=server{} usage={}.0 {}", i % 100, i, ts));
+        }
+        let data = lines.join("\n");
+
+        let points = parse_multiple_lines(&data, &config);
+        assert_eq!(points.len(), 2000);
+
+        // Verify some points
+        assert_eq!(points[0].measurement, "cpu");
+        assert!(points.iter().all(|p| p.measurement == "cpu"));
+    }
+
+    #[test]
+    fn test_parse_force_parallel() {
+        let data = "cpu,host=a usage=10.0 1000000000\ncpu,host=b usage=20.0 2000000000";
+        let config = get_test_schema_config();
+        let points = parse_multiple_lines_force_parallel(data, &config);
+        assert_eq!(points.len(), 2);
     }
 }
