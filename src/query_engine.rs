@@ -1,4 +1,5 @@
 use crate::query::create_custom_session_state;
+use crate::query::table_provider::{ParquetTableConfig, ParquetTableProvider};
 use crate::query_cache::{QueryCacheConfig, QueryCacheKey, QueryCacheStats, QueryResultCache, SharedQueryResultCache};
 use crate::storage::Storage;
 use chrono::{DateTime, TimeZone, Utc};
@@ -6,14 +7,9 @@ use datafusion::arrow::array::{Array, RecordBatch};
 use datafusion::catalog_common::MemoryCatalogProvider;
 use datafusion::catalog_common::MemorySchemaProvider;
 use datafusion::config::ConfigOptions;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::{
-    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
-};
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::*;
-use datafusion::sql::TableReference;
 use parking_lot::RwLock as ParkingRwLock;
 use parquet::file::metadata::ParquetMetaData;
 use std::collections::{HashMap, HashSet};
@@ -719,7 +715,7 @@ impl QueryEngine {
         Ok(())
     }
 
-    /// Register a simple (non-partitioned) table
+    /// Register a simple (non-partitioned) table using custom ParquetTableProvider
     async fn register_simple_table(
         &self,
         catalog_name: &str,
@@ -727,20 +723,37 @@ impl QueryEngine {
         table_name: &str,
         table_path: &str,
     ) -> Result<(), String> {
-        let table_ref = TableReference::full(catalog_name, schema_name, table_name);
-        self.ctx
-            .register_parquet(table_ref, table_path, ParquetReadOptions::default())
-            .await
-            .map_err(|e| {
-                format!(
-                    "Failed to register table '{}.{}.{}': {}",
-                    catalog_name, schema_name, table_name, e
-                )
-            })?;
+        // Strip file:// prefix if present for local path
+        let local_path = table_path.strip_prefix("file://").unwrap_or(table_path);
+
+        // Create ParquetTableProvider configuration
+        let config = ParquetTableConfig::new(format!("{}.{}.{}", catalog_name, schema_name, table_name))
+            .with_partitioned(false)
+            .with_batch_size(8192);
+
+        // Create the custom table provider
+        let provider = ParquetTableProvider::try_new(local_path, config)
+            .map_err(|e| format!("Failed to create table provider for '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
+
+        // Get the schema
+        let catalog = self
+            .ctx
+            .catalog(catalog_name)
+            .ok_or_else(|| format!("Catalog '{}' not found", catalog_name))?;
+
+        let schema = catalog
+            .schema(schema_name)
+            .ok_or_else(|| format!("Schema '{}.{}' not found", catalog_name, schema_name))?;
+
+        // Register the table with our custom provider
+        schema
+            .register_table(table_name.to_string(), Arc::new(provider))
+            .map_err(|e| format!("Failed to register table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
+
         Ok(())
     }
 
-    /// Register a partitioned table using ListingTable
+    /// Register a partitioned table using custom ParquetTableProvider
     async fn register_partitioned_table(
         &self,
         catalog_name: &str,
@@ -748,31 +761,17 @@ impl QueryEngine {
         table_name: &str,
         table_path: &str,
     ) -> Result<(), String> {
-        // Create ListingTableUrl from the table path
-        let table_url = ListingTableUrl::parse(table_path)
-            .map_err(|e| format!("Failed to parse table URL: {}", e))?;
+        // Strip file:// prefix if present for local path
+        let local_path = table_path.strip_prefix("file://").unwrap_or(table_path);
 
-        // Create ListingOptions for Parquet with Hive partitioning
-        let file_format = Arc::new(ParquetFormat::default());
-        let listing_options = ListingOptions::new(file_format)
-            .with_file_extension(".parquet")
-            .with_table_partition_cols(vec![(
-                "date".to_string(),
-                datafusion::arrow::datatypes::DataType::Utf8,
-            )]); // Partition column
+        // Create ParquetTableProvider configuration for partitioned table
+        let config = ParquetTableConfig::new(format!("{}.{}.{}", catalog_name, schema_name, table_name))
+            .with_partitioned(true)
+            .with_batch_size(8192);
 
-        // Create ListingTableConfig
-        let config = ListingTableConfig::new(table_url).with_listing_options(listing_options);
-
-        // Infer schema from the files
-        let config = config
-            .infer_schema(&self.ctx.state())
-            .await
-            .map_err(|e| format!("Failed to infer schema: {}", e))?;
-
-        // Create the ListingTable
-        let listing_table = ListingTable::try_new(config)
-            .map_err(|e| format!("Failed to create listing table: {}", e))?;
+        // Create the custom table provider
+        let provider = ParquetTableProvider::try_new(local_path, config)
+            .map_err(|e| format!("Failed to create partitioned table provider for '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
 
         // Get the catalog and schema
         let catalog = self
@@ -784,10 +783,10 @@ impl QueryEngine {
             .schema(schema_name)
             .ok_or_else(|| format!("Schema '{}.{}' not found", catalog_name, schema_name))?;
 
-        // Register the table
+        // Register the table with our custom provider
         schema
-            .register_table(table_name.to_string(), Arc::new(listing_table))
-            .map_err(|e| format!("Failed to register table: {}", e))?;
+            .register_table(table_name.to_string(), Arc::new(provider))
+            .map_err(|e| format!("Failed to register partitioned table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
 
         Ok(())
     }
