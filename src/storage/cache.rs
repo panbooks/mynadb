@@ -1,6 +1,6 @@
 use crate::line_protocol::{format_date32_as_partition, FieldValue, Point};
 use crate::parquet_writer::ParquetWriter;
-use crate::storage::Storage;
+use crate::storage::storage::Storage;
 use crate::wal::Wal;
 use arrow::array::{
     BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,

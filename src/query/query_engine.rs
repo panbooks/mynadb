@@ -1,7 +1,7 @@
 use crate::query::create_custom_session_state;
 use crate::query::table_provider::{ParquetTableConfig, ParquetTableProvider};
 use crate::query_cache::{QueryCacheConfig, QueryCacheKey, QueryCacheStats, QueryResultCache, SharedQueryResultCache};
-use crate::storage::Storage;
+use crate::storage::storage::Storage;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::arrow::array::{Array, RecordBatch};
 use datafusion::catalog_common::MemoryCatalogProvider;

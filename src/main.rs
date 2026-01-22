@@ -1,22 +1,13 @@
-mod api;
-mod auth;
-mod cache;
-mod compactor;
 mod config;
-mod database_manager;
-mod flight_service;
-mod line_protocol;
-mod logger;
-mod mysql_service;
-mod parquet_writer;
-mod profiling;
+mod jobs;
 mod query;
-mod query_cache;
-mod query_engine;
-mod rate_limiter;
-mod retention_manager;
+mod services;
 mod storage;
-mod wal;
+
+use jobs::{compactor, database_manager, logger, profiling, retention_manager};
+use query::{query_cache, query_engine};
+use services::{api, auth, flight_service, mysql_service};
+use storage::{cache, line_protocol, parquet_writer, storage as storage_mod, wal};
 
 use axum::{
     routing::{delete, get, post},
@@ -92,7 +83,7 @@ fn print_welcome_banner(config: &Config) {
 }
 
 /// Initialize WAL (Write-Ahead Log) with object store support
-async fn initialize_wal(config: &Config, storage: Arc<storage::Storage>) -> Option<Arc<wal::Wal>> {
+async fn initialize_wal(config: &Config, storage: Arc<storage_mod::Storage>) -> Option<Arc<wal::Wal>> {
     if !config.wal.enabled {
         info!("WAL is disabled");
         return None;
@@ -368,7 +359,7 @@ async fn main() {
         config.storage.object_store.backend
     );
     let storage = Arc::new(
-        storage::Storage::from_config(&config.storage.object_store)
+        storage_mod::Storage::from_config(&config.storage.object_store)
             .expect("Failed to initialize storage"),
     );
 
