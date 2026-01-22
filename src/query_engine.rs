@@ -1,5 +1,6 @@
 use crate::query_cache::{QueryCacheConfig, QueryCacheKey, QueryCacheStats, QueryResultCache, SharedQueryResultCache};
 use crate::storage::Storage;
+use chrono::{DateTime, TimeZone, Utc};
 use datafusion::arrow::array::{Array, RecordBatch};
 use datafusion::catalog_common::MemoryCatalogProvider;
 use datafusion::catalog_common::MemorySchemaProvider;
@@ -25,6 +26,12 @@ const DEFAULT_SCHEMA: &str = "default";
 
 /// Cache TTL for table metadata (5 minutes)
 const TABLE_CACHE_TTL_SECS: u64 = 300;
+
+/// Nanoseconds per second
+const NANOS_PER_SEC: i64 = 1_000_000_000;
+
+/// Nanoseconds per millisecond
+const NANOS_PER_MILLI: i64 = 1_000_000;
 
 /// Cache TTL for file listings (60 seconds)
 const FILE_LISTING_CACHE_TTL_SECS: u64 = 60;
@@ -320,6 +327,49 @@ pub struct TimeRange {
     pub start_date: Option<String>,
     /// End date for partition filtering (YYYY-MM-DD)
     pub end_date: Option<String>,
+}
+
+impl TimeRange {
+    /// Convert a nanosecond timestamp to a date string (YYYY-MM-DD)
+    pub fn timestamp_nanos_to_date(timestamp_nanos: i64) -> String {
+        let secs = timestamp_nanos / NANOS_PER_SEC;
+        let datetime = DateTime::from_timestamp(secs, 0)
+            .unwrap_or_else(|| Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap());
+        datetime.format("%Y-%m-%d").to_string()
+    }
+
+    /// Convert a millisecond timestamp to a date string (YYYY-MM-DD)
+    pub fn timestamp_millis_to_date(timestamp_millis: i64) -> String {
+        Self::timestamp_nanos_to_date(timestamp_millis * NANOS_PER_MILLI)
+    }
+
+    /// Check if a timestamp value looks like milliseconds (13 digits) vs nanoseconds (19 digits)
+    pub fn is_likely_millis(value: i64) -> bool {
+        // Milliseconds: 13 digits (e.g., 1704067200000)
+        // Nanoseconds: 19 digits (e.g., 1704067200000000000)
+        // If value is < 10^15, it's likely milliseconds
+        value > 0 && value < 1_000_000_000_000_000
+    }
+
+    /// Convert timestamp to date, auto-detecting milliseconds vs nanoseconds
+    pub fn timestamp_to_date(value: i64) -> String {
+        if Self::is_likely_millis(value) {
+            Self::timestamp_millis_to_date(value)
+        } else {
+            Self::timestamp_nanos_to_date(value)
+        }
+    }
+
+    /// Get the derived date range from timestamps (for partition pruning)
+    pub fn get_date_range(&self) -> (Option<String>, Option<String>) {
+        let start = self.start_date.clone().or_else(|| {
+            self.start_timestamp.map(Self::timestamp_to_date)
+        });
+        let end = self.end_date.clone().or_else(|| {
+            self.end_timestamp.map(Self::timestamp_to_date)
+        });
+        (start, end)
+    }
 }
 
 /// Result of EXPLAIN query
@@ -1089,6 +1139,7 @@ impl QueryEngine {
     /// Execute a SQL query with database context
     /// Automatically qualifies unqualified table names with catalog.schema
     /// Uses query result cache for repeated queries
+    /// Injects date predicates for smart partition pruning when timestamp filters are present
     pub async fn execute_query_with_db(
         &self,
         sql: &str,
@@ -1113,14 +1164,21 @@ impl QueryEngine {
         // Qualify unqualified table names with catalog.schema
         let qualified_sql = self.qualify_table_names(sql, db_name);
 
+        // Smart Partition Pruning: Inject date predicates based on timestamp filters
+        // This converts timestamp filters to date partition filters for better pruning
+        let optimized_sql = self.inject_date_predicates(&qualified_sql);
+
         debug!("SQL: {}", sql);
         if qualified_sql != sql {
             debug!("Qualified: {}", qualified_sql);
         }
+        if optimized_sql != qualified_sql {
+            debug!("Optimized (date predicates injected): {}", optimized_sql);
+        }
 
         // Execute query and measure time
         let start_time = Instant::now();
-        let result = self.execute_query(&qualified_sql).await?;
+        let result = self.execute_query(&optimized_sql).await?;
         let query_time_ms = start_time.elapsed().as_millis() as u64;
 
         // Cache the result
@@ -1389,6 +1447,76 @@ impl QueryEngine {
         }
 
         None
+    }
+
+    /// Inject date predicates into SQL based on timestamp filters for smart partition pruning
+    ///
+    /// This converts timestamp predicates to date predicates, enabling Hive-style partition pruning.
+    /// Example:
+    ///   Input:  SELECT * FROM cpu WHERE timestamp >= 1704067200000000000
+    ///   Output: SELECT * FROM cpu WHERE timestamp >= 1704067200000000000 AND date >= '2024-01-01'
+    ///
+    /// This allows DataFusion to prune partitions based on the date column.
+    pub fn inject_date_predicates(&self, sql: &str) -> String {
+        // Extract time range from the SQL
+        let time_range = match self.extract_time_range(sql) {
+            Some(tr) => tr,
+            None => return sql.to_string(), // No time range found, return original SQL
+        };
+
+        // Get derived date range from timestamps
+        let (start_date, end_date) = time_range.get_date_range();
+
+        // If no dates can be derived, return original SQL
+        if start_date.is_none() && end_date.is_none() {
+            return sql.to_string();
+        }
+
+        // Check if date predicates already exist in the query
+        let sql_upper = sql.to_uppercase();
+        if sql_upper.contains("DATE =") || sql_upper.contains("DATE >=") ||
+           sql_upper.contains("DATE <=") || sql_upper.contains("DATE >") ||
+           sql_upper.contains("DATE <") || sql_upper.contains("DATE BETWEEN") {
+            // Date predicates already exist, don't inject duplicates
+            debug!("Date predicates already present in query, skipping injection");
+            return sql.to_string();
+        }
+
+        // Build date predicate clause
+        let date_predicates = match (&start_date, &end_date) {
+            (Some(start), Some(end)) if start == end => {
+                format!("date = '{}'", start)
+            }
+            (Some(start), Some(end)) => {
+                format!("date >= '{}' AND date <= '{}'", start, end)
+            }
+            (Some(start), None) => {
+                format!("date >= '{}'", start)
+            }
+            (None, Some(end)) => {
+                format!("date <= '{}'", end)
+            }
+            (None, None) => {
+                return sql.to_string();
+            }
+        };
+
+        // Find WHERE clause position to inject the date predicates
+        if let Some(where_pos) = sql_upper.find("WHERE") {
+            // Insert date predicates after WHERE keyword
+            let where_end = where_pos + 5; // "WHERE" is 5 characters
+            let before = &sql[..where_end];
+            let after = &sql[where_end..];
+
+            let result = format!("{} {} AND{}", before, date_predicates, after);
+            debug!("Injected date predicates: {} -> {}", sql, result);
+            result
+        } else {
+            // No WHERE clause - we shouldn't inject date predicates without other conditions
+            // This could cause issues with queries that have no filtering
+            debug!("No WHERE clause found, cannot inject date predicates safely");
+            sql.to_string()
+        }
     }
 
     /// Get query analysis including estimated rows and partitions
@@ -2348,5 +2476,129 @@ mod tests {
         assert!(config.options().execution.parquet.pruning);
         assert!(config.options().execution.parquet.enable_page_index);
         assert!(config.options().execution.parquet.bloom_filter_on_read);
+    }
+
+    #[test]
+    fn test_timestamp_nanos_to_date() {
+        // 2024-01-01 00:00:00 UTC in nanoseconds
+        let ts = 1704067200000000000i64;
+        let date = TimeRange::timestamp_nanos_to_date(ts);
+        assert_eq!(date, "2024-01-01");
+
+        // 2024-01-15 12:30:45 UTC in nanoseconds
+        let ts2 = 1705322245000000000i64;
+        let date2 = TimeRange::timestamp_nanos_to_date(ts2);
+        assert_eq!(date2, "2024-01-15");
+    }
+
+    #[test]
+    fn test_timestamp_millis_to_date() {
+        // 2024-01-01 00:00:00 UTC in milliseconds
+        let ts = 1704067200000i64;
+        let date = TimeRange::timestamp_millis_to_date(ts);
+        assert_eq!(date, "2024-01-01");
+    }
+
+    #[test]
+    fn test_is_likely_millis() {
+        // Nanoseconds (19 digits)
+        assert!(!TimeRange::is_likely_millis(1704067200000000000));
+
+        // Milliseconds (13 digits)
+        assert!(TimeRange::is_likely_millis(1704067200000));
+
+        // Edge cases
+        assert!(TimeRange::is_likely_millis(1000000000000)); // 12 digits, still millis range
+        assert!(!TimeRange::is_likely_millis(1000000000000000)); // 16 digits, nanos range
+    }
+
+    #[test]
+    fn test_timestamp_to_date_auto_detect() {
+        // Nanoseconds
+        let date1 = TimeRange::timestamp_to_date(1704067200000000000);
+        assert_eq!(date1, "2024-01-01");
+
+        // Milliseconds
+        let date2 = TimeRange::timestamp_to_date(1704067200000);
+        assert_eq!(date2, "2024-01-01");
+    }
+
+    #[test]
+    fn test_inject_date_predicates_with_timestamp() {
+        let engine = QueryEngine::new("./data");
+
+        // Test with nanosecond timestamp
+        let sql = "SELECT * FROM cpu WHERE timestamp >= 1704067200000000000";
+        let result = engine.inject_date_predicates(sql);
+        assert!(result.contains("date >= '2024-01-01'"));
+        assert!(result.contains("timestamp >= 1704067200000000000"));
+    }
+
+    #[test]
+    fn test_inject_date_predicates_with_timestamp_range() {
+        let engine = QueryEngine::new("./data");
+
+        // Test with timestamp range (2024-01-01 to 2024-01-02)
+        let sql = "SELECT * FROM cpu WHERE timestamp >= 1704067200000000000 AND timestamp < 1704153600000000000";
+        let result = engine.inject_date_predicates(sql);
+        assert!(result.contains("date >= '2024-01-01'"));
+        assert!(result.contains("date <= '2024-01-02'"));
+    }
+
+    #[test]
+    fn test_inject_date_predicates_skips_existing_date() {
+        let engine = QueryEngine::new("./data");
+
+        // Test that existing date predicates are not duplicated
+        let sql = "SELECT * FROM cpu WHERE timestamp >= 1704067200000000000 AND date = '2024-01-01'";
+        let result = engine.inject_date_predicates(sql);
+        // Should return unchanged since date predicate already exists
+        assert_eq!(result, sql);
+    }
+
+    #[test]
+    fn test_inject_date_predicates_no_time_filter() {
+        let engine = QueryEngine::new("./data");
+
+        // Test query without time filter
+        let sql = "SELECT * FROM cpu WHERE usage > 50";
+        let result = engine.inject_date_predicates(sql);
+        // Should return unchanged since there's no time filter
+        assert_eq!(result, sql);
+    }
+
+    #[test]
+    fn test_inject_date_predicates_no_where_clause() {
+        let engine = QueryEngine::new("./data");
+
+        // Test query without WHERE clause - should not inject
+        let sql = "SELECT * FROM cpu";
+        let result = engine.inject_date_predicates(sql);
+        assert_eq!(result, sql);
+    }
+
+    #[test]
+    fn test_time_range_get_date_range() {
+        // Test with both timestamp and explicit dates
+        let range = TimeRange {
+            start_timestamp: Some(1704067200000000000), // 2024-01-01
+            end_timestamp: Some(1704153600000000000),   // 2024-01-02
+            start_date: None,
+            end_date: None,
+        };
+        let (start, end) = range.get_date_range();
+        assert_eq!(start, Some("2024-01-01".to_string()));
+        assert_eq!(end, Some("2024-01-02".to_string()));
+
+        // Test with explicit dates (should take precedence)
+        let range2 = TimeRange {
+            start_timestamp: Some(1704067200000000000),
+            end_timestamp: Some(1704153600000000000),
+            start_date: Some("2024-01-10".to_string()),
+            end_date: Some("2024-01-20".to_string()),
+        };
+        let (start2, end2) = range2.get_date_range();
+        assert_eq!(start2, Some("2024-01-10".to_string()));
+        assert_eq!(end2, Some("2024-01-20".to_string()));
     }
 }
