@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::config::WalConfig;
-use crate::storage::Storage;
+use crate::storage::storage::Storage;
 
 /// WAL entry type discriminator
 #[repr(u8)]

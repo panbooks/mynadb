@@ -1,5 +1,5 @@
 use crate::line_protocol::format_date32_as_partition;
-use crate::storage::Storage;
+use crate::storage::storage::Storage;
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::compute::{concat_batches, sort_to_indices, take};
 use arrow::datatypes::{Field, Schema};

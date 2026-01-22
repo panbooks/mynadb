@@ -1,6 +1,6 @@
 use crate::config::RetentionConfig;
 use crate::database_manager::DatabaseManager;
-use crate::storage::Storage;
+use crate::storage::storage::Storage;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;

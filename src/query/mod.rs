@@ -37,6 +37,8 @@ pub mod analyzers;
 pub mod executor;
 pub mod logical_optimizers;
 pub mod physical_optimizers;
+pub mod query_cache;
+pub mod query_engine;
 pub mod table_provider;
 
 pub use executor::{create_custom_session_state, CustomQueryExecutor};

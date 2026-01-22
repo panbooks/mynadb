@@ -1,4 +1,4 @@
-use crate::storage::Storage;
+use crate::storage::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::fs::{create_dir_all, read_to_string, write};
 use std::path::{Path, PathBuf};

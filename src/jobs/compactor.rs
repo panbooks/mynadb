@@ -18,8 +18,8 @@ use std::time::Instant;
 use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, error, info, warn};
 
-use crate::rate_limiter::RateLimiter;
-use crate::storage::Storage;
+use crate::services::rate_limiter::RateLimiter;
+use crate::storage::storage::Storage;
 
 // Compaction constants
 const LEVEL_PREFIX: char = 'L';
