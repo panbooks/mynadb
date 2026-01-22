@@ -16,9 +16,20 @@ const LEVEL_PREFIX: &str = "L";
 const RAW_FILE_LEVEL: u32 = 0;
 
 // Parquet optimization constants
-const ROW_GROUP_SIZE: usize = 1_000_000; // 1M rows per row group
-const BLOOM_FILTER_FPP: f64 = 0.01; // 1% false positive rate
-const BLOOM_FILTER_NDV: u64 = 10_000; // Expected distinct values
+// 500K rows per row group - optimal balance between:
+// - Parallelism (more row groups = more parallel reads)
+// - Statistics granularity (better predicate pruning)
+// - Memory usage (smaller groups = less memory per read)
+// - Compression ratio (larger groups = slightly better compression)
+const ROW_GROUP_SIZE: usize = 500_000;
+// Data page size - 1MB for good predicate pushdown performance
+const DATA_PAGE_SIZE: usize = 1024 * 1024;
+// Dictionary page size limit
+const DICTIONARY_PAGE_SIZE: usize = 1024 * 1024;
+// Bloom filter false positive rate (1%)
+const BLOOM_FILTER_FPP: f64 = 0.01;
+// Expected distinct values for bloom filter sizing
+const BLOOM_FILTER_NDV: u64 = 10_000;
 
 pub struct ParquetWriter {
     storage: Arc<Storage>,
@@ -86,21 +97,34 @@ impl ParquetWriter {
             .map_err(|e| format!("Failed to create sorted batch: {}", e))
     }
 
-    /// Create optimized WriterProperties with Bloom filters and compression
+    /// Create optimized WriterProperties with Bloom filters, compression, and tuned row groups
     fn create_optimized_writer_props(schema: &Schema) -> WriterProperties {
         let mut builder = WriterProperties::builder()
-            // Row group size for good statistics granularity
+            // ===== Row Group Tuning =====
+            // 500K rows per row group - optimal for parallel reads and statistics granularity
             .set_max_row_group_size(ROW_GROUP_SIZE)
-            // ZSTD compression (good balance of speed and ratio)
+            // ===== Page Size Tuning =====
+            // 1MB data pages for good predicate pushdown performance
+            .set_data_page_size_limit(DATA_PAGE_SIZE)
+            // Dictionary page size limit
+            .set_dictionary_page_size_limit(DICTIONARY_PAGE_SIZE)
+            // ===== Compression =====
+            // ZSTD level 3 - good balance of speed and compression ratio
             .set_compression(Compression::ZSTD(
                 ZstdLevel::try_new(3).unwrap_or_default(),
             ))
-            // Enable dictionary encoding for better compression of repeated values
+            // ===== Dictionary Encoding =====
+            // Enable dictionary encoding for better compression of repeated values (tags)
             .set_dictionary_enabled(true)
-            // Enable statistics for all columns
-            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page);
+            // ===== Statistics =====
+            // Enable page-level statistics for fine-grained predicate pruning
+            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
+            // ===== Write Batch Size =====
+            // Larger write batch for better I/O efficiency
+            .set_write_batch_size(10000);
 
-        // Enable Bloom filters for string columns (tags)
+        // ===== Bloom Filters for String Columns =====
+        // Enable Bloom filters for string columns (tags) to speed up equality predicates
         for field in schema.fields() {
             if field.data_type() == &arrow::datatypes::DataType::Utf8 {
                 let col_path: parquet::schema::types::ColumnPath = field.name().clone().into();

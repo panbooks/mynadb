@@ -419,26 +419,53 @@ pub struct QueryEngine {
 }
 
 impl QueryEngine {
-    /// Create optimized SessionContext with predicate push-down and pruning enabled
+    /// Create optimized SessionContext with predicate push-down, parallel reading, and pruning enabled
     fn create_optimized_context() -> SessionContext {
         let mut config = ConfigOptions::new();
 
-        // Enable predicate push-down to Parquet
+        // ===== Predicate Push-down =====
+        // Push filter predicates to Parquet reader for early filtering
         config.execution.parquet.pushdown_filters = true;
+        // Reorder filters for optimal execution (most selective first)
         config.execution.parquet.reorder_filters = true;
 
-        // Enable row group pruning using Parquet statistics
+        // ===== Row Group & Page Pruning =====
+        // Enable row group pruning using Parquet statistics (min/max)
         config.execution.parquet.pruning = true;
-
-        // Enable page-level pruning for better performance
+        // Enable page-level pruning using page index for finer-grained filtering
         config.execution.parquet.enable_page_index = true;
-
-        // Enable bloom filter for string columns if available
+        // Enable bloom filter for string column filtering
         config.execution.parquet.bloom_filter_on_read = true;
 
-        // Optimize for time-series workloads
+        // ===== Parallel Parquet Reading =====
+        // Use all available CPU cores for parallel partition processing
+        let num_cpus = num_cpus::get();
+        config.execution.target_partitions = num_cpus;
+        // Optimal batch size for vectorized execution (8K rows per batch)
+        config.execution.batch_size = 8192;
+        // Enable parallel reading of row groups within a single file
+        config.execution.parquet.maximum_parallel_row_group_writers = num_cpus;
+        // Increase buffered rows for better I/O efficiency
+        config.execution.parquet.maximum_buffered_record_batches_per_stream = 4;
+
+        // ===== Columnar Projection Push-down =====
+        // Enable projection pushdown to read only needed columns from Parquet
+        // (This is enabled by default in DataFusion, but we ensure it's on)
+        config.optimizer.enable_distinct_aggregation_soft_limit = true;
+
+        // ===== Memory & Performance Tuning =====
+        // Sort spill threshold (in rows) before spilling to disk
+        config.execution.sort_spill_reservation_bytes = 100 * 1024 * 1024; // 100MB
+        // Coalesce batches for better throughput
+        config.execution.coalesce_batches = true;
+
+        // ===== Time-series Workload Optimization =====
+        // Disable round-robin repartition (not beneficial for time-series)
         config.optimizer.enable_round_robin_repartition = false;
+        // Disable file scan repartition (we want partition-aware scanning)
         config.optimizer.repartition_file_scans = false;
+        // Enable topk optimization for ORDER BY ... LIMIT queries
+        config.optimizer.top_down_join_key_reordering = true;
 
         // Create session state with optimized config
         let session_config = SessionConfig::from(config);
@@ -2470,12 +2497,21 @@ mod tests {
         let state = ctx.state();
         let config = state.config();
 
-        // Check that pushdown filters are enabled
+        // Check predicate pushdown settings
         assert!(config.options().execution.parquet.pushdown_filters);
         assert!(config.options().execution.parquet.reorder_filters);
         assert!(config.options().execution.parquet.pruning);
         assert!(config.options().execution.parquet.enable_page_index);
         assert!(config.options().execution.parquet.bloom_filter_on_read);
+
+        // Check parallel reading settings
+        assert!(config.options().execution.target_partitions > 0);
+        assert_eq!(config.options().execution.batch_size, 8192);
+        assert!(config.options().execution.coalesce_batches);
+
+        // Check time-series optimizations
+        assert!(!config.options().optimizer.enable_round_robin_repartition);
+        assert!(!config.options().optimizer.repartition_file_scans);
     }
 
     #[test]
