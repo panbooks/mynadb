@@ -16,6 +16,8 @@ pub struct Config {
     #[serde(default)]
     pub query_cache: QueryCacheConfig,
     #[serde(default)]
+    pub query: QueryConfig,
+    #[serde(default)]
     pub compaction: CompactionConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
@@ -231,6 +233,28 @@ fn default_query_cache_ttl_secs() -> u64 {
 
 fn default_query_cache_min_query_time_ms() -> u64 {
     10
+}
+
+/// Query engine configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryConfig {
+    /// Use custom ParquetTableProvider instead of DataFusion's ListingTable
+    /// When false (default): Uses DataFusion's built-in ListingTable and register_parquet
+    /// When true: Uses custom ParquetTableProvider with manual Parquet reading
+    #[serde(default = "default_use_custom_table_provider")]
+    pub use_custom_table_provider: bool,
+}
+
+impl Default for QueryConfig {
+    fn default() -> Self {
+        Self {
+            use_custom_table_provider: default_use_custom_table_provider(),
+        }
+    }
+}
+
+fn default_use_custom_table_provider() -> bool {
+    false // Default to original ListingTable approach
 }
 
 /// Compaction configuration
@@ -735,6 +759,7 @@ impl Default for Config {
             schema: SchemaConfig::default(),
             cache: CacheConfig::default(),
             query_cache: QueryCacheConfig::default(),
+            query: QueryConfig::default(),
             compaction: CompactionConfig::default(),
             logging: LoggingConfig::default(),
             retention: RetentionConfig::default(),

@@ -1,6 +1,23 @@
 # Custom TableProvider Architecture
 
-This document describes the custom `ParquetTableProvider` implementation that replaces DataFusion's built-in `ListingTable` and `register_parquet()` approaches for table registration and query execution.
+This document describes the custom `ParquetTableProvider` implementation that can optionally replace DataFusion's built-in `ListingTable` and `register_parquet()` approaches for table registration and query execution.
+
+## Configuration
+
+The table provider implementation is configurable via `config.toml`:
+
+```toml
+[query]
+# Use custom ParquetTableProvider instead of DataFusion's ListingTable
+# When false (default): Uses DataFusion's built-in ListingTable and register_parquet
+# When true: Uses custom ParquetTableProvider with manual Parquet reading
+use_custom_table_provider = false
+```
+
+| Value | Table Provider | Description |
+|-------|---------------|-------------|
+| `false` (default) | ListingTable | DataFusion's built-in approach with automatic optimizations |
+| `true` | ParquetTableProvider | Custom implementation with manual control |
 
 ## Overview
 
@@ -40,14 +57,19 @@ The custom TableProvider provides full control over the query execution path, en
 │  │    └── Call register_partitioned_table() or register_simple_table()  │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                    │                                        │
+│                                    │                                        │
+│                    ┌───────────────┴───────────────┐                       │
+│                    │  use_custom_table_provider?   │                       │
+│                    └───────────────┬───────────────┘                       │
+│                 false              │              true                      │
 │           ┌────────────────────────┴────────────────────────┐              │
 │           ▼                                                  ▼              │
 │  ┌─────────────────────┐                      ┌─────────────────────────┐  │
-│  │ register_simple_    │                      │ register_partitioned_   │  │
-│  │ table()             │                      │ table()                 │  │
+│  │ _listing() methods  │                      │ _custom() methods       │  │
 │  │                     │                      │                         │  │
-│  │ Creates             │                      │ Creates                 │  │
-│  │ ParquetTableProvider│                      │ ParquetTableProvider    │  │
+│  │ Uses DataFusion's   │                      │ Uses custom             │  │
+│  │ ListingTable /      │                      │ ParquetTableProvider    │  │
+│  │ register_parquet    │                      │                         │  │
 │  │ (partitioned=false) │                      │ (partitioned=true)      │  │
 │  └─────────────────────┘                      └─────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
