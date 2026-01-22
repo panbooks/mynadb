@@ -9,6 +9,8 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use datafusion::execution::disk_manager::DiskManagerConfig;
+use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::*;
 use datafusion::sql::TableReference;
 use parking_lot::RwLock as ParkingRwLock;
@@ -418,6 +420,11 @@ pub struct QueryEngine {
     query_cache: SharedQueryResultCache,
 }
 
+/// Default memory limit for query execution (16GB)
+const DEFAULT_MEMORY_LIMIT_BYTES: usize = 16 * 1024 * 1024 * 1024;
+/// Memory threshold fraction before spilling to disk (80%)
+const MEMORY_LIMIT_FRACTION: f64 = 0.8;
+
 impl QueryEngine {
     /// Create optimized SessionContext with predicate push-down, parallel reading, and pruning enabled
     fn create_optimized_context() -> SessionContext {
@@ -467,9 +474,27 @@ impl QueryEngine {
         // Enable topk optimization for ORDER BY ... LIMIT queries
         config.optimizer.top_down_join_key_reordering = true;
 
-        // Create session state with optimized config
+        // Create session config
         let session_config = SessionConfig::from(config);
-        SessionContext::new_with_config(session_config)
+
+        // ===== Memory Management =====
+        // Configure RuntimeEnv with memory limits and disk spilling
+        let runtime_config = RuntimeConfig::new()
+            // Set memory limit (4GB default, 80% threshold before spilling)
+            .with_memory_limit(DEFAULT_MEMORY_LIMIT_BYTES, MEMORY_LIMIT_FRACTION)
+            // Enable disk manager for spilling intermediate results
+            .with_disk_manager(DiskManagerConfig::NewOs);
+
+        let runtime_env = match RuntimeEnv::try_new(runtime_config) {
+            Ok(env) => Arc::new(env),
+            Err(e) => {
+                warn!("Failed to create RuntimeEnv with memory limits: {}, using default", e);
+                Arc::new(RuntimeEnv::default())
+            }
+        };
+
+        // Create session context with optimized config and runtime environment
+        SessionContext::new_with_config_rt(session_config, runtime_env)
     }
 
     pub fn new(data_dir: &str) -> Self {
