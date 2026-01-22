@@ -1,3 +1,4 @@
+use crate::query::create_custom_session_state;
 use crate::query_cache::{QueryCacheConfig, QueryCacheKey, QueryCacheStats, QueryResultCache, SharedQueryResultCache};
 use crate::storage::Storage;
 use chrono::{DateTime, TimeZone, Utc};
@@ -493,16 +494,16 @@ impl QueryEngine {
             }
         };
 
-        // Create session context with optimized config and runtime environment
-        SessionContext::new_with_config_rt(session_config, runtime_env)
+        // Create base session context with optimized config and runtime environment
+        let base_ctx = SessionContext::new_with_config_rt(session_config, runtime_env);
+
+        // Apply custom analyzer and optimizer rules
+        let custom_state = create_custom_session_state(base_ctx.state());
+        SessionContext::new_with_state(custom_state)
     }
 
     pub fn new(data_dir: &str) -> Self {
         Self::new_with_query_cache(data_dir, None, QueryCacheConfig::default())
-    }
-
-    pub fn new_with_storage(data_dir: &str, storage: Arc<Storage>) -> Self {
-        Self::new_with_query_cache(data_dir, Some(storage), QueryCacheConfig::default())
     }
 
     pub fn new_with_query_cache(data_dir: &str, storage: Option<Arc<Storage>>, query_cache_config: QueryCacheConfig) -> Self {

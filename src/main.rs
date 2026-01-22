@@ -10,6 +10,7 @@ mod logger;
 mod mysql_service;
 mod parquet_writer;
 mod profiling;
+mod query;
 mod query_cache;
 mod query_engine;
 mod rate_limiter;
