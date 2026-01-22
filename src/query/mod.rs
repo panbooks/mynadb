@@ -37,5 +37,7 @@ pub mod analyzers;
 pub mod executor;
 pub mod logical_optimizers;
 pub mod physical_optimizers;
+pub mod table_provider;
 
 pub use executor::{create_custom_session_state, CustomQueryExecutor};
+pub use table_provider::{CustomExecPlan, CustomTableConfig, CustomTableProvider};
