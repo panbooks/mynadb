@@ -7,6 +7,10 @@ use datafusion::arrow::array::{Array, RecordBatch};
 use datafusion::catalog_common::MemoryCatalogProvider;
 use datafusion::catalog_common::MemorySchemaProvider;
 use datafusion::config::ConfigOptions;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::*;
@@ -415,6 +419,8 @@ pub struct QueryEngine {
     metadata_cache: Arc<TableMetadataCache>,
     // Query result cache
     query_cache: SharedQueryResultCache,
+    // Use custom ParquetTableProvider instead of ListingTable
+    use_custom_table_provider: bool,
 }
 
 /// Default memory limit for query execution (16GB)
@@ -499,10 +505,19 @@ impl QueryEngine {
     }
 
     pub fn new(data_dir: &str) -> Self {
-        Self::new_with_query_cache(data_dir, None, QueryCacheConfig::default())
+        Self::new_with_options(data_dir, None, QueryCacheConfig::default(), false)
     }
 
     pub fn new_with_query_cache(data_dir: &str, storage: Option<Arc<Storage>>, query_cache_config: QueryCacheConfig) -> Self {
+        Self::new_with_options(data_dir, storage, query_cache_config, false)
+    }
+
+    pub fn new_with_options(
+        data_dir: &str,
+        storage: Option<Arc<Storage>>,
+        query_cache_config: QueryCacheConfig,
+        use_custom_table_provider: bool,
+    ) -> Self {
         let ctx = Self::create_optimized_context();
         let metadata_cache = Arc::new(TableMetadataCache::new());
         let query_cache = Arc::new(QueryResultCache::new(query_cache_config));
@@ -524,8 +539,9 @@ impl QueryEngine {
             None => "local",
         };
 
-        info!("QueryEngine initialized: storage={}, metadata_cache=enabled, query_cache={}",
-              storage_type, if query_cache.is_enabled() { "enabled" } else { "disabled" });
+        let table_provider_type = if use_custom_table_provider { "custom" } else { "listing" };
+        info!("QueryEngine initialized: storage={}, table_provider={}, metadata_cache=enabled, query_cache={}",
+              storage_type, table_provider_type, if query_cache.is_enabled() { "enabled" } else { "disabled" });
 
         QueryEngine {
             ctx,
@@ -534,6 +550,7 @@ impl QueryEngine {
             registered_catalogs: Arc::new(RwLock::new(HashMap::new())),
             metadata_cache,
             query_cache,
+            use_custom_table_provider,
         }
     }
 
@@ -715,7 +732,7 @@ impl QueryEngine {
         Ok(())
     }
 
-    /// Register a simple (non-partitioned) table using custom ParquetTableProvider
+    /// Register a simple (non-partitioned) table - dispatches based on config
     async fn register_simple_table(
         &self,
         catalog_name: &str,
@@ -723,37 +740,41 @@ impl QueryEngine {
         table_name: &str,
         table_path: &str,
     ) -> Result<(), String> {
-        // Strip file:// prefix if present for local path
-        let local_path = table_path.strip_prefix("file://").unwrap_or(table_path);
-
-        // Create ParquetTableProvider configuration
-        let config = ParquetTableConfig::new(format!("{}.{}.{}", catalog_name, schema_name, table_name))
-            .with_partitioned(false)
-            .with_batch_size(8192);
-
-        // Create the custom table provider
-        let provider = ParquetTableProvider::try_new(local_path, config)
-            .map_err(|e| format!("Failed to create table provider for '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
-
-        // Get the schema
-        let catalog = self
-            .ctx
-            .catalog(catalog_name)
-            .ok_or_else(|| format!("Catalog '{}' not found", catalog_name))?;
-
-        let schema = catalog
-            .schema(schema_name)
-            .ok_or_else(|| format!("Schema '{}.{}' not found", catalog_name, schema_name))?;
-
-        // Register the table with our custom provider
-        schema
-            .register_table(table_name.to_string(), Arc::new(provider))
-            .map_err(|e| format!("Failed to register table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
-
-        Ok(())
+        if self.use_custom_table_provider {
+            self.register_table_custom(catalog_name, schema_name, table_name, table_path, false)
+                .await
+        } else {
+            let table_ref = datafusion::sql::TableReference::full(catalog_name, schema_name, table_name);
+            self.ctx
+                .register_parquet(table_ref, table_path, ParquetReadOptions::default())
+                .await
+                .map_err(|e| format!("Failed to register table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))
+        }
     }
 
-    /// Register a partitioned table using custom ParquetTableProvider
+    /// Register a table using custom ParquetTableProvider (consolidated method)
+    async fn register_table_custom(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+        table_path: &str,
+        partitioned: bool,
+    ) -> Result<(), String> {
+        let local_path = table_path.strip_prefix("file://").unwrap_or(table_path);
+        let full_name = format!("{}.{}.{}", catalog_name, schema_name, table_name);
+
+        let config = ParquetTableConfig::new(full_name.clone())
+            .with_partitioned(partitioned)
+            .with_batch_size(8192);
+
+        let provider = ParquetTableProvider::try_new(local_path, config)
+            .map_err(|e| format!("Failed to create table provider for '{}': {}", full_name, e))?;
+
+        self.register_provider(catalog_name, schema_name, table_name, Arc::new(provider))
+    }
+
+    /// Register a partitioned table - dispatches based on config
     async fn register_partitioned_table(
         &self,
         catalog_name: &str,
@@ -761,32 +782,58 @@ impl QueryEngine {
         table_name: &str,
         table_path: &str,
     ) -> Result<(), String> {
-        // Strip file:// prefix if present for local path
-        let local_path = table_path.strip_prefix("file://").unwrap_or(table_path);
+        if self.use_custom_table_provider {
+            self.register_table_custom(catalog_name, schema_name, table_name, table_path, true)
+                .await
+        } else {
+            self.register_partitioned_table_listing(catalog_name, schema_name, table_name, table_path)
+                .await
+        }
+    }
 
-        // Create ParquetTableProvider configuration for partitioned table
-        let config = ParquetTableConfig::new(format!("{}.{}.{}", catalog_name, schema_name, table_name))
-            .with_partitioned(true)
-            .with_batch_size(8192);
+    /// Register a partitioned table using DataFusion's ListingTable
+    async fn register_partitioned_table_listing(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+        table_path: &str,
+    ) -> Result<(), String> {
+        let table_url = ListingTableUrl::parse(table_path)
+            .map_err(|e| format!("Failed to parse table URL: {}", e))?;
 
-        // Create the custom table provider
-        let provider = ParquetTableProvider::try_new(local_path, config)
-            .map_err(|e| format!("Failed to create partitioned table provider for '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
+        let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+            .with_file_extension(".parquet")
+            .with_table_partition_cols(vec![("date".to_string(), datafusion::arrow::datatypes::DataType::Utf8)]);
 
-        // Get the catalog and schema
-        let catalog = self
-            .ctx
-            .catalog(catalog_name)
+        let config = ListingTableConfig::new(table_url)
+            .with_listing_options(listing_options)
+            .infer_schema(&self.ctx.state())
+            .await
+            .map_err(|e| format!("Failed to infer schema: {}", e))?;
+
+        let listing_table = ListingTable::try_new(config)
+            .map_err(|e| format!("Failed to create listing table: {}", e))?;
+
+        self.register_provider(catalog_name, schema_name, table_name, Arc::new(listing_table))
+    }
+
+    /// Helper to register a TableProvider in the catalog
+    fn register_provider(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+        provider: Arc<dyn datafusion::catalog::TableProvider>,
+    ) -> Result<(), String> {
+        let catalog = self.ctx.catalog(catalog_name)
             .ok_or_else(|| format!("Catalog '{}' not found", catalog_name))?;
 
-        let schema = catalog
-            .schema(schema_name)
+        let schema = catalog.schema(schema_name)
             .ok_or_else(|| format!("Schema '{}.{}' not found", catalog_name, schema_name))?;
 
-        // Register the table with our custom provider
-        schema
-            .register_table(table_name.to_string(), Arc::new(provider))
-            .map_err(|e| format!("Failed to register partitioned table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
+        schema.register_table(table_name.to_string(), provider)
+            .map_err(|e| format!("Failed to register table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
 
         Ok(())
     }
