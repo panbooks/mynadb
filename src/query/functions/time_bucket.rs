@@ -11,10 +11,12 @@
 //!   - 10:07:30 → 10:05:00
 //!   - 10:10:00 → 10:10:00
 
-use datafusion::arrow::array::{Array, ArrayRef, Int64Array};
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::array::{Array, ArrayRef, Int64Array, TimestampNanosecondArray};
+use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::common::Result;
-use datafusion::logical_expr::{ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
+use datafusion::logical_expr::{
+    ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -23,7 +25,7 @@ use std::sync::Arc;
 /// Usage: `time_bucket(timestamp_column, interval_nanos, offset_nanos)`
 ///
 /// Arguments:
-/// - `timestamp_column`: Int64 timestamp in nanoseconds
+/// - `timestamp_column`: Int64 timestamp in nanoseconds OR Timestamp(Nanosecond)
 /// - `interval_nanos`: Int64 bucket interval in nanoseconds
 /// - `offset_nanos`: Int64 offset for bucket alignment in nanoseconds
 ///
@@ -40,11 +42,44 @@ struct TimeBucketUDF {
 
 impl TimeBucketUDF {
     fn new() -> Self {
+        // Support multiple timestamp types
+        let signatures = vec![
+            // Int64 timestamp (nanoseconds)
+            TypeSignature::Exact(vec![DataType::Int64, DataType::Int64, DataType::Int64]),
+            // Timestamp(Nanosecond, None)
+            TypeSignature::Exact(vec![
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Int64,
+                DataType::Int64,
+            ]),
+            // Timestamp(Nanosecond, Some(tz))
+            TypeSignature::Exact(vec![
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                DataType::Int64,
+                DataType::Int64,
+            ]),
+            // Timestamp(Microsecond, None)
+            TypeSignature::Exact(vec![
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                DataType::Int64,
+                DataType::Int64,
+            ]),
+            // Timestamp(Millisecond, None)
+            TypeSignature::Exact(vec![
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                DataType::Int64,
+                DataType::Int64,
+            ]),
+            // Timestamp(Second, None)
+            TypeSignature::Exact(vec![
+                DataType::Timestamp(TimeUnit::Second, None),
+                DataType::Int64,
+                DataType::Int64,
+            ]),
+        ];
+
         Self {
-            signature: Signature::exact(
-                vec![DataType::Int64, DataType::Int64, DataType::Int64],
-                Volatility::Immutable,
-            ),
+            signature: Signature::one_of(signatures, Volatility::Immutable),
         }
     }
 }
@@ -87,7 +122,7 @@ impl ScalarUDFImpl for TimeBucketUDF {
                 ColumnarValue::Scalar(interval),
                 ColumnarValue::Scalar(offset),
             ) => {
-                let ts_val = scalar_to_i64(ts)?;
+                let ts_val = scalar_to_nanos(ts)?;
                 let interval_val = scalar_to_i64(interval)?;
                 let offset_val = scalar_to_i64(offset)?;
 
@@ -106,17 +141,11 @@ impl ScalarUDFImpl for TimeBucketUDF {
                 let interval_val = scalar_to_i64(interval)?;
                 let offset_val = scalar_to_i64(offset)?;
 
-                let ts_arr = ts_arr
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .ok_or_else(|| {
-                        datafusion::common::DataFusionError::Execution(
-                            "time_bucket: timestamp must be Int64".to_string(),
-                        )
-                    })?;
+                // Convert timestamp array to nanoseconds
+                let ts_nanos = array_to_nanos(ts_arr)?;
 
                 // Vectorized computation
-                let result: Int64Array = ts_arr
+                let result: Int64Array = ts_nanos
                     .iter()
                     .map(|opt_ts| opt_ts.map(|ts| compute_bucket(ts, interval_val, offset_val)))
                     .collect();
@@ -130,14 +159,7 @@ impl ScalarUDFImpl for TimeBucketUDF {
                 ColumnarValue::Array(interval_arr),
                 ColumnarValue::Array(offset_arr),
             ) => {
-                let ts_arr = ts_arr
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .ok_or_else(|| {
-                        datafusion::common::DataFusionError::Execution(
-                            "time_bucket: timestamp must be Int64".to_string(),
-                        )
-                    })?;
+                let ts_nanos = array_to_nanos(ts_arr)?;
                 let interval_arr = interval_arr
                     .as_any()
                     .downcast_ref::<Int64Array>()
@@ -155,13 +177,13 @@ impl ScalarUDFImpl for TimeBucketUDF {
                         )
                     })?;
 
-                let result: Int64Array = (0..ts_arr.len())
+                let result: Int64Array = (0..ts_nanos.len())
                     .map(|i| {
-                        if ts_arr.is_null(i) || interval_arr.is_null(i) || offset_arr.is_null(i) {
+                        if ts_nanos.is_null(i) || interval_arr.is_null(i) || offset_arr.is_null(i) {
                             None
                         } else {
                             Some(compute_bucket(
-                                ts_arr.value(i),
+                                ts_nanos.value(i),
                                 interval_arr.value(i),
                                 offset_arr.value(i),
                             ))
@@ -187,11 +209,7 @@ impl ScalarUDFImpl for TimeBucketUDF {
                 let interval_arr = columnar_to_array(interval_nanos, len)?;
                 let offset_arr = columnar_to_array(offset_nanos, len)?;
 
-                let ts_arr = ts_arr.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
-                    datafusion::common::DataFusionError::Execution(
-                        "time_bucket: timestamp must be Int64".to_string(),
-                    )
-                })?;
+                let ts_nanos = array_to_nanos(&ts_arr)?;
                 let interval_arr =
                     interval_arr
                         .as_any()
@@ -213,11 +231,11 @@ impl ScalarUDFImpl for TimeBucketUDF {
 
                 let result: Int64Array = (0..len)
                     .map(|i| {
-                        if ts_arr.is_null(i) || interval_arr.is_null(i) || offset_arr.is_null(i) {
+                        if ts_nanos.is_null(i) || interval_arr.is_null(i) || offset_arr.is_null(i) {
                             None
                         } else {
                             Some(compute_bucket(
-                                ts_arr.value(i),
+                                ts_nanos.value(i),
                                 interval_arr.value(i),
                                 offset_arr.value(i),
                             ))
@@ -251,6 +269,94 @@ fn compute_bucket(timestamp: i64, interval: i64, offset: i64) -> i64 {
     };
 
     bucket_num * interval + offset
+}
+
+/// Convert a timestamp array to nanoseconds Int64Array
+fn array_to_nanos(arr: &ArrayRef) -> Result<Int64Array> {
+    match arr.data_type() {
+        DataType::Int64 => {
+            let arr = arr.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+                datafusion::common::DataFusionError::Execution(
+                    "Failed to downcast to Int64Array".to_string(),
+                )
+            })?;
+            Ok(arr.clone())
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            let arr = arr
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .ok_or_else(|| {
+                    datafusion::common::DataFusionError::Execution(
+                        "Failed to downcast to TimestampNanosecondArray".to_string(),
+                    )
+                })?;
+            // TimestampNanosecondArray stores values as i64 nanoseconds
+            let values: Int64Array = arr.iter().map(|v| v).collect();
+            Ok(values)
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            let arr = arr
+                .as_any()
+                .downcast_ref::<datafusion::arrow::array::TimestampMicrosecondArray>()
+                .ok_or_else(|| {
+                    datafusion::common::DataFusionError::Execution(
+                        "Failed to downcast to TimestampMicrosecondArray".to_string(),
+                    )
+                })?;
+            // Convert microseconds to nanoseconds
+            let values: Int64Array = arr.iter().map(|v| v.map(|us| us * 1000)).collect();
+            Ok(values)
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            let arr = arr
+                .as_any()
+                .downcast_ref::<datafusion::arrow::array::TimestampMillisecondArray>()
+                .ok_or_else(|| {
+                    datafusion::common::DataFusionError::Execution(
+                        "Failed to downcast to TimestampMillisecondArray".to_string(),
+                    )
+                })?;
+            // Convert milliseconds to nanoseconds
+            let values: Int64Array = arr.iter().map(|v| v.map(|ms| ms * 1_000_000)).collect();
+            Ok(values)
+        }
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            let arr = arr
+                .as_any()
+                .downcast_ref::<datafusion::arrow::array::TimestampSecondArray>()
+                .ok_or_else(|| {
+                    datafusion::common::DataFusionError::Execution(
+                        "Failed to downcast to TimestampSecondArray".to_string(),
+                    )
+                })?;
+            // Convert seconds to nanoseconds
+            let values: Int64Array = arr
+                .iter()
+                .map(|v| v.map(|s| s * 1_000_000_000))
+                .collect();
+            Ok(values)
+        }
+        other => Err(datafusion::common::DataFusionError::Execution(format!(
+            "time_bucket: unsupported timestamp type: {:?}",
+            other
+        ))),
+    }
+}
+
+/// Extract nanoseconds from a ScalarValue (handles both Int64 and Timestamp types)
+fn scalar_to_nanos(scalar: &datafusion::common::ScalarValue) -> Result<i64> {
+    match scalar {
+        datafusion::common::ScalarValue::Int64(Some(v)) => Ok(*v),
+        datafusion::common::ScalarValue::TimestampNanosecond(Some(v), _) => Ok(*v),
+        datafusion::common::ScalarValue::TimestampMicrosecond(Some(v), _) => Ok(*v * 1000),
+        datafusion::common::ScalarValue::TimestampMillisecond(Some(v), _) => Ok(*v * 1_000_000),
+        datafusion::common::ScalarValue::TimestampSecond(Some(v), _) => Ok(*v * 1_000_000_000),
+        _ => Err(datafusion::common::DataFusionError::Execution(format!(
+            "time_bucket: expected timestamp or integer, got {:?}",
+            scalar
+        ))),
+    }
 }
 
 /// Extract i64 value from a ScalarValue
@@ -350,7 +456,7 @@ mod tests {
         let interval = ColumnarValue::Scalar(ScalarValue::Int64(Some(5 * NANOS_PER_MINUTE)));
         let offset = ColumnarValue::Scalar(ScalarValue::Int64(Some(0)));
 
-        let result = udf.invoke(&[ts, interval, offset]).unwrap();
+        let result = udf.invoke_batch(&[ts, interval, offset], 1).unwrap();
 
         match result {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) => {
@@ -375,7 +481,7 @@ mod tests {
         let interval = ColumnarValue::Scalar(ScalarValue::Int64(Some(5 * NANOS_PER_MINUTE)));
         let offset = ColumnarValue::Scalar(ScalarValue::Int64(Some(0)));
 
-        let result = udf.invoke(&[ts, interval, offset]).unwrap();
+        let result = udf.invoke_batch(&[ts, interval, offset], 4).unwrap();
 
         match result {
             ColumnarValue::Array(arr) => {
@@ -401,7 +507,7 @@ mod tests {
         let interval = ColumnarValue::Scalar(ScalarValue::Int64(Some(5 * NANOS_PER_MINUTE)));
         let offset = ColumnarValue::Scalar(ScalarValue::Int64(Some(0)));
 
-        let result = udf.invoke(&[ts, interval, offset]).unwrap();
+        let result = udf.invoke_batch(&[ts, interval, offset], 2).unwrap();
 
         match result {
             ColumnarValue::Array(arr) => {
@@ -409,6 +515,32 @@ mod tests {
                 assert_eq!(arr.len(), 2);
                 assert_eq!(arr.value(0), 10 * NANOS_PER_HOUR);
                 assert!(arr.is_null(1));
+            }
+            _ => panic!("Expected array result"),
+        }
+    }
+
+    #[test]
+    fn test_time_bucket_udf_timestamp_nanosecond() {
+        let udf = create_time_bucket_udf();
+
+        let timestamps = TimestampNanosecondArray::from(vec![
+            10 * NANOS_PER_HOUR,
+            10 * NANOS_PER_HOUR + 3 * NANOS_PER_MINUTE,
+        ]);
+
+        let ts = ColumnarValue::Array(Arc::new(timestamps));
+        let interval = ColumnarValue::Scalar(ScalarValue::Int64(Some(5 * NANOS_PER_MINUTE)));
+        let offset = ColumnarValue::Scalar(ScalarValue::Int64(Some(0)));
+
+        let result = udf.invoke_batch(&[ts, interval, offset], 2).unwrap();
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let arr = arr.as_any().downcast_ref::<Int64Array>().unwrap();
+                assert_eq!(arr.len(), 2);
+                assert_eq!(arr.value(0), 10 * NANOS_PER_HOUR);
+                assert_eq!(arr.value(1), 10 * NANOS_PER_HOUR);
             }
             _ => panic!("Expected array result"),
         }

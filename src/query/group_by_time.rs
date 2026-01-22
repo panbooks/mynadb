@@ -256,8 +256,16 @@ impl GroupByTimeTransformer {
 
         if let Some(caps) = select_pattern.captures(sql) {
             let select_keyword = caps.get(1).unwrap().as_str();
-            let select_columns = caps.get(2).unwrap().as_str();
+            let select_columns = caps.get(2).unwrap().as_str().trim();
             let from_onwards = caps.get(3).unwrap().as_str();
+
+            // Check for SELECT * which is not supported with GROUP BY time()
+            // because aggregation requires explicit columns
+            if select_columns == "*" || select_columns.starts_with("*, ") || select_columns.contains(", *") {
+                return Err(TransformError::InvalidSqlSyntax(
+                    "SELECT * is not supported with GROUP BY time(). Please specify columns explicitly, e.g., SELECT mean(column_name) FROM table GROUP BY time(5m)".to_string()
+                ));
+            }
 
             // Transform aggregate functions
             let transformed_columns = self.transform_aggregates(select_columns)?;
