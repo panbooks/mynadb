@@ -820,7 +820,11 @@ impl DataCache {
         for shard in self.shards.iter() {
             let data = shard.data.lock();
             for (key, batches) in data.iter() {
-                if key.0 == catalog && key.1 == schema && !batches.is_empty() && !tables.contains(&key.2) {
+                if key.0 == catalog
+                    && key.1 == schema
+                    && !batches.is_empty()
+                    && !tables.contains(&key.2)
+                {
                     tables.push(key.2.clone());
                 }
             }
