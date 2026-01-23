@@ -5,9 +5,9 @@ mod services;
 mod storage;
 
 use jobs::{compactor, database_manager, logger, profiling, retention_manager};
-use query::{query_cache, query_engine};
+use query::{catalog, catalog::MetadataManager, query_cache, query_engine};
 use services::{api, auth, flight_service, mysql_service};
-use storage::{cache, line_protocol, parquet_writer, storage as storage_mod, wal};
+use storage::{cache, file_cache, line_protocol, parquet_writer, storage as storage_mod, wal};
 
 use axum::{
     routing::{delete, get, post},
@@ -171,8 +171,8 @@ async fn perform_wal_recovery(
                 welcome!("   Flushing recovered data to Parquet...");
                 match cache.flush().await {
                     Ok(files) => {
-                        info!("Recovery flush complete: {} file(s) written", files);
-                        welcome!("   ✅ Recovery complete: {} Parquet file(s) written", files);
+                        info!("Recovery flush complete: {} file(s) written", files.len());
+                        welcome!("   ✅ Recovery complete: {} Parquet file(s) written", files.len());
 
                         wal.set_recovery_mode(false);
                         if let Err(e) = wal.cleanup_old_data_wal_files().await {
@@ -398,9 +398,72 @@ async fn main() {
         config.cache.max_size_mb,
         wal.as_ref().map(Arc::clone),
     );
-    cache
-        .clone()
-        .start_background_flush(config.cache.flush_interval_secs);
+
+    // Initialize metadata manager BEFORE starting background flush
+    // so we can register files as they're written
+    info!("Initializing metadata manager");
+    let metadata_dir = format!("{}/_metadata", config.storage.data_dir);
+    let metadata_manager: catalog::SharedMetadataManager =
+        Arc::new(catalog::MemoryMetadataManager::new(&metadata_dir));
+
+    // Try to load existing metadata
+    if let Err(e) = metadata_manager.load().await {
+        warn!("Failed to load metadata (starting fresh): {}", e);
+    }
+    // Rescan the data directory to rebuild metadata
+    if let Err(e) = metadata_manager.rescan(&config.storage.data_dir).await {
+        warn!("Failed to rescan metadata: {}", e);
+    }
+    // Save the metadata
+    if let Err(e) = metadata_manager.save().await {
+        warn!("Failed to save metadata: {}", e);
+    }
+
+    // Start background flush with metadata registration callback
+    let metadata_for_flush = metadata_manager.clone();
+    cache.clone().start_background_flush_with_callback(
+        config.cache.flush_interval_secs,
+        Some(move |files: Vec<parquet_writer::FileWriteResult>| {
+            let manager = metadata_for_flush.clone();
+            // Spawn async task to register files
+            tokio::spawn(async move {
+                for file in files {
+                    // Extract file name from path
+                    let file_name = file
+                        .path
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&file.path)
+                        .to_string();
+
+                    let file_info = catalog::FileInfo {
+                        path: file.path.clone(),
+                        file_name,
+                        catalog: file.catalog.clone(),
+                        schema: file.schema.clone(),
+                        table: file.table.clone(),
+                        partition_key: file.partition_key.clone(),
+                        size_bytes: file.size_bytes,
+                        row_count: file.row_count,
+                        level: file.level,
+                        min_timestamp: None,
+                        max_timestamp: None,
+                        created_at: chrono::Utc::now().timestamp_millis(),
+                        row_group_count: 1,
+                        column_stats: None,
+                        etag: None,
+                    };
+                    if let Err(e) = manager.register_file(file_info).await {
+                        warn!("Failed to register file {}: {}", file.path, e);
+                    }
+                }
+                // Save metadata after registering new files
+                if let Err(e) = manager.save().await {
+                    warn!("Failed to save metadata after flush: {}", e);
+                }
+            });
+        }),
+    );
 
     // Initialize core components
     info!("Initializing query engine with memtable support");
@@ -473,6 +536,36 @@ async fn main() {
         start_wal_cleanup_task(wal_arc, &config);
     }
 
+    // Initialize file cache (only for object storage backends)
+    let file_cache: Option<file_cache::SharedFileCache> = if !storage.is_local() {
+        info!("Initializing file cache for object storage");
+        let cache_dir = format!("{}/_cache/parquet", config.storage.data_dir);
+        let max_size = config
+            .storage
+            .file_cache_size_gb
+            .unwrap_or(100)
+            * 1024
+            * 1024
+            * 1024;
+        match file_cache::DiskFileCache::new_at(&cache_dir, max_size).await {
+            Ok(cache) => {
+                info!(
+                    "File cache initialized: dir={}, max_size={}GB",
+                    cache_dir,
+                    max_size / 1024 / 1024 / 1024
+                );
+                Some(Arc::new(cache))
+            }
+            Err(e) => {
+                warn!("Failed to initialize file cache: {}", e);
+                None
+            }
+        }
+    } else {
+        debug!("File cache disabled for local storage");
+        None
+    };
+
     // Build application state
     let state = api::AppState {
         cache,
@@ -481,6 +574,8 @@ async fn main() {
         compactor,
         config: config.clone(),
         wal,
+        metadata_manager: Some(metadata_manager),
+        file_cache,
     };
 
     // Initialize authentication

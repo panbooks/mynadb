@@ -75,6 +75,10 @@ pub struct StorageConfig {
     /// Object store configuration
     #[serde(default)]
     pub object_store: ObjectStoreConfig,
+
+    /// File cache size in GB (for object store backends)
+    #[serde(default)]
+    pub file_cache_size_gb: Option<u64>,
 }
 
 /// Object store configuration for S3-compatible storage
@@ -654,6 +658,7 @@ impl Default for StorageConfig {
             data_dir: default_data_dir(),
             system_dir: default_system_dir(),
             object_store: ObjectStoreConfig::default(),
+            file_cache_size_gb: None,
         }
     }
 }
@@ -824,7 +829,7 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.server.http_port, 7000);
         assert_eq!(config.server.flight_port, 7001);
-        assert_eq!(config.cache.flush_interval_secs, 30);
+        assert_eq!(config.cache.flush_interval_secs, 60);
     }
 
     #[test]

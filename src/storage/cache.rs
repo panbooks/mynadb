@@ -1,5 +1,5 @@
 use crate::line_protocol::{format_date32_as_partition, FieldValue, Point};
-use crate::parquet_writer::ParquetWriter;
+use crate::parquet_writer::{FileWriteResult, ParquetWriter};
 use crate::storage::storage::Storage;
 use crate::wal::Wal;
 use arrow::array::{
@@ -386,7 +386,8 @@ impl DataCache {
 
     /// Flush all cached data to disk
     /// Uses swap-and-flush pattern: takes data from shards instantly, then writes without blocking
-    pub async fn flush(&self) -> Result<usize, String> {
+    /// Returns list of written files with metadata for registration
+    pub async fn flush(&self) -> Result<Vec<FileWriteResult>, String> {
         let start = Instant::now();
 
         // Phase 1: Quickly take data from all shards (very fast, minimal blocking)
@@ -409,7 +410,7 @@ impl DataCache {
 
         if all_data.is_empty() {
             debug!("Flush: Cache is empty, nothing to write");
-            return Ok(0);
+            return Ok(Vec::new());
         }
 
         info!(
@@ -419,7 +420,7 @@ impl DataCache {
         );
 
         // Phase 2: Write to disk (no locks held, writers can continue)
-        let mut files_written = 0;
+        let mut written_files = Vec::new();
         let mut errors = Vec::new();
 
         for ((catalog, schema, table, date), batches) in all_data {
@@ -434,9 +435,9 @@ impl DataCache {
                 .writer
                 .write_batches_partitioned_sync(&catalog, &schema, &table, date, batches)
             {
-                Ok(filename) => {
-                    debug!("Written to: {}", filename);
-                    files_written += 1;
+                Ok(file_result) => {
+                    debug!("Written to: {}", file_result.path);
+                    written_files.push(file_result);
                 }
                 Err(e) => {
                     error!(
@@ -463,7 +464,7 @@ impl DataCache {
 
         info!(
             "Flush complete: {} file(s), {}MB written in {:?}",
-            files_written,
+            written_files.len(),
             flushed_size / 1024 / 1024,
             elapsed
         );
@@ -480,7 +481,7 @@ impl DataCache {
             }
         }
 
-        Ok(files_written)
+        Ok(written_files)
     }
 
     /// Get current cache statistics
@@ -508,6 +509,21 @@ impl DataCache {
 
     /// Start background flush task that runs every interval OR when size threshold is reached
     pub fn start_background_flush(self, flush_interval_secs: u64) {
+        self.start_background_flush_with_callback(
+            flush_interval_secs,
+            None::<fn(Vec<FileWriteResult>)>,
+        );
+    }
+
+    /// Start background flush task with optional callback for file registration
+    /// The callback receives a list of written files after each successful flush
+    pub fn start_background_flush_with_callback<F>(
+        self,
+        flush_interval_secs: u64,
+        on_files_written: Option<F>,
+    ) where
+        F: Fn(Vec<FileWriteResult>) + Send + Sync + 'static,
+    {
         let flush_notify = self.flush_notify.clone();
 
         tokio::spawn(async move {
@@ -536,8 +552,17 @@ impl DataCache {
                     }
                 }
 
-                if let Err(e) = self.flush().await {
-                    error!("Background flush error: {}", e);
+                match self.flush().await {
+                    Ok(files) => {
+                        if !files.is_empty() {
+                            if let Some(ref callback) = on_files_written {
+                                callback(files);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Background flush error: {}", e);
+                    }
                 }
             }
         });
