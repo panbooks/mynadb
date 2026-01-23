@@ -3,22 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Stats Service Documentation - Learn how to use the high-performance time series database">
-  <title>Documentation - Stats Service</title>
+  <meta name="description" content="MynaDB Documentation - Learn how to use the high-performance time series database">
+  <title>Documentation - MynaDB</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/style.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>M</text></svg>">
 </head>
 <body>
   <!-- Navigation -->
   <nav class="navbar">
     <div class="container">
       <a href="../index.html" class="navbar-brand">
-        <span class="logo-icon">S</span>
-        Stats Service
+        <span class="logo-icon">M</span>
+        MynaDB
       </a>
 
       <ul class="navbar-nav">
@@ -30,7 +30,7 @@
       </ul>
 
       <div class="navbar-actions">
-        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
           <span class="btn-icon">&#9733;</span> GitHub
         </a>
       </div>
@@ -56,6 +56,18 @@
           <li><a href="architecture.html">Architecture</a></li>
           <li><a href="data-model.html">Data Model</a></li>
           <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Features</h4>
+        <ul class="sidebar-nav">
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+          <li><a href="retention.html">Retention Policies</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="high-availability.html">High Availability</a></li>
         </ul>
       </div>
 
@@ -65,9 +77,6 @@
           <li><a href="guides.html">All Guides</a></li>
           <li><a href="sql-queries.html">SQL Queries</a></li>
           <li><a href="line-protocol.html">Line Protocol</a></li>
-          <li><a href="retention.html">Retention Policies</a></li>
-          <li><a href="compaction.html">Compaction</a></li>
-          <li><a href="high-availability.html">High Availability</a></li>
         </ul>
       </div>
 
@@ -91,22 +100,22 @@
 
     <!-- Main Content -->
     <main class="docs-content">
-      <h1>Stats Service Documentation</h1>
+      <h1>MynaDB Documentation</h1>
 
       <p class="hero-description" style="font-size: 1.125rem; max-width: none;">
-        Welcome to the Stats Service documentation. Stats Service is a high-performance time series database
+        Welcome to the MynaDB documentation. MynaDB is a high-performance time series database
         built with Rust, Apache DataFusion, and Parquet for modern infrastructure monitoring and analytics.
       </p>
 
       <div class="callout callout-info">
-        <div class="callout-title">&#128161; New to Stats Service?</div>
+        <div class="callout-title">&#128161; New to MynaDB?</div>
         <p>Start with our <a href="quickstart.html">Quick Start Guide</a> to get up and running in minutes.</p>
       </div>
 
-      <h2>What is Stats Service?</h2>
+      <h2>What is MynaDB?</h2>
 
       <p>
-        Stats Service is a time series database designed for high-throughput ingestion and fast analytical queries.
+        MynaDB is a time series database designed for high-throughput ingestion and fast analytical queries.
         It combines the best of modern data infrastructure:
       </p>
 
@@ -177,7 +186,7 @@ curl 'http://localhost:7000/query/mydb' \
 
       <h2>Architecture Overview</h2>
 
-      <p>Stats Service uses a layered architecture designed for performance and reliability:</p>
+      <p>MynaDB uses a layered architecture designed for performance and reliability:</p>
 
       <div class="architecture-diagram">
         <pre>
@@ -253,6 +262,18 @@ curl 'http://localhost:7000/query/mydb' \
               <td><a href="configuration.html">Configuration</a></td>
               <td>All configuration options explained</td>
             </tr>
+            <tr>
+              <td><a href="caching.html">Caching</a></td>
+              <td>Multi-level caching for metadata, queries, and files</td>
+            </tr>
+            <tr>
+              <td><a href="mysql-protocol.html">MySQL Protocol</a></td>
+              <td>Connect using MySQL clients, DBeaver, or Grafana</td>
+            </tr>
+            <tr>
+              <td><a href="object-store.html">Object Store</a></td>
+              <td>S3, MinIO, and Aliyun OSS configuration</td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -264,7 +285,7 @@ curl 'http://localhost:7000/query/mydb' \
       <ul>
         <li>Check the <a href="troubleshooting.html">Troubleshooting Guide</a></li>
         <li>Browse the <a href="faq.html">FAQ</a></li>
-        <li>Open an issue on <a href="https://github.com/anthropics/stats-service/issues" target="_blank">GitHub</a></li>
+        <li>Open an issue on <a href="https://github.com/mynadb/mynadb/issues" target="_blank">GitHub</a></li>
       </ul>
 
       <div class="callout callout-success">

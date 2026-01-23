@@ -3,22 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Stats Service Architecture - Deep dive into the system design">
-  <title>Architecture - Stats Service</title>
+  <meta name="description" content="MynaDB Architecture - Deep dive into the system design">
+  <title>Architecture - MynaDB</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/style.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>M</text></svg>">
 </head>
 <body>
   <!-- Navigation -->
   <nav class="navbar">
     <div class="container">
       <a href="../index.html" class="navbar-brand">
-        <span class="logo-icon">S</span>
-        Stats Service
+        <span class="logo-icon">M</span>
+        MynaDB
       </a>
 
       <ul class="navbar-nav">
@@ -30,7 +30,7 @@
       </ul>
 
       <div class="navbar-actions">
-        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
           <span class="btn-icon">&#9733;</span> GitHub
         </a>
       </div>
@@ -94,7 +94,7 @@
       <h1>Architecture</h1>
 
       <p>
-        Stats Service is built with a layered architecture optimized for high-throughput time series ingestion
+        MynaDB is built with a layered architecture optimized for high-throughput time series ingestion
         and fast analytical queries. This document explains the key components and how they work together.
       </p>
 
@@ -309,7 +309,7 @@ cpu,host=server01,region=us-west usage=75.5,temp=45i 1609459200000000000</code><
 
       <h2>Storage Structure</h2>
 
-      <p>Stats Service uses a hierarchical <strong>Catalog.Schema.Table</strong> structure:</p>
+      <p>MynaDB uses a hierarchical <strong>Catalog.Schema.Table</strong> structure:</p>
 
       <div class="code-block">
         <div class="code-content">
@@ -476,7 +476,7 @@ datafusion-cli --host localhost --port 7001
         <a href="configuration.html" class="card">
           <div class="card-icon">&#9881;</div>
           <h3>Configuration</h3>
-          <p>Tune Stats Service for your workload.</p>
+          <p>Tune MynaDB for your workload.</p>
           <span class="card-link">Read more <span>&#8594;</span></span>
         </a>
       </div>

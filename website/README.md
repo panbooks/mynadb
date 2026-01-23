@@ -1,6 +1,6 @@
-# Stats Service Documentation Website
+# MynaDB Documentation Website
 
-A modern, responsive documentation website for Stats Service, inspired by InfluxDB, GreptimeDB, and DuckDB documentation sites.
+A modern, responsive documentation website for MynaDB - The Voice of Your Machines.
 
 ## Structure
 
@@ -18,9 +18,21 @@ website/
     ├── architecture.html   # Architecture overview
     ├── configuration.html  # Configuration reference
     ├── api.html            # HTTP API reference
+    ├── flight-api.html     # Arrow Flight API reference
     ├── examples.html       # Query examples
     ├── guides.html         # All guides
     ├── sql-queries.html    # SQL query guide
+    ├── line-protocol.html  # InfluxDB Line Protocol guide
+    ├── data-model.html     # Data model (catalog.schema.table)
+    ├── storage.html        # Storage layer details
+    ├── compaction.html     # LSM compaction guide
+    ├── retention.html      # Retention policies
+    ├── high-availability.html  # HA and replication
+    ├── installation.html   # Installation guide
+    ├── caching.html        # Multi-level caching
+    ├── mysql-protocol.html # MySQL protocol support
+    ├── object-store.html   # S3/MinIO/OSS support
+    ├── faq.html            # Frequently asked questions
     └── troubleshooting.html # Troubleshooting guide
 ```
 
@@ -86,9 +98,21 @@ Edit CSS variables in `css/style.css`:
 | Architecture | System design and components |
 | Configuration | All config.toml options |
 | API Reference | HTTP endpoints documentation |
+| Flight API | Arrow Flight gRPC API |
 | Examples | Ready-to-use SQL queries |
 | Guides | Step-by-step tutorials |
 | SQL Queries | Complete SQL reference |
+| Line Protocol | InfluxDB line protocol syntax |
+| Data Model | Catalog.Schema.Table structure |
+| Storage | Parquet storage layer |
+| Compaction | LSM multi-level compaction |
+| Retention | Data retention policies |
+| High Availability | Replication and failover |
+| Installation | Build and deployment |
+| Caching | Metadata, query, and file caching |
+| MySQL Protocol | MySQL wire protocol support |
+| Object Store | S3, MinIO, Aliyun OSS |
+| FAQ | Frequently asked questions |
 | Troubleshooting | Common issues and solutions |
 
 ## Technologies
@@ -106,4 +130,4 @@ Edit CSS variables in `css/style.css`:
 
 ## License
 
-Same as Stats Service main project.
+Same as MynaDB main project.

@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Stats Service - A high-performance time series database built with Rust, powered by Apache DataFusion and Parquet">
-  <meta name="keywords" content="time series database, TSDB, Rust, DataFusion, Parquet, InfluxDB, metrics, analytics">
-  <title>Stats Service - High-Performance Time Series Database</title>
+  <meta name="description" content="MynaDB - The Voice of Your Machines. A high-performance time series database built with Rust, powered by Apache DataFusion and Parquet">
+  <meta name="keywords" content="time series database, TSDB, Rust, DataFusion, Parquet, InfluxDB, metrics, analytics, MynaDB">
+  <title>MynaDB - The Voice of Your Machines</title>
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -16,15 +16,15 @@
   <link rel="stylesheet" href="css/style.css">
 
   <!-- Favicon -->
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>M</text></svg>">
 </head>
 <body>
   <!-- Navigation -->
   <nav class="navbar">
     <div class="container">
       <a href="index.html" class="navbar-brand">
-        <span class="logo-icon">S</span>
-        Stats Service
+        <span class="logo-icon">M</span>
+        MynaDB
       </a>
 
       <ul class="navbar-nav">
@@ -36,7 +36,7 @@
       </ul>
 
       <div class="navbar-actions">
-        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
           <span class="btn-icon">&#9733;</span> GitHub
         </a>
         <a href="docs/quickstart.html" class="btn btn-primary">Get Started</a>
@@ -64,11 +64,11 @@
     <div class="container">
       <div class="hero-content">
         <div class="hero-badge">
-          <span>&#9889;</span> Built with Rust for Maximum Performance
+          <span>&#9889;</span> The Voice of Your Machines
         </div>
 
         <h1>
-          The Modern<br>
+          MynaDB<br>
           <span>Time Series Database</span>
         </h1>
 
@@ -127,7 +127,7 @@
   <section class="section">
     <div class="container">
       <div class="section-header">
-        <h2>Why Stats Service?</h2>
+        <h2>Why MynaDB?</h2>
         <p>Built for modern infrastructure monitoring and analytics with a focus on performance and developer experience.</p>
       </div>
 
@@ -193,6 +193,24 @@
         </div>
 
         <div class="feature-card">
+          <div class="feature-icon">&#128171;</div>
+          <h3>MySQL Protocol</h3>
+          <p>Connect with any MySQL client. Use familiar tools like mysql-cli, DBeaver, or Grafana.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#9729;</div>
+          <h3>Object Store</h3>
+          <p>Native support for S3, MinIO, and Aliyun OSS for cloud-native deployments.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128202;</div>
+          <h3>Multi-Level Caching</h3>
+          <p>Metadata cache, query result cache, and Parquet file cache for blazing-fast queries.</p>
+        </div>
+
+        <div class="feature-card">
           <div class="feature-icon">&#128260;</div>
           <h3>Zero Downtime Failover</h3>
           <p>Promote slave to master seamlessly. Manual or automatic failover with no data loss.</p>
@@ -202,6 +220,12 @@
           <div class="feature-icon">&#128272;</div>
           <h3>WAL Replication</h3>
           <p>Real-time Write-Ahead Log streaming ensures data durability across nodes.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128736;</div>
+          <h3>GROUP BY time()</h3>
+          <p>InfluxDB-compatible time bucketing with fill options for gap handling.</p>
         </div>
       </div>
     </div>
@@ -296,7 +320,7 @@
         <div class="code-content">
           <pre><code><span class="token-comment"># 1. Build and run</span>
 <span class="token-function">cargo</span> build --release
-<span class="token-function">./target/release/stats-service</span>
+<span class="token-function">./target/release/mynadb</span>
 
 <span class="token-comment"># 2. Write some data</span>
 <span class="token-function">curl</span> -X POST http://localhost:7000/write/mydb -d <span class="token-string">'
@@ -330,7 +354,7 @@ memory,host=server01 used=16.5,total=32.0
     <div class="container">
       <div class="section-header">
         <h2>Use Cases</h2>
-        <p>Stats Service is perfect for a wide range of time series workloads.</p>
+        <p>MynaDB is perfect for a wide range of time series workloads.</p>
       </div>
 
       <div class="cards-grid">
@@ -385,7 +409,7 @@ memory,host=server01 used=16.5,total=32.0
         <a href="docs/quickstart.html" class="card">
           <div class="card-icon">&#128640;</div>
           <h3>Quick Start</h3>
-          <p>Get up and running with Stats Service in under 5 minutes.</p>
+          <p>Get up and running with MynaDB in under 5 minutes.</p>
           <span class="card-link">Read more <span>&#8594;</span></span>
         </a>
 
@@ -430,6 +454,27 @@ memory,host=server01 used=16.5,total=32.0
           <p>Master-slave replication, failover, and HA configuration.</p>
           <span class="card-link">Read more <span>&#8594;</span></span>
         </a>
+
+        <a href="docs/caching.html" class="card">
+          <div class="card-icon">&#128202;</div>
+          <h3>Caching</h3>
+          <p>Multi-level caching for metadata, queries, and Parquet files.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/mysql-protocol.html" class="card">
+          <div class="card-icon">&#128171;</div>
+          <h3>MySQL Protocol</h3>
+          <p>Connect using MySQL clients, DBeaver, or Grafana.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/object-store.html" class="card">
+          <div class="card-icon">&#9729;</div>
+          <h3>Object Store</h3>
+          <p>S3, MinIO, and Aliyun OSS configuration for cloud storage.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
       </div>
     </div>
   </section>
@@ -440,10 +485,10 @@ memory,host=server01 used=16.5,total=32.0
       <div class="footer-grid">
         <div class="footer-brand">
           <a href="index.html" class="navbar-brand">
-            <span class="logo-icon">S</span>
-            Stats Service
+            <span class="logo-icon">M</span>
+            MynaDB
           </a>
-          <p>A high-performance time series database built with Rust, Apache DataFusion, and Parquet.</p>
+          <p>The Voice of Your Machines. A high-performance time series database built with Rust, Apache DataFusion, and Parquet.</p>
         </div>
 
         <div class="footer-column">
@@ -458,19 +503,30 @@ memory,host=server01 used=16.5,total=32.0
         </div>
 
         <div class="footer-column">
+          <h4>Features</h4>
+          <ul>
+            <li><a href="docs/caching.html">Caching</a></li>
+            <li><a href="docs/mysql-protocol.html">MySQL Protocol</a></li>
+            <li><a href="docs/object-store.html">Object Store</a></li>
+            <li><a href="docs/compaction.html">Compaction</a></li>
+            <li><a href="docs/retention.html">Retention</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-column">
           <h4>Resources</h4>
           <ul>
             <li><a href="docs/examples.html">Examples</a></li>
             <li><a href="docs/configuration.html">Configuration</a></li>
             <li><a href="docs/troubleshooting.html">Troubleshooting</a></li>
-            <li><a href="#">Changelog</a></li>
+            <li><a href="docs/faq.html">FAQ</a></li>
           </ul>
         </div>
 
         <div class="footer-column">
           <h4>Community</h4>
           <ul>
-            <li><a href="https://github.com/anthropics/stats-service" target="_blank">GitHub</a></li>
+            <li><a href="https://github.com/mynadb/mynadb" target="_blank">GitHub</a></li>
             <li><a href="#">Discord</a></li>
             <li><a href="#">Twitter</a></li>
             <li><a href="#">Contributing</a></li>
@@ -479,9 +535,9 @@ memory,host=server01 used=16.5,total=32.0
       </div>
 
       <div class="footer-bottom">
-        <p>&copy; 2024 Stats Service. Built with Rust.</p>
+        <p>&copy; 2024 MynaDB. The Voice of Your Machines. Built with Rust.</p>
         <div class="footer-social">
-          <a href="https://github.com/anthropics/stats-service" target="_blank" aria-label="GitHub">&#128736;</a>
+          <a href="https://github.com/mynadb/mynadb" target="_blank" aria-label="GitHub">&#128736;</a>
         </div>
       </div>
     </div>

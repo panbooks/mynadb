@@ -1,5 +1,5 @@
 /**
- * Stats Service Website - Main JavaScript
+ * MynaDB Website - Main JavaScript
  * Fantastic animations and interactions
  */
 

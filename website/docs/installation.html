@@ -3,21 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Stats Service Installation Guide - Install and deploy Stats Service">
-  <title>Installation - Stats Service</title>
+  <meta name="description" content="MynaDB Installation Guide - Install and deploy MynaDB">
+  <title>Installation - MynaDB</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/style.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%230066ff' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%230066ff' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>M</text></svg>">
 </head>
 <body>
   <nav class="navbar">
     <div class="container">
       <a href="../index.html" class="navbar-brand">
-        <span class="logo-icon">S</span>
-        Stats Service
+        <span class="logo-icon">M</span>
+        MynaDB
       </a>
       <ul class="navbar-nav">
         <li><a href="index.html">Documentation</a></li>
@@ -27,7 +27,7 @@
         <li><a href="examples.html">Examples</a></li>
       </ul>
       <div class="navbar-actions">
-        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
           <span class="btn-icon">&#9733;</span> GitHub
         </a>
       </div>
@@ -90,7 +90,7 @@
       <h1>Installation</h1>
 
       <p class="lead">
-        This guide covers multiple ways to install Stats Service: pre-built binaries,
+        This guide covers multiple ways to install MynaDB: pre-built binaries,
         building from source, Docker containers, and setting up as a system service.
       </p>
 
@@ -142,7 +142,7 @@
 
       <h2 id="binary">Binary Release</h2>
 
-      <p>The easiest way to install Stats Service is using pre-built binaries.</p>
+      <p>The easiest way to install MynaDB is using pre-built binaries.</p>
 
       <h3>Download Latest Release</h3>
 
@@ -158,16 +158,16 @@
         </div>
         <div class="code-content">
           <pre><code><span class="token-comment"># Download the latest release</span>
-curl -LO https://github.com/anthropics/stats-service/releases/latest/download/stats-service-linux-amd64.tar.gz
+curl -LO https://github.com/mynadb/mynadb/releases/latest/download/mynadb-linux-amd64.tar.gz
 
 <span class="token-comment"># Extract the archive</span>
-tar -xzf stats-service-linux-amd64.tar.gz
+tar -xzf mynadb-linux-amd64.tar.gz
 
 <span class="token-comment"># Move binary to /usr/local/bin</span>
-sudo mv stats-service /usr/local/bin/
+sudo mv mynadb /usr/local/bin/
 
 <span class="token-comment"># Verify installation</span>
-stats-service --version</code></pre>
+mynadb --version</code></pre>
         </div>
       </div>
 
@@ -185,11 +185,11 @@ stats-service --version</code></pre>
         </div>
         <div class="code-content">
           <pre><code><span class="token-comment"># Download ARM64 version</span>
-curl -LO https://github.com/anthropics/stats-service/releases/latest/download/stats-service-linux-arm64.tar.gz
+curl -LO https://github.com/mynadb/mynadb/releases/latest/download/mynadb-linux-arm64.tar.gz
 
 <span class="token-comment"># Extract and install</span>
-tar -xzf stats-service-linux-arm64.tar.gz
-sudo mv stats-service /usr/local/bin/</code></pre>
+tar -xzf mynadb-linux-arm64.tar.gz
+sudo mv mynadb /usr/local/bin/</code></pre>
         </div>
       </div>
 
@@ -235,17 +235,17 @@ rustc --version  <span class="token-comment"># Should be 1.75+</span></code></pr
         </div>
         <div class="code-content">
           <pre><code><span class="token-comment"># Clone the repository</span>
-git clone https://github.com/anthropics/stats-service.git
-cd stats-service
+git clone https://github.com/mynadb/mynadb.git
+cd mynadb
 
 <span class="token-comment"># Build release binary</span>
 cargo build --release
 
-<span class="token-comment"># Binary is now at target/release/stats-service</span>
-./target/release/stats-service --version
+<span class="token-comment"># Binary is now at target/release/mynadb</span>
+./target/release/mynadb --version
 
 <span class="token-comment"># Optional: Install to system path</span>
-sudo cp target/release/stats-service /usr/local/bin/</code></pre>
+sudo cp target/release/mynadb /usr/local/bin/</code></pre>
         </div>
       </div>
 
@@ -267,13 +267,13 @@ sudo cp target/release/stats-service /usr/local/bin/</code></pre>
           <pre><code><span class="token-comment"># Build and create release archive</span>
 ./build.sh
 
-<span class="token-comment"># Output: stats-service-vX.X.X-linux-amd64.tar.gz</span></code></pre>
+<span class="token-comment"># Output: mynadb-vX.X.X-linux-amd64.tar.gz</span></code></pre>
         </div>
       </div>
 
       <h2 id="docker">Docker</h2>
 
-      <p>Run Stats Service in a Docker container for easy deployment and isolation.</p>
+      <p>Run MynaDB in a Docker container for easy deployment and isolation.</p>
 
       <h3>Pull Official Image</h3>
 
@@ -289,15 +289,15 @@ sudo cp target/release/stats-service /usr/local/bin/</code></pre>
         </div>
         <div class="code-content">
           <pre><code><span class="token-comment"># Pull the latest image</span>
-docker pull ghcr.io/anthropics/stats-service:latest
+docker pull ghcr.io/mynadb/mynadb:latest
 
 <span class="token-comment"># Run with default settings</span>
 docker run -d \
-  --name stats-service \
+  --name mynadb \
   -p 7000:7000 \
   -p 7001:7001 \
   -v stats-data:/data \
-  ghcr.io/anthropics/stats-service:latest</code></pre>
+  ghcr.io/mynadb/mynadb:latest</code></pre>
         </div>
       </div>
 
@@ -320,16 +320,16 @@ docker run -d \
 version: '3.8'
 
 services:
-  stats-service:
-    image: ghcr.io/anthropics/stats-service:latest
-    container_name: stats-service
+  mynadb:
+    image: ghcr.io/mynadb/mynadb:latest
+    container_name: mynadb
     restart: unless-stopped
     ports:
       - "7000:7000"   <span class="token-comment"># HTTP API</span>
       - "7001:7001"   <span class="token-comment"># Arrow Flight</span>
     volumes:
       - ./data:/data
-      - ./config.toml:/etc/stats-service/config.toml:ro
+      - ./config.toml:/etc/mynadb/config.toml:ro
     environment:
       - RUST_LOG=info
     healthcheck:
@@ -355,7 +355,7 @@ services:
 docker-compose up -d
 
 <span class="token-comment"># View logs</span>
-docker-compose logs -f stats-service
+docker-compose logs -f mynadb
 
 <span class="token-comment"># Stop</span>
 docker-compose down</code></pre>
@@ -385,12 +385,12 @@ RUN cargo build --release
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/stats-service /usr/local/bin/
+COPY --from=builder /app/target/release/mynadb /usr/local/bin/
 
 EXPOSE 7000 7001
 VOLUME ["/data"]
 
-CMD ["stats-service"]</code></pre>
+CMD ["mynadb"]</code></pre>
         </div>
       </div>
 
@@ -406,16 +406,16 @@ CMD ["stats-service"]</code></pre>
         </div>
         <div class="code-content">
           <pre><code><span class="token-comment"># Build the image</span>
-docker build -t stats-service:local .
+docker build -t mynadb:local .
 
 <span class="token-comment"># Run locally built image</span>
-docker run -d -p 7000:7000 -p 7001:7001 stats-service:local</code></pre>
+docker run -d -p 7000:7000 -p 7001:7001 mynadb:local</code></pre>
         </div>
       </div>
 
       <h2 id="systemd">Systemd Service</h2>
 
-      <p>Set up Stats Service as a systemd service for automatic startup and management.</p>
+      <p>Set up MynaDB as a systemd service for automatic startup and management.</p>
 
       <h3>Create Service User</h3>
 
@@ -431,14 +431,14 @@ docker run -d -p 7000:7000 -p 7001:7001 stats-service:local</code></pre>
         </div>
         <div class="code-content">
           <pre><code><span class="token-comment"># Create a dedicated user</span>
-sudo useradd --system --no-create-home --shell /bin/false stats-service
+sudo useradd --system --no-create-home --shell /bin/false mynadb
 
 <span class="token-comment"># Create data directory</span>
-sudo mkdir -p /var/lib/stats-service
-sudo chown stats-service:stats-service /var/lib/stats-service
+sudo mkdir -p /var/lib/mynadb
+sudo chown mynadb:mynadb /var/lib/mynadb
 
 <span class="token-comment"># Create config directory</span>
-sudo mkdir -p /etc/stats-service</code></pre>
+sudo mkdir -p /etc/mynadb</code></pre>
         </div>
       </div>
 
@@ -455,14 +455,14 @@ sudo mkdir -p /etc/stats-service</code></pre>
           <button class="copy-btn" onclick="copyCode(this)">Copy</button>
         </div>
         <div class="code-content">
-          <pre><code><span class="token-comment"># /etc/stats-service/config.toml</span>
+          <pre><code><span class="token-comment"># /etc/mynadb/config.toml</span>
 
 [server]
 http_port = 7000
 flight_port = 7001
 
 [storage]
-data_dir = "/var/lib/stats-service/data"
+data_dir = "/var/lib/mynadb/data"
 
 [cache]
 flush_interval_secs = 30
@@ -492,19 +492,19 @@ interval_secs = 3600</code></pre>
           <button class="copy-btn" onclick="copyCode(this)">Copy</button>
         </div>
         <div class="code-content">
-          <pre><code><span class="token-comment"># /etc/systemd/system/stats-service.service</span>
+          <pre><code><span class="token-comment"># /etc/systemd/system/mynadb.service</span>
 
 [Unit]
-Description=Stats Service - High-Performance Time Series Database
-Documentation=https://github.com/anthropics/stats-service
+Description=MynaDB - High-Performance Time Series Database
+Documentation=https://github.com/mynadb/mynadb
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=stats-service
-Group=stats-service
-ExecStart=/usr/local/bin/stats-service --config /etc/stats-service/config.toml
+User=mynadb
+Group=mynadb
+ExecStart=/usr/local/bin/mynadb --config /etc/mynadb/config.toml
 Restart=on-failure
 RestartSec=5
 
@@ -516,7 +516,7 @@ LimitNPROC=4096
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/stats-service
+ReadWritePaths=/var/lib/mynadb
 PrivateTmp=true
 
 <span class="token-comment"># Environment</span>
@@ -544,22 +544,22 @@ WantedBy=multi-user.target</code></pre>
 sudo systemctl daemon-reload
 
 <span class="token-comment"># Enable service to start on boot</span>
-sudo systemctl enable stats-service
+sudo systemctl enable mynadb
 
 <span class="token-comment"># Start the service</span>
-sudo systemctl start stats-service
+sudo systemctl start mynadb
 
 <span class="token-comment"># Check status</span>
-sudo systemctl status stats-service
+sudo systemctl status mynadb
 
 <span class="token-comment"># View logs</span>
-sudo journalctl -u stats-service -f</code></pre>
+sudo journalctl -u mynadb -f</code></pre>
         </div>
       </div>
 
       <h2 id="verify">Verify Installation</h2>
 
-      <p>After installation, verify Stats Service is running correctly:</p>
+      <p>After installation, verify MynaDB is running correctly:</p>
 
       <h3>Health Check</h3>
 
@@ -625,15 +625,15 @@ curl 'http://localhost:7000/query/testdb' \
 ss -tlnp | grep -E '7000|7001'
 
 <span class="token-comment"># Expected output:</span>
-<span class="token-string">LISTEN  0  128  *:7000  *:*  users:(("stats-service",pid=1234,fd=3))</span>
-<span class="token-string">LISTEN  0  128  *:7001  *:*  users:(("stats-service",pid=1234,fd=4))</span></code></pre>
+<span class="token-string">LISTEN  0  128  *:7000  *:*  users:(("mynadb",pid=1234,fd=3))</span>
+<span class="token-string">LISTEN  0  128  *:7001  *:*  users:(("mynadb",pid=1234,fd=4))</span></code></pre>
         </div>
       </div>
 
       <div class="callout callout-success">
         <div class="callout-title">Installation Complete!</div>
         <p>
-          Stats Service is now installed and running. Continue to the
+          MynaDB is now installed and running. Continue to the
           <a href="quickstart.html">Quick Start</a> guide to learn how to use it,
           or see <a href="configuration.html">Configuration</a> for advanced setup options.
         </p>
@@ -656,11 +656,11 @@ ss -tlnp | grep -E '7000|7001'
             </tr>
             <tr>
               <td><strong>Permission denied</strong></td>
-              <td>Check data directory ownership: <code>chown -R stats-service:stats-service /var/lib/stats-service</code></td>
+              <td>Check data directory ownership: <code>chown -R mynadb:mynadb /var/lib/mynadb</code></td>
             </tr>
             <tr>
               <td><strong>Service won't start</strong></td>
-              <td>Check logs: <code>journalctl -u stats-service -n 50</code></td>
+              <td>Check logs: <code>journalctl -u mynadb -n 50</code></td>
             </tr>
             <tr>
               <td><strong>Out of memory</strong></td>
@@ -678,7 +678,7 @@ ss -tlnp | grep -E '7000|7001'
         <a href="quickstart.html" class="card">
           <div class="card-icon">&#9889;</div>
           <h3>Quick Start</h3>
-          <p>Get started with Stats Service in 5 minutes.</p>
+          <p>Get started with MynaDB in 5 minutes.</p>
           <span class="card-link">Start <span>&#8594;</span></span>
         </a>
 
@@ -692,7 +692,7 @@ ss -tlnp | grep -E '7000|7001'
         <a href="architecture.html" class="card">
           <div class="card-icon">&#127959;</div>
           <h3>Architecture</h3>
-          <p>Learn how Stats Service works.</p>
+          <p>Learn how MynaDB works.</p>
           <span class="card-link">Explore <span>&#8594;</span></span>
         </a>
       </div>
