@@ -14,11 +14,11 @@ use crate::query::memtable_provider::MemtableProvider;
 use crate::query::metadata_cache::{CacheStatistics, TableMetadataCache, TableParquetStats};
 use crate::query::sql_utils::{
     extract_optimization_info, extract_table_references, extract_time_range,
-    inject_date_predicates, qualify_table_names, summarize_plan, DEFAULT_SCHEMA,
+    inject_date_predicates, qualify_table_names, summarize_plan,
 };
 use crate::query::table_provider::{ParquetTableConfig, ParquetTableProvider};
 use crate::query::time_interval::FillOption;
-use crate::query::types::{QueryAnalysis, QueryExplainResult, QueryOptimizations};
+use crate::query::types::{QueryAnalysis, QueryExplainResult};
 use crate::query::union_provider::UnionTableProvider;
 use crate::query_cache::{
     QueryCacheConfig, QueryCacheKey, QueryCacheStats, QueryResultCache, SharedQueryResultCache,

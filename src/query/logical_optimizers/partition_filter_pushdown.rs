@@ -5,9 +5,8 @@
 //!
 //! Implements DataFusion's `OptimizerRule` trait for native integration.
 
-use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::tree_node::Transformed;
 use datafusion::common::Result;
-use datafusion::config::ConfigOptions;
 use datafusion::logical_expr::{BinaryExpr, Expr, Filter, LogicalPlan, Operator, TableScan};
 use datafusion::optimizer::optimizer::ApplyOrder;
 use datafusion::optimizer::OptimizerRule;

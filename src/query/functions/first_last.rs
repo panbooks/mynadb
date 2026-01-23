@@ -20,7 +20,6 @@ use datafusion::logical_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, AggregateUDFImpl, Signature, Volatility,
 };
 use std::any::Any;
-use std::sync::Arc;
 
 // ============================================================================
 // First Value UDAF

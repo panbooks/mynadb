@@ -9,7 +9,6 @@ use chrono::{DateTime, TimeZone, Utc};
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{Result, ScalarValue};
 use datafusion::config::ConfigOptions;
-use datafusion::logical_expr::expr::Alias;
 use datafusion::logical_expr::{col, lit, BinaryExpr, Expr, Filter, LogicalPlan, Operator};
 use datafusion::optimizer::AnalyzerRule;
 
