@@ -6,7 +6,9 @@
 
 use crate::query::create_custom_session_state;
 use crate::query::fill_processor::FillProcessor;
-use crate::query::functions::create_time_bucket_udf;
+use crate::query::functions::{
+    create_first_value_udaf, create_last_value_udaf, create_time_bucket_udf,
+};
 use crate::query::group_by_time::GroupByTimeTransformer;
 use crate::query::memtable_provider::MemtableProvider;
 use crate::query::metadata_cache::{CacheStatistics, TableMetadataCache, TableParquetStats};
@@ -142,6 +144,11 @@ impl QueryEngine {
         // Register custom UDFs
         ctx.register_udf(create_time_bucket_udf());
         debug!("Registered time_bucket UDF");
+
+        // Register custom UDAFs for InfluxDB-compatible first/last functions
+        ctx.register_udaf(create_first_value_udaf());
+        ctx.register_udaf(create_last_value_udaf());
+        debug!("Registered first_value and last_value UDAFs");
 
         ctx
     }

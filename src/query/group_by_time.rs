@@ -60,6 +60,10 @@ impl Default for TransformedQuery {
 }
 
 /// InfluxDB to DataFusion function mapping
+///
+/// Maps InfluxDB aggregate function names to their DataFusion equivalents.
+/// Note: first/last are handled specially in transform_aggregates()
+/// as they need to include the timestamp column argument.
 fn get_function_mapping() -> HashMap<&'static str, &'static str> {
     let mut map = HashMap::new();
     map.insert("mean", "avg");
@@ -69,8 +73,8 @@ fn get_function_mapping() -> HashMap<&'static str, &'static str> {
     map.insert("max", "max");
     map.insert("stddev", "stddev");
     map.insert("median", "approx_median");
-    // first/last would need custom UDFs
-    // spread would need transformation to max() - min()
+    // Note: first/last are handled separately as they require timestamp argument
+    // spread is transformed to max() - min()
     map
 }
 
@@ -295,7 +299,7 @@ impl GroupByTimeTransformer {
         let mut result = select_columns.to_string();
         let func_map = get_function_mapping();
 
-        // Transform each function
+        // Transform standard aggregate functions (mean, sum, count, etc.)
         for (influx_fn, datafusion_fn) in &func_map {
             // Match function call pattern: func(column)
             let pattern = Regex::new(&format!(r"(?i)\b{}\s*\(\s*([^)]+)\s*\)", influx_fn)).unwrap();
@@ -308,7 +312,33 @@ impl GroupByTimeTransformer {
                 .to_string();
         }
 
-        // Handle spread() -> max() - min()
+        // Handle first(column) -> first_value(column, timestamp)
+        // Returns the value with the minimum timestamp in each group
+        let first_pattern = Regex::new(r"(?i)\bfirst\s*\(\s*([^)]+)\s*\)").unwrap();
+        result = first_pattern
+            .replace_all(&result, |caps: &regex::Captures| {
+                let arg = caps.get(1).unwrap().as_str();
+                format!(
+                    "first_value({}, {}) as first_{}",
+                    arg, self.timestamp_column, arg
+                )
+            })
+            .to_string();
+
+        // Handle last(column) -> last_value(column, timestamp)
+        // Returns the value with the maximum timestamp in each group
+        let last_pattern = Regex::new(r"(?i)\blast\s*\(\s*([^)]+)\s*\)").unwrap();
+        result = last_pattern
+            .replace_all(&result, |caps: &regex::Captures| {
+                let arg = caps.get(1).unwrap().as_str();
+                format!(
+                    "last_value({}, {}) as last_{}",
+                    arg, self.timestamp_column, arg
+                )
+            })
+            .to_string();
+
+        // Handle spread(column) -> max(column) - min(column)
         let spread_pattern = Regex::new(r"(?i)\bspread\s*\(\s*([^)]+)\s*\)").unwrap();
         result = spread_pattern
             .replace_all(&result, |caps: &regex::Captures| {
@@ -565,5 +595,50 @@ mod tests {
         let order_pos = result.sql.find("ORDER BY").unwrap();
         let limit_pos = result.sql.find("LIMIT").unwrap();
         assert!(order_pos < limit_pos);
+    }
+
+    #[test]
+    fn test_transform_first_function() {
+        let transformer = GroupByTimeTransformer::new();
+
+        let result = transformer.transform_aggregates("first(usage)").unwrap();
+        assert!(result.contains("first_value(usage, timestamp)"));
+        assert!(result.contains("as first_usage"));
+    }
+
+    #[test]
+    fn test_transform_last_function() {
+        let transformer = GroupByTimeTransformer::new();
+
+        let result = transformer.transform_aggregates("last(value)").unwrap();
+        assert!(result.contains("last_value(value, timestamp)"));
+        assert!(result.contains("as last_value"));
+    }
+
+    #[test]
+    fn test_transform_first_last_with_group_by_time() {
+        let transformer = GroupByTimeTransformer::new();
+
+        let result = transformer
+            .transform("SELECT first(usage), last(usage) FROM cpu GROUP BY time(5m)")
+            .unwrap();
+
+        assert!(result.was_transformed);
+        assert!(result.sql.contains("first_value(usage, timestamp)"));
+        assert!(result.sql.contains("last_value(usage, timestamp)"));
+        assert!(result.sql.contains("time_bucket(timestamp,"));
+    }
+
+    #[test]
+    fn test_transform_mixed_aggregates() {
+        let transformer = GroupByTimeTransformer::new();
+
+        let result = transformer
+            .transform_aggregates("first(usage), mean(cpu), last(memory)")
+            .unwrap();
+
+        assert!(result.contains("first_value(usage, timestamp) as first_usage"));
+        assert!(result.contains("avg(cpu) as mean_cpu"));
+        assert!(result.contains("last_value(memory, timestamp) as last_memory"));
     }
 }
