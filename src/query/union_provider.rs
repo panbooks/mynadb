@@ -173,10 +173,7 @@ impl TableProvider for UnionTableProvider {
         );
 
         // Get execution plans from both providers
-        let primary_plan = self
-            .primary
-            .scan(state, projection, filters, limit)
-            .await?;
+        let primary_plan = self.primary.scan(state, projection, filters, limit).await?;
         let secondary_plan = self
             .secondary
             .scan(state, projection, filters, limit)
@@ -287,7 +284,10 @@ impl ExecutionPlan for UnionExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("UnionExec execute: table={}, partition={}", self.table_name, partition);
+        debug!(
+            "UnionExec execute: table={}, partition={}",
+            self.table_name, partition
+        );
 
         // Execute both child plans
         let primary_stream = self.primary.execute(0, context.clone())?;

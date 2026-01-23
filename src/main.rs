@@ -83,7 +83,10 @@ fn print_welcome_banner(config: &Config) {
 }
 
 /// Initialize WAL (Write-Ahead Log) with object store support
-async fn initialize_wal(config: &Config, storage: Arc<storage_mod::Storage>) -> Option<Arc<wal::Wal>> {
+async fn initialize_wal(
+    config: &Config,
+    storage: Arc<storage_mod::Storage>,
+) -> Option<Arc<wal::Wal>> {
     if !config.wal.enabled {
         info!("WAL is disabled");
         return None;
@@ -99,7 +102,9 @@ async fn initialize_wal(config: &Config, storage: Arc<storage_mod::Storage>) -> 
 
     match wal::Wal::new(storage, &config.wal).await {
         Ok(w) => {
-            info!("WAL initialized successfully - recovery will happen after components initialize");
+            info!(
+                "WAL initialized successfully - recovery will happen after components initialize"
+            );
             Some(Arc::new(w))
         }
         Err(e) => {
@@ -128,7 +133,11 @@ async fn perform_wal_recovery(
 
     let recovered_data = wal
         .replay_data_writes(|db, line_protocol| {
-            debug!("WAL recovery: replaying {} bytes to {}", line_protocol.len(), db);
+            debug!(
+                "WAL recovery: replaying {} bytes to {}",
+                line_protocol.len(),
+                db
+            );
 
             match tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(api::ingest_line_protocol_to_cache(
@@ -203,7 +212,10 @@ fn start_wal_cleanup_task(wal: &Arc<wal::Wal>, config: &Config) {
         use tokio::time::{interval, Duration};
         let mut ticker = interval(Duration::from_secs(interval_secs));
 
-        info!("Background WAL cleanup started: every {}s, retention {}h", interval_secs, retention_hours);
+        info!(
+            "Background WAL cleanup started: every {}s, retention {}h",
+            interval_secs, retention_hours
+        );
 
         loop {
             ticker.tick().await;
@@ -225,10 +237,7 @@ fn start_wal_cleanup_task(wal: &Arc<wal::Wal>, config: &Config) {
 }
 
 /// Build the Axum router with all routes
-fn build_router(
-    state: api::AppState,
-    auth_middleware: Arc<auth::AuthMiddleware>,
-) -> Router {
+fn build_router(state: api::AppState, auth_middleware: Arc<auth::AuthMiddleware>) -> Router {
     Router::new()
         .route("/", get(api::home))
         .route("/health", get(api::health))
@@ -243,10 +252,19 @@ fn build_router(
         // Query cache management
         .route("/cache/stats", get(api::query_cache_stats_handler))
         .route("/cache/prewarm/:catalog", post(api::prewarm_cache_handler))
-        .route("/cache/prewarm/:catalog/:schema/:table", post(api::prewarm_table_cache_handler))
+        .route(
+            "/cache/prewarm/:catalog/:schema/:table",
+            post(api::prewarm_table_cache_handler),
+        )
         .route("/cache/clear", post(api::clear_query_cache_handler))
-        .route("/cache/clear/results", post(api::clear_query_result_cache_handler))
-        .route("/cache/parquet/:catalog/:schema/:table", get(api::table_parquet_stats_handler))
+        .route(
+            "/cache/clear/results",
+            post(api::clear_query_result_cache_handler),
+        )
+        .route(
+            "/cache/parquet/:catalog/:schema/:table",
+            get(api::table_parquet_stats_handler),
+        )
         // Profiling endpoints
         .route("/debug/heap", get(api::heap_profile_handler))
         .route("/debug/cpu", get(api::cpu_profile_handler))
@@ -274,7 +292,10 @@ fn build_router(
         // Table management
         .route("/databases/:db/tables", post(api::create_table_handler))
         .route("/databases/:db/tables", get(api::list_tables_handler))
-        .route("/databases/:db/tables/:table", delete(api::delete_table_handler))
+        .route(
+            "/databases/:db/tables/:table",
+            delete(api::delete_table_handler),
+        )
         .route("/schema/:db/:table", get(api::schema_handler))
         // Compaction endpoints
         .route("/compact/:catalog", post(api::compact_handler))
@@ -413,7 +434,9 @@ async fn main() {
         );
     }
 
-    if config.compaction.full_compaction_enabled && config.compaction.full_compaction_interval_secs > 0 {
+    if config.compaction.full_compaction_enabled
+        && config.compaction.full_compaction_interval_secs > 0
+    {
         Arc::clone(&compactor).start_background_full_compaction(
             config.compaction.full_compaction_interval_secs,
             compaction_config,
@@ -438,8 +461,7 @@ async fn main() {
     ));
 
     if config.retention.enabled && config.retention.interval_secs > 0 {
-        Arc::clone(&retention_manager)
-            .start_background_retention(config.retention.clone());
+        Arc::clone(&retention_manager).start_background_retention(config.retention.clone());
     }
 
     // Start background WAL tasks
@@ -464,7 +486,11 @@ async fn main() {
     let auth_middleware = Arc::new(auth::AuthMiddleware::new(Arc::new(config.auth.clone())));
     info!(
         "Authentication: {} (username: {})",
-        if config.auth.enabled { "ENABLED" } else { "DISABLED" },
+        if config.auth.enabled {
+            "ENABLED"
+        } else {
+            "DISABLED"
+        },
         config.auth.username
     );
 

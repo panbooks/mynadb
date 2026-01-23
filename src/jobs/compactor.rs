@@ -101,11 +101,11 @@ impl Default for CompactionConfig {
             target_file_size: DEFAULT_TARGET_FILE_SIZE_MB * MB_TO_BYTES,
             max_level: DEFAULT_MAX_LEVEL,
             full_compaction_enabled: true,
-            full_compaction_hour: 3, // 03:00
+            full_compaction_hour: 3,                        // 03:00
             full_compaction_target_size: 200 * MB_TO_BYTES, // 200MB
             max_concurrent_compactions: 8,
             full_compaction_max_concurrent: 2,
-            read_rate_limit_bytes_per_sec: 0, // Unlimited
+            read_rate_limit_bytes_per_sec: 0,  // Unlimited
             write_rate_limit_bytes_per_sec: 0, // Unlimited
         }
     }
@@ -221,20 +221,26 @@ impl Compactor {
 
         // Create semaphore for full compaction if full_compaction_max_concurrent > 0
         let full_compaction_semaphore = if config.full_compaction_max_concurrent > 0 {
-            Some(Arc::new(Semaphore::new(config.full_compaction_max_concurrent)))
+            Some(Arc::new(Semaphore::new(
+                config.full_compaction_max_concurrent,
+            )))
         } else {
             None
         };
 
         // Create rate limiters if configured
         let read_rate_limiter = if config.read_rate_limit_bytes_per_sec > 0 {
-            Some(Arc::new(RateLimiter::new(config.read_rate_limit_bytes_per_sec)))
+            Some(Arc::new(RateLimiter::new(
+                config.read_rate_limit_bytes_per_sec,
+            )))
         } else {
             None
         };
 
         let write_rate_limiter = if config.write_rate_limit_bytes_per_sec > 0 {
-            Some(Arc::new(RateLimiter::new(config.write_rate_limit_bytes_per_sec)))
+            Some(Arc::new(RateLimiter::new(
+                config.write_rate_limit_bytes_per_sec,
+            )))
         } else {
             None
         };
@@ -361,7 +367,13 @@ impl Compactor {
             let config_clone = config.clone();
 
             let future = async move {
-                self.compact_table_all_partitions(&catalog_owned, &schema_owned, &table_owned, &config_clone).await
+                self.compact_table_all_partitions(
+                    &catalog_owned,
+                    &schema_owned,
+                    &table_owned,
+                    &config_clone,
+                )
+                .await
             };
             tasks.push(future);
         }
@@ -513,8 +525,8 @@ impl Compactor {
         let mut partitions_to_compact: Vec<(String, String, String, PathBuf)> = Vec::new();
 
         // Scan all catalogs
-        let catalog_entries = fs::read_dir(&self.data_dir)
-            .map_err(|e| format!("Failed to read data dir: {}", e))?;
+        let catalog_entries =
+            fs::read_dir(&self.data_dir).map_err(|e| format!("Failed to read data dir: {}", e))?;
 
         for catalog_entry in catalog_entries.flatten() {
             if !catalog_entry.path().is_dir() {
@@ -577,7 +589,10 @@ impl Compactor {
         }
 
         if partitions_to_compact.is_empty() {
-            debug!("No partitions found for full compaction on {}", yesterday_partition);
+            debug!(
+                "No partitions found for full compaction on {}",
+                yesterday_partition
+            );
             return Ok(Vec::new());
         }
 
@@ -607,7 +622,8 @@ impl Compactor {
                     &partition_name_owned,
                     &partition_path_owned,
                     &config_clone,
-                ).await
+                )
+                .await
             };
             tasks.push(future);
         }
@@ -635,7 +651,10 @@ impl Compactor {
                     results.push(r);
                 }
                 Ok(None) => {
-                    debug!("Full compaction [{}/{}]: skipped (no work needed)", completed, total);
+                    debug!(
+                        "Full compaction [{}/{}]: skipped (no work needed)",
+                        completed, total
+                    );
                 }
                 Err(e) => {
                     warn!("Full compaction [{}/{}]: failed - {}", completed, total, e);
@@ -667,7 +686,12 @@ impl Compactor {
     ) -> Result<Option<CompactionResult>, String> {
         // Acquire full compaction semaphore permit if concurrent limiting is enabled
         let _permit = if let Some(ref semaphore) = self.full_compaction_semaphore {
-            Some(semaphore.acquire().await.map_err(|e| format!("Failed to acquire full compaction semaphore: {}", e))?)
+            Some(
+                semaphore
+                    .acquire()
+                    .await
+                    .map_err(|e| format!("Failed to acquire full compaction semaphore: {}", e))?,
+            )
         } else {
             None
         };
@@ -760,7 +784,8 @@ impl Compactor {
         );
 
         // Extract just the paths for reading
-        let files_to_compact: Vec<PathBuf> = compactable_files.iter().map(|(p, _)| p.clone()).collect();
+        let files_to_compact: Vec<PathBuf> =
+            compactable_files.iter().map(|(p, _)| p.clone()).collect();
 
         // Read compactable files
         let batches = self.read_parquet_files(&files_to_compact).await?;
@@ -770,7 +795,8 @@ impl Compactor {
         let timestamp = chrono::Utc::now().timestamp_millis();
         let output = partition_path.join(format!("FULL_{}.parquet", timestamp));
 
-        self.write_compacted_file(output.to_str().unwrap(), batches).await?;
+        self.write_compacted_file(output.to_str().unwrap(), batches)
+            .await?;
 
         let output_size = fs::metadata(&output)
             .map(|m| m.len())
@@ -884,7 +910,12 @@ impl Compactor {
     ) -> Result<Option<CompactionResult>, String> {
         // Acquire semaphore permit if concurrent limiting is enabled
         let _permit = if let Some(ref semaphore) = self.compaction_semaphore {
-            Some(semaphore.acquire().await.map_err(|e| format!("Failed to acquire semaphore: {}", e))?)
+            Some(
+                semaphore
+                    .acquire()
+                    .await
+                    .map_err(|e| format!("Failed to acquire semaphore: {}", e))?,
+            )
         } else {
             None
         };
@@ -943,9 +974,7 @@ impl Compactor {
 
             info!("Minor compaction: {} L0 files → L1", l0_files.len());
 
-            let rows = self
-                .compact_level_files(path, &l0_files, 0, config)
-                .await?;
+            let rows = self.compact_level_files(path, &l0_files, 0, config).await?;
             total_rows += rows;
             compaction_happened = true;
         }
@@ -1093,7 +1122,8 @@ impl Compactor {
                 partition_path, LEVEL_PREFIX, target_level, LEVEL_SEPARATOR, timestamp, PARQUET_EXT
             );
 
-            self.write_compacted_file(&compacted_filename, batches).await?;
+            self.write_compacted_file(&compacted_filename, batches)
+                .await?;
 
             if target_level == current_level {
                 info!(
@@ -1221,7 +1251,11 @@ impl Compactor {
             }
         }
 
-        debug!("Read {} batches ({} MB)", all_batches.len(), total_bytes_read / (1024 * 1024));
+        debug!(
+            "Read {} batches ({} MB)",
+            all_batches.len(),
+            total_bytes_read / (1024 * 1024)
+        );
 
         // Merge schemas and align batches if there are schema conflicts
         if all_batches.len() > 1 {
@@ -1473,10 +1507,7 @@ impl Compactor {
                 }
             } else {
                 // Fallback: try Int64 timestamp
-                let ts_col = batch
-                    .column(ts_idx)
-                    .as_any()
-                    .downcast_ref::<Int64Array>();
+                let ts_col = batch.column(ts_idx).as_any().downcast_ref::<Int64Array>();
 
                 if let Some(ts_array) = ts_col {
                     for row_idx in 0..batch.num_rows() {
@@ -1499,12 +1530,8 @@ impl Compactor {
         let mut sorted_columns: Vec<ArrayRef> = Vec::with_capacity(schema.fields().len());
 
         for (col_idx, field) in schema.fields().iter().enumerate() {
-            let sorted_array = Self::build_sorted_column(
-                &batches,
-                col_idx,
-                field.data_type(),
-                &indexed_rows,
-            )?;
+            let sorted_array =
+                Self::build_sorted_column(&batches, col_idx, field.data_type(), &indexed_rows)?;
             sorted_columns.push(sorted_array);
         }
 
@@ -1571,7 +1598,8 @@ impl Compactor {
                 Ok(Arc::new(builder.finish()))
             }
             DataType::Utf8 => {
-                let mut builder = StringBuilder::with_capacity(indexed_rows.len(), indexed_rows.len() * 32);
+                let mut builder =
+                    StringBuilder::with_capacity(indexed_rows.len(), indexed_rows.len() * 32);
                 for (_, batch_idx, row_idx) in indexed_rows {
                     let array = batches[*batch_idx]
                         .column(col_idx)
@@ -1605,10 +1633,8 @@ impl Compactor {
             _ => {
                 // Fallback: use take with indices (less efficient but works for any type)
                 // First concat all arrays, then take
-                let arrays: Vec<&dyn Array> = batches
-                    .iter()
-                    .map(|b| b.column(col_idx).as_ref())
-                    .collect();
+                let arrays: Vec<&dyn Array> =
+                    batches.iter().map(|b| b.column(col_idx).as_ref()).collect();
 
                 let concatenated = arrow::compute::concat(&arrays)
                     .map_err(|e| format!("Failed to concat arrays: {}", e))?;
@@ -1626,8 +1652,7 @@ impl Compactor {
                 }
 
                 let indices = UInt64Array::from(global_indices);
-                take(&concatenated, &indices, None)
-                    .map_err(|e| format!("Failed to take: {}", e))
+                take(&concatenated, &indices, None).map_err(|e| format!("Failed to take: {}", e))
             }
         }
     }
@@ -1638,9 +1663,7 @@ impl Compactor {
             // Row group size for good statistics granularity
             .set_max_row_group_size(ROW_GROUP_SIZE)
             // ZSTD compression (good balance of speed and ratio)
-            .set_compression(Compression::ZSTD(
-                ZstdLevel::try_new(3).unwrap_or_default(),
-            ))
+            .set_compression(Compression::ZSTD(ZstdLevel::try_new(3).unwrap_or_default()))
             // Enable dictionary encoding for better compression of repeated values
             .set_dictionary_enabled(true)
             // Enable statistics for all columns
@@ -1796,10 +1819,7 @@ impl Compactor {
                 match self.full_compact_yesterday(&config).await {
                     Ok(results) => {
                         if !results.is_empty() {
-                            info!(
-                                "Full compaction: {} partitions compacted",
-                                results.len()
-                            );
+                            info!("Full compaction: {} partitions compacted", results.len());
                             for result in &results {
                                 info!(
                                     "{}.{}.{}/{}: {} → {} files, {:.2} MB",
@@ -2062,8 +2082,12 @@ mod tests {
         let config = create_test_config();
         let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
 
-        let lock1 = compactor.get_lock("catalog", "schema", "table", "2024-01-01").await;
-        let lock2 = compactor.get_lock("catalog", "schema", "table", "2024-01-01").await;
+        let lock1 = compactor
+            .get_lock("catalog", "schema", "table", "2024-01-01")
+            .await;
+        let lock2 = compactor
+            .get_lock("catalog", "schema", "table", "2024-01-01")
+            .await;
 
         // Should return the same lock instance
         assert!(Arc::ptr_eq(&lock1, &lock2));
@@ -2075,8 +2099,12 @@ mod tests {
         let config = create_test_config();
         let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
 
-        let lock1 = compactor.get_lock("catalog", "schema", "table", "2024-01-01").await;
-        let lock2 = compactor.get_lock("catalog", "schema", "table", "2024-01-02").await;
+        let lock1 = compactor
+            .get_lock("catalog", "schema", "table", "2024-01-01")
+            .await;
+        let lock2 = compactor
+            .get_lock("catalog", "schema", "table", "2024-01-02")
+            .await;
 
         // Should return different lock instances
         assert!(!Arc::ptr_eq(&lock1, &lock2));
@@ -2160,10 +2188,7 @@ mod tests {
             },
         ];
 
-        let filtered: Vec<_> = files
-            .iter()
-            .filter(|f| f.size < target_size)
-            .collect();
+        let filtered: Vec<_> = files.iter().filter(|f| f.size < target_size).collect();
 
         assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0].timestamp, 1000);

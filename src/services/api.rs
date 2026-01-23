@@ -8,7 +8,6 @@
 /// - Profiling (pprof-compatible)
 /// - Compaction
 /// - Partition management
-
 use axum::{
     extract::{Path, Query as AxumQuery, Request, State},
     http::StatusCode,
@@ -437,14 +436,23 @@ pub async fn memory_handler(State(state): State<AppState>) -> impl IntoResponse 
 
     // Cache memory
     output.push_str(&format!("Data Cache:\n"));
-    output.push_str(&format!("  Size: {} ({} bytes)\n",
-        format_bytes(cache_stats.size_bytes), cache_stats.size_bytes));
-    output.push_str(&format!("  Limit: {} ({} bytes)\n\n",
-        format_bytes(cache_stats.max_size_bytes), cache_stats.max_size_bytes));
+    output.push_str(&format!(
+        "  Size: {} ({} bytes)\n",
+        format_bytes(cache_stats.size_bytes),
+        cache_stats.size_bytes
+    ));
+    output.push_str(&format!(
+        "  Limit: {} ({} bytes)\n\n",
+        format_bytes(cache_stats.max_size_bytes),
+        cache_stats.max_size_bytes
+    ));
 
     output.push_str("──────────────────────────────────────────\n");
-    output.push_str(&format!("Total: {} ({} bytes)\n",
-        format_bytes(cache_stats.size_bytes), cache_stats.size_bytes));
+    output.push_str(&format!(
+        "Total: {} ({} bytes)\n",
+        format_bytes(cache_stats.size_bytes),
+        cache_stats.size_bytes
+    ));
     output.push_str("══════════════════════════════════════════\n");
 
     (StatusCode::OK, output)
@@ -523,18 +531,24 @@ pub async fn prewarm_cache_handler(
     match state.query_engine.prewarm_catalog_cache(&catalog).await {
         Ok(count) => {
             info!("Pre-warmed cache for '{}': {} files", catalog, count);
-            (StatusCode::OK, axum::Json(serde_json::json!({
-                "status": "success",
-                "catalog": catalog,
-                "files_cached": count
-            })))
+            (
+                StatusCode::OK,
+                axum::Json(serde_json::json!({
+                    "status": "success",
+                    "catalog": catalog,
+                    "files_cached": count
+                })),
+            )
         }
         Err(e) => {
             error!("Cache pre-warm error for '{}': {}", catalog, e);
-            (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({
-                "status": "error",
-                "message": e
-            })))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({
+                    "status": "error",
+                    "message": e
+                })),
+            )
         }
     }
 }
@@ -544,25 +558,44 @@ pub async fn prewarm_table_cache_handler(
     State(state): State<AppState>,
     Path((catalog, schema, table)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
-    info!("Pre-warming cache for table: {}.{}.{}", catalog, schema, table);
+    info!(
+        "Pre-warming cache for table: {}.{}.{}",
+        catalog, schema, table
+    );
 
-    match state.query_engine.prewarm_table_cache(&catalog, &schema, &table).await {
+    match state
+        .query_engine
+        .prewarm_table_cache(&catalog, &schema, &table)
+        .await
+    {
         Ok(count) => {
-            info!("Pre-warmed cache for '{}.{}.{}': {} files", catalog, schema, table, count);
-            (StatusCode::OK, axum::Json(serde_json::json!({
-                "status": "success",
-                "catalog": catalog,
-                "schema": schema,
-                "table": table,
-                "files_cached": count
-            })))
+            info!(
+                "Pre-warmed cache for '{}.{}.{}': {} files",
+                catalog, schema, table, count
+            );
+            (
+                StatusCode::OK,
+                axum::Json(serde_json::json!({
+                    "status": "success",
+                    "catalog": catalog,
+                    "schema": schema,
+                    "table": table,
+                    "files_cached": count
+                })),
+            )
         }
         Err(e) => {
-            error!("Cache pre-warm error for '{}.{}.{}': {}", catalog, schema, table, e);
-            (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({
-                "status": "error",
-                "message": e
-            })))
+            error!(
+                "Cache pre-warm error for '{}.{}.{}': {}",
+                catalog, schema, table, e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({
+                    "status": "error",
+                    "message": e
+                })),
+            )
         }
     }
 }
@@ -571,20 +604,26 @@ pub async fn prewarm_table_cache_handler(
 pub async fn clear_query_cache_handler(State(state): State<AppState>) -> impl IntoResponse {
     info!("Clearing all caches");
     state.query_engine.clear_all_caches();
-    (StatusCode::OK, axum::Json(serde_json::json!({
-        "status": "success",
-        "message": "All caches cleared (metadata + query results)"
-    })))
+    (
+        StatusCode::OK,
+        axum::Json(serde_json::json!({
+            "status": "success",
+            "message": "All caches cleared (metadata + query results)"
+        })),
+    )
 }
 
 /// Clear only query result cache (keeps metadata cache)
 pub async fn clear_query_result_cache_handler(State(state): State<AppState>) -> impl IntoResponse {
     info!("Clearing query result cache");
     state.query_engine.clear_query_cache();
-    (StatusCode::OK, axum::Json(serde_json::json!({
-        "status": "success",
-        "message": "Query result cache cleared"
-    })))
+    (
+        StatusCode::OK,
+        axum::Json(serde_json::json!({
+            "status": "success",
+            "message": "Query result cache cleared"
+        })),
+    )
 }
 
 /// Get Parquet statistics for a table (using cached metadata)
@@ -592,12 +631,18 @@ pub async fn table_parquet_stats_handler(
     State(state): State<AppState>,
     Path((catalog, schema, table)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
-    match state.query_engine.get_table_parquet_stats(&catalog, &schema, &table) {
+    match state
+        .query_engine
+        .get_table_parquet_stats(&catalog, &schema, &table)
+    {
         Ok(stats) => (StatusCode::OK, axum::Json(serde_json::json!(stats))),
-        Err(e) => (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({
-            "status": "error",
-            "message": e
-        }))),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({
+                "status": "error",
+                "message": e
+            })),
+        ),
     }
 }
 
@@ -606,11 +651,14 @@ pub async fn table_parquet_stats_handler(
 pub async fn heap_profile_handler(
     AxumQuery(params): AxumQuery<ProfileParams>,
 ) -> impl IntoResponse {
-    use axum::response::Response;
     use axum::body::Body;
     use axum::http::header;
+    use axum::response::Response;
 
-    info!("Heap Profile Request: duration={}s, format={}", params.duration, params.format);
+    info!(
+        "Heap Profile Request: duration={}s, format={}",
+        params.duration, params.format
+    );
 
     // Validate duration (max 300 seconds = 5 minutes)
     if params.duration > 300 {
@@ -656,11 +704,15 @@ pub async fn heap_profile_handler(
                 .header(header::CONTENT_TYPE, format.content_type());
 
             if download {
-                let filename = format!("heap_profile_{}.{}",
+                let filename = format!(
+                    "heap_profile_{}.{}",
                     chrono::Utc::now().format("%Y%m%d_%H%M%S"),
-                    format.file_extension());
-                response = response.header(header::CONTENT_DISPOSITION,
-                    format!("attachment; filename=\"{}\"", filename));
+                    format.file_extension()
+                );
+                response = response.header(
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}\"", filename),
+                );
             }
 
             info!("Heap profile generated successfully: {} bytes", data.len());
@@ -685,14 +737,15 @@ pub async fn heap_profile_handler(
     }
 }
 
-pub async fn cpu_profile_handler(
-    AxumQuery(params): AxumQuery<ProfileParams>,
-) -> impl IntoResponse {
-    use axum::response::Response;
+pub async fn cpu_profile_handler(AxumQuery(params): AxumQuery<ProfileParams>) -> impl IntoResponse {
     use axum::body::Body;
     use axum::http::header;
+    use axum::response::Response;
 
-    info!("CPU Profile Request: duration={}s, format={}", params.duration, params.format);
+    info!(
+        "CPU Profile Request: duration={}s, format={}",
+        params.duration, params.format
+    );
 
     // Validate duration (max 300 seconds = 5 minutes)
     if params.duration > 300 {
@@ -738,11 +791,15 @@ pub async fn cpu_profile_handler(
                 .header(header::CONTENT_TYPE, format.content_type());
 
             if download {
-                let filename = format!("cpu_profile_{}.{}",
+                let filename = format!(
+                    "cpu_profile_{}.{}",
                     chrono::Utc::now().format("%Y%m%d_%H%M%S"),
-                    format.file_extension());
-                response = response.header(header::CONTENT_DISPOSITION,
-                    format!("attachment; filename=\"{}\"", filename));
+                    format.file_extension()
+                );
+                response = response.header(
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}\"", filename),
+                );
             }
 
             info!("CPU profile generated successfully: {} bytes", data.len());
@@ -824,8 +881,10 @@ pub async fn explain_handler(
     AxumQuery(params): AxumQuery<ExplainParams>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    debug!("Explain Request: db={}, sql={}, verbose={}, analyze={}",
-           db, params.sql, params.verbose, params.analyze);
+    debug!(
+        "Explain Request: db={}, sql={}, verbose={}, analyze={}",
+        db, params.sql, params.verbose, params.analyze
+    );
 
     match state
         .query_engine
@@ -836,7 +895,10 @@ pub async fn explain_handler(
             info!("Explain executed successfully");
             match serde_json::to_string_pretty(&result) {
                 Ok(json) => (StatusCode::OK, json),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("JSON error: {}", e)),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("JSON error: {}", e),
+                ),
             }
         }
         Err(e) => {
@@ -863,7 +925,10 @@ pub async fn explain_handler_post(
             info!("Explain executed successfully");
             match serde_json::to_string_pretty(&result) {
                 Ok(json) => (StatusCode::OK, json),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("JSON error: {}", e)),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("JSON error: {}", e),
+                ),
             }
         }
         Err(e) => {
@@ -886,7 +951,10 @@ pub async fn analyze_handler(
             info!("Analyze executed successfully");
             match serde_json::to_string_pretty(&result) {
                 Ok(json) => (StatusCode::OK, json),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("JSON error: {}", e)),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("JSON error: {}", e),
+                ),
             }
         }
         Err(e) => {
@@ -909,7 +977,10 @@ pub async fn analyze_handler_post(
             info!("Analyze executed successfully");
             match serde_json::to_string_pretty(&result) {
                 Ok(json) => (StatusCode::OK, json),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("JSON error: {}", e)),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("JSON error: {}", e),
+                ),
             }
         }
         Err(e) => {
@@ -988,7 +1059,11 @@ async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCod
     // STEP 1: WAL write - sync or async based on configuration
     if let Some(ref wal) = state.wal {
         // Check WAL sync mode
-        let sync_on_write = state.wal.as_ref().map(|w| w.is_sync_on_write()).unwrap_or(false);
+        let sync_on_write = state
+            .wal
+            .as_ref()
+            .map(|w| w.is_sync_on_write())
+            .unwrap_or(false);
         if sync_on_write {
             // Strict durability: wait for WAL write before proceeding
             if let Err(e) = wal.log_data_write(db, data).await {
@@ -1015,7 +1090,10 @@ async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCod
     let points = parse_multiple_lines(data, &state.config.schema);
 
     if points.is_empty() {
-        return (StatusCode::BAD_REQUEST, "No valid points to write".to_string());
+        return (
+            StatusCode::BAD_REQUEST,
+            "No valid points to write".to_string(),
+        );
     }
 
     let point_count = points.len();
@@ -1028,9 +1106,10 @@ async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCod
             config::SchemaTableStrategy::ServiceAsSchema => {
                 (point.service.clone(), point.measurement.clone())
             }
-            config::SchemaTableStrategy::ServiceAsTable => {
-                (state.config.schema.default_name.clone(), point.service.clone())
-            }
+            config::SchemaTableStrategy::ServiceAsTable => (
+                state.config.schema.default_name.clone(),
+                point.service.clone(),
+            ),
         };
         grouped
             .entry((schema, table))

@@ -18,7 +18,10 @@ impl ProfileFormat {
             "protobuf" | "pb" | "pprof" => Ok(ProfileFormat::Protobuf),
             "flamegraph" | "svg" | "flame" => Ok(ProfileFormat::Flamegraph),
             "text" | "txt" => Ok(ProfileFormat::Text),
-            _ => Err(format!("Invalid format: {}. Use 'protobuf', 'flamegraph', or 'text'", s)),
+            _ => Err(format!(
+                "Invalid format: {}. Use 'protobuf', 'flamegraph', or 'text'",
+                s
+            )),
         }
     }
 
@@ -88,7 +91,10 @@ pub fn generate_cpu_profile(duration_secs: u64, format: ProfileFormat) -> Result
     convert_report_to_format(report, format)
 }
 
-fn convert_report_to_format(report: pprof::Report, format: ProfileFormat) -> Result<Vec<u8>, String> {
+fn convert_report_to_format(
+    report: pprof::Report,
+    format: ProfileFormat,
+) -> Result<Vec<u8>, String> {
     match format {
         ProfileFormat::Protobuf => generate_protobuf(&report),
         ProfileFormat::Flamegraph => generate_flamegraph(&report),
@@ -130,7 +136,8 @@ fn generate_text_report(report: &pprof::Report) -> String {
     // Convert report to protobuf to extract frame data
     if let Ok(profile) = report.pprof() {
         // Extract sample data from profile
-        let mut function_samples: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+        let mut function_samples: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
 
         for sample in &profile.sample {
             if let Some(value) = sample.value.first() {
@@ -140,7 +147,9 @@ fn generate_text_report(report: &pprof::Report) -> String {
                     if let Some(location) = profile.location.iter().find(|l| l.id == *location_id) {
                         // Get the function for this location
                         if let Some(line) = location.line.first() {
-                            if let Some(function) = profile.function.iter().find(|f| f.id == line.function_id) {
+                            if let Some(function) =
+                                profile.function.iter().find(|f| f.id == line.function_id)
+                            {
                                 // Get function name
                                 let name_id = function.name;
                                 if let Some(name) = profile.string_table.get(name_id as usize) {
@@ -192,17 +201,32 @@ mod tests {
 
     #[test]
     fn test_format_from_str() {
-        assert!(matches!(ProfileFormat::from_str("protobuf"), Ok(ProfileFormat::Protobuf)));
-        assert!(matches!(ProfileFormat::from_str("flamegraph"), Ok(ProfileFormat::Flamegraph)));
-        assert!(matches!(ProfileFormat::from_str("text"), Ok(ProfileFormat::Text)));
+        assert!(matches!(
+            ProfileFormat::from_str("protobuf"),
+            Ok(ProfileFormat::Protobuf)
+        ));
+        assert!(matches!(
+            ProfileFormat::from_str("flamegraph"),
+            Ok(ProfileFormat::Flamegraph)
+        ));
+        assert!(matches!(
+            ProfileFormat::from_str("text"),
+            Ok(ProfileFormat::Text)
+        ));
         assert!(matches!(ProfileFormat::from_str("invalid"), Err(_)));
     }
 
     #[test]
     fn test_content_type() {
-        assert_eq!(ProfileFormat::Protobuf.content_type(), "application/octet-stream");
+        assert_eq!(
+            ProfileFormat::Protobuf.content_type(),
+            "application/octet-stream"
+        );
         assert_eq!(ProfileFormat::Flamegraph.content_type(), "image/svg+xml");
-        assert_eq!(ProfileFormat::Text.content_type(), "text/plain; charset=utf-8");
+        assert_eq!(
+            ProfileFormat::Text.content_type(),
+            "text/plain; charset=utf-8"
+        );
     }
 
     #[test]

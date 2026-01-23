@@ -18,7 +18,9 @@ use crate::query::table_provider::{ParquetTableConfig, ParquetTableProvider};
 use crate::query::time_interval::FillOption;
 use crate::query::types::{QueryAnalysis, QueryExplainResult, QueryOptimizations};
 use crate::query::union_provider::UnionTableProvider;
-use crate::query_cache::{QueryCacheConfig, QueryCacheKey, QueryCacheStats, QueryResultCache, SharedQueryResultCache};
+use crate::query_cache::{
+    QueryCacheConfig, QueryCacheKey, QueryCacheStats, QueryResultCache, SharedQueryResultCache,
+};
 use crate::storage::cache::DataCache;
 use crate::storage::storage::Storage;
 use datafusion::arrow::array::{Array, RecordBatch};
@@ -84,7 +86,10 @@ impl QueryEngine {
         // Enable parallel reading of row groups within a single file
         config.execution.parquet.maximum_parallel_row_group_writers = num_cpus;
         // Increase buffered rows for better I/O efficiency
-        config.execution.parquet.maximum_buffered_record_batches_per_stream = 4;
+        config
+            .execution
+            .parquet
+            .maximum_buffered_record_batches_per_stream = 4;
 
         // ===== Columnar Projection Push-down =====
         // Enable projection pushdown to read only needed columns from Parquet
@@ -94,7 +99,7 @@ impl QueryEngine {
         // ===== Memory & Performance Tuning =====
         // Sort spill threshold (in rows) before spilling to disk
         config.execution.sort_spill_reservation_bytes = 100 * 1024 * 1024; // 100MB
-        // Coalesce batches for better throughput
+                                                                           // Coalesce batches for better throughput
         config.execution.coalesce_batches = true;
 
         // ===== Time-series Workload Optimization =====
@@ -119,7 +124,10 @@ impl QueryEngine {
         let runtime_env = match RuntimeEnv::try_new(runtime_config) {
             Ok(env) => Arc::new(env),
             Err(e) => {
-                warn!("Failed to create RuntimeEnv with memory limits: {}, using default", e);
+                warn!(
+                    "Failed to create RuntimeEnv with memory limits: {}, using default",
+                    e
+                );
                 Arc::new(RuntimeEnv::default())
             }
         };
@@ -157,7 +165,13 @@ impl QueryEngine {
         use_custom_table_provider: bool,
         write_cache: Arc<DataCache>,
     ) -> Self {
-        Self::new_with_options(data_dir, storage, query_cache_config, use_custom_table_provider, Some(write_cache))
+        Self::new_with_options(
+            data_dir,
+            storage,
+            query_cache_config,
+            use_custom_table_provider,
+            Some(write_cache),
+        )
     }
 
     pub fn new_with_options(
@@ -178,7 +192,10 @@ impl QueryEngine {
                     .expect("Failed to parse storage URL prefix");
                 ctx.runtime_env()
                     .register_object_store(&url, storage.object_store());
-                info!("Registered object store with DataFusion: {}", storage.url_prefix());
+                info!(
+                    "Registered object store with DataFusion: {}",
+                    storage.url_prefix()
+                );
             }
         }
 
@@ -188,8 +205,16 @@ impl QueryEngine {
             None => "local",
         };
 
-        let table_provider_type = if use_custom_table_provider { "custom" } else { "listing" };
-        let memtable_status = if write_cache.is_some() { "enabled" } else { "disabled" };
+        let table_provider_type = if use_custom_table_provider {
+            "custom"
+        } else {
+            "listing"
+        };
+        let memtable_status = if write_cache.is_some() {
+            "enabled"
+        } else {
+            "disabled"
+        };
         info!(
             "QueryEngine initialized: storage={}, table_provider={}, metadata_cache=enabled, query_cache={}, memtable={}",
             storage_type,
@@ -330,16 +355,24 @@ impl QueryEngine {
         );
 
         // For local storage, check if path exists
-        let path_exists = if self.storage.is_none() || self.storage.as_ref().map(|s| s.is_local()).unwrap_or(true) {
+        let path_exists = if self.storage.is_none()
+            || self.storage.as_ref().map(|s| s.is_local()).unwrap_or(true)
+        {
             std::path::Path::new(&table_path).exists()
         } else {
             true
         };
 
         // Check cache first for table info
-        let (has_partitions, partitions) = if let Some(cached) = self.metadata_cache.get_table_info(catalog_name, schema_name, table_name) {
+        let (has_partitions, partitions) = if let Some(cached) =
+            self.metadata_cache
+                .get_table_info(catalog_name, schema_name, table_name)
+        {
             // Use cached partition info
-            debug!("Using cached table info for {}.{}.{}", catalog_name, schema_name, table_name);
+            debug!(
+                "Using cached table info for {}.{}.{}",
+                catalog_name, schema_name, table_name
+            );
             (cached.has_partitions, cached.partitions)
         } else {
             // Cache miss - need to scan directory
@@ -347,46 +380,70 @@ impl QueryEngine {
                 // Check if we have memtable data for this table
                 if let Some(ref cache) = self.write_cache {
                     if cache.has_cached_data(catalog_name, schema_name, table_name) {
-                        return self.register_memtable_only(catalog_name, schema_name, table_name).await;
+                        return self
+                            .register_memtable_only(catalog_name, schema_name, table_name)
+                            .await;
                     }
                 }
                 return Err(format!("Table path not found: {}", table_path));
             }
 
             // Discover partitions
-            let partitions = if self.storage.is_none() || self.storage.as_ref().map(|s| s.is_local()).unwrap_or(true) {
+            let partitions = if self.storage.is_none()
+                || self.storage.as_ref().map(|s| s.is_local()).unwrap_or(true)
+            {
                 self.discover_table_partitions(&table_path)?
             } else {
                 // For object storage, assume partitioned
                 Vec::new()
             };
 
-            let has_partitions = if self.storage.is_none() || self.storage.as_ref().map(|s| s.is_local()).unwrap_or(true) {
+            let has_partitions = if self.storage.is_none()
+                || self.storage.as_ref().map(|s| s.is_local()).unwrap_or(true)
+            {
                 !partitions.is_empty()
             } else {
                 true
             };
 
             // Cache the result
-            self.metadata_cache.set_table_info(catalog_name, schema_name, table_name, has_partitions, partitions.clone());
-            debug!("Cached table info for {}.{}.{} (partitions: {})", catalog_name, schema_name, table_name, partitions.len());
+            self.metadata_cache.set_table_info(
+                catalog_name,
+                schema_name,
+                table_name,
+                has_partitions,
+                partitions.clone(),
+            );
+            debug!(
+                "Cached table info for {}.{}.{} (partitions: {})",
+                catalog_name,
+                schema_name,
+                table_name,
+                partitions.len()
+            );
 
             (has_partitions, partitions)
         };
 
         // Ensure catalog and schema exist
-        self.ensure_schema_in_catalog(catalog_name, schema_name).await?;
+        self.ensure_schema_in_catalog(catalog_name, schema_name)
+            .await?;
 
         if has_partitions {
             // Register partitioned table using ListingTable API
-            self.register_partitioned_table(catalog_name, schema_name, table_name, &table_url).await?;
+            self.register_partitioned_table(catalog_name, schema_name, table_name, &table_url)
+                .await?;
             debug!(
                 "Registered partitioned table: {}.{}.{} ({} partitions)",
-                catalog_name, schema_name, table_name, partitions.len()
+                catalog_name,
+                schema_name,
+                table_name,
+                partitions.len()
             );
         } else {
             // No partitions, use standard registration
-            self.register_simple_table(catalog_name, schema_name, table_name, &table_url).await?;
+            self.register_simple_table(catalog_name, schema_name, table_name, &table_url)
+                .await?;
             debug!(
                 "Registered non-partitioned table: {}.{}.{}",
                 catalog_name, schema_name, table_name
@@ -415,11 +472,17 @@ impl QueryEngine {
             self.register_table_custom(catalog_name, schema_name, table_name, table_path, false)
                 .await
         } else {
-            let table_ref = datafusion::sql::TableReference::full(catalog_name, schema_name, table_name);
+            let table_ref =
+                datafusion::sql::TableReference::full(catalog_name, schema_name, table_name);
             self.ctx
                 .register_parquet(table_ref, table_path, ParquetReadOptions::default())
                 .await
-                .map_err(|e| format!("Failed to register table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))
+                .map_err(|e| {
+                    format!(
+                        "Failed to register table '{}.{}.{}': {}",
+                        catalog_name, schema_name, table_name, e
+                    )
+                })
         }
     }
 
@@ -457,8 +520,13 @@ impl QueryEngine {
             self.register_table_custom(catalog_name, schema_name, table_name, table_path, true)
                 .await
         } else {
-            self.register_partitioned_table_listing(catalog_name, schema_name, table_name, table_path)
-                .await
+            self.register_partitioned_table_listing(
+                catalog_name,
+                schema_name,
+                table_name,
+                table_path,
+            )
+            .await
         }
     }
 
@@ -475,7 +543,10 @@ impl QueryEngine {
 
         let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
             .with_file_extension(".parquet")
-            .with_table_partition_cols(vec![("date".to_string(), datafusion::arrow::datatypes::DataType::Utf8)]);
+            .with_table_partition_cols(vec![(
+                "date".to_string(),
+                datafusion::arrow::datatypes::DataType::Utf8,
+            )]);
 
         let config = ListingTableConfig::new(table_url)
             .with_listing_options(listing_options)
@@ -486,7 +557,12 @@ impl QueryEngine {
         let listing_table = ListingTable::try_new(config)
             .map_err(|e| format!("Failed to create listing table: {}", e))?;
 
-        self.register_provider(catalog_name, schema_name, table_name, Arc::new(listing_table))
+        self.register_provider(
+            catalog_name,
+            schema_name,
+            table_name,
+            Arc::new(listing_table),
+        )
     }
 
     /// Helper to register a TableProvider in the catalog
@@ -497,16 +573,26 @@ impl QueryEngine {
         table_name: &str,
         provider: Arc<dyn datafusion::catalog::TableProvider>,
     ) -> Result<(), String> {
-        let catalog = self.ctx.catalog(catalog_name)
+        let catalog = self
+            .ctx
+            .catalog(catalog_name)
             .ok_or_else(|| format!("Catalog '{}' not found", catalog_name))?;
 
-        let schema = catalog.schema(schema_name)
+        let schema = catalog
+            .schema(schema_name)
             .ok_or_else(|| format!("Schema '{}.{}' not found", catalog_name, schema_name))?;
 
-        let final_provider = self.maybe_wrap_with_memtable(catalog_name, schema_name, table_name, provider)?;
+        let final_provider =
+            self.maybe_wrap_with_memtable(catalog_name, schema_name, table_name, provider)?;
 
-        schema.register_table(table_name.to_string(), final_provider)
-            .map_err(|e| format!("Failed to register table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
+        schema
+            .register_table(table_name.to_string(), final_provider)
+            .map_err(|e| {
+                format!(
+                    "Failed to register table '{}.{}.{}': {}",
+                    catalog_name, schema_name, table_name, e
+                )
+            })?;
 
         Ok(())
     }
@@ -528,17 +614,24 @@ impl QueryEngine {
             return Ok(parquet_provider);
         }
 
-        let memtable_provider = match MemtableProvider::try_new(cache.clone(), catalog_name, schema_name, table_name) {
-            Some(p) => Arc::new(p),
-            None => return Ok(parquet_provider),
-        };
+        let memtable_provider =
+            match MemtableProvider::try_new(cache.clone(), catalog_name, schema_name, table_name) {
+                Some(p) => Arc::new(p),
+                None => return Ok(parquet_provider),
+            };
 
         let full_name = format!("{}.{}.{}", catalog_name, schema_name, table_name);
-        let union_provider = UnionTableProvider::new(memtable_provider, parquet_provider, full_name.clone())
-            .map_err(|e| format!("Failed to create union provider for '{}': {}", full_name, e))?;
+        let union_provider =
+            UnionTableProvider::new(memtable_provider, parquet_provider, full_name.clone())
+                .map_err(|e| {
+                    format!("Failed to create union provider for '{}': {}", full_name, e)
+                })?;
 
         let stats = cache.get_table_cache_stats(catalog_name, schema_name, table_name);
-        debug!("Created memtable union for {}: {} cached rows in {} batches", full_name, stats.total_rows, stats.total_batches);
+        debug!(
+            "Created memtable union for {}: {} cached rows in {} batches",
+            full_name, stats.total_rows, stats.total_batches
+        );
 
         Ok(Arc::new(union_provider))
     }
@@ -550,26 +643,43 @@ impl QueryEngine {
         schema_name: &str,
         table_name: &str,
     ) -> Result<(), String> {
-        let cache = self.write_cache.as_ref()
+        let cache = self
+            .write_cache
+            .as_ref()
             .ok_or_else(|| "Write cache not available".to_string())?;
 
-        let memtable_provider = MemtableProvider::try_new(cache.clone(), catalog_name, schema_name, table_name)
-            .ok_or_else(|| format!("No cached data available for {}.{}.{}", catalog_name, schema_name, table_name))?;
+        let memtable_provider =
+            MemtableProvider::try_new(cache.clone(), catalog_name, schema_name, table_name)
+                .ok_or_else(|| {
+                    format!(
+                        "No cached data available for {}.{}.{}",
+                        catalog_name, schema_name, table_name
+                    )
+                })?;
 
-        self.ensure_schema_in_catalog(catalog_name, schema_name).await?;
+        self.ensure_schema_in_catalog(catalog_name, schema_name)
+            .await?;
 
         let full_name = format!("{}.{}.{}", catalog_name, schema_name, table_name);
         let stats = cache.get_table_cache_stats(catalog_name, schema_name, table_name);
 
-        let catalog = self.ctx.catalog(catalog_name)
+        let catalog = self
+            .ctx
+            .catalog(catalog_name)
             .ok_or_else(|| format!("Catalog '{}' not found", catalog_name))?;
 
-        let schema = catalog.schema(schema_name)
+        let schema = catalog
+            .schema(schema_name)
             .ok_or_else(|| format!("Schema '{}.{}' not found", catalog_name, schema_name))?;
 
         schema
             .register_table(table_name.to_string(), Arc::new(memtable_provider))
-            .map_err(|e| format!("Failed to register memtable '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to register memtable '{}.{}.{}': {}",
+                    catalog_name, schema_name, table_name, e
+                )
+            })?;
 
         debug!(
             "Registered memtable-only table {}: {} cached rows in {} batches",
@@ -601,8 +711,15 @@ impl QueryEngine {
         // Check file listing cache first
         if let Some(cached) = self.metadata_cache.get_file_listing(&path_buf) {
             // Extract partition names from cached file paths
-            let partitions: Vec<String> = cached.files.iter()
-                .filter_map(|p| p.file_name().and_then(|s| s.to_str()).filter(|s| s.starts_with("date=")).map(|s| s.to_string()))
+            let partitions: Vec<String> = cached
+                .files
+                .iter()
+                .filter_map(|p| {
+                    p.file_name()
+                        .and_then(|s| s.to_str())
+                        .filter(|s| s.starts_with("date="))
+                        .map(|s| s.to_string())
+                })
                 .collect();
             if !partitions.is_empty() {
                 return Ok(partitions);
@@ -643,19 +760,19 @@ impl QueryEngine {
 
         // Check cache first
         if let Some(cached) = self.metadata_cache.get_file_listing(&path) {
-            return cached.files.iter()
+            return cached
+                .files
+                .iter()
                 .filter(|p| p.extension().map(|e| e == "parquet").unwrap_or(false))
                 .count();
         }
 
         // Cache miss - scan and cache
         if let Ok(entries) = std::fs::read_dir(&path) {
-            let files: Vec<PathBuf> = entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .collect();
+            let files: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
 
-            let parquet_count = files.iter()
+            let parquet_count = files
+                .iter()
                 .filter(|p| p.extension().map(|e| e == "parquet").unwrap_or(false))
                 .count();
 
@@ -678,7 +795,11 @@ impl QueryEngine {
         match self.read_parquet_metadata(file_path) {
             Ok((metadata, file_size)) => {
                 let arc_metadata = Arc::new(metadata);
-                self.metadata_cache.set_parquet_metadata(file_path.clone(), arc_metadata.clone(), file_size);
+                self.metadata_cache.set_parquet_metadata(
+                    file_path.clone(),
+                    arc_metadata.clone(),
+                    file_size,
+                );
                 Some(arc_metadata)
             }
             Err(e) => {
@@ -695,10 +816,10 @@ impl QueryEngine {
         use parquet::file::serialized_reader::SerializedFileReader;
         use std::fs::File;
 
-        let file = File::open(file_path)
-            .map_err(|e| format!("Failed to open file: {}", e))?;
+        let file = File::open(file_path).map_err(|e| format!("Failed to open file: {}", e))?;
 
-        let file_size = file.metadata()
+        let file_size = file
+            .metadata()
             .map_err(|e| format!("Failed to get file metadata: {}", e))?
             .len();
 
@@ -746,16 +867,21 @@ impl QueryEngine {
         }
 
         // Also cache the table info
-        self.metadata_cache.set_table_info(catalog, schema, table, has_partitions, partitions);
+        self.metadata_cache
+            .set_table_info(catalog, schema, table, has_partitions, partitions);
 
-        info!("Pre-warmed cache for {}.{}.{}: {} Parquet files cached", catalog, schema, table, cached_count);
+        info!(
+            "Pre-warmed cache for {}.{}.{}: {} Parquet files cached",
+            catalog, schema, table, cached_count
+        );
         Ok(cached_count)
     }
 
     /// Pre-warm cache for all Parquet files in a directory
     fn prewarm_directory_cache(&self, dir_path: &str) -> Result<usize, String> {
         let path = PathBuf::from(dir_path);
-        let entries = std::fs::read_dir(&path).map_err(|e| format!("Failed to read directory: {}", e))?;
+        let entries =
+            std::fs::read_dir(&path).map_err(|e| format!("Failed to read directory: {}", e))?;
 
         let mut cached_count = 0;
         let mut all_files = Vec::new();
@@ -764,7 +890,11 @@ impl QueryEngine {
             let file_path = entry.path();
             all_files.push(file_path.clone());
 
-            if file_path.extension().map(|e| e == "parquet").unwrap_or(false) {
+            if file_path
+                .extension()
+                .map(|e| e == "parquet")
+                .unwrap_or(false)
+            {
                 // Cache the Parquet metadata
                 if self.get_parquet_metadata_cached(&file_path).is_some() {
                     cached_count += 1;
@@ -821,14 +951,23 @@ impl QueryEngine {
                     _ => continue,
                 };
 
-                match self.prewarm_table_cache(catalog, schema_name, table_name).await {
+                match self
+                    .prewarm_table_cache(catalog, schema_name, table_name)
+                    .await
+                {
                     Ok(count) => total_cached += count,
-                    Err(e) => warn!("Failed to prewarm {}.{}.{}: {}", catalog, schema_name, table_name, e),
+                    Err(e) => warn!(
+                        "Failed to prewarm {}.{}.{}: {}",
+                        catalog, schema_name, table_name, e
+                    ),
                 }
             }
         }
 
-        info!("Pre-warmed cache for catalog '{}': {} total Parquet files cached", catalog, total_cached);
+        info!(
+            "Pre-warmed cache for catalog '{}': {} total Parquet files cached",
+            catalog, total_cached
+        );
         Ok(total_cached)
     }
 
@@ -856,7 +995,10 @@ impl QueryEngine {
         let dirs_to_scan: Vec<String> = if partitions.is_empty() {
             vec![table_path.clone()]
         } else {
-            partitions.iter().map(|p| format!("{}/{}", table_path, p)).collect()
+            partitions
+                .iter()
+                .map(|p| format!("{}/{}", table_path, p))
+                .collect()
         };
 
         for dir in dirs_to_scan {
@@ -864,7 +1006,11 @@ impl QueryEngine {
             if let Ok(entries) = std::fs::read_dir(&path) {
                 for entry in entries.filter_map(|e| e.ok()) {
                     let file_path = entry.path();
-                    if file_path.extension().map(|e| e == "parquet").unwrap_or(false) {
+                    if file_path
+                        .extension()
+                        .map(|e| e == "parquet")
+                        .unwrap_or(false)
+                    {
                         total_files += 1;
 
                         if let Ok(metadata) = std::fs::metadata(&file_path) {
@@ -960,7 +1106,10 @@ impl QueryEngine {
                     if !schema_name.starts_with('.') {
                         match self.discover_and_register(catalog_name, schema_name).await {
                             Ok(count) => total_tables += count,
-                            Err(e) => warn!("Failed to discover schema {}.{}: {}", catalog_name, schema_name, e),
+                            Err(e) => warn!(
+                                "Failed to discover schema {}.{}: {}",
+                                catalog_name, schema_name, e
+                            ),
                         }
                     }
                 }
@@ -971,11 +1120,7 @@ impl QueryEngine {
     }
 
     /// Ensure a schema is tracked in registered catalogs
-    pub async fn ensure_schema(
-        &self,
-        catalog_name: &str,
-        schema_name: &str,
-    ) -> Result<(), String> {
+    pub async fn ensure_schema(&self, catalog_name: &str, schema_name: &str) -> Result<(), String> {
         let mut catalogs = self.registered_catalogs.write().await;
         catalogs
             .entry(catalog_name.to_string())
@@ -988,7 +1133,10 @@ impl QueryEngine {
     pub async fn ensure_database_registered(&self, db_name: &str) -> Result<(), String> {
         let count = self.discover_catalog(db_name).await?;
         if count > 0 {
-            info!("Auto-registered {} table(s) in catalog '{}'", count, db_name);
+            info!(
+                "Auto-registered {} table(s) in catalog '{}'",
+                count, db_name
+            );
         }
         Ok(())
     }
@@ -1020,7 +1168,8 @@ impl QueryEngine {
         let optimized_sql = inject_date_predicates(&qualified_sql);
 
         let transformer = GroupByTimeTransformer::new();
-        let transformed = transformer.transform(&optimized_sql)
+        let transformed = transformer
+            .transform(&optimized_sql)
             .map_err(|e| format!("GROUP BY time() transformation error: {}", e))?;
 
         let final_sql = &transformed.sql;
@@ -1043,38 +1192,65 @@ impl QueryEngine {
         if transformed.was_transformed && !matches!(transformed.fill_option, FillOption::None) {
             if let Some(interval_nanos) = transformed.interval_nanos {
                 let time_col_idx = if !result.is_empty() {
-                    result[0].schema().fields().iter().position(|f| f.name() == "time").unwrap_or(0)
+                    result[0]
+                        .schema()
+                        .fields()
+                        .iter()
+                        .position(|f| f.name() == "time")
+                        .unwrap_or(0)
                 } else {
                     0
                 };
 
                 let group_col_indices: Vec<usize> = if !result.is_empty() {
-                    transformed.group_columns.iter()
-                        .filter_map(|col_name| result[0].schema().fields().iter().position(|f| f.name() == col_name))
+                    transformed
+                        .group_columns
+                        .iter()
+                        .filter_map(|col_name| {
+                            result[0]
+                                .schema()
+                                .fields()
+                                .iter()
+                                .position(|f| f.name() == col_name)
+                        })
                         .collect()
                 } else {
                     Vec::new()
                 };
 
-                let processor = FillProcessor::new(interval_nanos, transformed.fill_option.clone(), time_col_idx, group_col_indices);
-                result = processor.apply(result).map_err(|e| format!("Fill processing error: {}", e))?;
+                let processor = FillProcessor::new(
+                    interval_nanos,
+                    transformed.fill_option.clone(),
+                    time_col_idx,
+                    group_col_indices,
+                );
+                result = processor
+                    .apply(result)
+                    .map_err(|e| format!("Fill processing error: {}", e))?;
             }
         }
 
-        let referenced_tables: Vec<String> = table_refs.iter()
+        let referenced_tables: Vec<String> = table_refs
+            .iter()
             .map(|(c, s, t)| format!("{}.{}.{}", c, s, t))
             .collect();
 
-        self.query_cache.put(cache_key, result.clone(), referenced_tables, query_time_ms);
+        self.query_cache
+            .put(cache_key, result.clone(), referenced_tables, query_time_ms);
 
         Ok(result)
     }
 
     /// Execute a raw SQL query without database context
     pub async fn execute_query(&self, sql: &str) -> Result<Vec<RecordBatch>, String> {
-        let df = self.ctx.sql(sql).await
+        let df = self
+            .ctx
+            .sql(sql)
+            .await
             .map_err(|e| format!("SQL error: {}", e))?;
-        let batches = df.collect().await
+        let batches = df
+            .collect()
+            .await
             .map_err(|e| format!("Execution error: {}", e))?;
         Ok(batches)
     }
@@ -1087,7 +1263,10 @@ impl QueryEngine {
     ) -> Result<Arc<datafusion::arrow::datatypes::Schema>, String> {
         self.ensure_database_registered(db_name).await?;
         let qualified_sql = qualify_table_names(sql, db_name);
-        let df = self.ctx.sql(&qualified_sql).await
+        let df = self
+            .ctx
+            .sql(&qualified_sql)
+            .await
             .map_err(|e| format!("SQL error: {}", e))?;
         Ok(df.schema().inner().clone())
     }
@@ -1112,7 +1291,10 @@ impl QueryEngine {
 
         // Qualify table names and create DataFrame
         let qualified_sql = qualify_table_names(sql, db_name);
-        let df = self.ctx.sql(&qualified_sql).await
+        let df = self
+            .ctx
+            .sql(&qualified_sql)
+            .await
             .map_err(|e| format!("SQL error: {}", e))?;
         let logical_plan = format!("{:?}", df.logical_plan());
 
@@ -1125,7 +1307,9 @@ impl QueryEngine {
                 .map_err(|e| format!("Explain error: {}", e))?
         };
 
-        let batches = explain_df.collect().await
+        let batches = explain_df
+            .collect()
+            .await
             .map_err(|e| format!("Collect error: {}", e))?;
 
         let mut plan_lines = Vec::new();
@@ -1133,10 +1317,12 @@ impl QueryEngine {
             let plan_type_col = batch.column(0);
             let plan_col = batch.column(1);
 
-            let plan_types = plan_type_col.as_any()
+            let plan_types = plan_type_col
+                .as_any()
                 .downcast_ref::<datafusion::arrow::array::StringArray>()
                 .ok_or("Failed to get plan_type column")?;
-            let plans = plan_col.as_any()
+            let plans = plan_col
+                .as_any()
                 .downcast_ref::<datafusion::arrow::array::StringArray>()
                 .ok_or("Failed to get plan column")?;
 
@@ -1160,11 +1346,7 @@ impl QueryEngine {
     }
 
     /// Analyze a query and return statistics about tables, partitions, and files
-    pub async fn analyze_query(
-        &self,
-        sql: &str,
-        db_name: &str,
-    ) -> Result<QueryAnalysis, String> {
+    pub async fn analyze_query(&self, sql: &str, db_name: &str) -> Result<QueryAnalysis, String> {
         let explain = self.explain_query(sql, db_name, true, false).await?;
         let time_range = extract_time_range(sql);
         let table_refs = extract_table_references(sql, db_name);
@@ -1179,7 +1361,9 @@ impl QueryEngine {
                     for partition in &partitions {
                         if let Some(date) = partition.strip_prefix("date=") {
                             let include = match (&tr.start_date, &tr.end_date) {
-                                (Some(start), Some(end)) => date >= start.as_str() && date <= end.as_str(),
+                                (Some(start), Some(end)) => {
+                                    date >= start.as_str() && date <= end.as_str()
+                                }
                                 (Some(start), None) => date >= start.as_str(),
                                 (None, Some(end)) => date <= end.as_str(),
                                 (None, None) => true,
@@ -1203,7 +1387,10 @@ impl QueryEngine {
 
         Ok(QueryAnalysis {
             sql: sql.to_string(),
-            tables: table_refs.iter().map(|(c, s, t)| format!("{}.{}.{}", c, s, t)).collect(),
+            tables: table_refs
+                .iter()
+                .map(|(c, s, t)| format!("{}.{}.{}", c, s, t))
+                .collect(),
             time_range,
             partitions_to_scan: partition_count,
             files_to_scan: total_files,
@@ -1351,7 +1538,8 @@ impl QueryEngine {
                 for schema_name in catalog.schema_names() {
                     if let Some(schema) = catalog.schema(&schema_name) {
                         for table_name in schema.table_names() {
-                            all_tables.push(format!("{}.{}.{}", catalog_name, schema_name, table_name));
+                            all_tables
+                                .push(format!("{}.{}.{}", catalog_name, schema_name, table_name));
                         }
                     }
                 }

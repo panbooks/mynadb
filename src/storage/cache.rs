@@ -196,7 +196,10 @@ impl DataCache {
         let added_size = self.shards[shard_idx].add(key, batch);
 
         // Update total size counter
-        let new_size = self.total_size_bytes.fetch_add(added_size, Ordering::Relaxed) + added_size;
+        let new_size = self
+            .total_size_bytes
+            .fetch_add(added_size, Ordering::Relaxed)
+            + added_size;
 
         // P1: Trigger flush if threshold exceeded (80% capacity)
         let threshold = self.max_size_bytes * FLUSH_THRESHOLD_PERCENT / 100;
@@ -396,7 +399,10 @@ impl DataCache {
                 let shard_data = shard.take();
                 flushed_size += shard_size;
                 for (key, mut batches) in shard_data {
-                    all_data.entry(key).or_insert_with(Vec::new).append(&mut batches);
+                    all_data
+                        .entry(key)
+                        .or_insert_with(Vec::new)
+                        .append(&mut batches);
                 }
             }
         }
@@ -720,12 +726,7 @@ impl DataCache {
     }
 
     /// Get list of date partitions that have cached data for a table
-    pub fn get_cached_partitions(
-        &self,
-        catalog: &str,
-        schema: &str,
-        table: &str,
-    ) -> Vec<i32> {
+    pub fn get_cached_partitions(&self, catalog: &str, schema: &str, table: &str) -> Vec<i32> {
         let mut dates: Vec<i32> = Vec::new();
 
         for shard in self.shards.iter() {

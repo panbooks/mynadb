@@ -475,17 +475,10 @@ impl Wal {
             }
 
             let old = segment.filename.clone();
-            info!(
-                "Rotating data WAL: {} -> {}",
-                old, new_filename
-            );
+            info!("Rotating data WAL: {} -> {}", old, new_filename);
 
             // Create new segment
-            *segment = WalSegment::new(
-                new_filename,
-                self.rotate_size_mb,
-                self.buffer_entries,
-            );
+            *segment = WalSegment::new(new_filename, self.rotate_size_mb, self.buffer_entries);
 
             old
         };
@@ -630,14 +623,16 @@ impl Wal {
 
         for file_path in files {
             debug!("Replaying data WAL: {}", file_path);
-            count += self.replay_file(&file_path, |entry| {
-                if entry.entry_type == EntryType::DataWrite {
-                    let line_protocol = String::from_utf8(entry.payload.clone())
-                        .map_err(|_| "Invalid UTF-8 in payload")?;
-                    callback(&entry.db_name, &line_protocol)?;
-                }
-                Ok(())
-            }).await?;
+            count += self
+                .replay_file(&file_path, |entry| {
+                    if entry.entry_type == EntryType::DataWrite {
+                        let line_protocol = String::from_utf8(entry.payload.clone())
+                            .map_err(|_| "Invalid UTF-8 in payload")?;
+                        callback(&entry.db_name, &line_protocol)?;
+                    }
+                    Ok(())
+                })
+                .await?;
         }
 
         // NOTE: Do NOT delete old WAL files here!

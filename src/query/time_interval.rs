@@ -358,7 +358,10 @@ mod tests {
     #[test]
     fn test_parse_interval_invalid_unit() {
         let result: Result<TimeInterval, _> = "5x".parse();
-        assert!(matches!(result, Err(ParseTimeIntervalError::InvalidUnit(_))));
+        assert!(matches!(
+            result,
+            Err(ParseTimeIntervalError::InvalidUnit(_))
+        ));
     }
 
     #[test]

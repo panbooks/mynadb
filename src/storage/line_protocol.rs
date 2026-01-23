@@ -21,7 +21,7 @@ pub struct Point {
     pub tags: HashMap<String, String>,
     pub fields: HashMap<String, FieldValue>,
     pub timestamp: Option<i64>,
-    pub date: i32, // Date32 type: days since Unix epoch (1970-01-01)
+    pub date: i32,       // Date32 type: days since Unix epoch (1970-01-01)
     pub service: String, // Extracted schema/service name
 }
 
@@ -129,7 +129,10 @@ fn parse_field_value(value: &str) -> Result<FieldValue, String> {
 
 /// Extract schema name from tags using schema configuration
 /// Iterates through tag_keys in order, returning the first match
-fn extract_service_from_tags(tags: &HashMap<String, String>, schema_config: &SchemaConfig) -> String {
+fn extract_service_from_tags(
+    tags: &HashMap<String, String>,
+    schema_config: &SchemaConfig,
+) -> String {
     for tag_key in &schema_config.tag_keys {
         if let Some(value) = tags.get(tag_key) {
             // Prefix numeric values if configured
@@ -243,8 +246,8 @@ pub fn parse_multiple_lines_force_parallel(data: &str, schema_config: &SchemaCon
 
 #[cfg(test)]
 mod tests {
-    use crate::config::SchemaTableStrategy;
     use super::*;
+    use crate::config::SchemaTableStrategy;
 
     fn get_test_schema_config() -> SchemaConfig {
         SchemaConfig {
@@ -295,7 +298,9 @@ mod tests {
         let line = "cpu usage=23.5 1672531200000000000";
         let config = get_test_schema_config();
         let point = parse_line_protocol(line, &config).unwrap();
-        assert!(matches!(point.fields.get("usage"), Some(FieldValue::Float(f)) if (*f - 23.5).abs() < 0.001));
+        assert!(
+            matches!(point.fields.get("usage"), Some(FieldValue::Float(f)) if (*f - 23.5).abs() < 0.001)
+        );
     }
 
     #[test]
@@ -303,7 +308,10 @@ mod tests {
         let line = "cpu temp=45i 1672531200000000000";
         let config = get_test_schema_config();
         let point = parse_line_protocol(line, &config).unwrap();
-        assert!(matches!(point.fields.get("temp"), Some(FieldValue::Integer(45))));
+        assert!(matches!(
+            point.fields.get("temp"),
+            Some(FieldValue::Integer(45))
+        ));
     }
 
     #[test]
@@ -311,8 +319,14 @@ mod tests {
         let line = "system active=true,enabled=false 1672531200000000000";
         let config = get_test_schema_config();
         let point = parse_line_protocol(line, &config).unwrap();
-        assert!(matches!(point.fields.get("active"), Some(FieldValue::Boolean(true))));
-        assert!(matches!(point.fields.get("enabled"), Some(FieldValue::Boolean(false))));
+        assert!(matches!(
+            point.fields.get("active"),
+            Some(FieldValue::Boolean(true))
+        ));
+        assert!(matches!(
+            point.fields.get("enabled"),
+            Some(FieldValue::Boolean(false))
+        ));
     }
 
     #[test]
@@ -327,16 +341,26 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_fields() {
-        let line = "cpu,host=server01 usage=23.5,temp=45i,active=true,name=\"cpu0\" 1672531200000000000";
+        let line =
+            "cpu,host=server01 usage=23.5,temp=45i,active=true,name=\"cpu0\" 1672531200000000000";
         let config = get_test_schema_config();
         let point = parse_line_protocol(line, &config).unwrap();
 
         assert_eq!(point.measurement, "cpu");
         assert_eq!(point.tags.get("host"), Some(&"server01".to_string()));
         assert_eq!(point.fields.len(), 4);
-        assert!(matches!(point.fields.get("usage"), Some(FieldValue::Float(_))));
-        assert!(matches!(point.fields.get("temp"), Some(FieldValue::Integer(45))));
-        assert!(matches!(point.fields.get("active"), Some(FieldValue::Boolean(true))));
+        assert!(matches!(
+            point.fields.get("usage"),
+            Some(FieldValue::Float(_))
+        ));
+        assert!(matches!(
+            point.fields.get("temp"),
+            Some(FieldValue::Integer(45))
+        ));
+        assert!(matches!(
+            point.fields.get("active"),
+            Some(FieldValue::Boolean(true))
+        ));
         assert!(matches!(point.fields.get("name"), Some(FieldValue::String(s)) if s == "cpu0"));
     }
 
@@ -370,7 +394,9 @@ mod tests {
         let line = "cpu value=1.5e10 1672531200000000000";
         let config = get_test_schema_config();
         let point = parse_line_protocol(line, &config).unwrap();
-        assert!(matches!(point.fields.get("value"), Some(FieldValue::Float(f)) if (*f - 1.5e10).abs() < 1e5));
+        assert!(
+            matches!(point.fields.get("value"), Some(FieldValue::Float(f)) if (*f - 1.5e10).abs() < 1e5)
+        );
     }
 
     #[test]
@@ -378,8 +404,13 @@ mod tests {
         let line = "temp value=-10.5,count=-100i 1672531200000000000";
         let config = get_test_schema_config();
         let point = parse_line_protocol(line, &config).unwrap();
-        assert!(matches!(point.fields.get("value"), Some(FieldValue::Float(f)) if (*f - (-10.5)).abs() < 0.001));
-        assert!(matches!(point.fields.get("count"), Some(FieldValue::Integer(-100))));
+        assert!(
+            matches!(point.fields.get("value"), Some(FieldValue::Float(f)) if (*f - (-10.5)).abs() < 0.001)
+        );
+        assert!(matches!(
+            point.fields.get("count"),
+            Some(FieldValue::Integer(-100))
+        ));
     }
 
     #[test]
@@ -389,7 +420,10 @@ mod tests {
         let point = parse_line_protocol(line, &config).unwrap();
         assert_eq!(point.measurement, "cpu");
         assert!(point.timestamp.is_none());
-        assert!(matches!(point.fields.get("usage"), Some(FieldValue::Float(_))));
+        assert!(matches!(
+            point.fields.get("usage"),
+            Some(FieldValue::Float(_))
+        ));
     }
 
     #[test]

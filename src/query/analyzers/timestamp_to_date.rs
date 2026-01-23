@@ -145,10 +145,7 @@ impl TimestampToDateAnalyzer {
             return None;
         }
 
-        let combined_date_pred = date_predicates
-            .into_iter()
-            .reduce(|a, b| a.and(b))
-            .unwrap();
+        let combined_date_pred = date_predicates.into_iter().reduce(|a, b| a.and(b)).unwrap();
 
         Some(combined_date_pred.and(expr.clone()))
     }

@@ -76,7 +76,10 @@ impl RetentionManager {
     }
 
     /// Run a single retention check across all databases
-    async fn run_retention_check(&self, config: &RetentionConfig) -> Result<RetentionStats, String> {
+    async fn run_retention_check(
+        &self,
+        config: &RetentionConfig,
+    ) -> Result<RetentionStats, String> {
         let mut stats = RetentionStats::default();
 
         // Discover all catalogs (databases)
@@ -124,7 +127,10 @@ impl RetentionManager {
                 .await
             {
                 Ok(()) => {
-                    debug!("Retention check completed for schema: {}.{}", catalog, schema);
+                    debug!(
+                        "Retention check completed for schema: {}.{}",
+                        catalog, schema
+                    );
                 }
                 Err(e) => {
                     warn!(
@@ -188,9 +194,12 @@ impl RetentionManager {
         stats: &mut RetentionStats,
     ) -> Result<(), String> {
         // Delete partitions older than retention period
-        let deleted = self
-            .db_manager
-            .delete_partitions_older_than_days(catalog, schema, table, config.default_days)?;
+        let deleted = self.db_manager.delete_partitions_older_than_days(
+            catalog,
+            schema,
+            table,
+            config.default_days,
+        )?;
 
         if !deleted.is_empty() {
             info!(
