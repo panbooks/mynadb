@@ -485,10 +485,11 @@ async fn main() {
 
     info!("Initializing compactor");
     let compaction_config = compactor::CompactionConfig::from(&config.compaction);
-    let compactor = Arc::new(compactor::Compactor::with_storage(
+    let compactor = Arc::new(compactor::Compactor::with_storage_and_metadata(
         &config.storage.data_dir,
         storage.clone(),
         &compaction_config,
+        metadata_manager.clone(),
     ));
 
     if config.compaction.interval_secs > 0 {

@@ -543,7 +543,7 @@ fn default_log_dir() -> String {
 }
 
 fn default_log_file_prefix() -> String {
-    "stats-service".to_string()
+    "mynadb".to_string()
 }
 
 fn default_log_rotation() -> String {
