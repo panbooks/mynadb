@@ -62,7 +62,7 @@ prefix_numeric = true
 
 [cache]
 # Background flush interval in seconds
-flush_interval_secs = 30
+flush_interval_secs = 60
 
 # Maximum cache size in MB before forcing flush
 max_size_mb = 4096

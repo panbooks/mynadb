@@ -471,7 +471,7 @@ fn default_s3_region() -> String {
 }
 
 fn default_cache_flush_interval() -> u64 {
-    30
+    60
 }
 
 fn default_cache_max_size_mb() -> u64 {
