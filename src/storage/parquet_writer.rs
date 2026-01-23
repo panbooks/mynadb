@@ -15,6 +15,27 @@ const PARQUET_FILE_EXT: &str = "parquet";
 const LEVEL_PREFIX: &str = "L";
 const RAW_FILE_LEVEL: u32 = 0;
 
+/// Result of a file write operation, containing metadata for registration
+#[derive(Debug, Clone)]
+pub struct FileWriteResult {
+    /// Full path to the written file
+    pub path: String,
+    /// Catalog name
+    pub catalog: String,
+    /// Schema name
+    pub schema: String,
+    /// Table name
+    pub table: String,
+    /// Partition key (e.g., "2024-01-15")
+    pub partition_key: String,
+    /// File size in bytes
+    pub size_bytes: u64,
+    /// Number of rows written
+    pub row_count: u64,
+    /// Compaction level (0 = raw)
+    pub level: u8,
+}
+
 // Parquet optimization constants
 // 500K rows per row group - optimal balance between:
 // - Parallelism (more row groups = more parallel reads)
@@ -139,6 +160,7 @@ impl ParquetWriter {
     /// Write batches to a partitioned directory structure
     /// Directory: catalog/schema/table/date=YYYY-MM-DD/
     /// Batches are merged, sorted by timestamp, and written with optimized settings
+    /// Returns detailed file write result for metadata registration
     pub async fn write_batches_partitioned(
         &self,
         catalog: &str,
@@ -146,7 +168,7 @@ impl ParquetWriter {
         table: &str,
         date: i32,
         batches: Vec<RecordBatch>,
-    ) -> Result<String, String> {
+    ) -> Result<FileWriteResult, String> {
         if batches.is_empty() {
             return Err("No batches to write".to_string());
         }
@@ -155,6 +177,7 @@ impl ParquetWriter {
 
         // Create directory structure
         let partition_path = Self::get_partition_path(catalog, schema, table, date);
+        let partition_key = format_date32_as_partition(date);
         self.storage.create_dir(&partition_path).await?;
 
         // Generate filename with L0 prefix (Level 0 - raw files)
@@ -205,13 +228,25 @@ impl ParquetWriter {
             .close()
             .map_err(|e| format!("Failed to close writer: {}", e))?;
 
+        let size_bytes = buffer.len() as u64;
+
         // Write buffer to storage
         self.storage.put(&full_path, Bytes::from(buffer)).await?;
 
-        Ok(full_path)
+        Ok(FileWriteResult {
+            path: full_path,
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            partition_key,
+            size_bytes,
+            row_count: total_rows as u64,
+            level: RAW_FILE_LEVEL as u8,
+        })
     }
 
     /// Write batches synchronously (for backward compatibility with cache.rs)
+    /// Returns detailed file write result for metadata registration
     pub fn write_batches_partitioned_sync(
         &self,
         catalog: &str,
@@ -219,7 +254,7 @@ impl ParquetWriter {
         table: &str,
         date: i32,
         batches: Vec<RecordBatch>,
-    ) -> Result<String, String> {
+    ) -> Result<FileWriteResult, String> {
         // Use tokio runtime to run async code
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()

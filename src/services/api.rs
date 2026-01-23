@@ -24,7 +24,9 @@ use crate::compactor;
 use crate::config;
 use crate::line_protocol::parse_multiple_lines;
 use crate::profiling;
+use crate::query::catalog::{MetadataManager, SharedMetadataManager};
 use crate::query_engine::QueryEngine;
+use crate::storage::file_cache::{FileCache, SharedFileCache};
 
 // ===== Types and State =====
 
@@ -36,6 +38,10 @@ pub struct AppState {
     pub compactor: Arc<crate::compactor::Compactor>,
     pub config: Arc<config::Config>,
     pub wal: Option<Arc<crate::wal::Wal>>,
+    /// Centralized metadata manager for catalog/schema/table/file metadata
+    pub metadata_manager: Option<SharedMetadataManager>,
+    /// File cache for Object Store Parquet files
+    pub file_cache: Option<SharedFileCache>,
 }
 
 #[derive(Deserialize)]
@@ -462,8 +468,47 @@ pub async fn flush_handler(State(state): State<AppState>) -> impl IntoResponse {
     info!("Manual Flush Request");
 
     match state.cache.flush().await {
-        Ok(count) => {
+        Ok(files) => {
+            let count = files.len();
             info!("Manual flush completed: {} files", count);
+
+            // Register files with metadata manager if available
+            if let Some(ref manager) = state.metadata_manager {
+                for file in files {
+                    let file_name = file
+                        .path
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&file.path)
+                        .to_string();
+
+                    let file_info = crate::query::catalog::FileInfo {
+                        path: file.path.clone(),
+                        file_name,
+                        catalog: file.catalog.clone(),
+                        schema: file.schema.clone(),
+                        table: file.table.clone(),
+                        partition_key: file.partition_key.clone(),
+                        size_bytes: file.size_bytes,
+                        row_count: file.row_count,
+                        level: file.level,
+                        min_timestamp: None,
+                        max_timestamp: None,
+                        created_at: chrono::Utc::now().timestamp_millis(),
+                        row_group_count: 1,
+                        column_stats: None,
+                        etag: None,
+                    };
+                    if let Err(e) = manager.register_file(file_info).await {
+                        warn!("Failed to register file {}: {}", file.path, e);
+                    }
+                }
+                // Save metadata after registering new files
+                if let Err(e) = manager.save().await {
+                    warn!("Failed to save metadata after manual flush: {}", e);
+                }
+            }
+
             (StatusCode::OK, format!("Flushed {} file(s) to disk", count))
         }
         Err(e) => {

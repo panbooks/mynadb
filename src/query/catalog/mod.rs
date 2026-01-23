@@ -31,6 +31,6 @@ pub mod manager;
 pub mod memory_manager;
 pub mod types;
 
-pub use manager::MetadataManager;
+pub use manager::{MetadataManager, SharedMetadataManager};
 pub use memory_manager::MemoryMetadataManager;
 pub use types::*;

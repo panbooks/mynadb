@@ -34,6 +34,6 @@ pub mod cache;
 pub mod disk_cache;
 pub mod types;
 
-pub use cache::FileCache;
-pub use disk_cache::DiskFileCache;
+pub use cache::{FileCache, SharedFileCache};
+pub use disk_cache::{DiskCacheConfig, DiskFileCache};
 pub use types::*;
