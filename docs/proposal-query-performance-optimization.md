@@ -114,7 +114,7 @@ impl AsyncFileReader for CachedParquetReader {
 **Current:**
 ```sql
 SELECT * FROM cpu WHERE date >= '2024-01-10'  -- Prunes by date partition
-SELECT * FROM cpu WHERE timestamp > 1704844800000000000  -- No pruning!
+SELECT * FROM cpu WHERE time > 1704844800000000000  -- No pruning!
 ```
 
 **Solution:** Convert timestamp predicates to date predicates for pruning.
@@ -123,9 +123,9 @@ SELECT * FROM cpu WHERE timestamp > 1704844800000000000  -- No pruning!
 ```rust
 fn extract_time_range(expr: &Expr) -> Option<(i64, i64)> {
     // Parse expressions like:
-    // timestamp > X  → (X, i64::MAX)
-    // timestamp < X  → (i64::MIN, X)
-    // timestamp BETWEEN X AND Y → (X, Y)
+    // time > X  → (X, i64::MAX)
+    // time < X  → (i64::MIN, X)
+    // time BETWEEN X AND Y → (X, Y)
     // time > 'ISO8601' → parse and convert
 }
 

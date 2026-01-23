@@ -103,9 +103,9 @@ curl -X POST ${BASE_URL}/query/${DB_NAME} \
   -d "SELECT c.host, c.usage as cpu_usage, m.used as memory_used, m.total as memory_total FROM ${DB_NAME}_cpu c JOIN ${DB_NAME}_memory m ON c.host = m.host" | python3 -m json.tool
 echo -e "\n"
 
-# Test 15: Order by timestamp
+# Test 15: Order by time
 echo "1️⃣5️⃣  Query: Latest CPU records"
-curl -s "${BASE_URL}/query/${DB_NAME}?sql=SELECT%20host,%20usage,%20timestamp%20FROM%20${DB_NAME}_cpu%20ORDER%20BY%20timestamp%20DESC%20LIMIT%203" | python3 -m json.tool
+curl -s "${BASE_URL}/query/${DB_NAME}?sql=SELECT%20host,%20usage,%20time%20FROM%20${DB_NAME}_cpu%20ORDER%20BY%20time%20DESC%20LIMIT%203" | python3 -m json.tool
 echo -e "\n"
 
 # Test 16: Count records

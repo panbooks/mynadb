@@ -2,15 +2,15 @@
 //!
 //! Provides `first_value` and `last_value` aggregate functions compatible with InfluxDB 1.x.
 //!
-//! - `first_value(value, timestamp)` - Returns the value with the minimum timestamp in each group
-//! - `last_value(value, timestamp)` - Returns the value with the maximum timestamp in each group
+//! - `first_value(value, time)` - Returns the value with the minimum time in each group
+//! - `last_value(value, time)` - Returns the value with the maximum time in each group
 //!
 //! Example:
 //! ```sql
-//! SELECT first_value(usage, timestamp) as first_usage,
-//!        last_value(usage, timestamp) as last_usage
+//! SELECT first_value(usage, time) as first_usage,
+//!        last_value(usage, time) as last_usage
 //! FROM cpu
-//! GROUP BY time_bucket(timestamp, 300000000000, 0)
+//! GROUP BY time_bucket(time, 300000000000, 0)
 //! ```
 
 use datafusion::arrow::array::{Array, ArrayRef, Float64Array, Int64Array, StringArray};
@@ -27,9 +27,9 @@ use std::any::Any;
 
 /// Create the first_value UDAF
 ///
-/// Usage: `first_value(value_column, timestamp_column)`
+/// Usage: `first_value(value_column, time_column)`
 ///
-/// Returns the value from the row with the minimum timestamp in each group.
+/// Returns the value from the row with the minimum time in each group.
 pub fn create_first_value_udaf() -> AggregateUDF {
     AggregateUDF::from(FirstValueUDAF::new())
 }
@@ -205,9 +205,9 @@ impl Accumulator for FirstValueAccumulator {
 
 /// Create the last_value UDAF
 ///
-/// Usage: `last_value(value_column, timestamp_column)`
+/// Usage: `last_value(value_column, time_column)`
 ///
-/// Returns the value from the row with the maximum timestamp in each group.
+/// Returns the value from the row with the maximum time in each group.
 pub fn create_last_value_udaf() -> AggregateUDF {
     AggregateUDF::from(LastValueUDAF::new())
 }

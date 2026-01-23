@@ -354,22 +354,22 @@ pub fn qualify_table_names(sql: &str, catalog_name: &str) -> String {
 pub fn extract_time_range(sql: &str) -> Option<TimeRange> {
     let sql_upper = sql.to_uppercase();
 
-    // Look for timestamp conditions in WHERE clause
+    // Look for time conditions in WHERE clause
     if let Some(where_pos) = sql_upper.find("WHERE") {
         let where_clause = &sql[where_pos + 5..];
 
         // Common patterns:
-        // timestamp > X, timestamp >= X, timestamp < X, timestamp <= X
-        // timestamp BETWEEN X AND Y
-        // time > X, time >= X (common alias)
+        // time > X, time >= X, time < X, time <= X
+        // time BETWEEN X AND Y
+        // timestamp > X (legacy alias)
 
         let mut start_ts: Option<i64> = None;
         let mut end_ts: Option<i64> = None;
         let mut start_date: Option<String> = None;
         let mut end_date: Option<String> = None;
 
-        // Look for timestamp/time comparisons
-        let time_patterns = ["TIMESTAMP", "TIME", "TS"];
+        // Look for time column comparisons (supports legacy "timestamp" alias)
+        let time_patterns = ["TIME", "TIMESTAMP", "TS"];
         for pattern in time_patterns {
             // Check for >= or >
             if let Some(pos) = where_clause.to_uppercase().find(&format!("{} >", pattern)) {
@@ -470,12 +470,12 @@ fn extract_date_value(s: &str) -> Option<String> {
     None
 }
 
-/// Inject date predicates into SQL based on timestamp filters for smart partition pruning
+/// Inject date predicates into SQL based on time filters for smart partition pruning
 ///
-/// This converts timestamp predicates to date predicates, enabling Hive-style partition pruning.
+/// This converts time predicates to date predicates, enabling Hive-style partition pruning.
 /// Example:
-///   Input:  SELECT * FROM cpu WHERE timestamp >= 1704067200000000000
-///   Output: SELECT * FROM cpu WHERE timestamp >= 1704067200000000000 AND date >= '2024-01-01'
+///   Input:  SELECT * FROM cpu WHERE time >= 1704067200000000000
+///   Output: SELECT * FROM cpu WHERE time >= 1704067200000000000 AND date >= '2024-01-01'
 ///
 /// This allows DataFusion to prune partitions based on the date column.
 pub fn inject_date_predicates(sql: &str) -> String {

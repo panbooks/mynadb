@@ -8,17 +8,17 @@
 //! Input:
 //! ```sql
 //! SELECT mean(usage) FROM cpu
-//! WHERE timestamp >= 1704067200000000000
+//! WHERE time >= 1704067200000000000
 //! GROUP BY time(5m), host
 //! fill(previous)
 //! ```
 //!
 //! Output:
 //! ```sql
-//! SELECT time_bucket(timestamp, 300000000000, 0) as time, host, avg(usage) as mean_usage
+//! SELECT time_bucket(time, 300000000000, 0) as time, host, avg(usage) as mean_usage
 //! FROM cpu
-//! WHERE timestamp >= 1704067200000000000
-//! GROUP BY time_bucket(timestamp, 300000000000, 0), host
+//! WHERE time >= 1704067200000000000
+//! GROUP BY time_bucket(time, 300000000000, 0), host
 //! ORDER BY time
 //! ```
 
@@ -53,7 +53,7 @@ impl Default for TransformedQuery {
             interval_nanos: None,
             offset_nanos: 0,
             was_transformed: false,
-            time_column: "timestamp".to_string(),
+            time_column: "time".to_string(),
             group_columns: Vec::new(),
         }
     }
@@ -63,7 +63,7 @@ impl Default for TransformedQuery {
 ///
 /// Maps InfluxDB aggregate function names to their DataFusion equivalents.
 /// Note: first/last are handled specially in transform_aggregates()
-/// as they need to include the timestamp column argument.
+/// as they need to include the time column argument.
 fn get_function_mapping() -> HashMap<&'static str, &'static str> {
     let mut map = HashMap::new();
     map.insert("mean", "avg");
@@ -80,8 +80,8 @@ fn get_function_mapping() -> HashMap<&'static str, &'static str> {
 
 /// SQL Transformer for GROUP BY time() queries
 pub struct GroupByTimeTransformer {
-    /// The default timestamp column name
-    timestamp_column: String,
+    /// The default time column name (InfluxQL compatible)
+    time_column: String,
 }
 
 impl Default for GroupByTimeTransformer {
@@ -94,13 +94,13 @@ impl GroupByTimeTransformer {
     /// Create a new transformer with default settings
     pub fn new() -> Self {
         Self {
-            timestamp_column: "timestamp".to_string(),
+            time_column: "time".to_string(),
         }
     }
 
-    /// Create a transformer with a custom timestamp column
-    pub fn with_timestamp_column(mut self, column: &str) -> Self {
-        self.timestamp_column = column.to_string();
+    /// Create a transformer with a custom time column
+    pub fn with_time_column(mut self, column: &str) -> Self {
+        self.time_column = column.to_string();
         self
     }
 
@@ -136,7 +136,7 @@ impl GroupByTimeTransformer {
             interval_nanos: Some(interval.nanos),
             offset_nanos: offset.map_or(0, |o| o.nanos),
             was_transformed: true,
-            time_column: self.timestamp_column.clone(),
+            time_column: self.time_column.clone(),
             group_columns,
         })
     }
@@ -233,7 +233,7 @@ impl GroupByTimeTransformer {
         // Build the time_bucket expression
         let time_bucket_expr = format!(
             "time_bucket({}, {}, {})",
-            self.timestamp_column, interval.nanos, offset_nanos
+            self.time_column, interval.nanos, offset_nanos
         );
 
         // Transform SELECT clause - map InfluxDB functions and add time bucket
@@ -320,7 +320,7 @@ impl GroupByTimeTransformer {
                 let arg = caps.get(1).unwrap().as_str();
                 format!(
                     "first_value({}, {}) as first_{}",
-                    arg, self.timestamp_column, arg
+                    arg, self.time_column, arg
                 )
             })
             .to_string();
@@ -333,7 +333,7 @@ impl GroupByTimeTransformer {
                 let arg = caps.get(1).unwrap().as_str();
                 format!(
                     "last_value({}, {}) as last_{}",
-                    arg, self.timestamp_column, arg
+                    arg, self.time_column, arg
                 )
             })
             .to_string();
@@ -528,11 +528,11 @@ mod tests {
         let transformer = GroupByTimeTransformer::new();
 
         let result = transformer
-            .transform("SELECT mean(usage) FROM cpu WHERE timestamp >= 1704067200000000000 GROUP BY time(5m)")
+            .transform("SELECT mean(usage) FROM cpu WHERE time >= 1704067200000000000 GROUP BY time(5m)")
             .unwrap();
 
         assert!(result.was_transformed);
-        assert!(result.sql.contains("time_bucket(timestamp,"));
+        assert!(result.sql.contains("time_bucket(time,"));
         assert!(result.sql.contains("300000000000")); // 5 minutes in nanos
         assert!(result.sql.contains("avg(usage)"));
         assert!(result.sql.contains("ORDER BY time"));
@@ -548,7 +548,7 @@ mod tests {
             .unwrap();
 
         assert!(result.was_transformed);
-        assert!(result.sql.contains("time_bucket(timestamp,"));
+        assert!(result.sql.contains("time_bucket(time,"));
         assert_eq!(result.fill_option, FillOption::Previous);
         assert_eq!(result.offset_nanos, 15 * 60 * 1_000_000_000); // 15 minutes
     }
@@ -562,7 +562,7 @@ mod tests {
             .unwrap();
 
         assert!(result.was_transformed);
-        assert!(result.sql.contains("time_bucket(timestamp,"));
+        assert!(result.sql.contains("time_bucket(time,"));
         assert!(result.sql.contains("host"));
         assert!(result.sql.contains("region"));
         assert_eq!(result.group_columns, vec!["host", "region"]);
@@ -573,11 +573,11 @@ mod tests {
         let transformer = GroupByTimeTransformer::new();
 
         let result = transformer
-            .transform("SELECT * FROM cpu WHERE timestamp > 1000")
+            .transform("SELECT * FROM cpu WHERE time > 1000")
             .unwrap();
 
         assert!(!result.was_transformed);
-        assert_eq!(result.sql, "SELECT * FROM cpu WHERE timestamp > 1000");
+        assert_eq!(result.sql, "SELECT * FROM cpu WHERE time > 1000");
     }
 
     #[test]
@@ -602,7 +602,7 @@ mod tests {
         let transformer = GroupByTimeTransformer::new();
 
         let result = transformer.transform_aggregates("first(usage)").unwrap();
-        assert!(result.contains("first_value(usage, timestamp)"));
+        assert!(result.contains("first_value(usage, time)"));
         assert!(result.contains("as first_usage"));
     }
 
@@ -611,7 +611,7 @@ mod tests {
         let transformer = GroupByTimeTransformer::new();
 
         let result = transformer.transform_aggregates("last(value)").unwrap();
-        assert!(result.contains("last_value(value, timestamp)"));
+        assert!(result.contains("last_value(value, time)"));
         assert!(result.contains("as last_value"));
     }
 
@@ -624,9 +624,9 @@ mod tests {
             .unwrap();
 
         assert!(result.was_transformed);
-        assert!(result.sql.contains("first_value(usage, timestamp)"));
-        assert!(result.sql.contains("last_value(usage, timestamp)"));
-        assert!(result.sql.contains("time_bucket(timestamp,"));
+        assert!(result.sql.contains("first_value(usage, time)"));
+        assert!(result.sql.contains("last_value(usage, time)"));
+        assert!(result.sql.contains("time_bucket(time,"));
     }
 
     #[test]
@@ -637,8 +637,8 @@ mod tests {
             .transform_aggregates("first(usage), mean(cpu), last(memory)")
             .unwrap();
 
-        assert!(result.contains("first_value(usage, timestamp) as first_usage"));
+        assert!(result.contains("first_value(usage, time) as first_usage"));
         assert!(result.contains("avg(cpu) as mean_cpu"));
-        assert!(result.contains("last_value(memory, timestamp) as last_memory"));
+        assert!(result.contains("last_value(memory, time) as last_memory"));
     }
 }

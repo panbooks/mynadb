@@ -455,9 +455,9 @@ retention_hours = 48      # Keep WAL longer for debugging
 4. **Duplicate Detection**
    ```sql
    -- Check for duplicates after recovery
-   SELECT timestamp, measurement, COUNT(*)
+   SELECT time, measurement, COUNT(*)
    FROM mydb.default.cpu
-   GROUP BY timestamp, measurement
+   GROUP BY time, measurement
    HAVING COUNT(*) > 1;
    ```
 

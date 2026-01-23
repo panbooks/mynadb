@@ -478,9 +478,9 @@ pub struct ContinuousAggregationWorker {
 impl ContinuousAggregationWorker {
     pub async fn process_window(&self, start: i64, end: i64) -> Result<()> {
         let sql = format!(
-            "SELECT time_bucket(timestamp, {}) as time, {}, {} \
+            "SELECT time_bucket(time, {}) as bucket, {}, {} \
              FROM {} \
-             WHERE timestamp >= {} AND timestamp < {} \
+             WHERE time >= {} AND time < {} \
              GROUP BY 1, {}",
             self.config.interval.as_nanos(),
             self.config.group_by.join(", "),
@@ -713,19 +713,19 @@ src/jobs/
 
 ```sql
 -- Point query (should use bloom filter + tag index)
-SELECT * FROM cpu WHERE host = 'server-12345' AND timestamp > now() - interval '1h';
+SELECT * FROM cpu WHERE host = 'server-12345' AND time > now() - interval '1h';
 
 -- Time range scan (should use time index + partition pruning)
-SELECT avg(value) FROM cpu WHERE timestamp BETWEEN '2024-01-01' AND '2024-01-02';
+SELECT avg(value) FROM cpu WHERE time BETWEEN '2024-01-01' AND '2024-01-02';
 
 -- Dashboard query (should use continuous aggregation)
-SELECT time_bucket(timestamp, '5m'), host, avg(cpu)
+SELECT time_bucket(time, '5m'), host, avg(cpu)
 FROM cpu
-WHERE timestamp > now() - interval '1h'
+WHERE time > now() - interval '1h'
 GROUP BY 1, 2;
 
 -- Recent data (should hit hot partition cache)
-SELECT * FROM cpu WHERE timestamp > now() - interval '5m' ORDER BY timestamp DESC LIMIT 100;
+SELECT * FROM cpu WHERE time > now() - interval '5m' ORDER BY time DESC LIMIT 100;
 ```
 
 ### Performance Testing Script
@@ -742,7 +742,7 @@ time curl -s "http://localhost:7000/query/mydb?sql=SELECT%20*%20FROM%20cpu%20WHE
 
 # Time range
 echo "Time Range Query:"
-time curl -s "http://localhost:7000/query/mydb?sql=SELECT%20count(*)%20FROM%20cpu%20WHERE%20timestamp%20%3E%20now()%20-%20interval%20'1%20hour'" > /dev/null
+time curl -s "http://localhost:7000/query/mydb?sql=SELECT%20count(*)%20FROM%20cpu%20WHERE%20time%20%3E%20now()%20-%20interval%20'1%20hour'" > /dev/null
 
 # Aggregation
 echo "Aggregation Query:"
@@ -750,7 +750,7 @@ time curl -s "http://localhost:7000/query/mydb?sql=SELECT%20host,%20avg(usage)%2
 
 # Dashboard simulation
 echo "Dashboard Query:"
-time curl -s "http://localhost:7000/query/mydb?sql=SELECT%20time_bucket(timestamp,%20'5m'),%20avg(usage)%20FROM%20cpu%20WHERE%20timestamp%20%3E%20now()%20-%20interval%20'1%20hour'%20GROUP%20BY%201" > /dev/null
+time curl -s "http://localhost:7000/query/mydb?sql=SELECT%20time_bucket(time,%20'5m'),%20avg(usage)%20FROM%20cpu%20WHERE%20time%20%3E%20now()%20-%20interval%20'1%20hour'%20GROUP%20BY%201" > /dev/null
 ```
 
 ---

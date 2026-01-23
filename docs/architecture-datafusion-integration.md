@@ -161,11 +161,11 @@ JOIN mydb_memory m ON c.host = m.host;
 ### Window Functions
 ```sql
 -- Moving average
-SELECT 
-  timestamp,
+SELECT
+  time,
   usage,
   AVG(usage) OVER (
-    ORDER BY timestamp 
+    ORDER BY time
     ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
   ) as moving_avg
 FROM mydb_cpu;
@@ -357,20 +357,20 @@ curl -X POST http://localhost:3000/query/mydb -d "SELECT * ..."
 ### 1. Real-time Monitoring Dashboard
 ```sql
 -- Latest metrics
-SELECT host, usage, timestamp 
-FROM mydb_cpu 
-ORDER BY timestamp DESC 
+SELECT host, usage, time
+FROM mydb_cpu
+ORDER BY time DESC
 LIMIT 20;
 ```
 
 ### 2. Historical Analysis
 ```sql
--- Average by day (requires timestamp conversion)
-SELECT 
-  (timestamp / 86400000000000) as day,
+-- Average by day (requires time conversion)
+SELECT
+  (time / 86400000000000) as day,
   AVG(usage) as daily_avg
 FROM mydb_cpu
-GROUP BY (timestamp / 86400000000000);
+GROUP BY (time / 86400000000000);
 ```
 
 ### 3. Anomaly Detection
@@ -396,12 +396,12 @@ ORDER BY p95_usage DESC;
 ### 5. Correlation Analysis
 ```sql
 -- CPU vs Memory correlation
-SELECT 
+SELECT
   c.host,
   c.usage as cpu_usage,
   m.used as memory_used
 FROM mydb_cpu c
-JOIN mydb_memory m ON c.host = m.host AND c.timestamp = m.timestamp
+JOIN mydb_memory m ON c.host = m.host AND c.time = m.time
 WHERE c.usage > 70;
 ```
 

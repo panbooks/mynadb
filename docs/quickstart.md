@@ -98,7 +98,7 @@ curl 'http://localhost:7000/query/mydb?sql=SELECT host, AVG(usage) as avg_usage 
 ### Complex query (using POST)
 ```bash
 curl -X POST http://localhost:7000/query/mydb \
-  -d "SELECT * FROM mydb_cpu WHERE usage > 50 ORDER BY timestamp DESC"
+  -d "SELECT * FROM mydb_cpu WHERE usage > 50 ORDER BY time DESC"
 ```
 
 ## Step 8: Verify the Data

@@ -314,7 +314,7 @@ The query engine is configured with the following optimizations enabled by defau
 ### EXPLAIN Endpoint
 ```bash
 # Get execution plan for a query
-curl "http://localhost:7000/explain/mydb?sql=SELECT%20*%20FROM%20cpu%20WHERE%20timestamp%20%3E%201704067200000000000&verbose=true"
+curl "http://localhost:7000/explain/mydb?sql=SELECT%20*%20FROM%20cpu%20WHERE%20time%20%3E%201704067200000000000&verbose=true"
 
 # Response includes:
 # - logical_plan: DataFusion logical plan

@@ -632,7 +632,7 @@ pub struct AggregationSpec {
 impl ContinuousAggregation {
     pub async fn process_window(&self, start: i64, end: i64) -> Result<()> {
         let sql = format!(
-            "SELECT time_bucket(timestamp, {}) as time, {}, {} FROM {} WHERE timestamp >= {} AND timestamp < {} GROUP BY time, {}",
+            "SELECT time_bucket(time, {}) as bucket, {}, {} FROM {} WHERE time >= {} AND time < {} GROUP BY bucket, {}",
             self.interval.as_nanos(),
             self.group_by.join(", "),
             self.aggregations.iter().map(|a| a.to_sql()).collect::<Vec<_>>().join(", "),
@@ -726,7 +726,7 @@ SELECT
     avg(cpu_usage) as avg_cpu,
     max(memory_usage) as max_memory
 FROM metrics.default.system
-WHERE timestamp > now() - interval '1 hour'
+WHERE time > now() - interval '1 hour'
 GROUP BY host
 REFRESH EVERY 5 MINUTES;
 
@@ -880,17 +880,17 @@ pub async fn query_parallel_partitions(
 
 ```sql
 -- Point query (should use Bloom filter)
-SELECT * FROM metrics WHERE host = 'server-12345' AND timestamp > now() - '1h';
+SELECT * FROM metrics WHERE host = 'server-12345' AND time > now() - '1h';
 
 -- Time range scan (should use partition pruning)
-SELECT avg(value) FROM metrics WHERE timestamp BETWEEN '2024-01-01' AND '2024-01-02';
+SELECT avg(value) FROM metrics WHERE time BETWEEN '2024-01-01' AND '2024-01-02';
 
 -- Aggregation with GROUP BY (should use pre-aggregation if available)
-SELECT host, avg(cpu) FROM metrics WHERE timestamp > now() - '1d' GROUP BY host;
+SELECT host, avg(cpu) FROM metrics WHERE time > now() - '1d' GROUP BY host;
 
 -- Dashboard query (should hit cache)
-SELECT time_bucket(timestamp, '5m'), avg(value) FROM metrics
-WHERE timestamp > now() - '1h' GROUP BY 1 ORDER BY 1;
+SELECT time_bucket(time, '5m'), avg(value) FROM metrics
+WHERE time > now() - '1h' GROUP BY 1 ORDER BY 1;
 ```
 
 ### Performance Testing Script
@@ -902,7 +902,7 @@ WHERE timestamp > now() - '1h' GROUP BY 1 ORDER BY 1;
 QUERIES=(
     "SELECT count(*) FROM mydb.default.cpu"
     "SELECT * FROM mydb.default.cpu WHERE host = 'server01' LIMIT 100"
-    "SELECT avg(usage) FROM mydb.default.cpu WHERE timestamp > now() - interval '1 hour'"
+    "SELECT avg(usage) FROM mydb.default.cpu WHERE time > now() - interval '1 hour'"
     "SELECT host, avg(usage) FROM mydb.default.cpu GROUP BY host"
 )
 
@@ -1015,7 +1015,7 @@ SELECT
     avg(rows_scanned) as avg_rows,
     avg(bytes_read) as avg_bytes
 FROM system.query_stats
-WHERE timestamp > now() - interval '1 hour'
+WHERE time > now() - interval '1 hour'
 GROUP BY table_name;
 
 -- Check slow queries
