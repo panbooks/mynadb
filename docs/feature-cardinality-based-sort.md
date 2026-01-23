@@ -171,9 +171,12 @@ ParquetExec: files=1, row_groups=3, rows_pruned=2000, rows_to_scan=1000
 
 | Component | File | Description |
 |-----------|------|-------------|
-| `TagCardinalityTracker` | `src/storage/cache.rs` | Tracks distinct values per tag |
-| `sort_batch_by_columns()` | `src/storage/parquet_writer.rs` | Multi-column lexicographic sort |
-| `build_sort_order()` | `src/storage/parquet_writer.rs` | Constructs optimal column order |
+| `TagCardinalityTracker` | `src/storage/cache.rs` | Tracks distinct values per tag during writes |
+| `sort_batch_by_columns()` | `src/storage/parquet_writer.rs` | Multi-column lexicographic sort for flush |
+| `build_sort_order()` | `src/storage/parquet_writer.rs` | Constructs optimal column order for flush |
+| `build_cardinality_sort_order()` | `src/jobs/compactor.rs` | Analyzes cardinality during compaction |
+| `estimate_cardinality()` | `src/jobs/compactor.rs` | Sampling-based cardinality estimation |
+| `sort_batch_by_columns()` | `src/jobs/compactor.rs` | Multi-column lexicographic sort for compaction |
 
 ### Data Flow
 
@@ -214,19 +217,70 @@ This enables DataFusion to skip row groups entirely when filtering on these tags
 | TimescaleDB | Chunk ordering by time | Limited to time dimension |
 | InfluxDB | TSM engine, series-based | Automatic but different approach |
 
+## Compaction Behavior
+
+Compaction also applies cardinality-based sorting to ensure optimal data layout is preserved (and improved) as files are merged.
+
+### How Compaction Sorting Works
+
+1. **Read all source files** into memory
+2. **Analyze cardinality** of all string columns (tags) using sampling
+3. **Sort merged data** by cardinality order (low → high → time)
+4. **Write compacted file** with optimal layout
+
+### Cardinality Estimation During Compaction
+
+For performance, compaction uses sampling-based cardinality estimation:
+
+| Data Size | Approach |
+|-----------|----------|
+| ≤ 100,000 rows | Exact count (iterate all rows) |
+| > 100,000 rows | Sample every Nth row, extrapolate |
+
+Tags with > 1,000 distinct values are marked as "high cardinality" and sorted last.
+
+### Example: Compaction Sort Order
+
+```
+Compacting 3 files:
+  File 1: 50,000 rows (sorted: region → host → time)
+  File 2: 30,000 rows (sorted: region → host → time)
+  File 3: 20,000 rows (sorted: datacenter → host → time)  ← different order!
+
+Compaction process:
+  1. Concatenate: 100,000 rows total
+  2. Analyze cardinality:
+     - region: 5 distinct values
+     - datacenter: 8 distinct values
+     - host: 500 distinct values
+  3. Sort by: region → datacenter → host → time
+  4. Write single compacted file
+
+Result: Optimal sort order based on current data distribution
+```
+
+### Log Output
+
+```
+DEBUG Compaction sort order: region -> datacenter -> host -> time
+INFO  Compacted 3 files (100,000 rows) -> L1_1706000000.parquet
+```
+
 ## Limitations
 
-1. **First flush determines order**: The cardinality observed in the first flush cycle determines sort order. Later data with different cardinality distribution uses the same order.
+1. **Per-flush cardinality**: Write path tracks cardinality per flush cycle. Data arriving in different flush cycles may have slightly different sort orders until compacted.
 
 2. **Per-table tracking**: Cardinality is tracked per table, not globally. Different tables may have different sort orders.
 
-3. **Memory overhead**: Each table with active writes uses ~1KB per tag key for cardinality tracking (bounded at 1000 values per tag).
+3. **Memory overhead**:
+   - Write path: ~1KB per tag key (bounded HashSets)
+   - Compaction: Temporary memory for cardinality HashSets during merge
 
-4. **Compaction preserves order**: Compacted files maintain the sort order from their source files. Re-sorting requires rewriting files.
+4. **Sampling accuracy**: For very large compactions (> 100K rows), cardinality is estimated via sampling, which may not perfectly reflect true distribution.
 
 ## Future Enhancements
 
-- **Configurable sort order override**: Allow manual specification of sort columns
-- **Adaptive re-sorting during compaction**: Re-analyze cardinality and re-sort if beneficial
+- **Configurable sort order override**: Allow manual specification of sort columns via config
+- **Persistent cardinality stats**: Store cardinality estimates in metadata for faster compaction
 - **Z-Order sorting**: Interleaved sorting for multi-dimensional query patterns
 - **Statistics export**: API to view current cardinality estimates per table

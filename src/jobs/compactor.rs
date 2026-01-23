@@ -2,7 +2,7 @@ use arrow::array::{
     new_null_array, Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch,
     StringArray,
 };
-use arrow::compute::{cast, concat_batches, take};
+use arrow::compute::{cast, concat_batches, lexsort_to_indices, take, SortColumn};
 use arrow::datatypes::{DataType, Field, Schema};
 use chrono::Timelike;
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -10,7 +10,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -38,6 +38,12 @@ const MB_TO_BYTES: u64 = 1024 * 1024;
 const ROW_GROUP_SIZE: usize = 1_000_000; // 1M rows per row group
 const BLOOM_FILTER_FPP: f64 = 0.01; // 1% false positive rate
 const BLOOM_FILTER_NDV: u64 = 10_000; // Expected distinct values
+
+// Cardinality-based sorting constants
+/// Maximum rows to sample for cardinality estimation (performance optimization)
+const CARDINALITY_SAMPLE_SIZE: usize = 100_000;
+/// Threshold for "high cardinality" - tags with more distinct values are sorted last
+const HIGH_CARDINALITY_THRESHOLD: usize = 1000;
 
 /// Type alias for compaction locks map
 /// Key: (catalog, schema, table, date_partition)
@@ -1623,8 +1629,9 @@ impl Compactor {
         Ok(StringArray::from(string_values))
     }
 
-    /// K-way merge sort for already-sorted batches (one batch per file)
-    /// Much more efficient than full sort: O(N log K) vs O(N log N)
+    /// Merge and sort batches with cardinality-based tag ordering
+    /// Sort order: [low cardinality tags] -> [high cardinality tags] -> time
+    /// This preserves optimal data locality for query filtering
     fn merge_sorted_batches(
         batches: Vec<RecordBatch>,
         schema: &Arc<Schema>,
@@ -1637,180 +1644,164 @@ impl Compactor {
             return Ok(batches.into_iter().next().unwrap());
         }
 
-        let ts_idx = match schema.index_of("time") {
-            Ok(idx) => idx,
-            Err(_) => {
-                // No time column, just concatenate
-                debug!("No time column found, concatenating without sort");
-                return concat_batches(schema, &batches)
-                    .map_err(|e| format!("Failed to concat batches: {}", e));
-            }
-        };
+        // First, concatenate all batches
+        let merged = concat_batches(schema, &batches)
+            .map_err(|e| format!("Failed to concat batches: {}", e))?;
 
-        // Collect all rows with (time, batch_idx, row_idx)
-        let mut indexed_rows: Vec<(i64, usize, usize)> = Vec::new();
-
-        for (batch_idx, batch) in batches.iter().enumerate() {
-            let ts_col = batch
-                .column(ts_idx)
-                .as_any()
-                .downcast_ref::<arrow::array::TimestampNanosecondArray>();
-
-            if let Some(ts_array) = ts_col {
-                for row_idx in 0..batch.num_rows() {
-                    let ts = ts_array.value(row_idx);
-                    indexed_rows.push((ts, batch_idx, row_idx));
-                }
-            } else {
-                // Fallback: try Int64 time
-                let ts_col = batch.column(ts_idx).as_any().downcast_ref::<Int64Array>();
-
-                if let Some(ts_array) = ts_col {
-                    for row_idx in 0..batch.num_rows() {
-                        let ts = ts_array.value(row_idx);
-                        indexed_rows.push((ts, batch_idx, row_idx));
-                    }
-                } else {
-                    // Unknown time column type, just add rows in order
-                    for row_idx in 0..batch.num_rows() {
-                        indexed_rows.push((row_idx as i64, batch_idx, row_idx));
-                    }
-                }
-            }
+        // Check if we have a time column
+        if schema.index_of("time").is_err() {
+            debug!("No time column found, returning concatenated batch without sort");
+            return Ok(merged);
         }
 
-        // Sort by time (stable sort preserves order for equal times)
-        indexed_rows.sort_by_key(|(ts, _, _)| *ts);
+        // Analyze cardinality and build optimal sort order
+        let sort_order = Self::build_cardinality_sort_order(&merged, schema);
 
-        // Build sorted arrays
-        let mut sorted_columns: Vec<ArrayRef> = Vec::with_capacity(schema.fields().len());
-
-        for (col_idx, field) in schema.fields().iter().enumerate() {
-            let sorted_array =
-                Self::build_sorted_column(&batches, col_idx, field.data_type(), &indexed_rows)?;
-            sorted_columns.push(sorted_array);
+        if sort_order.is_empty() {
+            debug!("No sortable columns found");
+            return Ok(merged);
         }
 
-        RecordBatch::try_new(schema.clone(), sorted_columns)
-            .map_err(|e| format!("Failed to create merged batch: {}", e))
+        // Log the sort order being used
+        debug!(
+            "Compaction sort order: {}",
+            sort_order.join(" -> ")
+        );
+
+        // Sort using lexicographic multi-column sort
+        Self::sort_batch_by_columns(&merged, &sort_order)
     }
 
-    /// Build a single sorted column from indexed rows
-    fn build_sorted_column(
-        batches: &[RecordBatch],
-        col_idx: usize,
-        data_type: &DataType,
-        indexed_rows: &[(i64, usize, usize)],
-    ) -> Result<ArrayRef, String> {
-        use arrow::array::*;
+    /// Analyze cardinality of string columns and build optimal sort order
+    /// Returns column names sorted by cardinality (low to high), with time at the end
+    fn build_cardinality_sort_order(batch: &RecordBatch, schema: &Arc<Schema>) -> Vec<String> {
+        let mut tag_cardinalities: Vec<(String, usize)> = Vec::new();
 
-        match data_type {
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, _) => {
-                let mut builder = TimestampNanosecondArray::builder(indexed_rows.len());
-                for (_, batch_idx, row_idx) in indexed_rows {
-                    let array = batches[*batch_idx]
-                        .column(col_idx)
-                        .as_any()
-                        .downcast_ref::<TimestampNanosecondArray>()
-                        .ok_or("Failed to downcast timestamp array")?;
-                    if array.is_null(*row_idx) {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(array.value(*row_idx));
-                    }
-                }
-                Ok(Arc::new(builder.finish()))
-            }
-            DataType::Int64 => {
-                let mut builder = Int64Builder::with_capacity(indexed_rows.len());
-                for (_, batch_idx, row_idx) in indexed_rows {
-                    let array = batches[*batch_idx]
-                        .column(col_idx)
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .ok_or("Failed to downcast Int64 array")?;
-                    if array.is_null(*row_idx) {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(array.value(*row_idx));
-                    }
-                }
-                Ok(Arc::new(builder.finish()))
-            }
-            DataType::Float64 => {
-                let mut builder = Float64Builder::with_capacity(indexed_rows.len());
-                for (_, batch_idx, row_idx) in indexed_rows {
-                    let array = batches[*batch_idx]
-                        .column(col_idx)
-                        .as_any()
-                        .downcast_ref::<Float64Array>()
-                        .ok_or("Failed to downcast Float64 array")?;
-                    if array.is_null(*row_idx) {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(array.value(*row_idx));
-                    }
-                }
-                Ok(Arc::new(builder.finish()))
-            }
-            DataType::Utf8 => {
-                let mut builder =
-                    StringBuilder::with_capacity(indexed_rows.len(), indexed_rows.len() * 32);
-                for (_, batch_idx, row_idx) in indexed_rows {
-                    let array = batches[*batch_idx]
-                        .column(col_idx)
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .ok_or("Failed to downcast String array")?;
-                    if array.is_null(*row_idx) {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(array.value(*row_idx));
-                    }
-                }
-                Ok(Arc::new(builder.finish()))
-            }
-            DataType::Boolean => {
-                let mut builder = BooleanBuilder::with_capacity(indexed_rows.len());
-                for (_, batch_idx, row_idx) in indexed_rows {
-                    let array = batches[*batch_idx]
-                        .column(col_idx)
-                        .as_any()
-                        .downcast_ref::<BooleanArray>()
-                        .ok_or("Failed to downcast Boolean array")?;
-                    if array.is_null(*row_idx) {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(array.value(*row_idx));
-                    }
-                }
-                Ok(Arc::new(builder.finish()))
-            }
-            _ => {
-                // Fallback: use take with indices (less efficient but works for any type)
-                // First concat all arrays, then take
-                let arrays: Vec<&dyn Array> =
-                    batches.iter().map(|b| b.column(col_idx).as_ref()).collect();
+        // Find string columns (tags) and estimate their cardinality
+        for field in schema.fields() {
+            let col_name = field.name();
 
-                let concatenated = arrow::compute::concat(&arrays)
-                    .map_err(|e| format!("Failed to concat arrays: {}", e))?;
+            // Skip special columns
+            if col_name == "time" || col_name == "measurement" || col_name == "date" {
+                continue;
+            }
 
-                // Build global indices
-                let mut global_indices: Vec<u64> = Vec::with_capacity(indexed_rows.len());
-                let mut offsets: Vec<usize> = vec![0];
-                for batch in batches {
-                    offsets.push(offsets.last().unwrap() + batch.num_rows());
-                }
+            // Only analyze string columns (tags)
+            if field.data_type() != &DataType::Utf8 {
+                continue;
+            }
 
-                for (_, batch_idx, row_idx) in indexed_rows {
-                    let global_idx = offsets[*batch_idx] + row_idx;
-                    global_indices.push(global_idx as u64);
-                }
-
-                let indices = UInt64Array::from(global_indices);
-                take(&concatenated, &indices, None).map_err(|e| format!("Failed to take: {}", e))
+            // Get the column and estimate cardinality
+            if let Ok(col_idx) = schema.index_of(col_name) {
+                let cardinality = Self::estimate_cardinality(batch.column(col_idx));
+                tag_cardinalities.push((col_name.clone(), cardinality));
             }
         }
+
+        // Sort by cardinality (ascending - low cardinality first)
+        tag_cardinalities.sort_by_key(|(_, card)| *card);
+
+        // Build final sort order: tags by cardinality, then time
+        let mut sort_order: Vec<String> = tag_cardinalities
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+
+        // Always end with time
+        sort_order.push("time".to_string());
+
+        sort_order
+    }
+
+    /// Estimate cardinality of a column using sampling for large columns
+    fn estimate_cardinality(column: &ArrayRef) -> usize {
+        let string_array = match column.as_any().downcast_ref::<StringArray>() {
+            Some(arr) => arr,
+            None => return HIGH_CARDINALITY_THRESHOLD + 1, // Non-string, treat as high cardinality
+        };
+
+        let num_rows = string_array.len();
+        if num_rows == 0 {
+            return 0;
+        }
+
+        // For small columns, count exact cardinality
+        // For large columns, sample to estimate (performance optimization)
+        let sample_size = num_rows.min(CARDINALITY_SAMPLE_SIZE);
+        let step = if num_rows > sample_size {
+            num_rows / sample_size
+        } else {
+            1
+        };
+
+        let mut distinct_values: HashSet<Option<&str>> = HashSet::new();
+
+        for i in (0..num_rows).step_by(step) {
+            if string_array.is_null(i) {
+                distinct_values.insert(None);
+            } else {
+                distinct_values.insert(Some(string_array.value(i)));
+            }
+
+            // Early exit if we've determined it's high cardinality
+            if distinct_values.len() > HIGH_CARDINALITY_THRESHOLD {
+                return usize::MAX;
+            }
+        }
+
+        // If we sampled, extrapolate the cardinality
+        if step > 1 {
+            // Rough estimation: actual cardinality is likely higher than sampled
+            let estimated = distinct_values.len() * 2;
+            if estimated > HIGH_CARDINALITY_THRESHOLD {
+                return usize::MAX;
+            }
+            return estimated;
+        }
+
+        distinct_values.len()
+    }
+
+    /// Sort a RecordBatch by multiple columns using lexicographic sorting
+    fn sort_batch_by_columns(batch: &RecordBatch, sort_columns: &[String]) -> Result<RecordBatch, String> {
+        if sort_columns.is_empty() {
+            return Ok(batch.clone());
+        }
+
+        let schema = batch.schema();
+
+        // Build SortColumn specifications
+        let mut sort_cols: Vec<SortColumn> = Vec::with_capacity(sort_columns.len());
+
+        for col_name in sort_columns {
+            if let Ok(idx) = schema.index_of(col_name) {
+                sort_cols.push(SortColumn {
+                    values: batch.column(idx).clone(),
+                    options: None, // Default: ascending, nulls last
+                });
+            }
+        }
+
+        if sort_cols.is_empty() {
+            return Ok(batch.clone());
+        }
+
+        // Perform lexicographic sort
+        let indices = lexsort_to_indices(&sort_cols, None)
+            .map_err(|e| format!("Failed to lexsort: {}", e))?;
+
+        // Apply sort indices to all columns
+        let sorted_columns: Result<Vec<ArrayRef>, String> = batch
+            .columns()
+            .iter()
+            .map(|col| {
+                take(col.as_ref(), &indices, None)
+                    .map_err(|e| format!("Failed to reorder column: {}", e))
+            })
+            .collect();
+
+        RecordBatch::try_new(schema, sorted_columns?)
+            .map_err(|e| format!("Failed to create sorted batch: {}", e))
     }
 
     /// Create optimized WriterProperties with Bloom filters and compression
