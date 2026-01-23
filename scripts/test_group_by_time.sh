@@ -120,7 +120,7 @@ echo ""
 
 # Test 3.2: GROUP BY time(1h) with WHERE clause
 echo "Test 3.2: GROUP BY time(1h) with WHERE clause"
-RESULT=$(query "SELECT mean(usage) FROM cpu WHERE timestamp >= ${BASE_TS} GROUP BY time(1h)")
+RESULT=$(query "SELECT mean(usage) FROM cpu WHERE time >= ${BASE_TS} GROUP BY time(1h)")
 echo "$RESULT" | head -20
 echo ""
 
@@ -174,12 +174,12 @@ echo "=== Step 5: Test with ISO timestamp format ==="
 
 # Test using ISO timestamp in WHERE clause
 echo "Test 5.1: WHERE with ISO timestamp"
-RESULT=$(query "SELECT mean(usage) FROM cpu WHERE timestamp >= '2025-01-22T00:00:00Z' GROUP BY time(30m)")
+RESULT=$(query "SELECT mean(usage) FROM cpu WHERE time >= '2025-01-22T00:00:00Z' GROUP BY time(30m)")
 echo "$RESULT" | head -20
 echo ""
 
 echo "Test 5.2: WHERE with ISO timestamp range"
-RESULT=$(query "SELECT mean(usage) FROM cpu WHERE timestamp >= '2025-01-22T00:00:00Z' AND timestamp < '2025-01-22T02:00:00Z' GROUP BY time(30m)")
+RESULT=$(query "SELECT mean(usage) FROM cpu WHERE time >= '2025-01-22T00:00:00Z' AND time < '2025-01-22T02:00:00Z' GROUP BY time(30m)")
 echo "$RESULT" | head -20
 echo ""
 
@@ -192,7 +192,7 @@ echo "$RESULT" | head -20
 echo ""
 
 echo "Test 6.2: GROUP BY time(1h, 15m) on memory table (with offset)"
-RESULT=$(query "SELECT mean(used) FROM memory WHERE timestamp >= '2025-01-22T00:00:00Z' GROUP BY time(1h, 15m)")
+RESULT=$(query "SELECT mean(used) FROM memory WHERE time >= '2025-01-22T00:00:00Z' GROUP BY time(1h, 15m)")
 echo "$RESULT" | head -20
 echo ""
 
@@ -208,7 +208,7 @@ echo ""
 echo "=== Step 8: Verify time_bucket UDF directly ==="
 
 echo "Test 8.1: Direct time_bucket usage"
-RESULT=$(query "SELECT time_bucket(timestamp, 1800000000000, 0) as bucket, avg(usage) FROM cpu GROUP BY time_bucket(timestamp, 1800000000000, 0) ORDER BY bucket")
+RESULT=$(query "SELECT time_bucket(time, 1800000000000, 0) as bucket, avg(usage) FROM cpu GROUP BY time_bucket(time, 1800000000000, 0) ORDER BY bucket")
 echo "$RESULT" | head -20
 echo ""
 

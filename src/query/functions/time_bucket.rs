@@ -1,9 +1,9 @@
 //! Time Bucket UDF
 //!
 //! Provides a vectorized `time_bucket` function for time-series bucketing.
-//! This aligns timestamps to preset round-number boundaries.
+//! This aligns time values to preset round-number boundaries.
 //!
-//! Formula: `floor((timestamp - offset) / interval) * interval + offset`
+//! Formula: `floor((time - offset) / interval) * interval + offset`
 //!
 //! Example:
 //! - With interval=5m and offset=0:
@@ -22,14 +22,14 @@ use std::sync::Arc;
 
 /// Create the time_bucket UDF
 ///
-/// Usage: `time_bucket(timestamp_column, interval_nanos, offset_nanos)`
+/// Usage: `time_bucket(time_column, interval_nanos, offset_nanos)`
 ///
 /// Arguments:
-/// - `timestamp_column`: Int64 timestamp in nanoseconds OR Timestamp(Nanosecond)
+/// - `time_column`: Int64 time in nanoseconds OR Timestamp(Nanosecond)
 /// - `interval_nanos`: Int64 bucket interval in nanoseconds
 /// - `offset_nanos`: Int64 offset for bucket alignment in nanoseconds
 ///
-/// Returns: Int64 bucketed timestamp in nanoseconds
+/// Returns: Int64 bucketed time in nanoseconds
 pub fn create_time_bucket_udf() -> ScalarUDF {
     ScalarUDF::from(TimeBucketUDF::new())
 }

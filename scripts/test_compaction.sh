@@ -66,7 +66,7 @@ echo "Total files: $TOTAL_COUNT_AFTER"
 echo -e "\n[7] Verifying data integrity with SQL query..."
 curl -s "$BASE_URL/query/$DB?sql=SELECT COUNT(*) as row_count FROM ${DB}_cpu"
 echo ""
-curl -s "$BASE_URL/query/$DB?sql=SELECT * FROM ${DB}_cpu ORDER BY timestamp LIMIT 5"
+curl -s "$BASE_URL/query/$DB?sql=SELECT * FROM ${DB}_cpu ORDER BY time LIMIT 5"
 echo ""
 
 # Step 7: Write more data and compact again

@@ -115,7 +115,7 @@ curl http://localhost:7000/schema/mydb/cpu
 curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'
 
 # Specific columns
-curl 'http://localhost:7000/query/mydb?sql=SELECT host, usage, timestamp FROM cpu'
+curl 'http://localhost:7000/query/mydb?sql=SELECT host, usage, time FROM cpu'
 ```
 
 ### Filtering (WHERE)
@@ -129,7 +129,7 @@ curl 'http://localhost:7000/query/mydb' -d "SELECT * FROM cpu WHERE usage > 50 A
 
 # Time range
 curl 'http://localhost:7000/query/mydb' -d "SELECT * FROM cpu
-    WHERE timestamp BETWEEN 1703251234567000000 AND 1703251240000000000"
+    WHERE time BETWEEN 1703251234567000000 AND 1703251240000000000"
 ```
 
 ### Sorting (ORDER BY)
@@ -145,7 +145,7 @@ curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu ORDER BY usage DESC
 curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu ORDER BY host ASC, usage DESC'
 
 # Latest records
-curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu ORDER BY timestamp DESC LIMIT 5'
+curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu ORDER BY time DESC LIMIT 5'
 ```
 
 ### DISTINCT
@@ -304,7 +304,7 @@ curl -X POST http://localhost:7000/query/mydb \
 # Moving average
 curl -X POST http://localhost:7000/query/mydb \
   -d "SELECT host, usage,
-        AVG(usage) OVER (PARTITION BY host ORDER BY timestamp) as moving_avg
+        AVG(usage) OVER (PARTITION BY host ORDER BY time) as moving_avg
       FROM cpu"
 
 # Rank by usage
@@ -315,8 +315,8 @@ curl -X POST http://localhost:7000/query/mydb \
 
 # Running average (last 3 rows)
 curl -X POST http://localhost:7000/query/mydb \
-  -d "SELECT timestamp, usage,
-        AVG(usage) OVER (ORDER BY timestamp ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) as moving_avg
+  -d "SELECT time, usage,
+        AVG(usage) OVER (ORDER BY time ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) as moving_avg
       FROM cpu"
 ```
 

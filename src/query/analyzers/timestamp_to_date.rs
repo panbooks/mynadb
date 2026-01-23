@@ -1,6 +1,6 @@
-//! Timestamp to Date Analyzer Rule
+//! Time to Date Analyzer Rule
 //!
-//! This analyzer detects timestamp predicates in WHERE clauses and adds
+//! This analyzer detects time column predicates in WHERE clauses and adds
 //! corresponding date predicates for partition pruning.
 //!
 //! Implements DataFusion's `AnalyzerRule` trait for native integration.
@@ -15,11 +15,11 @@ use datafusion::optimizer::AnalyzerRule;
 /// Nanoseconds per second
 const NANOS_PER_SEC: i64 = 1_000_000_000;
 
-/// Analyzer rule that converts timestamp predicates to date predicates for partition pruning
+/// Analyzer rule that converts time predicates to date predicates for partition pruning
 #[derive(Debug, Default)]
 pub struct TimestampToDateAnalyzer {
-    /// Column name for timestamp
-    timestamp_column: String,
+    /// Column name for time (default: "time" for InfluxQL compatibility)
+    time_column: String,
     /// Column name for date partition
     date_column: String,
 }
@@ -27,14 +27,14 @@ pub struct TimestampToDateAnalyzer {
 impl TimestampToDateAnalyzer {
     pub fn new() -> Self {
         Self {
-            timestamp_column: "timestamp".to_string(),
+            time_column: "time".to_string(),
             date_column: "date".to_string(),
         }
     }
 
-    pub fn with_columns(timestamp_column: &str, date_column: &str) -> Self {
+    pub fn with_columns(time_column: &str, date_column: &str) -> Self {
         Self {
-            timestamp_column: timestamp_column.to_string(),
+            time_column: time_column.to_string(),
             date_column: date_column.to_string(),
         }
     }
@@ -63,12 +63,12 @@ impl TimestampToDateAnalyzer {
         }
     }
 
-    /// Check if an expression is a timestamp comparison and extract the value
-    fn extract_timestamp_comparison(&self, expr: &Expr) -> Option<(Operator, i64)> {
+    /// Check if an expression is a time column comparison and extract the value
+    fn extract_time_comparison(&self, expr: &Expr) -> Option<(Operator, i64)> {
         if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr {
-            // Check for: timestamp >= value or timestamp > value
+            // Check for: time >= value or time > value
             if let Expr::Column(c) = left.as_ref() {
-                if c.name == self.timestamp_column {
+                if c.name == self.time_column {
                     if let Expr::Literal(scalar) = right.as_ref() {
                         if let Some(val) = Self::scalar_to_i64(scalar) {
                             return Some((*op, val));
@@ -76,9 +76,9 @@ impl TimestampToDateAnalyzer {
                     }
                 }
             }
-            // Check for: value <= timestamp or value < timestamp
+            // Check for: value <= time or value < time
             if let Expr::Column(c) = right.as_ref() {
-                if c.name == self.timestamp_column {
+                if c.name == self.time_column {
                     if let Expr::Literal(scalar) = left.as_ref() {
                         if let Some(val) = Self::scalar_to_i64(scalar) {
                             let flipped_op = match op {
@@ -132,7 +132,7 @@ impl TimestampToDateAnalyzer {
         let mut date_predicates = Vec::new();
 
         let _ = expr.clone().transform(|e| {
-            if let Some((op, ts_value)) = self.extract_timestamp_comparison(&e) {
+            if let Some((op, ts_value)) = self.extract_time_comparison(&e) {
                 if let Some(date_pred) = self.create_date_predicate(op, ts_value) {
                     date_predicates.push(date_pred);
                 }

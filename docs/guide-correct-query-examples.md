@@ -33,7 +33,7 @@ curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu WHERE usage > 80'
 # Aggregation
 curl 'http://localhost:7000/query/mydb' -d 'SELECT host, AVG(usage) FROM cpu GROUP BY host'
 
-# Order by timestamp
+# Order by time
 curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu ORDER BY time DESC LIMIT 10'
 ```
 

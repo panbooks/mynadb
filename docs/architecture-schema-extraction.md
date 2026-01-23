@@ -179,7 +179,7 @@ When querying data, use the schema name in your SQL:
 SELECT * FROM benchmark.web.cpu LIMIT 10;
 
 -- Query from "api" schema
-SELECT * FROM benchmark.api.requests WHERE timestamp > now() - interval '1 hour';
+SELECT * FROM benchmark.api.requests WHERE time > now() - interval '1 hour';
 
 -- Query from hierarchical schema (full path preserved)
 SELECT * FROM benchmark."MONITOR.service".metrics LIMIT 10;

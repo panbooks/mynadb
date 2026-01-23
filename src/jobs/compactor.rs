@@ -1637,17 +1637,17 @@ impl Compactor {
             return Ok(batches.into_iter().next().unwrap());
         }
 
-        let ts_idx = match schema.index_of("timestamp") {
+        let ts_idx = match schema.index_of("time") {
             Ok(idx) => idx,
             Err(_) => {
-                // No timestamp column, just concatenate
-                debug!("No timestamp column found, concatenating without sort");
+                // No time column, just concatenate
+                debug!("No time column found, concatenating without sort");
                 return concat_batches(schema, &batches)
                     .map_err(|e| format!("Failed to concat batches: {}", e));
             }
         };
 
-        // Collect all rows with (timestamp, batch_idx, row_idx)
+        // Collect all rows with (time, batch_idx, row_idx)
         let mut indexed_rows: Vec<(i64, usize, usize)> = Vec::new();
 
         for (batch_idx, batch) in batches.iter().enumerate() {
@@ -1662,7 +1662,7 @@ impl Compactor {
                     indexed_rows.push((ts, batch_idx, row_idx));
                 }
             } else {
-                // Fallback: try Int64 timestamp
+                // Fallback: try Int64 time
                 let ts_col = batch.column(ts_idx).as_any().downcast_ref::<Int64Array>();
 
                 if let Some(ts_array) = ts_col {
@@ -1671,7 +1671,7 @@ impl Compactor {
                         indexed_rows.push((ts, batch_idx, row_idx));
                     }
                 } else {
-                    // Unknown timestamp type, just add rows in order
+                    // Unknown time column type, just add rows in order
                     for row_idx in 0..batch.num_rows() {
                         indexed_rows.push((row_idx as i64, batch_idx, row_idx));
                     }
@@ -1679,7 +1679,7 @@ impl Compactor {
             }
         }
 
-        // Sort by timestamp (stable sort preserves order for equal timestamps)
+        // Sort by time (stable sort preserves order for equal times)
         indexed_rows.sort_by_key(|(ts, _, _)| *ts);
 
         // Build sorted arrays
@@ -1839,7 +1839,7 @@ impl Compactor {
         builder.build()
     }
 
-    /// Write compacted batches to a new file (merge-sorted by timestamp, optimized)
+    /// Write compacted batches to a new file (merge-sorted by time, optimized)
     /// Uses k-way merge since each input file is already sorted
     async fn write_compacted_file(
         &self,
@@ -1857,7 +1857,7 @@ impl Compactor {
 
         let total_rows = sorted_batch.num_rows();
         debug!(
-            "Writing {} rows to {} (merge-sorted by timestamp)",
+            "Writing {} rows to {} (merge-sorted by time)",
             total_rows, filename
         );
 

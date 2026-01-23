@@ -91,12 +91,12 @@ impl ParquetWriter {
         )
     }
 
-    /// Sort a RecordBatch by timestamp column (ascending)
-    fn sort_batch_by_timestamp(batch: &RecordBatch) -> Result<RecordBatch, String> {
+    /// Sort a RecordBatch by time column (ascending)
+    fn sort_batch_by_time(batch: &RecordBatch) -> Result<RecordBatch, String> {
         let ts_idx = batch
             .schema()
-            .index_of("timestamp")
-            .map_err(|_| "No timestamp column found")?;
+            .index_of("time")
+            .map_err(|_| "No time column found")?;
 
         let ts_col = batch.column(ts_idx);
 
@@ -206,11 +206,11 @@ impl ParquetWriter {
         let merged_batch = concat_batches(&schema_ref, &adapted_batches)
             .map_err(|e| format!("Failed to merge batches: {}", e))?;
 
-        // Sort by timestamp
-        let sorted_batch = Self::sort_batch_by_timestamp(&merged_batch)?;
+        // Sort by time
+        let sorted_batch = Self::sort_batch_by_time(&merged_batch)?;
 
         debug!(
-            "Writing {} rows to {} (sorted by timestamp)",
+            "Writing {} rows to {} (sorted by time)",
             total_rows, full_path
         );
 
@@ -286,10 +286,10 @@ impl ParquetWriter {
             }
         }
 
-        // Maintain field order: timestamp, date, measurement, tags (sorted), fields (sorted)
+        // Maintain field order: time, date, measurement, tags (sorted), fields (sorted)
         let mut fields = Vec::new();
 
-        if let Some(f) = field_map.remove("timestamp") {
+        if let Some(f) = field_map.remove("time") {
             fields.push(f);
         }
         if let Some(f) = field_map.remove("date") {

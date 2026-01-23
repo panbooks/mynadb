@@ -83,7 +83,7 @@ echo ""
 
 # 6. Query all data
 echo "6. Querying all data..."
-SQL_QUERY_ALL="SELECT * FROM cpu ORDER BY timestamp DESC LIMIT 10"
+SQL_QUERY_ALL="SELECT * FROM cpu ORDER BY time DESC LIMIT 10"
 ENCODED_SQL_ALL=$(echo "$SQL_QUERY_ALL" | jq -sRr @uri)
 request "GET /query/$CATALOG?sql=$SQL_QUERY_ALL" \
     "curl '$BASE_URL/query/$CATALOG?sql=$ENCODED_SQL_ALL'"

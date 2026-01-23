@@ -38,7 +38,7 @@ curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu WHERE usage > 50 AN
 ### Select Specific Columns
 
 ```bash
-curl 'http://localhost:7000/query/mydb?sql=SELECT host, usage, timestamp FROM cpu'
+curl 'http://localhost:7000/query/mydb?sql=SELECT host, usage, time FROM cpu'
 ```
 
 ## Aggregations
@@ -126,19 +126,19 @@ curl -X POST http://localhost:7000/query/mydb \
 ### Recent Data
 
 ```bash
-# Using timestamp comparison
+# Using time comparison
 curl -X POST http://localhost:7000/query/mydb \
-  -d "SELECT * FROM cpu 
-      WHERE timestamp > 1703251234567000000 
-      ORDER BY timestamp DESC"
+  -d "SELECT * FROM cpu
+      WHERE time > 1703251234567000000
+      ORDER BY time DESC"
 ```
 
 ### Time Range
 
 ```bash
 curl -X POST http://localhost:7000/query/mydb \
-  -d "SELECT * FROM cpu 
-      WHERE timestamp BETWEEN 1703251234567000000 AND 1703251240000000000"
+  -d "SELECT * FROM cpu
+      WHERE time BETWEEN 1703251234567000000 AND 1703251240000000000"
 ```
 
 ## Advanced Queries
@@ -169,8 +169,8 @@ curl -X POST http://localhost:7000/query/mydb \
 ```bash
 # Moving average
 curl -X POST http://localhost:7000/query/mydb \
-  -d "SELECT host, usage, 
-             AVG(usage) OVER (PARTITION BY host ORDER BY timestamp) as moving_avg
+  -d "SELECT host, usage,
+             AVG(usage) OVER (PARTITION BY host ORDER BY time) as moving_avg
       FROM cpu"
 
 # Rank by usage
@@ -213,9 +213,9 @@ curl 'http://localhost:7000/query/mydb?sql=SELECT host, COUNT(*) as count FROM c
 
 ```bash
 curl -X POST http://localhost:7000/query/mydb \
-  -d "SELECT DISTINCT ON (host) host, usage, timestamp
+  -d "SELECT DISTINCT ON (host) host, usage, time
       FROM cpu
-      ORDER BY host, timestamp DESC"
+      ORDER BY host, time DESC"
 ```
 
 ### 5. Hourly Averages
@@ -223,8 +223,8 @@ curl -X POST http://localhost:7000/query/mydb \
 ```bash
 # Note: Requires date/time functions support in DataFusion
 curl -X POST http://localhost:7000/query/mydb \
-  -d "SELECT 
-        DATE_TRUNC('hour', timestamp) as hour,
+  -d "SELECT
+        DATE_TRUNC('hour', time) as hour,
         AVG(usage) as avg_usage
       FROM cpu
       GROUP BY hour
@@ -263,7 +263,7 @@ curl -X POST http://localhost:7000/query/mydb \
       FROM cpu c
       LEFT JOIN memory m ON c.host = m.host
       LEFT JOIN disk d ON c.host = d.host
-      WHERE c.timestamp > 1703251234567000000
+      WHERE c.time > 1703251234567000000
       ORDER BY c.usage DESC"
 ```
 

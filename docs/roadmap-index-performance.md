@@ -185,7 +185,7 @@ data/{catalog}/{schema}/{table}/
 
 ### Query Flow
 ```
-Query: WHERE timestamp BETWEEN t1 AND t2
+Query: WHERE time BETWEEN t1 AND t2
 
 1. Binary search in time index for t1 → find starting file/row_group
 2. Binary search for t2 → find ending file/row_group
@@ -561,17 +561,17 @@ For each numeric field:
 ### Query Rewriting
 ```sql
 -- Original query
-SELECT time_bucket('1h', timestamp) as hour,
+SELECT time_bucket('1h', time) as hour,
        avg(cpu_usage) as avg_cpu
 FROM cpu
-WHERE timestamp > now() - interval '30 days'
+WHERE time > now() - interval '30 days'
 GROUP BY hour
 
 -- Rewritten to use rollups (automatic)
-SELECT timestamp as hour,
+SELECT time as hour,
        cpu_usage_sum / cpu_usage_count as avg_cpu
 FROM cpu._rollup_1h
-WHERE timestamp > now() - interval '30 days'
+WHERE time > now() - interval '30 days'
 ```
 
 ### Expected Impact

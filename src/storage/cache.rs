@@ -242,12 +242,12 @@ impl DataCache {
             return schema.clone();
         }
 
-        // Build schema: timestamp + measurement + tags + fields
+        // Build schema: time + measurement + tags + fields
         let mut fields = Vec::with_capacity(2 + tag_keys.len() + field_keys.len());
 
-        // Timestamp
+        // Time column (InfluxQL compatible)
         fields.push(Field::new(
-            "timestamp",
+            "time",
             DataType::Timestamp(TimeUnit::Nanosecond, None),
             false,
         ));

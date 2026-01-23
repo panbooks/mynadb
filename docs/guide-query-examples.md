@@ -97,17 +97,17 @@ curl 'http://localhost:7000/query/mydb?sql=SELECT region, COUNT(*) as count FROM
 curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu ORDER BY usage DESC LIMIT 10'
 
 # Latest records
-curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu ORDER BY timestamp DESC LIMIT 5'
+curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu ORDER BY time DESC LIMIT 5'
 ```
 
 ### 6. Time-based Filtering
 
 ```bash
 # Records after a specific timestamp
-curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu WHERE timestamp > 1703251234567890123'
+curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu WHERE time > 1703251234567890123'
 
 # Between timestamps
-curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu WHERE timestamp BETWEEN 1703251234567890123 AND 1703251300000000000'
+curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu WHERE time BETWEEN 1703251234567890123 AND 1703251300000000000'
 ```
 
 ## Complex Query Examples
@@ -115,7 +115,7 @@ curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu WHERE timestamp BET
 ### 1. Multi-condition Filtering
 
 ```bash
-curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu WHERE host = '"'"'server01'"'"' AND usage > 50.0 ORDER BY timestamp DESC'
+curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu WHERE host = '"'"'server01'"'"' AND usage > 50.0 ORDER BY time DESC'
 ```
 
 ### 2. Statistical Analysis
@@ -133,7 +133,7 @@ curl -X POST http://localhost:7000/query/mydb \
   -d "SELECT c.host, c.usage as cpu_usage, m.used as memory_used
       FROM cpu c
       JOIN memory m ON c.host = m.host
-      WHERE c.timestamp = m.timestamp"
+      WHERE c.time = m.time"
 ```
 
 ### 4. Subqueries
@@ -148,8 +148,8 @@ curl -X POST http://localhost:7000/query/mydb \
 ```bash
 # Running average
 curl -X POST http://localhost:7000/query/mydb \
-  -d "SELECT timestamp, usage,
-      AVG(usage) OVER (ORDER BY timestamp ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) as moving_avg
+  -d "SELECT time, usage,
+      AVG(usage) OVER (ORDER BY time ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) as moving_avg
       FROM cpu"
 ```
 

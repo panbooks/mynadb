@@ -247,7 +247,7 @@ Files after pruning:  5 files (only 2024-01-15 to 2024-01-19)
 Column selection is pushed to the Parquet reader level:
 
 ```sql
-SELECT id, timestamp FROM cpu WHERE ...
+SELECT id, time FROM cpu WHERE ...
 ```
 
 **Process:**
