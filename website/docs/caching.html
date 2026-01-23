@@ -95,6 +95,10 @@
 
       <p>MynaDB implements a sophisticated multi-level caching architecture to maximize query performance. This guide explains the different cache layers and how to configure them.</p>
 
+      <div class="info-box" style="background: linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 100%); border-left: 4px solid #0284c7; padding: 1rem 1.5rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>New in v0.2.8:</strong> Memory-based Metadata Manager with automatic persistence, Parquet Disk Cache for Object Store, and Memtable for immediate query visibility of fresh writes.
+      </div>
+
       <h2>Cache Architecture Overview</h2>
 
       <div class="code-block">
@@ -102,68 +106,160 @@
           <span class="lang">text</span>
         </div>
         <div class="code-content">
-          <pre><code>┌─────────────────────────────────────────────────────────────┐
-│                        Query Engine                          │
-│                                                              │
-│  ┌─────────────────────┐      ┌─────────────────────────┐   │
-│  │   Metadata Cache    │      │   Query Result Cache    │   │
-│  │  (Table info, etc.) │      │   (SQL -> Results)      │   │
-│  └──────────┬──────────┘      └───────────┬─────────────┘   │
-│             │                              │                  │
-│             ▼                              ▼                  │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │              Parquet File Cache (Disk)                  │ │
-│  │         Local SSD cache for Object Store files          │ │
-│  └──────────────────────────┬──────────────────────────────┘ │
-│                             │                                 │
-└─────────────────────────────┼─────────────────────────────────┘
-                              │
-                              ▼
-                 ┌─────────────────────────┐
-                 │     Object Store        │
-                 │  (S3, MinIO, OSS)       │
-                 └─────────────────────────┘</code></pre>
+          <pre><code>┌─────────────────────────────────────────────────────────────────────┐
+│                          Query Engine                                │
+│                                                                      │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐   │
+│  │ Metadata Manager │  │   Query Cache    │  │    Memtable      │   │
+│  │  (Memory + JSON) │  │  (SQL → Results) │  │  (Fresh Writes)  │   │
+│  └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘   │
+│           │                     │                     │              │
+│           │     ┌───────────────┴───────────────┐     │              │
+│           │     │                               │     │              │
+│           ▼     ▼                               ▼     ▼              │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │              Parquet Disk Cache (Local SSD)                   │  │
+│  │         Caches Object Store files for fast local access       │  │
+│  └──────────────────────────────┬────────────────────────────────┘  │
+│                                 │                                    │
+└─────────────────────────────────┼────────────────────────────────────┘
+                                  │
+                    ┌─────────────┴─────────────┐
+                    │                           │
+                    ▼                           ▼
+           ┌───────────────┐          ┌────────────────┐
+           │ Local Storage │          │  Object Store  │
+           │   (Parquet)   │          │ (S3/MinIO/OSS) │
+           └───────────────┘          └────────────────┘</code></pre>
         </div>
       </div>
 
-      <h2>1. Metadata Cache</h2>
+      <h2>Cache Layers Summary</h2>
 
-      <p>The metadata cache stores table and file information to avoid expensive directory scans during query planning.</p>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Cache Layer</th>
+              <th>Storage</th>
+              <th>Purpose</th>
+              <th>Performance Impact</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Metadata Manager</strong></td>
+              <td>Memory + JSON</td>
+              <td>Catalog, schema, table, partition, file metadata</td>
+              <td>Eliminates directory scans (10-100x faster planning)</td>
+            </tr>
+            <tr>
+              <td><strong>Query Result Cache</strong></td>
+              <td>Memory</td>
+              <td>SQL query results</td>
+              <td>Instant response for repeated queries</td>
+            </tr>
+            <tr>
+              <td><strong>Memtable</strong></td>
+              <td>Memory</td>
+              <td>Fresh writes not yet flushed</td>
+              <td>Immediate query visibility (no flush required)</td>
+            </tr>
+            <tr>
+              <td><strong>Parquet Disk Cache</strong></td>
+              <td>Local SSD</td>
+              <td>Object Store files</td>
+              <td>10-100x faster than network fetch</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
-      <h3>What's Cached</h3>
+      <h2>1. Metadata Manager</h2>
 
-      <ul>
-        <li><strong>Table Info</strong>: Catalog, schema, table names, partition information</li>
-        <li><strong>File Listings</strong>: List of Parquet files per partition</li>
-        <li><strong>Parquet Metadata</strong>: File footers with row group statistics</li>
-        <li><strong>Schema Information</strong>: Column names, types, and statistics</li>
-      </ul>
+      <p>The Metadata Manager maintains a complete catalog of all databases, schemas, tables, partitions, and files in memory. This eliminates expensive directory scans and object store listings during query planning.</p>
 
-      <h3>Cache Management API</h3>
+      <h3>Architecture</h3>
 
       <div class="code-block">
         <div class="code-header">
-          <span class="lang">bash</span>
+          <span class="lang">text</span>
         </div>
         <div class="code-content">
-          <pre><code># Get cache statistics
-curl http://localhost:7000/cache/stats
-
-# Pre-warm cache for entire catalog
-curl -X POST http://localhost:7000/cache/prewarm/mydb
-
-# Pre-warm cache for specific table
-curl -X POST http://localhost:7000/cache/prewarm/mydb/default/cpu
-
-# Clear all caches
-curl -X POST http://localhost:7000/cache/clear
-
-# Get Parquet file statistics for a table
-curl http://localhost:7000/cache/parquet/mydb/default/cpu</code></pre>
+          <pre><code>┌─────────────────────────────────────────────────────────────┐
+│                    Metadata Manager                          │
+│                                                              │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │  Catalogs   │  │   Schemas   │  │      Tables         │  │
+│  │  HashMap    │  │   HashMap   │  │      HashMap        │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+│                                                              │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │ Partitions  │  │    Files    │  │   Partition→Files   │  │
+│  │  HashMap    │  │   HashMap   │  │   Reverse Index     │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+│                                                              │
+│         ↓                ↓                   ↓               │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │             JSON Snapshot (Periodic Save)               │ │
+│  │              catalog_snapshot.json                       │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘</code></pre>
         </div>
       </div>
 
-      <h3>Cache Statistics Response</h3>
+      <h3>What's Stored</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Entity</th>
+              <th>Key</th>
+              <th>Tracked Information</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>CatalogInfo</strong></td>
+              <td>catalog_name</td>
+              <td>Name, created_at, schema_count, table_count, total_bytes</td>
+            </tr>
+            <tr>
+              <td><strong>SchemaInfo</strong></td>
+              <td>(catalog, schema)</td>
+              <td>Name, catalog, table_count, total_bytes</td>
+            </tr>
+            <tr>
+              <td><strong>TableInfo</strong></td>
+              <td>(catalog, schema, table)</td>
+              <td>Name, total_rows, total_bytes, partition_count, file_count, min/max timestamp</td>
+            </tr>
+            <tr>
+              <td><strong>PartitionInfo</strong></td>
+              <td>(catalog, schema, table, date)</td>
+              <td>Partition key/value, total_rows, total_bytes, file_count, min/max timestamp</td>
+            </tr>
+            <tr>
+              <td><strong>FileInfo</strong></td>
+              <td>file_path</td>
+              <td>Path, level, size_bytes, row_count, row_groups, partition_key, etag</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Key Features</h3>
+
+      <ul>
+        <li><strong>Zero Directory Scans</strong>: All metadata in memory, no filesystem calls during query planning</li>
+        <li><strong>Automatic Persistence</strong>: Periodic save to <code>catalog_snapshot.json</code> for crash recovery</li>
+        <li><strong>Lazy Registration</strong>: New catalogs/schemas/tables auto-created when files are registered</li>
+        <li><strong>Aggregated Statistics</strong>: Automatic rollup of row counts, bytes, timestamps up the hierarchy</li>
+        <li><strong>Fast Partition Pruning</strong>: Query <code>list_partitions_in_range()</code> for date-filtered queries</li>
+      </ul>
+
+      <h3>Snapshot Persistence</h3>
 
       <div class="code-block">
         <div class="code-header">
@@ -171,11 +267,96 @@ curl http://localhost:7000/cache/parquet/mydb/default/cpu</code></pre>
         </div>
         <div class="code-content">
           <pre><code>{
-  "metadata_cache": {
-    "table_info_entries": 42,
-    "file_listing_entries": 156,
-    "parquet_metadata_entries": 1024,
-    "memory_usage_bytes": 52428800
+  "version": 1,
+  "snapshot_at": 1705123456789,
+  "catalogs": [
+    {"name": "mydb", "created_at": 1705000000000, "schema_count": 3, "table_count": 15}
+  ],
+  "schemas": [
+    {"name": "default", "catalog": "mydb", "table_count": 10}
+  ],
+  "tables": [
+    {"name": "cpu", "schema": "default", "catalog": "mydb",
+     "total_rows": 1000000, "total_bytes": 52428800, "partition_count": 7}
+  ],
+  "partitions": [
+    {"partition_key": "2024-01-15", "table": "cpu", "file_count": 3}
+  ],
+  "files": [
+    {"path": "/data/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet",
+     "level": 0, "size_bytes": 10485760, "row_count": 100000}
+  ]
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Recovery Flow</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>Server Startup
+      │
+      ▼
+┌─────────────────┐
+│ Load Snapshot?  │──────────────────┐
+└────────┬────────┘                  │ No snapshot
+         │ Yes                       ▼
+         ▼                   ┌───────────────┐
+┌─────────────────┐          │ Full Rescan   │
+│ Load from JSON  │          │ (data_dir)    │
+└────────┬────────┘          └───────┬───────┘
+         │                           │
+         ▼                           ▼
+┌─────────────────────────────────────────────┐
+│          Metadata Manager Ready             │
+│     (All queries use in-memory lookups)     │
+└─────────────────────────────────────────────┘</code></pre>
+        </div>
+      </div>
+
+      <h3>API Endpoints</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Get global metadata statistics
+curl http://localhost:7000/cache/stats
+
+# Pre-warm metadata for entire catalog (database)
+curl -X POST http://localhost:7000/cache/prewarm/mydb
+
+# Pre-warm metadata for specific table
+curl -X POST http://localhost:7000/cache/prewarm/mydb/default/cpu
+
+# Clear all caches (triggers rescan on next query)
+curl -X POST http://localhost:7000/cache/clear
+
+# Get detailed Parquet file statistics
+curl http://localhost:7000/cache/parquet/mydb/default/cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>Statistics Response</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">json</span>
+        </div>
+        <div class="code-content">
+          <pre><code>{
+  "metadata_manager": {
+    "catalog_count": 3,
+    "schema_count": 12,
+    "table_count": 156,
+    "partition_count": 2340,
+    "file_count": 8920,
+    "total_rows": 5847293847,
+    "total_bytes": 128849018880
   },
   "query_cache": {
     "entries": 128,
@@ -243,9 +424,106 @@ curl -X POST http://localhost:7000/cache/clear/results
         </div>
       </div>
 
-      <h2>3. Parquet File Cache (Disk Cache)</h2>
+      <h2>3. Memtable (Immediate Query Visibility)</h2>
 
-      <p>When using Object Store backends (S3, MinIO), MynaDB can cache Parquet files on local SSD to reduce network latency.</p>
+      <p>The Memtable provides immediate query visibility for fresh writes that haven't been flushed to Parquet yet. Previously, you had to call <code>/flush</code> before querying recent data. Now queries automatically include in-memory data.</p>
+
+      <h3>How It Works</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>┌─────────────────────────────────────────────────────────────┐
+│                      Query Execution                         │
+│                                                              │
+│  SELECT * FROM cpu WHERE host = 'server01'                   │
+│                                                              │
+│         ┌──────────────┐          ┌──────────────┐           │
+│         │MemtableExec  │          │ParquetExec   │           │
+│         │(Fresh Data)  │          │(Parquet Files)│          │
+│         └──────┬───────┘          └──────┬───────┘           │
+│                │                         │                    │
+│                └──────────┬──────────────┘                    │
+│                           │                                   │
+│                           ▼                                   │
+│                   ┌───────────────┐                           │
+│                   │  UnionExec    │                           │
+│                   │ (Merge Both)  │                           │
+│                   └───────────────┘                           │
+│                           │                                   │
+│                           ▼                                   │
+│                      Query Results                            │
+│              (Includes ALL data, flushed + unflushed)         │
+└─────────────────────────────────────────────────────────────┘</code></pre>
+        </div>
+      </div>
+
+      <h3>Key Features</h3>
+
+      <ul>
+        <li><strong>Zero-Copy Access</strong>: Reads directly from DataCache without copying (Arc-based batches)</li>
+        <li><strong>Schema Alignment</strong>: Automatically aligns memtable schema with Parquet file schema</li>
+        <li><strong>Filter Pushdown</strong>: Supports inexact filter pushdown for efficiency</li>
+        <li><strong>Streaming Results</strong>: Uses RecordBatchStream to avoid collecting all data in memory</li>
+      </ul>
+
+      <h3>Query Behavior</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Write data (goes to in-memory cache)
+curl -X POST http://localhost:7000/write/mydb \
+  -d 'cpu,host=server01 usage=75.5'
+
+# Query IMMEDIATELY - no flush needed!
+# This returns the fresh data from memtable
+curl 'http://localhost:7000/query/mydb' \
+  -d 'SELECT * FROM cpu WHERE host = '\''server01'\'''
+
+# Data is automatically included from:
+# 1. In-memory cache (memtable) - fresh writes
+# 2. Parquet files - flushed data</code></pre>
+        </div>
+      </div>
+
+      <h2>4. Parquet Disk Cache (Object Store)</h2>
+
+      <p>When using Object Store backends (S3, MinIO, Aliyun OSS), MynaDB caches Parquet files on local SSD to dramatically reduce network latency. This is essential for production deployments using cloud storage.</p>
+
+      <h3>Architecture</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>┌─────────────────────────────────────────────────────────────┐
+│                      Disk File Cache                         │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │                  In-Memory State                        │ │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │ │
+│  │  │   entries    │  │  total_size  │  │    stats     │  │ │
+│  │  │   HashMap    │  │    (u64)     │  │ hits/misses  │  │ │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘  │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│                              │                               │
+│                              ▼                               │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │                  Local SSD Storage                      │ │
+│  │  /var/cache/mynadb/parquet/                             │ │
+│  │    ├── abc123def456.parquet  (cached file)              │ │
+│  │    ├── 789ghi012jkl.parquet  (cached file)              │ │
+│  │    └── cache_index.json      (metadata)                 │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘</code></pre>
+        </div>
+      </div>
 
       <h3>Configuration</h3>
 
@@ -255,45 +533,67 @@ curl -X POST http://localhost:7000/cache/clear/results
         </div>
         <div class="code-content">
           <pre><code>[file_cache]
-# Enable file caching (for Object Store backends)
+# Enable file caching (essential for Object Store backends)
 enabled = true
 
-# Cache directory on local SSD
+# Cache directory on local SSD (use NVMe for best performance)
 cache_dir = "/var/cache/mynadb/parquet"
 
 # Maximum cache size (100 GB)
 max_size_bytes = 107374182400
 
-# Index save interval in seconds
+# Index save interval in seconds (5 minutes)
 auto_save_interval_secs = 300</code></pre>
         </div>
       </div>
 
-      <h3>Cache Eviction Strategy</h3>
+      <h3>Cache Entry Metadata</h3>
 
-      <p>The file cache uses a priority-based LRU eviction strategy that considers:</p>
+      <p>Each cached file tracks comprehensive metadata for smart eviction:</p>
 
-      <ul>
-        <li><strong>Recency</strong>: How recently was the file accessed?</li>
-        <li><strong>Frequency</strong>: How often is the file accessed?</li>
-        <li><strong>Partition Date</strong>: Recent partitions are prioritized (time series workloads typically query recent data)</li>
-      </ul>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">json</span>
+        </div>
+        <div class="code-content">
+          <pre><code>{
+  "source_path": "s3://bucket/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet",
+  "cache_path": "/var/cache/mynadb/parquet/abc123.parquet",
+  "size_bytes": 10485760,
+  "etag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+  "cached_at": 1705123456789,
+  "last_accessed": 1705234567890,
+  "access_count": 42,
+  "partition_date": "2024-01-15"
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Smart Eviction Strategy</h3>
+
+      <p>The cache uses a priority-based eviction algorithm that considers multiple factors:</p>
 
       <div class="code-block">
         <div class="code-header">
           <span class="lang">text</span>
         </div>
         <div class="code-content">
-          <pre><code>Priority Score = Recency * Frequency * Partition_Bonus
+          <pre><code>Priority Score = Recency × Frequency × Partition_Bonus
 
-Partition Bonus:
-  - Today:       10x
-  - Yesterday:   8x
-  - This week:   5x
-  - This month:  2x
-  - Older:       1x
+Recency Factors:
+  - Accessed in last hour:    100x
+  - Accessed today:           50x
+  - Accessed this week:       10x
+  - Older:                    1x
 
-Lower scores are evicted first.</code></pre>
+Partition Date Bonus (time series optimization):
+  - Today's partition:        10x
+  - Yesterday's partition:    8x
+  - This week's partition:    5x
+  - This month's partition:   2x
+  - Older partitions:         1x
+
+Files with LOWER scores are evicted first.</code></pre>
         </div>
       </div>
 
@@ -304,26 +604,94 @@ Lower scores are evicted first.</code></pre>
           <span class="lang">text</span>
         </div>
         <div class="code-content">
-          <pre><code>Query Request
+          <pre><code>Query needs file: s3://bucket/mydb/default/cpu/date=2024-01-15/L0.parquet
      │
      ▼
-┌─────────────┐
-│ Check Cache │──────────────────┐
-└─────────────┘                  │
-     │                           │ Miss
-     │ Hit                       ▼
-     │                  ┌─────────────────┐
-     ▼                  │ Fetch from S3   │
-┌─────────────┐         └────────┬────────┘
-│ Read Local  │                  │
-│ SSD File    │                  ▼
-└─────────────┘         ┌─────────────────┐
-     │                  │ Write to Cache  │
-     │                  └────────┬────────┘
-     ▼                           │
-┌─────────────────────────────────┐
-│       Return Data               │
-└─────────────────────────────────┘</code></pre>
+┌─────────────────┐
+│ Check In-Memory │
+│  Entry Index    │
+└────────┬────────┘
+         │
+    ┌────┴────┐
+    │ Exists? │
+    └────┬────┘
+         │
+    Yes  │  No
+    ┌────┘  └────┐
+    │            │
+    ▼            ▼
+┌─────────┐  ┌─────────────────┐
+│ Update  │  │ Fetch from S3   │
+│ Access  │  │ (Network Call)  │
+│ Stats   │  └────────┬────────┘
+└────┬────┘           │
+     │                ▼
+     │        ┌─────────────────┐
+     │        │ Make Room       │
+     │        │ (Evict if full) │
+     │        └────────┬────────┘
+     │                 │
+     │                 ▼
+     │        ┌─────────────────┐
+     │        │ Write to SSD    │
+     │        │ + Update Index  │
+     │        └────────┬────────┘
+     │                 │
+     ▼                 ▼
+┌───────────────────────────────┐
+│ Read from Local SSD           │
+│ (Fast: ~0.1ms vs ~50ms S3)    │
+└───────────────────────────────┘</code></pre>
+        </div>
+      </div>
+
+      <h3>Cache Statistics</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Get disk cache statistics
+curl http://localhost:7000/cache/stats | jq '.disk_cache'
+
+# Response:
+{
+  "file_count": 1523,
+  "total_size_bytes": 85899345920,
+  "max_size_bytes": 107374182400,
+  "hits": 45210,
+  "misses": 892,
+  "hit_rate": 0.981,
+  "evictions": 234,
+  "bytes_read_from_cache": 4521000000000,
+  "bytes_fetched_from_source": 89200000000
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Cache Operations</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Prefetch files for expected queries (warm cache before dashboard load)
+curl -X POST http://localhost:7000/cache/prefetch \
+  -H "Content-Type: application/json" \
+  -d '{"paths": ["s3://bucket/mydb/default/cpu/date=2024-01-15/*"]}'
+
+# Invalidate cache for specific path prefix (after compaction)
+curl -X POST http://localhost:7000/cache/invalidate \
+  -H "Content-Type: application/json" \
+  -d '{"prefix": "s3://bucket/mydb/default/cpu/date=2024-01-15/"}'
+
+# Clear entire disk cache
+curl -X POST http://localhost:7000/cache/clear
+
+# Verify cache integrity (check for orphaned entries)
+curl http://localhost:7000/cache/verify</code></pre>
         </div>
       </div>
 
@@ -331,30 +699,108 @@ Lower scores are evicted first.</code></pre>
 
       <h3>For High Query Performance</h3>
 
-      <ul>
-        <li>Enable query result cache for dashboards with repeated queries</li>
-        <li>Pre-warm metadata cache on startup for frequently queried tables</li>
-        <li>Use local SSD for file cache when using Object Store</li>
-        <li>Set appropriate TTL based on data freshness requirements</li>
-      </ul>
+      <div class="best-practice-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; margin: 1.5rem 0;">
+        <div style="background: #f8fafc; border-radius: 0.75rem; padding: 1.5rem; border: 1px solid #e2e8f0;">
+          <h4 style="color: #0284c7; margin-bottom: 0.75rem;">Metadata Manager</h4>
+          <ul style="margin: 0; padding-left: 1.25rem;">
+            <li>Let the system auto-populate metadata from writes</li>
+            <li>Pre-warm on startup for critical databases</li>
+            <li>Monitor partition counts for table growth</li>
+          </ul>
+        </div>
+        <div style="background: #f8fafc; border-radius: 0.75rem; padding: 1.5rem; border: 1px solid #e2e8f0;">
+          <h4 style="color: #0284c7; margin-bottom: 0.75rem;">Query Result Cache</h4>
+          <ul style="margin: 0; padding-left: 1.25rem;">
+            <li>Enable for dashboard/reporting queries</li>
+            <li>Set TTL based on data freshness needs</li>
+            <li>Use <code>min_query_time_ms</code> to skip fast queries</li>
+          </ul>
+        </div>
+        <div style="background: #f8fafc; border-radius: 0.75rem; padding: 1.5rem; border: 1px solid #e2e8f0;">
+          <h4 style="color: #0284c7; margin-bottom: 0.75rem;">Memtable</h4>
+          <ul style="margin: 0; padding-left: 1.25rem;">
+            <li>Auto-enabled, no configuration needed</li>
+            <li>Query immediately after writes</li>
+            <li>Adjust <code>flush_interval_secs</code> for memory vs freshness</li>
+          </ul>
+        </div>
+        <div style="background: #f8fafc; border-radius: 0.75rem; padding: 1.5rem; border: 1px solid #e2e8f0;">
+          <h4 style="color: #0284c7; margin-bottom: 0.75rem;">Disk Cache</h4>
+          <ul style="margin: 0; padding-left: 1.25rem;">
+            <li>Use NVMe SSD for cache directory</li>
+            <li>Size to hold 7+ days of hot data</li>
+            <li>Monitor hit rate (target >90%)</li>
+          </ul>
+        </div>
+      </div>
 
-      <h3>For Memory Management</h3>
+      <h3>Memory Sizing Guide</h3>
 
-      <ul>
-        <li>Monitor cache memory usage via <code>/cache/stats</code></li>
-        <li>Adjust <code>max_size_mb</code> based on available RAM</li>
-        <li>Use <code>min_query_time_ms</code> to avoid caching trivial queries</li>
-        <li>Clear caches periodically if memory is constrained</li>
-      </ul>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Deployment Size</th>
+              <th>Tables</th>
+              <th>Query Cache</th>
+              <th>Disk Cache</th>
+              <th>Recommended RAM</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Small</td>
+              <td>&lt;50</td>
+              <td>256 MB</td>
+              <td>10 GB</td>
+              <td>4 GB</td>
+            </tr>
+            <tr>
+              <td>Medium</td>
+              <td>50-500</td>
+              <td>1 GB</td>
+              <td>100 GB</td>
+              <td>16 GB</td>
+            </tr>
+            <tr>
+              <td>Large</td>
+              <td>500-5000</td>
+              <td>4 GB</td>
+              <td>500 GB</td>
+              <td>64 GB</td>
+            </tr>
+            <tr>
+              <td>Enterprise</td>
+              <td>&gt;5000</td>
+              <td>16 GB</td>
+              <td>1+ TB</td>
+              <td>128+ GB</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
-      <h3>For Object Store Workloads</h3>
+      <h3>Object Store Deployment</h3>
 
-      <ul>
-        <li>Size file cache based on working set (recent partitions)</li>
-        <li>Place cache on NVMe SSD for best performance</li>
-        <li>Monitor cache hit rate and adjust size accordingly</li>
-        <li>Consider pre-warming cache for predictable query patterns</li>
-      </ul>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Recommended config for S3/MinIO/OSS deployments
+[file_cache]
+enabled = true
+cache_dir = "/mnt/nvme/mynadb-cache"  # NVMe SSD
+max_size_bytes = 107374182400          # 100 GB
+auto_save_interval_secs = 60           # Frequent saves
+
+[query_cache]
+enabled = true
+max_size_mb = 1024                     # 1 GB
+ttl_secs = 300                         # 5 min TTL
+min_query_time_ms = 50                 # Only cache slow queries</code></pre>
+        </div>
+      </div>
 
       <h2>Monitoring</h2>
 

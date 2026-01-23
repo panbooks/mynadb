@@ -123,6 +123,56 @@
     </div>
   </section>
 
+  <!-- What's New Section -->
+  <section class="section" style="background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 50%, #f0f9ff 100%);">
+    <div class="container">
+      <div class="section-header">
+        <h2>What's New in v0.2.8</h2>
+        <p>Major performance improvements and new features for time series analytics.</p>
+      </div>
+
+      <div class="features-grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+        <div class="feature-card" style="background: white; border: 2px solid #0284c7;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #0284c7, #06b6d4);">&#128200;</div>
+          <h3>Metadata Manager</h3>
+          <p>Memory-based metadata catalog with JSON persistence. Eliminates filesystem scans for <strong>10-100x faster</strong> query planning.</p>
+          <a href="docs/caching.html" style="color: #0284c7; text-decoration: none; font-weight: 500;">Learn more &rarr;</a>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #06b6d4;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #06b6d4, #22d3ee);">&#128190;</div>
+          <h3>Parquet Disk Cache</h3>
+          <p>Local SSD caching for Object Store files. Smart eviction prioritizes recent partitions for time series workloads.</p>
+          <a href="docs/caching.html#disk-cache" style="color: #06b6d4; text-decoration: none; font-weight: 500;">Learn more &rarr;</a>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #10b981;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #10b981, #34d399);">&#9889;</div>
+          <h3>Instant Query Visibility</h3>
+          <p>Memtable provides immediate query access to fresh writes. <strong>No more flush before query!</strong></p>
+          <a href="docs/caching.html#memtable" style="color: #10b981; text-decoration: none; font-weight: 500;">Learn more &rarr;</a>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #8b5cf6;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa);">&#128202;</div>
+          <h3>first_value() / last_value()</h3>
+          <p>InfluxDB-compatible aggregate functions for time-ordered data. Essential for downsampling and monitoring.</p>
+          <a href="docs/sql-queries.html#time-series" style="color: #8b5cf6; text-decoration: none; font-weight: 500;">Learn more &rarr;</a>
+        </div>
+      </div>
+
+      <div class="text-center" style="margin-top: 2rem;">
+        <div style="display: inline-block; background: white; padding: 1rem 2rem; border-radius: 0.75rem; box-shadow: 0 4px 20px rgba(0,0,0,0.08);">
+          <code style="font-size: 1rem; color: #0f172a;">
+            <span style="color: #64748b;"># Try it now!</span><br>
+            curl -X POST localhost:7000/write/mydb -d 'cpu,host=srv1 usage=75.5'<br>
+            curl 'localhost:7000/query/mydb' -d 'SELECT * FROM cpu'  <span style="color: #10b981;"># Instant!</span>
+          </code>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- Features Section -->
   <section class="section">
     <div class="container">
@@ -253,24 +303,29 @@
             +-------+-------+                 +-------+-------+
                     |                                 |
             +-------v-------+                 +-------v-------+
-            |   DataCache   |                 |  QueryEngine  |
-            |  (In-Memory)  |                 |  (DataFusion) |
-            +-------+-------+                 +-------+-------+
+            |   DataCache   |&lt;----------------|  QueryEngine  |
+            |  (In-Memory)  |   Memtable      |  (DataFusion) |
+            +-------+-------+   (instant!)    +-------+-------+
                     |                                 |
                     |    +------------------+         |
-                    +--->|  Parquet Files   |<--------+
-                         |  (Columnar)      |
-                         +--------+---------+
-                                  |
-           +-------------+--------v---------+-------------+
-           |             |    Compactor     |             |
-           |             |  (LSM Multi-Level)|            |
-           |             +------------------+             |
-           |                                              |
-   +-------v--------+    WAL Replication    +-------v--------+
-   |     MASTER     |---------------------->|     SLAVE      |
-   |   (Active)     |     Real-time        |   (Standby)    |
-   +----------------+                       +----------------+
+                    +--->|  Parquet Files   |&lt;--------+
+                    |    |  (Columnar)      |
+                    |    +--------+---------+
+                    |             |
+            +-------v-------------v-------+
+            |      Metadata Manager       |
+            |  (Memory-based Catalog)     |
+            +-------------+---------------+
+                          |
+           +-------------+v---------+-------------+
+           |             Compactor                |
+           |          (LSM Multi-Level)           |
+           +--------------------------------------+
+           |                                      |
+   +-------v--------+   WAL Replication  +-------v--------+
+   |     MASTER     |------------------->|     SLAVE      |
+   |   (Active)     |    Real-time       |   (Standby)    |
+   +----------------+                    +----------------+
         </pre>
       </div>
 
@@ -280,12 +335,24 @@
           <p>InfluxDB Line Protocol parser with high-throughput buffering and background flush to Parquet.</p>
         </div>
         <div class="arch-card">
+          <h4>&#9889; Memtable</h4>
+          <p>Query fresh writes instantly without waiting for flush. Automatic union of memory and Parquet data.</p>
+        </div>
+        <div class="arch-card">
+          <h4>&#128200; Metadata Manager</h4>
+          <p>Memory-based catalog with JSON persistence. 10-100x faster query planning.</p>
+        </div>
+        <div class="arch-card">
           <h4>&#128451; Storage Layer</h4>
           <p>Columnar Parquet files with date partitioning and multi-level LSM compaction.</p>
         </div>
         <div class="arch-card">
           <h4>&#128270; Query Engine</h4>
           <p>Apache DataFusion SQL engine with predicate pushdown and parallel execution.</p>
+        </div>
+        <div class="arch-card">
+          <h4>&#128190; Disk Cache</h4>
+          <p>Local SSD cache for Object Store files. Smart eviction prioritizes recent data.</p>
         </div>
         <div class="arch-card">
           <h4>&#9992; Arrow Flight</h4>
@@ -329,15 +396,16 @@ cpu,host=server02,region=us-east usage=82.3,temp=50
 memory,host=server01 used=16.5,total=32.0
 '</span>
 
-<span class="token-comment"># 3. Flush to disk</span>
-<span class="token-function">curl</span> -X POST http://localhost:7000/flush
-
-<span class="token-comment"># 4. Query with SQL</span>
+<span class="token-comment"># 3. Query immediately! (No flush needed - Memtable provides instant visibility)</span>
 <span class="token-function">curl</span> <span class="token-string">'http://localhost:7000/query/mydb'</span> \
   -d <span class="token-string">'SELECT host, AVG(usage) as avg_cpu FROM cpu GROUP BY host'</span>
 
 <span class="token-comment"># Result:</span>
-<span class="token-comment"># [{"host":"server01","avg_cpu":75.5},{"host":"server02","avg_cpu":82.3}]</span></code></pre>
+<span class="token-comment"># [{"host":"server01","avg_cpu":75.5},{"host":"server02","avg_cpu":82.3}]</span>
+
+<span class="token-comment"># 4. Time series aggregation with GROUP BY time()</span>
+<span class="token-function">curl</span> <span class="token-string">'http://localhost:7000/query/mydb'</span> \
+  -d <span class="token-string">'SELECT host, AVG(usage) FROM cpu GROUP BY time(5m), host'</span></code></pre>
         </div>
       </div>
 
