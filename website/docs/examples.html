@@ -127,7 +127,7 @@
 
       <div class="code-block">
         <div class="code-content">
-          <pre><code>curl 'http://localhost:7000/query/mydb' -d 'SELECT host, usage, timestamp FROM cpu'</code></pre>
+          <pre><code>curl 'http://localhost:7000/query/mydb' -d 'SELECT host, usage, time FROM cpu'</code></pre>
         </div>
       </div>
 
@@ -139,7 +139,7 @@
 curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu ORDER BY usage DESC LIMIT 10'
 
 <span class="token-comment"># Latest records first</span>
-curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu ORDER BY timestamp DESC LIMIT 10'</code></pre>
+curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu ORDER BY time DESC LIMIT 10'</code></pre>
         </div>
       </div>
 
@@ -256,17 +256,17 @@ WHERE region = 'us-west' OR region = 'us-east'
 
       <div class="code-block">
         <div class="code-content">
-          <pre><code><span class="token-comment"># After timestamp</span>
+          <pre><code><span class="token-comment"># After time</span>
 curl 'http://localhost:7000/query/mydb' -d "
 SELECT * FROM cpu
-WHERE timestamp > 1703251234567000000
-ORDER BY timestamp DESC
+WHERE time > 1703251234567000000
+ORDER BY time DESC
 "
 
-<span class="token-comment"># Between timestamps</span>
+<span class="token-comment"># Between times</span>
 curl 'http://localhost:7000/query/mydb' -d "
 SELECT * FROM cpu
-WHERE timestamp BETWEEN 1703251234567000000 AND 1703251300000000000
+WHERE time BETWEEN 1703251234567000000 AND 1703251300000000000
 "</code></pre>
         </div>
       </div>
@@ -346,12 +346,12 @@ LEFT JOIN disk d ON c.host = d.host
         <div class="code-content">
           <pre><code>curl 'http://localhost:7000/query/mydb' -d "
 SELECT
-  timestamp,
+  time,
   host,
   usage,
   AVG(usage) OVER (
     PARTITION BY host
-    ORDER BY timestamp
+    ORDER BY time
     ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
   ) as moving_avg
 FROM cpu
@@ -380,9 +380,9 @@ FROM cpu
         <div class="code-content">
           <pre><code>curl 'http://localhost:7000/query/mydb' -d "
 SELECT
-  timestamp,
+  time,
   usage,
-  SUM(usage) OVER (ORDER BY timestamp) as running_total
+  SUM(usage) OVER (ORDER BY time) as running_total
 FROM cpu
 "</code></pre>
         </div>
@@ -394,10 +394,10 @@ FROM cpu
         <div class="code-content">
           <pre><code>curl 'http://localhost:7000/query/mydb' -d "
 SELECT
-  timestamp,
+  time,
   usage,
-  LAG(usage, 1) OVER (ORDER BY timestamp) as prev_usage,
-  LEAD(usage, 1) OVER (ORDER BY timestamp) as next_usage
+  LAG(usage, 1) OVER (ORDER BY time) as prev_usage,
+  LEAD(usage, 1) OVER (ORDER BY time) as next_usage
 FROM cpu
 "</code></pre>
         </div>
@@ -481,10 +481,10 @@ SELECT host, 'memory' as metric, used as value FROM memory
           <pre><code><span class="token-comment"># Group by minute</span>
 curl 'http://localhost:7000/query/mydb' -d "
 SELECT
-  (timestamp / 60000000000) as minute_bucket,
+  (time / 60000000000) as minute_bucket,
   AVG(usage) as avg_usage
 FROM cpu
-GROUP BY (timestamp / 60000000000)
+GROUP BY (time / 60000000000)
 ORDER BY minute_bucket
 "</code></pre>
         </div>
@@ -572,11 +572,11 @@ WITH ranked AS (
   SELECT
     host,
     usage,
-    timestamp,
-    ROW_NUMBER() OVER (PARTITION BY host ORDER BY timestamp DESC) as rn
+    time,
+    ROW_NUMBER() OVER (PARTITION BY host ORDER BY time DESC) as rn
   FROM cpu
 )
-SELECT host, usage, timestamp
+SELECT host, usage, time
 FROM ranked
 WHERE rn = 1
 "</code></pre>
@@ -589,14 +589,14 @@ WHERE rn = 1
         <div class="code-content">
           <pre><code>curl 'http://localhost:7000/query/mydb' -d "
 SELECT
-  timestamp,
+  time,
   host,
   usage,
-  LAG(usage) OVER (PARTITION BY host ORDER BY timestamp) as prev_usage,
-  usage - LAG(usage) OVER (PARTITION BY host ORDER BY timestamp) as change
+  LAG(usage) OVER (PARTITION BY host ORDER BY time) as prev_usage,
+  usage - LAG(usage) OVER (PARTITION BY host ORDER BY time) as change
 FROM cpu
 WHERE host = 'server01'
-ORDER BY timestamp DESC
+ORDER BY time DESC
 LIMIT 20
 "</code></pre>
         </div>

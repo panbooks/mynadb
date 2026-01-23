@@ -249,13 +249,13 @@ data/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet
 
 <span class="token-comment"># Query only reads date=2024-01-15 partition</span>
 SELECT * FROM cpu
-WHERE timestamp >= '2024-01-15' AND timestamp < '2024-01-16'</code></pre>
+WHERE time >= '2024-01-15' AND time < '2024-01-16'</code></pre>
         </div>
       </div>
 
       <h3>Partition Pruning</h3>
 
-      <p>When you filter by timestamp, only relevant partitions are scanned:</p>
+      <p>When you filter by time, only relevant partitions are scanned:</p>
 
       <div class="table-wrapper">
         <table>
@@ -267,11 +267,11 @@ WHERE timestamp >= '2024-01-15' AND timestamp < '2024-01-16'</code></pre>
           </thead>
           <tbody>
             <tr>
-              <td><code>WHERE timestamp > '2024-01-15'</code></td>
+              <td><code>WHERE time > '2024-01-15'</code></td>
               <td>Only date=2024-01-15 and later</td>
             </tr>
             <tr>
-              <td><code>WHERE timestamp BETWEEN '2024-01-10' AND '2024-01-12'</code></td>
+              <td><code>WHERE time BETWEEN '2024-01-10' AND '2024-01-12'</code></td>
               <td>Only 3 partitions</td>
             </tr>
             <tr>

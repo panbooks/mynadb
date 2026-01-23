@@ -208,8 +208,8 @@ curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu LIMIT 10'</code></
         <div class="code-content">
           <pre><code><span class="token-keyword">SELECT</span> c.host, c.usage, m.available
 <span class="token-keyword">FROM</span> cpu c
-<span class="token-keyword">JOIN</span> memory m <span class="token-keyword">ON</span> c.host = m.host <span class="token-keyword">AND</span> c.timestamp = m.timestamp
-<span class="token-keyword">WHERE</span> c.timestamp > now() - <span class="token-keyword">INTERVAL</span> <span class="token-string">'1 hour'</span></code></pre>
+<span class="token-keyword">JOIN</span> memory m <span class="token-keyword">ON</span> c.host = m.host <span class="token-keyword">AND</span> c.time = m.time
+<span class="token-keyword">WHERE</span> c.time > now() - <span class="token-keyword">INTERVAL</span> <span class="token-string">'1 hour'</span></code></pre>
         </div>
       </div>
 
@@ -224,7 +224,7 @@ curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu LIMIT 10'</code></
       <h3>How can I improve query performance?</h3>
       <ul>
         <li><strong>Use LIMIT:</strong> Always add LIMIT for exploratory queries</li>
-        <li><strong>Filter on timestamp:</strong> Time-based filters leverage partitioning</li>
+        <li><strong>Filter on time:</strong> Time-based filters leverage partitioning</li>
         <li><strong>Run compaction:</strong> Reduces file count and improves scan efficiency</li>
         <li><strong>Use Arrow Flight:</strong> Faster than HTTP for large result sets</li>
       </ul>

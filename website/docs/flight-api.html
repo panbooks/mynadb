@@ -268,7 +268,7 @@ datafusion-cli --host localhost --port 7001 --catalog mydb</code></pre>
 <span class="token-comment">-- Query data</span>
 <span class="token-keyword">SELECT</span> host, <span class="token-function">AVG</span>(usage) <span class="token-keyword">AS</span> avg_cpu
 <span class="token-keyword">FROM</span> mydb.default.cpu
-<span class="token-keyword">WHERE</span> timestamp > now() - interval '1 hour'
+<span class="token-keyword">WHERE</span> time > now() - interval '1 hour'
 <span class="token-keyword">GROUP BY</span> host
 <span class="token-keyword">ORDER BY</span> avg_cpu <span class="token-keyword">DESC</span>;
 
@@ -322,7 +322,7 @@ client = flight.connect(<span class="token-string">"grpc://localhost:7001"</span
 sql = <span class="token-string">"""
     SELECT host, region, AVG(usage) as avg_cpu
     FROM mydb.default.cpu
-    WHERE timestamp > now() - interval '1 hour'
+    WHERE time > now() - interval '1 hour'
     GROUP BY host, region
 """</span>
 
@@ -571,7 +571,7 @@ futures = "0.3"</code></pre>
       <div class="code-block">
         <div class="code-content">
           <pre><code><span class="token-comment">-- Good: Only select needed columns</span>
-<span class="token-keyword">SELECT</span> timestamp, host, usage <span class="token-keyword">FROM</span> cpu;
+<span class="token-keyword">SELECT</span> time, host, usage <span class="token-keyword">FROM</span> cpu;
 
 <span class="token-comment">-- Avoid: Selecting all columns</span>
 <span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> cpu;</code></pre>
@@ -584,12 +584,12 @@ futures = "0.3"</code></pre>
         <div class="code-content">
           <pre><code><span class="token-comment">-- Leverages date partition pruning</span>
 <span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> cpu
-<span class="token-keyword">WHERE</span> timestamp >= <span class="token-number">1704067200000000000</span>  <span class="token-comment">-- epoch nanos</span>
-  <span class="token-keyword">AND</span> timestamp <  <span class="token-number">1704153600000000000</span>;
+<span class="token-keyword">WHERE</span> time >= <span class="token-number">1704067200000000000</span>  <span class="token-comment">-- epoch nanos</span>
+  <span class="token-keyword">AND</span> time <  <span class="token-number">1704153600000000000</span>;
 
 <span class="token-comment">-- Or using date functions</span>
 <span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> cpu
-<span class="token-keyword">WHERE</span> timestamp > now() - interval <span class="token-string">'1 day'</span>;</code></pre>
+<span class="token-keyword">WHERE</span> time > now() - interval <span class="token-string">'1 day'</span>;</code></pre>
         </div>
       </div>
 
