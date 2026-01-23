@@ -1,14 +1,14 @@
 use crate::line_protocol::format_date32_as_partition;
 use crate::storage::storage::Storage;
-use arrow::array::{ArrayRef, RecordBatch};
-use arrow::compute::{concat_batches, sort_to_indices, take};
+use arrow::array::{ArrayRef, RecordBatch, UInt32Array};
+use arrow::compute::{concat_batches, lexsort_to_indices, sort_to_indices, take, SortColumn};
 use arrow::datatypes::{Field, Schema};
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, warn};
 
 // File naming constants
 const PARQUET_FILE_EXT: &str = "parquet";
@@ -91,18 +91,43 @@ impl ParquetWriter {
         )
     }
 
-    /// Sort a RecordBatch by time column (ascending)
+    /// Sort a RecordBatch by time column only (ascending) - legacy method
     fn sort_batch_by_time(batch: &RecordBatch) -> Result<RecordBatch, String> {
-        let ts_idx = batch
-            .schema()
-            .index_of("time")
-            .map_err(|_| "No time column found")?;
+        Self::sort_batch_by_columns(batch, &["time".to_string()])
+    }
 
-        let ts_col = batch.column(ts_idx);
+    /// Sort a RecordBatch by multiple columns (ascending)
+    /// Columns are sorted in the order provided (first column is primary sort key)
+    fn sort_batch_by_columns(batch: &RecordBatch, sort_columns: &[String]) -> Result<RecordBatch, String> {
+        if sort_columns.is_empty() {
+            return Err("No sort columns provided".to_string());
+        }
 
-        // Get sort indices (ascending order)
-        let indices =
-            sort_to_indices(ts_col, None, None).map_err(|e| format!("Failed to sort: {}", e))?;
+        // Build SortColumn specifications for lexsort
+        let mut sort_cols: Vec<SortColumn> = Vec::with_capacity(sort_columns.len());
+
+        for col_name in sort_columns {
+            match batch.schema().index_of(col_name) {
+                Ok(idx) => {
+                    sort_cols.push(SortColumn {
+                        values: batch.column(idx).clone(),
+                        options: None, // Default: ascending, nulls last
+                    });
+                }
+                Err(_) => {
+                    // Column not found - skip (may be optional tag)
+                    warn!("Sort column '{}' not found in schema, skipping", col_name);
+                }
+            }
+        }
+
+        if sort_cols.is_empty() {
+            return Err("No valid sort columns found in schema".to_string());
+        }
+
+        // Perform lexicographic sort
+        let indices = lexsort_to_indices(&sort_cols, None)
+            .map_err(|e| format!("Failed to lexsort: {}", e))?;
 
         // Reorder all columns by the sort indices
         let sorted_columns: Result<Vec<ArrayRef>, String> = batch
@@ -116,6 +141,25 @@ impl ParquetWriter {
 
         RecordBatch::try_new(batch.schema(), sorted_columns?)
             .map_err(|e| format!("Failed to create sorted batch: {}", e))
+    }
+
+    /// Build optimal sort order: low cardinality tags first, then time
+    /// This enables efficient partition pruning and data locality
+    fn build_sort_order(schema: &Schema, tag_order_by_cardinality: &[String]) -> Vec<String> {
+        let mut sort_order = Vec::new();
+
+        // Add tags in cardinality order (low to high)
+        for tag in tag_order_by_cardinality {
+            // Verify tag exists in schema
+            if schema.index_of(tag).is_ok() {
+                sort_order.push(tag.clone());
+            }
+        }
+
+        // Always end with time for time-range locality
+        sort_order.push("time".to_string());
+
+        sort_order
     }
 
     /// Create optimized WriterProperties with Bloom filters, compression, and tuned row groups
@@ -169,6 +213,23 @@ impl ParquetWriter {
         date: i32,
         batches: Vec<RecordBatch>,
     ) -> Result<FileWriteResult, String> {
+        // Default: sort by time only (backward compatible)
+        self.write_batches_partitioned_with_sort(catalog, schema, table, date, batches, &[])
+            .await
+    }
+
+    /// Write batches with cardinality-based sort ordering
+    /// tag_order_by_cardinality: tags sorted from low to high cardinality
+    /// Sort order will be: [low_cardinality_tags...] -> time
+    pub async fn write_batches_partitioned_with_sort(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date: i32,
+        batches: Vec<RecordBatch>,
+        tag_order_by_cardinality: &[String],
+    ) -> Result<FileWriteResult, String> {
         if batches.is_empty() {
             return Err("No batches to write".to_string());
         }
@@ -206,12 +267,18 @@ impl ParquetWriter {
         let merged_batch = concat_batches(&schema_ref, &adapted_batches)
             .map_err(|e| format!("Failed to merge batches: {}", e))?;
 
-        // Sort by time
-        let sorted_batch = Self::sort_batch_by_time(&merged_batch)?;
+        // Build optimal sort order based on cardinality
+        let sort_order = Self::build_sort_order(&schema_ref, tag_order_by_cardinality);
+        let sorted_batch = Self::sort_batch_by_columns(&merged_batch, &sort_order)?;
 
+        let sort_desc = if tag_order_by_cardinality.is_empty() {
+            "time".to_string()
+        } else {
+            format!("{} -> time", tag_order_by_cardinality.join(" -> "))
+        };
         debug!(
-            "Writing {} rows to {} (sorted by time)",
-            total_rows, full_path
+            "Writing {} rows to {} (sorted by: {})",
+            total_rows, full_path, sort_desc
         );
 
         // Write to Parquet with optimized settings
@@ -255,10 +322,29 @@ impl ParquetWriter {
         date: i32,
         batches: Vec<RecordBatch>,
     ) -> Result<FileWriteResult, String> {
+        self.write_batches_partitioned_with_sort_sync(catalog, schema, table, date, batches, &[])
+    }
+
+    /// Write batches synchronously with cardinality-based sort ordering
+    pub fn write_batches_partitioned_with_sort_sync(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date: i32,
+        batches: Vec<RecordBatch>,
+        tag_order_by_cardinality: &[String],
+    ) -> Result<FileWriteResult, String> {
         // Use tokio runtime to run async code
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(self.write_batches_partitioned(catalog, schema, table, date, batches))
+            tokio::runtime::Handle::current().block_on(self.write_batches_partitioned_with_sort(
+                catalog,
+                schema,
+                table,
+                date,
+                batches,
+                tag_order_by_cardinality,
+            ))
         })
     }
 

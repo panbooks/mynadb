@@ -7,13 +7,92 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use parking_lot::{Mutex, RwLock};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Notify;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
+
+/// Maximum distinct values to track per tag before marking as "high cardinality"
+/// This bounds memory usage while still allowing cardinality-based sorting
+const MAX_TRACKED_DISTINCT_VALUES: usize = 1000;
+
+/// Tag cardinality tracker for a single table
+/// Uses bounded HashSets to efficiently track distinct values during writes
+#[derive(Default)]
+struct TableCardinalityTracker {
+    /// Maps tag_key -> set of distinct values (bounded)
+    tag_values: HashMap<String, HashSet<String>>,
+    /// Tags that exceeded MAX_TRACKED_DISTINCT_VALUES
+    high_cardinality_tags: HashSet<String>,
+}
+
+impl TableCardinalityTracker {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Track tag values from a point, respecting the memory bound
+    fn track_point(&mut self, tags: &HashMap<String, String>) {
+        for (key, value) in tags {
+            // Skip if already marked as high cardinality
+            if self.high_cardinality_tags.contains(key) {
+                continue;
+            }
+
+            let values = self.tag_values.entry(key.clone()).or_default();
+
+            // Check if we've hit the threshold
+            if values.len() >= MAX_TRACKED_DISTINCT_VALUES {
+                // Mark as high cardinality and clear the set to free memory
+                self.high_cardinality_tags.insert(key.clone());
+                self.tag_values.remove(key);
+            } else {
+                values.insert(value.clone());
+            }
+        }
+    }
+
+    /// Get cardinality estimate for a tag key
+    /// Returns usize::MAX for high cardinality tags
+    fn get_cardinality(&self, key: &str) -> usize {
+        if self.high_cardinality_tags.contains(key) {
+            usize::MAX
+        } else {
+            self.tag_values.get(key).map(|s| s.len()).unwrap_or(0)
+        }
+    }
+
+    /// Get all tag keys sorted by cardinality (low to high)
+    fn get_tags_by_cardinality(&self) -> Vec<String> {
+        let mut all_tags: HashSet<String> = self.tag_values.keys().cloned().collect();
+        all_tags.extend(self.high_cardinality_tags.iter().cloned());
+
+        let mut tags_with_cardinality: Vec<(String, usize)> = all_tags
+            .into_iter()
+            .map(|key| {
+                let card = self.get_cardinality(&key);
+                (key, card)
+            })
+            .collect();
+
+        // Sort by cardinality (ascending - low cardinality first)
+        tags_with_cardinality.sort_by_key(|(_, card)| *card);
+
+        tags_with_cardinality.into_iter().map(|(k, _)| k).collect()
+    }
+
+    /// Clear the tracker (called after flush)
+    fn clear(&mut self) {
+        self.tag_values.clear();
+        self.high_cardinality_tags.clear();
+    }
+}
+
+/// Table key: (catalog, schema, table) - ignoring date partition
+type TableKey = (String, String, String);
 
 /// Schema cache key includes tag keys and field keys with their types
 /// Format: "tags:host,region|fields:cpu:f,mem:i,active:b"
@@ -112,6 +191,8 @@ pub struct DataCache {
     flush_notify: Arc<Notify>,
     /// WAL for durability (optional)
     wal: Option<Arc<Wal>>,
+    /// Tag cardinality tracker per table (for optimal sort ordering)
+    cardinality_tracker: Arc<RwLock<HashMap<TableKey, TableCardinalityTracker>>>,
 }
 
 impl DataCache {
@@ -128,6 +209,7 @@ impl DataCache {
             max_size_bytes,
             flush_notify: Arc::new(Notify::new()),
             wal,
+            cardinality_tracker: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -166,6 +248,17 @@ impl DataCache {
             table.to_string(),
             points[0].date,
         );
+
+        // Track tag cardinality for optimal sort ordering
+        // This is done before batch conversion for efficiency (avoid re-iteration)
+        {
+            let table_key = (catalog.to_string(), schema.to_string(), table.to_string());
+            let mut tracker = self.cardinality_tracker.write();
+            let table_tracker = tracker.entry(table_key).or_insert_with(TableCardinalityTracker::new);
+            for point in &points {
+                table_tracker.track_point(&point.tags);
+            }
+        }
 
         // Convert points to RecordBatch
         let batch = Self::points_to_record_batch(&points).map_err(|e| {
@@ -408,6 +501,20 @@ impl DataCache {
         // Reset total size counter
         self.total_size_bytes.store(0, Ordering::Relaxed);
 
+        // Extract cardinality info and clear tracker
+        let cardinality_info: HashMap<TableKey, Vec<String>> = {
+            let mut tracker = self.cardinality_tracker.write();
+            let info: HashMap<TableKey, Vec<String>> = tracker
+                .iter()
+                .map(|(k, v)| (k.clone(), v.get_tags_by_cardinality()))
+                .collect();
+            // Clear tracker for next flush cycle
+            for (_, table_tracker) in tracker.iter_mut() {
+                table_tracker.clear();
+            }
+            info
+        };
+
         if all_data.is_empty() {
             debug!("Flush: Cache is empty, nothing to write");
             return Ok(Vec::new());
@@ -426,15 +533,36 @@ impl DataCache {
         for ((catalog, schema, table, date), batches) in all_data {
             let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
             let date_partition = format_date32_as_partition(date);
-            debug!(
-                "Writing {} rows for {}.{}.{}/{}",
-                total_rows, catalog, schema, table, date_partition
-            );
 
-            match self
-                .writer
-                .write_batches_partitioned_sync(&catalog, &schema, &table, date, batches)
-            {
+            // Get optimal tag sort order for this table (low cardinality first)
+            let table_key = (catalog.clone(), schema.clone(), table.clone());
+            let tag_order = cardinality_info.get(&table_key).cloned().unwrap_or_default();
+
+            if !tag_order.is_empty() {
+                debug!(
+                    "Writing {} rows for {}.{}.{}/{} (sort: {} -> time)",
+                    total_rows,
+                    catalog,
+                    schema,
+                    table,
+                    date_partition,
+                    tag_order.join(" -> ")
+                );
+            } else {
+                debug!(
+                    "Writing {} rows for {}.{}.{}/{}",
+                    total_rows, catalog, schema, table, date_partition
+                );
+            }
+
+            match self.writer.write_batches_partitioned_with_sort_sync(
+                &catalog,
+                &schema,
+                &table,
+                date,
+                batches,
+                &tag_order,
+            ) {
                 Ok(file_result) => {
                     debug!("Written to: {}", file_result.path);
                     written_files.push(file_result);
@@ -867,4 +995,77 @@ pub struct TableCacheStats {
     pub total_batches: usize,
     pub total_size_bytes: usize,
     pub partition_count: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cardinality_tracker_basic() {
+        let mut tracker = TableCardinalityTracker::new();
+
+        // Add points with tags
+        let mut tags1 = HashMap::new();
+        tags1.insert("region".to_string(), "us-west".to_string());
+        tags1.insert("host".to_string(), "server01".to_string());
+        tracker.track_point(&tags1);
+
+        let mut tags2 = HashMap::new();
+        tags2.insert("region".to_string(), "us-east".to_string());
+        tags2.insert("host".to_string(), "server02".to_string());
+        tracker.track_point(&tags2);
+
+        let mut tags3 = HashMap::new();
+        tags3.insert("region".to_string(), "us-west".to_string()); // duplicate region
+        tags3.insert("host".to_string(), "server03".to_string()); // new host
+        tracker.track_point(&tags3);
+
+        // region has 2 distinct values, host has 3
+        assert_eq!(tracker.get_cardinality("region"), 2);
+        assert_eq!(tracker.get_cardinality("host"), 3);
+
+        // Verify sort order: low cardinality first
+        let sorted = tracker.get_tags_by_cardinality();
+        assert_eq!(sorted[0], "region"); // cardinality 2
+        assert_eq!(sorted[1], "host"); // cardinality 3
+    }
+
+    #[test]
+    fn test_cardinality_tracker_high_cardinality() {
+        let mut tracker = TableCardinalityTracker::new();
+
+        // Add many distinct values for "request_id" to trigger high cardinality
+        for i in 0..MAX_TRACKED_DISTINCT_VALUES + 10 {
+            let mut tags = HashMap::new();
+            tags.insert("request_id".to_string(), format!("req_{}", i));
+            tags.insert("region".to_string(), "us-west".to_string());
+            tracker.track_point(&tags);
+        }
+
+        // request_id should be marked as high cardinality
+        assert_eq!(tracker.get_cardinality("request_id"), usize::MAX);
+        assert_eq!(tracker.get_cardinality("region"), 1);
+
+        // Verify sort order: low cardinality (region) before high cardinality (request_id)
+        let sorted = tracker.get_tags_by_cardinality();
+        assert_eq!(sorted[0], "region");
+        assert_eq!(sorted[1], "request_id");
+    }
+
+    #[test]
+    fn test_cardinality_tracker_clear() {
+        let mut tracker = TableCardinalityTracker::new();
+
+        let mut tags = HashMap::new();
+        tags.insert("host".to_string(), "server01".to_string());
+        tracker.track_point(&tags);
+
+        assert_eq!(tracker.get_cardinality("host"), 1);
+
+        tracker.clear();
+
+        assert_eq!(tracker.get_cardinality("host"), 0);
+        assert!(tracker.get_tags_by_cardinality().is_empty());
+    }
 }
