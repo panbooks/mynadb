@@ -4,6 +4,9 @@
 //! and in-memory data (memtable). Supports automatic table registration, query caching,
 //! and InfluxDB-compatible GROUP BY time() syntax.
 
+use crate::query::cache::hot_partition_cache::{
+    HotPartitionCache, HotPartitionCacheConfig, HotPartitionCacheStats, SharedHotPartitionCache,
+};
 use crate::query::cache::metadata_cache::{CacheStatistics, TableMetadataCache, TableParquetStats};
 use crate::query::cache::query_cache::{
     QueryCacheConfig, QueryCacheKey, QueryCacheStats, QueryResultCache, SharedQueryResultCache,
@@ -54,6 +57,7 @@ pub struct QueryEngine {
     registered_catalogs: Arc<RwLock<HashMap<String, HashSet<String>>>>,
     metadata_cache: Arc<TableMetadataCache>,
     query_cache: SharedQueryResultCache,
+    hot_partition_cache: SharedHotPartitionCache,
     use_custom_table_provider: bool,
     write_cache: Option<Arc<DataCache>>,
 }
@@ -152,7 +156,14 @@ impl QueryEngine {
     }
 
     pub fn new(data_dir: &str) -> Self {
-        Self::new_with_options(data_dir, None, QueryCacheConfig::default(), false, None)
+        Self::new_with_options(
+            data_dir,
+            None,
+            QueryCacheConfig::default(),
+            HotPartitionCacheConfig::default(),
+            false,
+            None,
+        )
     }
 
     pub fn new_with_query_cache(
@@ -160,13 +171,21 @@ impl QueryEngine {
         storage: Option<Arc<Storage>>,
         query_cache_config: QueryCacheConfig,
     ) -> Self {
-        Self::new_with_options(data_dir, storage, query_cache_config, false, None)
+        Self::new_with_options(
+            data_dir,
+            storage,
+            query_cache_config,
+            HotPartitionCacheConfig::default(),
+            false,
+            None,
+        )
     }
 
     pub fn new_with_memtable(
         data_dir: &str,
         storage: Option<Arc<Storage>>,
         query_cache_config: QueryCacheConfig,
+        hot_partition_cache_config: HotPartitionCacheConfig,
         use_custom_table_provider: bool,
         write_cache: Arc<DataCache>,
     ) -> Self {
@@ -174,6 +193,7 @@ impl QueryEngine {
             data_dir,
             storage,
             query_cache_config,
+            hot_partition_cache_config,
             use_custom_table_provider,
             Some(write_cache),
         )
@@ -183,12 +203,14 @@ impl QueryEngine {
         data_dir: &str,
         storage: Option<Arc<Storage>>,
         query_cache_config: QueryCacheConfig,
+        hot_partition_cache_config: HotPartitionCacheConfig,
         use_custom_table_provider: bool,
         write_cache: Option<Arc<DataCache>>,
     ) -> Self {
         let ctx = Self::create_optimized_context();
         let metadata_cache = Arc::new(TableMetadataCache::new());
         let query_cache = Arc::new(QueryResultCache::new(query_cache_config));
+        let hot_partition_cache = Arc::new(HotPartitionCache::new(hot_partition_cache_config));
 
         // Register object store with DataFusion runtime if needed
         if let Some(ref storage) = storage {
@@ -221,10 +243,11 @@ impl QueryEngine {
             "disabled"
         };
         info!(
-            "QueryEngine initialized: storage={}, table_provider={}, metadata_cache=enabled, query_cache={}, memtable={}",
+            "QueryEngine initialized: storage={}, table_provider={}, metadata_cache=enabled, query_cache={}, hot_partition_cache={}, memtable={}",
             storage_type,
             table_provider_type,
             if query_cache.is_enabled() { "enabled" } else { "disabled" },
+            if hot_partition_cache.is_enabled() { "enabled" } else { "disabled" },
             memtable_status
         );
 
@@ -235,6 +258,7 @@ impl QueryEngine {
             registered_catalogs: Arc::new(RwLock::new(HashMap::new())),
             metadata_cache,
             query_cache,
+            hot_partition_cache,
             use_custom_table_provider,
             write_cache,
         }
@@ -264,23 +288,37 @@ impl QueryEngine {
         &self.query_cache
     }
 
+    /// Get hot partition cache statistics
+    pub fn get_hot_partition_cache_stats(&self) -> HotPartitionCacheStats {
+        self.hot_partition_cache.stats()
+    }
+
+    /// Get reference to the hot partition cache
+    pub fn hot_partition_cache(&self) -> &SharedHotPartitionCache {
+        &self.hot_partition_cache
+    }
+
     /// Invalidate cache for a table (call after writes)
-    /// This invalidates both metadata cache and query result cache
+    /// This invalidates metadata cache, query result cache, and hot partition cache
     pub fn invalidate_table_cache(&self, catalog: &str, schema: &str, table: &str) {
         self.metadata_cache.invalidate_table(catalog, schema, table);
         self.query_cache.invalidate_table(catalog, schema, table);
+        self.hot_partition_cache
+            .invalidate_table(catalog, schema, table);
     }
 
     /// Invalidate all caches for a database
     pub fn invalidate_database_cache(&self, db: &str) {
         self.metadata_cache.invalidate_catalog(db);
         self.query_cache.invalidate_database(db);
+        self.hot_partition_cache.invalidate_catalog(db);
     }
 
-    /// Clear all caches (metadata + query results)
+    /// Clear all caches (metadata + query results + hot partitions)
     pub fn clear_all_caches(&self) {
         self.metadata_cache.clear();
         self.query_cache.clear();
+        self.hot_partition_cache.clear();
     }
 
     /// Clear only query result cache

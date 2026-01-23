@@ -10,7 +10,5 @@ pub mod table_provider;
 pub mod union_provider;
 
 pub use memtable_provider::MemtableProvider;
-pub use table_provider::{
-    ParquetTableConfig, ParquetTableProvider,
-};
+pub use table_provider::{ParquetTableConfig, ParquetTableProvider};
 pub use union_provider::UnionTableProvider;

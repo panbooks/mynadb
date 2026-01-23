@@ -16,6 +16,8 @@ pub struct Config {
     #[serde(default)]
     pub query_cache: QueryCacheConfig,
     #[serde(default)]
+    pub hot_partition_cache: HotPartitionCacheConfig,
+    #[serde(default)]
     pub query: QueryConfig,
     #[serde(default)]
     pub compaction: CompactionConfig,
@@ -237,6 +239,54 @@ fn default_query_cache_ttl_secs() -> u64 {
 
 fn default_query_cache_min_query_time_ms() -> u64 {
     10
+}
+
+/// Hot partition cache configuration
+/// Caches decoded RecordBatches for recent partitions (today, yesterday)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HotPartitionCacheConfig {
+    /// Enable hot partition caching
+    #[serde(default = "default_hot_partition_enabled")]
+    pub enabled: bool,
+
+    /// Maximum cache size in MB
+    #[serde(default = "default_hot_partition_max_size_mb")]
+    pub max_size_mb: u64,
+
+    /// Number of recent days to cache (0 = today only, 1 = today + yesterday)
+    #[serde(default = "default_hot_partition_hot_days")]
+    pub hot_days: u32,
+
+    /// TTL for cached entries in seconds
+    #[serde(default = "default_hot_partition_ttl_secs")]
+    pub ttl_secs: u64,
+}
+
+impl Default for HotPartitionCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_hot_partition_enabled(),
+            max_size_mb: default_hot_partition_max_size_mb(),
+            hot_days: default_hot_partition_hot_days(),
+            ttl_secs: default_hot_partition_ttl_secs(),
+        }
+    }
+}
+
+fn default_hot_partition_enabled() -> bool {
+    true
+}
+
+fn default_hot_partition_max_size_mb() -> u64 {
+    1024 // 1GB
+}
+
+fn default_hot_partition_hot_days() -> u32 {
+    2 // Today + yesterday
+}
+
+fn default_hot_partition_ttl_secs() -> u64 {
+    1800 // 30 minutes
 }
 
 /// Query engine configuration
@@ -761,6 +811,7 @@ impl Default for Config {
             schema: SchemaConfig::default(),
             cache: CacheConfig::default(),
             query_cache: QueryCacheConfig::default(),
+            hot_partition_cache: HotPartitionCacheConfig::default(),
             query: QueryConfig::default(),
             compaction: CompactionConfig::default(),
             logging: LoggingConfig::default(),

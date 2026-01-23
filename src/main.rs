@@ -5,7 +5,10 @@ mod services;
 mod storage;
 
 use jobs::{compactor, database_manager, logger, profiling, retention_manager};
-use query::{cache::query_cache, catalog, catalog::MetadataManager, query_engine};
+use query::{
+    cache::{hot_partition_cache, query_cache},
+    catalog, query_engine,
+};
 use services::{api, auth, flight_service, mysql_service};
 use storage::{cache, file_cache, line_protocol, parquet_writer, storage as storage_mod, wal};
 
@@ -471,11 +474,14 @@ async fn main() {
     // Initialize core components
     info!("Initializing query engine with memtable support");
     let query_cache_config = query_cache::QueryCacheConfig::from(&config.query_cache);
+    let hot_partition_cache_config =
+        hot_partition_cache::HotPartitionCacheConfig::from(&config.hot_partition_cache);
     let cache_arc = Arc::new(cache.clone());
     let query_engine = Arc::new(query_engine::QueryEngine::new_with_memtable(
         &config.storage.data_dir,
         Some(storage.clone()),
         query_cache_config,
+        hot_partition_cache_config,
         config.query.use_custom_table_provider,
         cache_arc,
     ));
