@@ -112,6 +112,17 @@
         <p>Start with our <a href="quickstart.html">Quick Start Guide</a> to get up and running in minutes.</p>
       </div>
 
+      <div class="callout" style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 4px solid #10b981; padding: 1rem 1.5rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <div class="callout-title" style="color: #10b981; font-weight: 600;">&#9889; What's New in v0.2.8</div>
+        <p style="margin: 0.5rem 0;">
+          <strong>Instant Query Visibility</strong> - Query fresh writes immediately without flushing!<br>
+          <strong>Metadata Manager</strong> - 10-100x faster query planning with memory-based catalog.<br>
+          <strong>Parquet Disk Cache</strong> - Local SSD caching for Object Store files.<br>
+          <strong>first_value() / last_value()</strong> - InfluxDB-compatible aggregate functions.
+        </p>
+        <a href="caching.html" style="color: #10b981; text-decoration: none; font-weight: 500;">Learn more about caching &rarr;</a>
+      </div>
+
       <h2>What is MynaDB?</h2>
 
       <p>
@@ -153,6 +164,18 @@
           <h3>InfluxDB Compatible</h3>
           <p>Drop-in replacement for InfluxDB write API for seamless migration.</p>
         </div>
+
+        <div class="card">
+          <div class="card-icon">&#9889;</div>
+          <h3>Instant Visibility</h3>
+          <p>Query fresh writes immediately via Memtable - no flush required!</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128200;</div>
+          <h3>Smart Caching</h3>
+          <p>Multi-level caching: metadata, query results, and Parquet files on SSD.</p>
+        </div>
       </div>
 
       <h2>Quick Example</h2>
@@ -175,12 +198,13 @@ cpu,host=server02,region=us-east usage=82.3,temp=50
 memory,host=server01 used=16.5,total=32.0
 '
 
-<span class="token-comment"># Flush data to disk</span>
-curl -X POST http://localhost:7000/flush
-
-<span class="token-comment"># Query with SQL</span>
+<span class="token-comment"># Query immediately - no flush needed! (Memtable provides instant visibility)</span>
 curl 'http://localhost:7000/query/mydb' \
-  -d 'SELECT host, AVG(usage) as avg_cpu FROM cpu GROUP BY host'</code></pre>
+  -d 'SELECT host, AVG(usage) as avg_cpu FROM cpu GROUP BY host'
+
+<span class="token-comment"># Time series aggregation with GROUP BY time()</span>
+curl 'http://localhost:7000/query/mydb' \
+  -d 'SELECT AVG(usage) FROM cpu GROUP BY time(5m), host'</code></pre>
         </div>
       </div>
 
@@ -194,8 +218,8 @@ curl 'http://localhost:7000/query/mydb' \
         |
         v
   +------------------+
-  |   HTTP Server    |  Port 7000
-  |      (Axum)      |
+  |   HTTP Server    |  Port 7000/7001/7002
+  | (Axum/Flight/MySQL)|
   +--------+---------+
            |
      +-----+-----+
@@ -206,24 +230,34 @@ curl 'http://localhost:7000/query/mydb' \
   |  API |   |  API  |
   +--+---+   +---+---+
      |           |
-     v           v
-  +------+   +----------+
-  |Cache |   |DataFusion|
-  +--+---+   +----+-----+
-     |            |
-     +------+-----+
-            |
-            v
-     +------+------+
-     |   Parquet   |
-     |   Storage   |
-     +------+------+
-            |
-            v
-     +------+------+
-     |  Compactor  |
-     | (LSM-style) |
-     +-------------+
+     v           |
+  +------+       |
+  |Cache |&lt;------+ (Memtable: instant query visibility)
+  +--+---+       |
+     |           v
+     |    +----------+
+     |    |DataFusion|
+     |    +----+-----+
+     |         |
+     +----+----+
+          |
+          v
+    +-----+------+
+    |  Metadata  |
+    |  Manager   |
+    +-----+------+
+          |
+          v
+    +-----+------+
+    |  Parquet   |
+    |  Storage   |
+    +-----+------+
+          |
+          v
+    +-----+------+
+    |  Compactor |
+    | (LSM-style)|
+    +------------+
         </pre>
       </div>
 

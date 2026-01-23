@@ -56,6 +56,7 @@
           <li><a href="architecture.html">Architecture</a></li>
           <li><a href="data-model.html">Data Model</a></li>
           <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
         </ul>
       </div>
 
@@ -186,31 +187,12 @@ memory,host=server03 used=12.2,total=32.0
         <p>The database (<code>mydb</code>) is automatically created when you first write to it. No need to create it explicitly!</p>
       </div>
 
-      <h2>Step 3: Flush to Disk</h2>
+      <h2>Step 3: Query with SQL</h2>
 
-      <p>Data is buffered in memory for performance. Flush it to Parquet files before querying:</p>
-
-      <div class="code-block">
-        <div class="code-header">
-          <div class="dots">
-            <span class="dot red"></span>
-            <span class="dot yellow"></span>
-            <span class="dot green"></span>
-          </div>
-          <span class="lang">bash</span>
-          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
-        </div>
-        <div class="code-content">
-          <pre><code>curl -X POST http://localhost:7000/flush</code></pre>
-        </div>
+      <div class="callout" style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 4px solid #10b981; padding: 1rem 1.5rem; border-radius: 0.5rem; margin-bottom: 1.5rem;">
+        <div class="callout-title" style="color: #10b981; font-weight: 600;">&#9889; Instant Query Visibility</div>
+        <p style="margin: 0.5rem 0;">No need to flush! MynaDB's <strong>Memtable</strong> provides immediate query visibility for fresh writes. The query engine automatically combines data from memory (unflushed) and Parquet files (flushed).</p>
       </div>
-
-      <div class="callout callout-warning">
-        <div class="callout-title">&#9888; Note</div>
-        <p>Data is also automatically flushed every 30 seconds (configurable). Manual flush is only needed for immediate queries.</p>
-      </div>
-
-      <h2>Step 4: Query with SQL</h2>
 
       <p>Now query your data using standard SQL:</p>
 
@@ -304,7 +286,7 @@ JOIN memory m ON c.host = m.host
         </div>
       </div>
 
-      <h2>Step 5: List Tables</h2>
+      <h2>Step 4: List Tables</h2>
 
       <p>See what tables are available in your database:</p>
 
@@ -342,8 +324,8 @@ JOIN memory m ON c.host = m.host
       <ul>
         <li>&#10003; Built and started MynaDB</li>
         <li>&#10003; Written time series data using Line Protocol</li>
-        <li>&#10003; Flushed data to Parquet storage</li>
-        <li>&#10003; Queried data using SQL</li>
+        <li>&#10003; Queried data immediately (no flush needed!)</li>
+        <li>&#10003; Used SQL with aggregations and JOINs</li>
         <li>&#10003; Listed available tables</li>
       </ul>
 
