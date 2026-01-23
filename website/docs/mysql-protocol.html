@@ -189,7 +189,7 @@ SHOW CREATE TABLE cpu;</code></pre>
           <pre><code>-- Standard SQL queries work as expected
 SELECT host, AVG(usage) as avg_cpu
 FROM cpu
-WHERE timestamp > NOW() - INTERVAL 1 HOUR
+WHERE time > NOW() - INTERVAL 1 HOUR
 GROUP BY host
 ORDER BY avg_cpu DESC;
 
@@ -198,7 +198,7 @@ SELECT * FROM mydb.default.cpu LIMIT 10;
 
 -- Time-based queries
 SELECT
-  time_bucket('5 minutes', timestamp) as bucket,
+  time_bucket('5 minutes', time) as bucket,
   host,
   AVG(usage) as avg_usage
 FROM cpu
@@ -249,13 +249,13 @@ ORDER BY bucket;</code></pre>
           <pre><code>Example Grafana Query:
 
 SELECT
-  $__timeGroup(timestamp, $__interval) as time,
+  $__timeGroup(time, $__interval) as ts,
   host,
   AVG(usage) as usage
 FROM cpu
-WHERE $__timeFilter(timestamp)
-GROUP BY time, host
-ORDER BY time</code></pre>
+WHERE $__timeFilter(time)
+GROUP BY ts, host
+ORDER BY ts</code></pre>
         </div>
       </div>
 
@@ -296,7 +296,7 @@ cursor = conn.cursor()
 cursor.execute("""
     SELECT host, AVG(usage) as avg_cpu
     FROM cpu
-    WHERE timestamp > NOW() - INTERVAL 1 HOUR
+    WHERE time > NOW() - INTERVAL 1 HOUR
     GROUP BY host
 """)
 
@@ -329,7 +329,7 @@ async function query() {
   const [rows] = await conn.execute(`
     SELECT host, AVG(usage) as avg_cpu
     FROM cpu
-    WHERE timestamp > NOW() - INTERVAL 1 HOUR
+    WHERE time > NOW() - INTERVAL 1 HOUR
     GROUP BY host
   `);
 

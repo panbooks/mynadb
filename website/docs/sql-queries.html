@@ -164,14 +164,14 @@ curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'</code></p
       <h3>Specific Columns</h3>
       <div class="code-block">
         <div class="code-content">
-          <pre><code>SELECT host, usage, timestamp FROM cpu</code></pre>
+          <pre><code>SELECT host, usage, time FROM cpu</code></pre>
         </div>
       </div>
 
       <h3>Column Aliases</h3>
       <div class="code-block">
         <div class="code-content">
-          <pre><code>SELECT host, usage AS cpu_usage, timestamp AS ts FROM cpu</code></pre>
+          <pre><code>SELECT host, usage AS cpu_usage, time AS ts FROM cpu</code></pre>
         </div>
       </div>
 
@@ -216,7 +216,7 @@ SELECT * FROM cpu WHERE region NOT IN ('eu-west')</code></pre>
       <div class="code-block">
         <div class="code-content">
           <pre><code>SELECT * FROM cpu WHERE usage BETWEEN 50 AND 80
-SELECT * FROM cpu WHERE timestamp BETWEEN 1703251234567000000 AND 1703251300000000000</code></pre>
+SELECT * FROM cpu WHERE time BETWEEN 1703251234567000000 AND 1703251300000000000</code></pre>
         </div>
       </div>
 
@@ -276,7 +276,7 @@ HAVING AVG(usage) > 50</code></pre>
       <div class="code-block">
         <div class="code-content">
           <pre><code>SELECT * FROM cpu ORDER BY usage DESC
-SELECT * FROM cpu ORDER BY timestamp ASC
+SELECT * FROM cpu ORDER BY time ASC
 SELECT * FROM cpu ORDER BY host ASC, usage DESC</code></pre>
         </div>
       </div>
@@ -318,7 +318,7 @@ LEFT JOIN disk d ON c.host = d.host</code></pre>
         <div class="code-content">
           <pre><code>SELECT host, usage,
   ROW_NUMBER() OVER (ORDER BY usage DESC) AS row_num,
-  RANK() OVER (ORDER BY usage DESC) AS rank
+  RANK() OVER (ORDER BY usage DESC) AS rnk
 FROM cpu</code></pre>
         </div>
       </div>
@@ -326,9 +326,9 @@ FROM cpu</code></pre>
       <h3>Moving Average</h3>
       <div class="code-block">
         <div class="code-content">
-          <pre><code>SELECT timestamp, usage,
+          <pre><code>SELECT time, usage,
   AVG(usage) OVER (
-    ORDER BY timestamp
+    ORDER BY time
     ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
   ) AS moving_avg
 FROM cpu</code></pre>
@@ -338,9 +338,9 @@ FROM cpu</code></pre>
       <h3>LAG / LEAD</h3>
       <div class="code-block">
         <div class="code-content">
-          <pre><code>SELECT timestamp, usage,
-  LAG(usage, 1) OVER (ORDER BY timestamp) AS prev_usage,
-  LEAD(usage, 1) OVER (ORDER BY timestamp) AS next_usage
+          <pre><code>SELECT time, usage,
+  LAG(usage, 1) OVER (ORDER BY time) AS prev_usage,
+  LEAD(usage, 1) OVER (ORDER BY time) AS next_usage
 FROM cpu</code></pre>
         </div>
       </div>
@@ -348,8 +348,8 @@ FROM cpu</code></pre>
       <h3>Partition By</h3>
       <div class="code-block">
         <div class="code-content">
-          <pre><code>SELECT host, timestamp, usage,
-  AVG(usage) OVER (PARTITION BY host ORDER BY timestamp) AS host_avg
+          <pre><code>SELECT host, time, usage,
+  AVG(usage) OVER (PARTITION BY host ORDER BY time) AS host_avg
 FROM cpu</code></pre>
         </div>
       </div>
@@ -414,13 +414,13 @@ SELECT host, 'memory' AS metric, used AS value FROM memory</code></pre>
           <pre><code>-- 5-minute average CPU usage per host
 SELECT host, AVG(usage) AS avg_cpu
 FROM cpu
-WHERE timestamp >= 1704067200000000000
+WHERE time >= 1704067200000000000
 GROUP BY time(5m), host
 
 -- Hourly request counts
 SELECT COUNT(*) AS requests
 FROM api_logs
-WHERE timestamp >= NOW() - INTERVAL '24 hours'
+WHERE time >= NOW() - INTERVAL '24 hours'
 GROUP BY time(1h)
 
 -- 30-second intervals with offset
@@ -436,12 +436,12 @@ GROUP BY time(30s, 10s)  -- 30s buckets, 10s offset</code></pre>
 
       <div class="code-block">
         <div class="code-content">
-          <pre><code>-- time_bucket(timestamp_col, interval_nanos, offset_nanos)
+          <pre><code>-- time_bucket(time_col, interval_nanos, offset_nanos)
 SELECT
-  time_bucket(timestamp, 300000000000, 0) AS bucket,  -- 5 min = 300B ns
+  time_bucket(time, 300000000000, 0) AS bucket,  -- 5 min = 300B ns
   AVG(usage) AS avg_usage
 FROM cpu
-GROUP BY time_bucket(timestamp, 300000000000, 0)
+GROUP BY time_bucket(time, 300000000000, 0)
 ORDER BY bucket</code></pre>
         </div>
       </div>
@@ -452,23 +452,23 @@ ORDER BY bucket</code></pre>
 
       <div class="code-block">
         <div class="code-content">
-          <pre><code>-- first_value(value_column, timestamp_column)
--- Returns the value at the minimum timestamp in each group
+          <pre><code>-- first_value(value_column, time_column)
+-- Returns the value at the minimum time in each group
 
--- last_value(value_column, timestamp_column)
--- Returns the value at the maximum timestamp in each group
+-- last_value(value_column, time_column)
+-- Returns the value at the maximum time in each group
 
 -- Example: First and last CPU reading per 5-minute bucket
 SELECT
-  time_bucket(timestamp, 300000000000, 0) AS time,
+  time_bucket(time, 300000000000, 0) AS bucket,
   host,
-  first_value(usage, timestamp) AS first_cpu,
-  last_value(usage, timestamp) AS last_cpu,
+  first_value(usage, time) AS first_cpu,
+  last_value(usage, time) AS last_cpu,
   AVG(usage) AS avg_cpu,
   MAX(usage) - MIN(usage) AS spread
 FROM cpu
-GROUP BY time_bucket(timestamp, 300000000000, 0), host
-ORDER BY time, host</code></pre>
+GROUP BY time_bucket(time, 300000000000, 0), host
+ORDER BY bucket, host</code></pre>
         </div>
       </div>
 
@@ -480,7 +480,7 @@ ORDER BY time, host</code></pre>
         <div class="code-content">
           <pre><code>-- fill(null) - Default, missing buckets not included
 SELECT AVG(usage) FROM cpu
-WHERE timestamp >= 1704067200000000000
+WHERE time >= 1704067200000000000
 GROUP BY time(5m)
 fill(null)
 
@@ -530,12 +530,12 @@ fill(null)
             </tr>
             <tr>
               <td><code>first(field)</code></td>
-              <td><code>first_value(field, timestamp)</code></td>
+              <td><code>first_value(field, time)</code></td>
               <td>First value by time</td>
             </tr>
             <tr>
               <td><code>last(field)</code></td>
-              <td><code>last_value(field, timestamp)</code></td>
+              <td><code>last_value(field, time)</code></td>
               <td>Last value by time</td>
             </tr>
             <tr>
@@ -565,19 +565,19 @@ fill(null)
         <div class="code-content">
           <pre><code>-- Create hourly summary from minute-level data
 SELECT
-  time_bucket(timestamp, 3600000000000, 0) AS hour,
+  time_bucket(time, 3600000000000, 0) AS hour,
   host,
   COUNT(*) AS sample_count,
   AVG(cpu_usage) AS avg_cpu,
   MAX(cpu_usage) AS max_cpu,
   MIN(cpu_usage) AS min_cpu,
-  first_value(cpu_usage, timestamp) AS first_cpu,
-  last_value(cpu_usage, timestamp) AS last_cpu,
+  first_value(cpu_usage, time) AS first_cpu,
+  last_value(cpu_usage, time) AS last_cpu,
   AVG(memory_used) AS avg_memory,
   MAX(disk_io) AS peak_disk_io
 FROM system_metrics
-WHERE timestamp >= NOW() - INTERVAL '7 days'
-GROUP BY time_bucket(timestamp, 3600000000000, 0), host
+WHERE time >= NOW() - INTERVAL '7 days'
+GROUP BY time_bucket(time, 3600000000000, 0), host
 ORDER BY hour DESC, host</code></pre>
         </div>
       </div>
@@ -587,7 +587,7 @@ ORDER BY hour DESC, host</code></pre>
       <ul>
         <li><strong>Use POST</strong> for complex multi-line queries</li>
         <li><strong>Always LIMIT</strong> exploratory queries</li>
-        <li><strong>Filter on timestamp/date</strong> for partition pruning</li>
+        <li><strong>Filter on time/date</strong> for partition pruning</li>
         <li><strong>Use short table names</strong> for cleaner queries</li>
         <li><strong>Query immediately</strong> after writes (memtable provides instant visibility)</li>
         <li><strong>Use time_bucket</strong> for efficient time series aggregation</li>

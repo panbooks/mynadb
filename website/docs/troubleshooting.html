@@ -140,7 +140,7 @@ curl http://localhost:7000/schema/mydb/cpu
 curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu LIMIT 1'
 
 <span class="token-comment"># 4. Check time range - timestamps are nanoseconds</span>
-curl 'http://localhost:7000/query/mydb' -d 'SELECT MIN(timestamp), MAX(timestamp) FROM cpu'</code></pre>
+curl 'http://localhost:7000/query/mydb' -d 'SELECT MIN(time), MAX(time) FROM cpu'</code></pre>
         </div>
       </div>
 
