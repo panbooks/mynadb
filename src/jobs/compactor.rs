@@ -18,6 +18,7 @@ use std::time::Instant;
 use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, error, info, warn};
 
+use crate::query::catalog::{FileInfo, SharedMetadataManager};
 use crate::services::rate_limiter::RateLimiter;
 use crate::storage::storage::Storage;
 
@@ -60,6 +61,8 @@ pub struct Compactor {
     read_rate_limiter: Option<Arc<RateLimiter>>,
     /// Write rate limiter (None = unlimited)
     write_rate_limiter: Option<Arc<RateLimiter>>,
+    /// Metadata manager for updating file registry after compaction
+    metadata_manager: Option<SharedMetadataManager>,
 }
 
 #[derive(Debug, Clone)]
@@ -200,17 +203,27 @@ impl ParquetFileInfo {
 
 impl Compactor {
     pub fn with_config(data_dir: &str, config: &CompactionConfig) -> Self {
-        Self::with_storage_and_config(data_dir, None, config)
+        Self::with_storage_metadata_and_config(data_dir, None, config, None)
     }
 
     pub fn with_storage(data_dir: &str, storage: Arc<Storage>, config: &CompactionConfig) -> Self {
-        Self::with_storage_and_config(data_dir, Some(storage), config)
+        Self::with_storage_metadata_and_config(data_dir, Some(storage), config, None)
     }
 
-    fn with_storage_and_config(
+    pub fn with_storage_and_metadata(
+        data_dir: &str,
+        storage: Arc<Storage>,
+        config: &CompactionConfig,
+        metadata_manager: SharedMetadataManager,
+    ) -> Self {
+        Self::with_storage_metadata_and_config(data_dir, Some(storage), config, Some(metadata_manager))
+    }
+
+    fn with_storage_metadata_and_config(
         data_dir: &str,
         storage: Option<Arc<Storage>>,
         config: &CompactionConfig,
+        metadata_manager: Option<SharedMetadataManager>,
     ) -> Self {
         // Create semaphore if max_concurrent_compactions > 0
         let compaction_semaphore = if config.max_concurrent_compactions > 0 {
@@ -253,6 +266,7 @@ impl Compactor {
             full_compaction_semaphore,
             read_rate_limiter,
             write_rate_limiter,
+            metadata_manager,
         }
     }
 
@@ -275,6 +289,42 @@ impl Compactor {
             .entry(key)
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone()
+    }
+
+    /// Create a FileInfo struct for registering with the metadata manager
+    fn create_file_info(
+        path: &str,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        partition_key: &str,
+        level: u8,
+        row_count: u64,
+        size_bytes: u64,
+    ) -> FileInfo {
+        let file_name = path
+            .rsplit('/')
+            .next()
+            .unwrap_or(path)
+            .to_string();
+
+        FileInfo {
+            path: path.to_string(),
+            file_name,
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            partition_key: partition_key.to_string(),
+            size_bytes,
+            row_count,
+            level,
+            min_timestamp: None,
+            max_timestamp: None,
+            created_at: chrono::Utc::now().timestamp_millis(),
+            row_group_count: 1,
+            column_stats: None,
+            etag: None,
+        }
     }
 
     /// Compact all tables in a catalog
@@ -810,12 +860,44 @@ impl Compactor {
             compactable_bytes as f64 / MB_TO_BYTES as f64
         );
 
+        // Register new FULL file with metadata manager
+        if let Some(ref manager) = self.metadata_manager {
+            let file_info = Self::create_file_info(
+                output.to_str().unwrap_or_default(),
+                catalog,
+                schema,
+                table,
+                partition_name,
+                255, // FULL files use level 255 to distinguish from LSM levels
+                total_rows as u64,
+                output_size,
+            );
+            if let Err(e) = manager.register_file(file_info).await {
+                warn!("Failed to register compacted file {}: {}", output.display(), e);
+            }
+        }
+
         // Delete old compacted files (keep oversized files)
+        let mut deleted_paths: Vec<String> = Vec::new();
         for (file, _) in &compactable_files {
             if let Err(e) = fs::remove_file(file) {
                 warn!("Failed to delete {}: {}", file.display(), e);
             } else {
                 debug!("Deleted: {}", file.display());
+                deleted_paths.push(file.to_string_lossy().to_string());
+            }
+        }
+
+        // Remove deleted files from metadata manager
+        if let Some(ref manager) = self.metadata_manager {
+            if !deleted_paths.is_empty() {
+                if let Err(e) = manager.remove_files(deleted_paths).await {
+                    warn!("Failed to remove files from metadata: {}", e);
+                }
+                // Save metadata after full compaction
+                if let Err(e) = manager.save().await {
+                    warn!("Failed to save metadata after full compaction: {}", e);
+                }
             }
         }
 
@@ -974,7 +1056,9 @@ impl Compactor {
 
             info!("Minor compaction: {} L0 files → L1", l0_files.len());
 
-            let rows = self.compact_level_files(path, &l0_files, 0, config).await?;
+            let rows = self
+                .compact_level_files(path, &l0_files, 0, config, catalog, schema, table, partition_id)
+                .await?;
             total_rows += rows;
             compaction_happened = true;
         }
@@ -1026,10 +1110,19 @@ impl Compactor {
                 }
 
                 let rows = self
-                    .compact_level_files(path, &level_files, current_level, config)
+                    .compact_level_files(path, &level_files, current_level, config, catalog, schema, table, partition_id)
                     .await?;
                 total_rows += rows;
                 compaction_happened = true;
+            }
+        }
+
+        // Save metadata after all compaction operations complete
+        if compaction_happened {
+            if let Some(ref manager) = self.metadata_manager {
+                if let Err(e) = manager.save().await {
+                    warn!("Failed to save metadata after LSM compaction: {}", e);
+                }
             }
         }
 
@@ -1080,6 +1173,10 @@ impl Compactor {
         level_files: &[ParquetFileInfo],
         current_level: u32,
         config: &CompactionConfig,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        partition_key: &str,
     ) -> Result<usize, String> {
         if level_files.is_empty() {
             return Ok(0);
@@ -1125,6 +1222,28 @@ impl Compactor {
             self.write_compacted_file(&compacted_filename, batches)
                 .await?;
 
+            // Get the size of the newly written file for metadata
+            let file_size = fs::metadata(&compacted_filename)
+                .map(|m| m.len())
+                .unwrap_or(0);
+
+            // Register new file with metadata manager
+            if let Some(ref manager) = self.metadata_manager {
+                let file_info = Self::create_file_info(
+                    &compacted_filename,
+                    catalog,
+                    schema,
+                    table,
+                    partition_key,
+                    target_level as u8,
+                    rows as u64,
+                    file_size,
+                );
+                if let Err(e) = manager.register_file(file_info).await {
+                    warn!("Failed to register compacted file {}: {}", compacted_filename, e);
+                }
+            }
+
             if target_level == current_level {
                 info!(
                     "Created L{} file: {} ({} rows from {} L{} files) [max-level compaction]",
@@ -1154,11 +1273,22 @@ impl Compactor {
             }
 
             // Delete old files after successful write
+            let mut deleted_paths: Vec<String> = Vec::new();
             for file in &paths {
                 if let Err(e) = fs::remove_file(file) {
                     warn!("Failed to delete {}: {}", file.display(), e);
                 } else {
                     debug!("Deleted: {}", file.display());
+                    deleted_paths.push(file.to_string_lossy().to_string());
+                }
+            }
+
+            // Remove deleted files from metadata manager
+            if let Some(ref manager) = self.metadata_manager {
+                if !deleted_paths.is_empty() {
+                    if let Err(e) = manager.remove_files(deleted_paths).await {
+                        warn!("Failed to remove files from metadata: {}", e);
+                    }
                 }
             }
         }
