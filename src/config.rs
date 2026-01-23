@@ -631,10 +631,7 @@ fn default_auth_password() -> String {
 }
 
 fn default_auth_public_endpoints() -> Vec<String> {
-    vec![
-        "/health".to_string(),
-        "/stats".to_string(),
-    ]
+    vec!["/health".to_string(), "/stats".to_string()]
 }
 
 impl Default for ServerConfig {

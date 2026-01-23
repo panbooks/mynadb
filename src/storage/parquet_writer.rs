@@ -80,8 +80,8 @@ impl ParquetWriter {
         let ts_col = batch.column(ts_idx);
 
         // Get sort indices (ascending order)
-        let indices = sort_to_indices(ts_col, None, None)
-            .map_err(|e| format!("Failed to sort: {}", e))?;
+        let indices =
+            sort_to_indices(ts_col, None, None).map_err(|e| format!("Failed to sort: {}", e))?;
 
         // Reorder all columns by the sort indices
         let sorted_columns: Result<Vec<ArrayRef>, String> = batch
@@ -110,9 +110,7 @@ impl ParquetWriter {
             .set_dictionary_page_size_limit(DICTIONARY_PAGE_SIZE)
             // ===== Compression =====
             // ZSTD level 3 - good balance of speed and compression ratio
-            .set_compression(Compression::ZSTD(
-                ZstdLevel::try_new(3).unwrap_or_default(),
-            ))
+            .set_compression(Compression::ZSTD(ZstdLevel::try_new(3).unwrap_or_default()))
             // ===== Dictionary Encoding =====
             // Enable dictionary encoding for better compression of repeated values (tags)
             .set_dictionary_enabled(true)
@@ -224,9 +222,8 @@ impl ParquetWriter {
     ) -> Result<String, String> {
         // Use tokio runtime to run async code
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(
-                self.write_batches_partitioned(catalog, schema, table, date, batches),
-            )
+            tokio::runtime::Handle::current()
+                .block_on(self.write_batches_partitioned(catalog, schema, table, date, batches))
         })
     }
 

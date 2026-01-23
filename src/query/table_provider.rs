@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::common::{project_schema, Result, DataFusionError};
+use datafusion::common::{project_schema, DataFusionError, Result};
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::TableProviderFilterPushDown;
@@ -22,9 +22,7 @@ use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::ExecutionMode;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
-};
+use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion::prelude::Expr;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use futures::Stream;
@@ -132,10 +130,7 @@ impl fmt::Debug for ParquetTableProvider {
 
 impl ParquetTableProvider {
     /// Create a new provider by scanning the table directory
-    pub fn try_new(
-        base_path: impl AsRef<Path>,
-        config: ParquetTableConfig,
-    ) -> Result<Self> {
+    pub fn try_new(base_path: impl AsRef<Path>, config: ParquetTableConfig) -> Result<Self> {
         let base_path = base_path.as_ref().to_path_buf();
 
         // Discover files and infer schema
@@ -175,7 +170,10 @@ impl ParquetTableProvider {
     }
 
     /// Discover Parquet files in the table directory
-    fn discover_files(base_path: &Path, config: &ParquetTableConfig) -> Result<Vec<ParquetFileInfo>> {
+    fn discover_files(
+        base_path: &Path,
+        config: &ParquetTableConfig,
+    ) -> Result<Vec<ParquetFileInfo>> {
         let mut files = Vec::new();
 
         if !base_path.exists() {
@@ -200,8 +198,8 @@ impl ParquetTableProvider {
         config: &ParquetTableConfig,
         files: &mut Vec<ParquetFileInfo>,
     ) -> Result<()> {
-        let entries = std::fs::read_dir(base_path)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let entries =
+            std::fs::read_dir(base_path).map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         for entry in entries {
             let entry = entry.map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -212,12 +210,16 @@ impl ParquetTableProvider {
                     // Check for partition format: column=value
                     let prefix = format!("{}=", config.partition_column);
                     if dir_name.starts_with(&prefix) {
-                        let partition_value = dir_name.strip_prefix(&prefix)
-                            .unwrap_or("")
-                            .to_string();
+                        let partition_value =
+                            dir_name.strip_prefix(&prefix).unwrap_or("").to_string();
 
                         // Scan Parquet files in this partition
-                        Self::scan_partition_files(&path, &config.partition_column, &partition_value, files)?;
+                        Self::scan_partition_files(
+                            &path,
+                            &config.partition_column,
+                            &partition_value,
+                            files,
+                        )?;
                     }
                 }
             }
@@ -247,7 +249,8 @@ impl ParquetTableProvider {
                             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                         let mut partition_values = HashMap::new();
-                        partition_values.insert(partition_column.to_string(), partition_value.to_string());
+                        partition_values
+                            .insert(partition_column.to_string(), partition_value.to_string());
 
                         files.push(ParquetFileInfo {
                             path,
@@ -264,8 +267,8 @@ impl ParquetTableProvider {
 
     /// Scan a flat directory for Parquet files
     fn scan_flat_dir(base_path: &Path, files: &mut Vec<ParquetFileInfo>) -> Result<()> {
-        let entries = std::fs::read_dir(base_path)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let entries =
+            std::fs::read_dir(base_path).map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         for entry in entries {
             let entry = entry.map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -300,7 +303,11 @@ impl ParquetTableProvider {
         if files.is_empty() {
             // Return empty schema if no files
             let schema = if config.partitioned {
-                Schema::new(vec![Field::new(&config.partition_column, DataType::Utf8, true)])
+                Schema::new(vec![Field::new(
+                    &config.partition_column,
+                    DataType::Utf8,
+                    true,
+                )])
             } else {
                 Schema::empty()
             };
@@ -309,8 +316,8 @@ impl ParquetTableProvider {
 
         // Read schema from first file
         let first_file = &files[0];
-        let file = File::open(&first_file.path)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let file =
+            File::open(&first_file.path).map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let reader = ParquetRecordBatchReaderBuilder::try_new(file)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -320,7 +327,8 @@ impl ParquetTableProvider {
         // Add partition column to schema if partitioned
         if config.partitioned {
             let partition_field = Field::new(&config.partition_column, DataType::Utf8, true);
-            let mut fields: Vec<Field> = schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+            let mut fields: Vec<Field> =
+                schema.fields().iter().map(|f| f.as_ref().clone()).collect();
 
             // Only add if not already present
             if !fields.iter().any(|f| f.name() == &config.partition_column) {
@@ -388,14 +396,15 @@ impl ParquetTableProvider {
     }
 
     /// Extract partition filter conditions from expressions
-    fn extract_partition_filters(
-        partition_column: &str,
-        filters: &[Expr],
-    ) -> Vec<PartitionFilter> {
+    fn extract_partition_filters(partition_column: &str, filters: &[Expr]) -> Vec<PartitionFilter> {
         let mut partition_filters = Vec::new();
 
         for filter in filters {
-            Self::extract_partition_filter_from_expr(partition_column, filter, &mut partition_filters);
+            Self::extract_partition_filter_from_expr(
+                partition_column,
+                filter,
+                &mut partition_filters,
+            );
         }
 
         partition_filters
@@ -413,7 +422,9 @@ impl ParquetTableProvider {
                 if let Expr::Column(col) = binary.left.as_ref() {
                     if col.name == partition_column {
                         if let Expr::Literal(scalar) = binary.right.as_ref() {
-                            if let Some(value) = scalar.to_string().strip_prefix("Utf8(\"")
+                            if let Some(value) = scalar
+                                .to_string()
+                                .strip_prefix("Utf8(\"")
                                 .and_then(|s| s.strip_suffix("\")"))
                             {
                                 let filter = match binary.op {
@@ -442,8 +453,16 @@ impl ParquetTableProvider {
 
                 // Recurse into AND expressions
                 if binary.op == datafusion::logical_expr::Operator::And {
-                    Self::extract_partition_filter_from_expr(partition_column, &binary.left, filters);
-                    Self::extract_partition_filter_from_expr(partition_column, &binary.right, filters);
+                    Self::extract_partition_filter_from_expr(
+                        partition_column,
+                        &binary.left,
+                        filters,
+                    );
+                    Self::extract_partition_filter_from_expr(
+                        partition_column,
+                        &binary.right,
+                        filters,
+                    );
                 }
             }
             _ => {}
@@ -683,7 +702,8 @@ impl ExecutionPlan for ParquetExecPlan {
                         limit,
                         &partition_column,
                         partitioned,
-                    ).await
+                    )
+                    .await
                 }
             })
             .buffered(4) // Read up to 4 files concurrently
@@ -717,8 +737,7 @@ async fn read_parquet_file(
     partition_column: &str,
     partitioned: bool,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>> {
-    let file = File::open(&file_info.path)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let file = File::open(&file_info.path).map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)
         .map_err(|e| DataFusionError::External(Box::new(e)))?
@@ -735,7 +754,10 @@ async fn read_parquet_file(
             field.name() != partition_column
         })
         .filter_map(|field| {
-            file_schema.fields().iter().position(|f| f.name() == field.name())
+            file_schema
+                .fields()
+                .iter()
+                .position(|f| f.name() == field.name())
         })
         .collect();
 
@@ -752,22 +774,26 @@ async fn read_parquet_file(
         builder = builder.with_limit(lim);
     }
 
-    let reader = builder.build()
+    let reader = builder
+        .build()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     // Clone partition values for the stream
     let partition_value = file_info.partition_values.get(partition_column).cloned();
 
     // Convert to stream and add partition column if needed
-    let batches: Vec<RecordBatch> = reader
-        .filter_map(|r| r.ok())
-        .collect();
+    let batches: Vec<RecordBatch> = reader.filter_map(|r| r.ok()).collect();
 
     let result_batches: Vec<Result<RecordBatch>> = batches
         .into_iter()
         .map(|batch| {
             if partitioned {
-                add_partition_column(&batch, &target_schema, partition_column, partition_value.as_deref())
+                add_partition_column(
+                    &batch,
+                    &target_schema,
+                    partition_column,
+                    partition_value.as_deref(),
+                )
             } else {
                 // For non-partitioned tables, ensure schema matches
                 if batch.schema() == target_schema {
@@ -784,20 +810,21 @@ async fn read_parquet_file(
 }
 
 /// Reproject a batch to match target schema by selecting columns by name
-fn reproject_batch(
-    batch: &RecordBatch,
-    target_schema: &SchemaRef,
-) -> Result<RecordBatch> {
+fn reproject_batch(batch: &RecordBatch, target_schema: &SchemaRef) -> Result<RecordBatch> {
     let columns: Result<Vec<Arc<dyn datafusion::arrow::array::Array>>> = target_schema
         .fields()
         .iter()
         .map(|field| {
-            batch.schema().index_of(field.name())
+            batch
+                .schema()
+                .index_of(field.name())
                 .map(|idx| batch.column(idx).clone())
-                .map_err(|_| DataFusionError::Internal(format!(
-                    "Field '{}' not found in batch",
-                    field.name()
-                )))
+                .map_err(|_| {
+                    DataFusionError::Internal(format!(
+                        "Field '{}' not found in batch",
+                        field.name()
+                    ))
+                })
         })
         .collect();
 
@@ -815,7 +842,10 @@ fn add_partition_column(
     use datafusion::arrow::array::StringArray;
 
     // Check if partition column is in target schema
-    let has_partition_col = target_schema.fields().iter().any(|f| f.name() == partition_column);
+    let has_partition_col = target_schema
+        .fields()
+        .iter()
+        .any(|f| f.name() == partition_column);
 
     if !has_partition_col {
         // Partition column not requested in projection
@@ -828,7 +858,10 @@ fn add_partition_column(
             .fields()
             .iter()
             .filter_map(|field| {
-                batch.schema().index_of(field.name()).ok()
+                batch
+                    .schema()
+                    .index_of(field.name())
+                    .ok()
                     .map(|idx| batch.column(idx).clone())
             })
             .collect();
@@ -848,9 +881,8 @@ fn add_partition_column(
         if field.name() == partition_column {
             // Add partition column with the partition value
             let value = partition_value.unwrap_or("");
-            let array: Arc<dyn datafusion::arrow::array::Array> = Arc::new(
-                StringArray::from(vec![value; num_rows])
-            );
+            let array: Arc<dyn datafusion::arrow::array::Array> =
+                Arc::new(StringArray::from(vec![value; num_rows]));
             columns.push(array);
         } else {
             // Find and add column from batch
@@ -896,10 +928,8 @@ mod tests {
             None,
         ]);
 
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(ids), Arc::new(names)],
-        ).unwrap();
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(names)]).unwrap();
 
         let path = dir.join(filename);
         let file = File::create(&path).unwrap();

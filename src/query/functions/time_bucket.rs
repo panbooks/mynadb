@@ -210,24 +210,22 @@ impl ScalarUDFImpl for TimeBucketUDF {
                 let offset_arr = columnar_to_array(offset_nanos, len)?;
 
                 let ts_nanos = array_to_nanos(&ts_arr)?;
-                let interval_arr =
-                    interval_arr
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .ok_or_else(|| {
-                            datafusion::common::DataFusionError::Execution(
-                                "time_bucket: interval must be Int64".to_string(),
-                            )
-                        })?;
-                let offset_arr =
-                    offset_arr
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .ok_or_else(|| {
-                            datafusion::common::DataFusionError::Execution(
-                                "time_bucket: offset must be Int64".to_string(),
-                            )
-                        })?;
+                let interval_arr = interval_arr
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| {
+                        datafusion::common::DataFusionError::Execution(
+                            "time_bucket: interval must be Int64".to_string(),
+                        )
+                    })?;
+                let offset_arr = offset_arr
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| {
+                        datafusion::common::DataFusionError::Execution(
+                            "time_bucket: offset must be Int64".to_string(),
+                        )
+                    })?;
 
                 let result: Int64Array = (0..len)
                     .map(|i| {
@@ -331,10 +329,7 @@ fn array_to_nanos(arr: &ArrayRef) -> Result<Int64Array> {
                     )
                 })?;
             // Convert seconds to nanoseconds
-            let values: Int64Array = arr
-                .iter()
-                .map(|v| v.map(|s| s * 1_000_000_000))
-                .collect();
+            let values: Int64Array = arr.iter().map(|v| v.map(|s| s * 1_000_000_000)).collect();
             Ok(values)
         }
         other => Err(datafusion::common::DataFusionError::Execution(format!(

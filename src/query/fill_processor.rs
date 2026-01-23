@@ -146,8 +146,12 @@ impl FillProcessor {
 
         for col_idx in 0..batch.num_columns() {
             let col = batch.column(col_idx);
-            let filled_col =
-                self.fill_column(col, &expected_times, &existing_data, col_idx == self.time_column_idx)?;
+            let filled_col = self.fill_column(
+                col,
+                &expected_times,
+                &existing_data,
+                col_idx == self.time_column_idx,
+            )?;
             filled_columns.push(filled_col);
         }
 
@@ -384,7 +388,8 @@ impl FillProcessor {
                     }
                     FillOption::Linear => {
                         // Find next value for interpolation
-                        let next_val = self.find_next_value_int64(col, expected_times, existing_data, idx);
+                        let next_val =
+                            self.find_next_value_int64(col, expected_times, existing_data, idx);
                         if let (Some(prev), Some(next)) = (last_value, next_val) {
                             let interpolated = (prev + next) / 2; // Simple linear
                             builder.append_value(interpolated);
@@ -461,11 +466,14 @@ impl FillProcessor {
                     FillOption::Linear => {
                         // True linear interpolation
                         if let (Some(prev_val), Some(prev_time)) = (last_value, last_time) {
-                            if let Some((next_val, next_time)) =
-                                self.find_next_value_float64(col, expected_times, existing_data, idx)
-                            {
-                                let fraction = (time - prev_time) as f64
-                                    / (next_time - prev_time) as f64;
+                            if let Some((next_val, next_time)) = self.find_next_value_float64(
+                                col,
+                                expected_times,
+                                existing_data,
+                                idx,
+                            ) {
+                                let fraction =
+                                    (time - prev_time) as f64 / (next_time - prev_time) as f64;
                                 let interpolated = prev_val + (next_val - prev_val) * fraction;
                                 builder.append_value(interpolated);
                             } else {
@@ -725,10 +733,7 @@ mod tests {
     #[test]
     fn test_fill_null_inserts_nulls() {
         // Data has a gap at 5m
-        let batch = create_test_batch(
-            &[0, 10 * NANOS_PER_MINUTE],
-            &[Some(1.0), Some(3.0)],
-        );
+        let batch = create_test_batch(&[0, 10 * NANOS_PER_MINUTE], &[Some(1.0), Some(3.0)]);
 
         let processor = FillProcessor::new(5 * NANOS_PER_MINUTE, FillOption::Null, 0, vec![]);
 
@@ -748,10 +753,7 @@ mod tests {
 
     #[test]
     fn test_fill_previous() {
-        let batch = create_test_batch(
-            &[0, 10 * NANOS_PER_MINUTE],
-            &[Some(1.0), Some(3.0)],
-        );
+        let batch = create_test_batch(&[0, 10 * NANOS_PER_MINUTE], &[Some(1.0), Some(3.0)]);
 
         let processor = FillProcessor::new(5 * NANOS_PER_MINUTE, FillOption::Previous, 0, vec![]);
 
@@ -769,10 +771,7 @@ mod tests {
 
     #[test]
     fn test_fill_linear() {
-        let batch = create_test_batch(
-            &[0, 10 * NANOS_PER_MINUTE],
-            &[Some(0.0), Some(10.0)],
-        );
+        let batch = create_test_batch(&[0, 10 * NANOS_PER_MINUTE], &[Some(0.0), Some(10.0)]);
 
         let processor = FillProcessor::new(5 * NANOS_PER_MINUTE, FillOption::Linear, 0, vec![]);
 
@@ -790,10 +789,7 @@ mod tests {
 
     #[test]
     fn test_fill_value() {
-        let batch = create_test_batch(
-            &[0, 10 * NANOS_PER_MINUTE],
-            &[Some(1.0), Some(3.0)],
-        );
+        let batch = create_test_batch(&[0, 10 * NANOS_PER_MINUTE], &[Some(1.0), Some(3.0)]);
 
         let processor =
             FillProcessor::new(5 * NANOS_PER_MINUTE, FillOption::Value(99.0), 0, vec![]);
@@ -812,10 +808,7 @@ mod tests {
 
     #[test]
     fn test_time_column_always_filled() {
-        let batch = create_test_batch(
-            &[0, 10 * NANOS_PER_MINUTE],
-            &[Some(1.0), Some(3.0)],
-        );
+        let batch = create_test_batch(&[0, 10 * NANOS_PER_MINUTE], &[Some(1.0), Some(3.0)]);
 
         let processor = FillProcessor::new(5 * NANOS_PER_MINUTE, FillOption::Null, 0, vec![]);
 

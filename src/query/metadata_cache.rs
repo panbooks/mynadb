@@ -143,7 +143,9 @@ impl TableMetadataCache {
                 return Some(listing.clone());
             }
         }
-        self.stats.file_listing_misses.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .file_listing_misses
+            .fetch_add(1, Ordering::Relaxed);
         None
     }
 
@@ -165,12 +167,16 @@ impl TableMetadataCache {
             // Check if file size changed (quick invalidation check)
             if let Ok(metadata) = std::fs::metadata(file) {
                 if metadata.len() == entry.file_size {
-                    self.stats.parquet_metadata_hits.fetch_add(1, Ordering::Relaxed);
+                    self.stats
+                        .parquet_metadata_hits
+                        .fetch_add(1, Ordering::Relaxed);
                     return Some(entry.metadata.clone());
                 }
             }
         }
-        self.stats.parquet_metadata_misses.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .parquet_metadata_misses
+            .fetch_add(1, Ordering::Relaxed);
         None
     }
 
@@ -186,7 +192,8 @@ impl TableMetadataCache {
         // Evict old entries if cache is too large
         if cache.len() >= PARQUET_METADATA_CACHE_MAX_ENTRIES {
             // Remove oldest 10% of entries
-            let to_remove: Vec<PathBuf> = cache.iter()
+            let to_remove: Vec<PathBuf> = cache
+                .iter()
                 .map(|(k, v)| (k.clone(), v.cached_at))
                 .collect::<Vec<_>>()
                 .into_iter()
@@ -199,11 +206,14 @@ impl TableMetadataCache {
             }
         }
 
-        cache.insert(file, CachedParquetMetadata {
-            metadata,
-            cached_at: Instant::now(),
-            file_size,
-        });
+        cache.insert(
+            file,
+            CachedParquetMetadata {
+                metadata,
+                cached_at: Instant::now(),
+                file_size,
+            },
+        );
     }
 
     /// Invalidate cache for a specific table (called after writes)
@@ -214,7 +224,10 @@ impl TableMetadataCache {
         // Increment global version
         self.global_version.fetch_add(1, Ordering::Relaxed);
 
-        debug!("Invalidated cache for table: {}.{}.{}", catalog, schema, table);
+        debug!(
+            "Invalidated cache for table: {}.{}.{}",
+            catalog, schema, table
+        );
     }
 
     /// Invalidate all cache entries for a catalog (database)
@@ -279,12 +292,20 @@ pub struct CacheStatistics {
 impl CacheStatistics {
     pub fn table_hit_rate(&self) -> f64 {
         let total = self.table_hits + self.table_misses;
-        if total == 0 { 0.0 } else { self.table_hits as f64 / total as f64 * 100.0 }
+        if total == 0 {
+            0.0
+        } else {
+            self.table_hits as f64 / total as f64 * 100.0
+        }
     }
 
     pub fn parquet_hit_rate(&self) -> f64 {
         let total = self.parquet_metadata_hits + self.parquet_metadata_misses;
-        if total == 0 { 0.0 } else { self.parquet_metadata_hits as f64 / total as f64 * 100.0 }
+        if total == 0 {
+            0.0
+        } else {
+            self.parquet_metadata_hits as f64 / total as f64 * 100.0
+        }
     }
 }
 

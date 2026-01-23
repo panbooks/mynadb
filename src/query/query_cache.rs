@@ -59,7 +59,9 @@ impl QueryCacheKey {
 
 impl PartialEq for QueryCacheKey {
     fn eq(&self, other: &Self) -> bool {
-        self.db == other.db && self.sql_hash == other.sql_hash && self.sql_normalized == other.sql_normalized
+        self.db == other.db
+            && self.sql_hash == other.sql_hash
+            && self.sql_normalized == other.sql_normalized
     }
 }
 
@@ -302,14 +304,19 @@ impl QueryResultCache {
 
         // If replacing existing entry, adjust size
         if let Some(old) = cache.insert(key.clone(), entry) {
-            self.current_size.fetch_sub(old.size_bytes as u64, Ordering::Relaxed);
+            self.current_size
+                .fetch_sub(old.size_bytes as u64, Ordering::Relaxed);
         }
 
-        self.current_size.fetch_add(size_bytes as u64, Ordering::Relaxed);
+        self.current_size
+            .fetch_add(size_bytes as u64, Ordering::Relaxed);
 
         debug!(
             "Query cache PUT: db={}, rows={}, size={}, tables={:?}",
-            key.db, row_count, size_bytes, key.sql_normalized.chars().take(50).collect::<String>()
+            key.db,
+            row_count,
+            size_bytes,
+            key.sql_normalized.chars().take(50).collect::<String>()
         );
 
         true
@@ -327,7 +334,10 @@ impl QueryResultCache {
         let keys_to_remove: Vec<QueryCacheKey> = cache
             .iter()
             .filter(|(_, entry)| {
-                entry.referenced_tables.iter().any(|t| t == &table_ref || t.ends_with(&format!(".{}", table)))
+                entry
+                    .referenced_tables
+                    .iter()
+                    .any(|t| t == &table_ref || t.ends_with(&format!(".{}", table)))
             })
             .map(|(k, _)| k.clone())
             .collect();
@@ -336,12 +346,15 @@ impl QueryResultCache {
 
         for key in keys_to_remove {
             if let Some(entry) = cache.remove(&key) {
-                self.current_size.fetch_sub(entry.size_bytes as u64, Ordering::Relaxed);
+                self.current_size
+                    .fetch_sub(entry.size_bytes as u64, Ordering::Relaxed);
             }
         }
 
         if removed_count > 0 {
-            self.stats.invalidations.fetch_add(removed_count as u64, Ordering::Relaxed);
+            self.stats
+                .invalidations
+                .fetch_add(removed_count as u64, Ordering::Relaxed);
             debug!(
                 "Query cache INVALIDATE: table={}, removed={} entries",
                 table_ref, removed_count
@@ -367,12 +380,15 @@ impl QueryResultCache {
 
         for key in keys_to_remove {
             if let Some(entry) = cache.remove(&key) {
-                self.current_size.fetch_sub(entry.size_bytes as u64, Ordering::Relaxed);
+                self.current_size
+                    .fetch_sub(entry.size_bytes as u64, Ordering::Relaxed);
             }
         }
 
         if removed_count > 0 {
-            self.stats.invalidations.fetch_add(removed_count as u64, Ordering::Relaxed);
+            self.stats
+                .invalidations
+                .fetch_add(removed_count as u64, Ordering::Relaxed);
             debug!(
                 "Query cache INVALIDATE DB: db={}, removed={} entries",
                 db, removed_count
@@ -406,9 +422,15 @@ impl QueryResultCache {
 
     /// Estimate size of record batches in bytes
     fn estimate_batch_size(batches: &[RecordBatch]) -> usize {
-        batches.iter().map(|b| {
-            b.columns().iter().map(|col| col.get_buffer_memory_size()).sum::<usize>()
-        }).sum()
+        batches
+            .iter()
+            .map(|b| {
+                b.columns()
+                    .iter()
+                    .map(|col| col.get_buffer_memory_size())
+                    .sum::<usize>()
+            })
+            .sum()
     }
 
     /// Ensure there's space for new entry by evicting if necessary
@@ -424,7 +446,9 @@ impl QueryResultCache {
         self.evict_expired(&mut cache);
 
         // If still over, evict LRU entries
-        while self.current_size.load(Ordering::Relaxed) as usize + needed_bytes > max && !cache.is_empty() {
+        while self.current_size.load(Ordering::Relaxed) as usize + needed_bytes > max
+            && !cache.is_empty()
+        {
             self.evict_lru(&mut cache);
         }
     }
@@ -439,7 +463,8 @@ impl QueryResultCache {
 
         for key in expired {
             if let Some(entry) = cache.remove(&key) {
-                self.current_size.fetch_sub(entry.size_bytes as u64, Ordering::Relaxed);
+                self.current_size
+                    .fetch_sub(entry.size_bytes as u64, Ordering::Relaxed);
                 self.stats.evictions.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -461,9 +486,13 @@ impl QueryResultCache {
 
         if let Some(key) = victim {
             if let Some(entry) = cache.remove(&key) {
-                self.current_size.fetch_sub(entry.size_bytes as u64, Ordering::Relaxed);
+                self.current_size
+                    .fetch_sub(entry.size_bytes as u64, Ordering::Relaxed);
                 self.stats.evictions.fetch_add(1, Ordering::Relaxed);
-                debug!("Query cache EVICT: db={}, size={}", key.db, entry.size_bytes);
+                debug!(
+                    "Query cache EVICT: db={}, size={}",
+                    key.db, entry.size_bytes
+                );
             }
         }
     }
@@ -496,7 +525,8 @@ mod tests {
         ]));
 
         let id_array = Int64Array::from((0..rows as i64).collect::<Vec<_>>());
-        let name_array = StringArray::from((0..rows).map(|i| format!("name_{}", i)).collect::<Vec<_>>());
+        let name_array =
+            StringArray::from((0..rows).map(|i| format!("name_{}", i)).collect::<Vec<_>>());
 
         RecordBatch::try_new(schema, vec![Arc::new(id_array), Arc::new(name_array)]).unwrap()
     }
@@ -534,7 +564,12 @@ mod tests {
         let batches = vec![batch];
 
         // Put into cache
-        assert!(cache.put(key.clone(), batches.clone(), vec!["testdb.default.cpu".to_string()], 100));
+        assert!(cache.put(
+            key.clone(),
+            batches.clone(),
+            vec!["testdb.default.cpu".to_string()],
+            100
+        ));
 
         // Get from cache
         let result = cache.get(&key);
@@ -577,8 +612,18 @@ mod tests {
         let key2 = QueryCacheKey::new("testdb", "SELECT * FROM memory");
         let batch = create_test_batch(10);
 
-        cache.put(key1.clone(), vec![batch.clone()], vec!["testdb.default.cpu".to_string()], 100);
-        cache.put(key2.clone(), vec![batch], vec!["testdb.default.memory".to_string()], 100);
+        cache.put(
+            key1.clone(),
+            vec![batch.clone()],
+            vec!["testdb.default.cpu".to_string()],
+            100,
+        );
+        cache.put(
+            key2.clone(),
+            vec![batch],
+            vec!["testdb.default.memory".to_string()],
+            100,
+        );
 
         assert_eq!(cache.stats().entry_count, 2);
 
@@ -603,8 +648,18 @@ mod tests {
         let key2 = QueryCacheKey::new("db2", "SELECT * FROM cpu");
         let batch = create_test_batch(10);
 
-        cache.put(key1.clone(), vec![batch.clone()], vec!["db1.default.cpu".to_string()], 100);
-        cache.put(key2.clone(), vec![batch], vec!["db2.default.cpu".to_string()], 100);
+        cache.put(
+            key1.clone(),
+            vec![batch.clone()],
+            vec!["db1.default.cpu".to_string()],
+            100,
+        );
+        cache.put(
+            key2.clone(),
+            vec![batch],
+            vec!["db2.default.cpu".to_string()],
+            100,
+        );
 
         assert_eq!(cache.stats().entry_count, 2);
 
@@ -627,7 +682,12 @@ mod tests {
         let key = QueryCacheKey::new("testdb", "SELECT * FROM cpu");
         let batch = create_test_batch(10);
 
-        cache.put(key, vec![batch], vec!["testdb.default.cpu".to_string()], 100);
+        cache.put(
+            key,
+            vec![batch],
+            vec!["testdb.default.cpu".to_string()],
+            100,
+        );
         assert_eq!(cache.stats().entry_count, 1);
 
         cache.clear();

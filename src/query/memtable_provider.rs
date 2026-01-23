@@ -297,9 +297,9 @@ impl ExecutionPlan for MemtableExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // Get all batches from cache for this table
-        let batches = self
-            .cache
-            .get_table_batches(&self.catalog, &self.schema_name, &self.table_name, None);
+        let batches =
+            self.cache
+                .get_table_batches(&self.catalog, &self.schema_name, &self.table_name, None);
 
         debug!(
             "MemtableExec execute: table={}, batches={}",

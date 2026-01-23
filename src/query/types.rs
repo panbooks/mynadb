@@ -72,12 +72,14 @@ impl TimeRange {
 
     /// Get the derived date range from timestamps (for partition pruning)
     pub fn get_date_range(&self) -> (Option<String>, Option<String>) {
-        let start = self.start_date.clone().or_else(|| {
-            self.start_timestamp.map(Self::timestamp_to_date)
-        });
-        let end = self.end_date.clone().or_else(|| {
-            self.end_timestamp.map(Self::timestamp_to_date)
-        });
+        let start = self
+            .start_date
+            .clone()
+            .or_else(|| self.start_timestamp.map(Self::timestamp_to_date));
+        let end = self
+            .end_date
+            .clone()
+            .or_else(|| self.end_timestamp.map(Self::timestamp_to_date));
         (start, end)
     }
 }

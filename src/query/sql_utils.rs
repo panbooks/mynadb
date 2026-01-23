@@ -83,10 +83,7 @@ pub fn quote_identifier(ident: &str) -> String {
 
 /// Extract table references from SQL query
 /// Returns Vec<(catalog, schema, table)> with fully resolved names
-pub fn extract_table_references(
-    sql: &str,
-    catalog_name: &str,
-) -> Vec<(String, String, String)> {
+pub fn extract_table_references(sql: &str, catalog_name: &str) -> Vec<(String, String, String)> {
     let sql_upper = sql.to_uppercase();
     let mut table_refs = Vec::new();
 
@@ -214,7 +211,11 @@ fn process_table_ref(
         0 => return,
         1 => {
             // Simple name: cpu -> catalog.default.cpu
-            (catalog_name.to_string(), DEFAULT_SCHEMA.to_string(), parts[0].clone())
+            (
+                catalog_name.to_string(),
+                DEFAULT_SCHEMA.to_string(),
+                parts[0].clone(),
+            )
         }
         2 => {
             // Partially qualified: schema.table -> catalog.schema.table
@@ -270,8 +271,7 @@ pub fn qualify_table_names(sql: &str, catalog_name: &str) -> String {
                     quote_char = ch;
                 } else if in_quotes && ch == quote_char {
                     in_quotes = false;
-                } else if !in_quotes
-                    && (ch.is_whitespace() || ch == ',' || ch == ';' || ch == ')')
+                } else if !in_quotes && (ch.is_whitespace() || ch == ',' || ch == ';' || ch == ')')
                 {
                     end_pos = i;
                     break;
@@ -458,7 +458,10 @@ fn extract_date_value(s: &str) -> Option<String> {
         if let Some(end) = trimmed[start + 1..].find('\'') {
             let date = &trimmed[start + 1..start + 1 + end];
             // Validate date format (YYYY-MM-DD)
-            if date.len() == 10 && date.chars().nth(4) == Some('-') && date.chars().nth(7) == Some('-') {
+            if date.len() == 10
+                && date.chars().nth(4) == Some('-')
+                && date.chars().nth(7) == Some('-')
+            {
                 return Some(date.to_string());
             }
         }
@@ -555,8 +558,7 @@ pub fn extract_optimization_info(plan: &str) -> QueryOptimizations {
         row_group_pruning: plan_lower.contains("row_group")
             || plan_lower.contains("statistics")
             || plan_lower.contains("skip"),
-        projection_pushdown: plan_lower.contains("projection=")
-            || plan_lower.contains("project:"),
+        projection_pushdown: plan_lower.contains("projection=") || plan_lower.contains("project:"),
         limit_pushdown: plan_lower.contains("limit")
             || plan_lower.contains("topk")
             || plan_lower.contains("fetch="),
@@ -628,8 +630,16 @@ mod tests {
     fn test_extract_table_references() {
         let sql = "SELECT * FROM cpu, memory WHERE cpu.usage > 50";
         let refs = extract_table_references(sql, "testdb");
-        assert!(refs.contains(&("testdb".to_string(), "default".to_string(), "cpu".to_string())));
-        assert!(refs.contains(&("testdb".to_string(), "default".to_string(), "memory".to_string())));
+        assert!(refs.contains(&(
+            "testdb".to_string(),
+            "default".to_string(),
+            "cpu".to_string()
+        )));
+        assert!(refs.contains(&(
+            "testdb".to_string(),
+            "default".to_string(),
+            "memory".to_string()
+        )));
     }
 
     #[test]

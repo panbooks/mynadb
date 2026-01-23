@@ -187,11 +187,14 @@ impl Storage {
                 Ok(meta) => {
                     let path_str = meta.location.to_string();
                     // Remove base_path prefix if present
-                    let relative = if !self.base_path.is_empty() && path_str.starts_with(&self.base_path) {
-                        path_str[self.base_path.len()..].trim_start_matches('/').to_string()
-                    } else {
-                        path_str
-                    };
+                    let relative =
+                        if !self.base_path.is_empty() && path_str.starts_with(&self.base_path) {
+                            path_str[self.base_path.len()..]
+                                .trim_start_matches('/')
+                                .to_string()
+                        } else {
+                            path_str
+                        };
                     paths.push(relative);
                 }
                 Err(e) => {
@@ -252,7 +255,10 @@ impl Storage {
     pub fn local_path(&self, relative_path: &str) -> Option<std::path::PathBuf> {
         if let StorageBackend::Local(_) = &self.backend {
             let base = self.url_prefix.trim_start_matches("file://");
-            Some(std::path::PathBuf::from(format!("{}/{}", base, relative_path)))
+            Some(std::path::PathBuf::from(format!(
+                "{}/{}",
+                base, relative_path
+            )))
         } else {
             None
         }
@@ -267,10 +273,13 @@ impl Storage {
 impl std::fmt::Debug for Storage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Storage")
-            .field("backend", &match &self.backend {
-                StorageBackend::Local(_) => "local",
-                StorageBackend::S3(_) => "s3",
-            })
+            .field(
+                "backend",
+                &match &self.backend {
+                    StorageBackend::Local(_) => "local",
+                    StorageBackend::S3(_) => "s3",
+                },
+            )
             .field("base_path", &self.base_path)
             .field("url_prefix", &self.url_prefix)
             .finish()

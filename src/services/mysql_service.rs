@@ -485,10 +485,7 @@ impl MysqlSession {
     }
 
     /// Handle SHOW TABLES command
-    fn handle_show_tables<W: Read + Write>(
-        &self,
-        results: QueryResultWriter<W>,
-    ) -> io::Result<()> {
+    fn handle_show_tables<W: Read + Write>(&self, results: QueryResultWriter<W>) -> io::Result<()> {
         let db = match &self.current_db {
             Some(db) => db.clone(),
             None => {

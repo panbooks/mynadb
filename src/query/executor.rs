@@ -31,19 +31,19 @@ pub fn create_custom_session_state(base_state: SessionState) -> SessionState {
     let builder = SessionStateBuilder::new_from_existing(base_state);
 
     // Add custom analyzer rules
-    let builder = custom_analyzer_rules.into_iter().fold(builder, |b, rule| {
-        b.with_analyzer_rule(rule)
-    });
+    let builder = custom_analyzer_rules
+        .into_iter()
+        .fold(builder, |b, rule| b.with_analyzer_rule(rule));
 
     // Add custom optimizer rules
-    let builder = custom_optimizer_rules.into_iter().fold(builder, |b, rule| {
-        b.with_optimizer_rule(rule)
-    });
+    let builder = custom_optimizer_rules
+        .into_iter()
+        .fold(builder, |b, rule| b.with_optimizer_rule(rule));
 
     // Add custom physical optimizer rules
-    let builder = custom_physical_rules.into_iter().fold(builder, |b, rule| {
-        b.with_physical_optimizer_rule(rule)
-    });
+    let builder = custom_physical_rules
+        .into_iter()
+        .fold(builder, |b, rule| b.with_physical_optimizer_rule(rule));
 
     builder.build()
 }
@@ -129,20 +129,21 @@ impl CustomQueryExecutor {
         tracing::debug!("Parsed logical plan");
 
         // Analyze (custom + builtin rules)
-        let analyzed_plan = state
-            .analyzer()
-            .execute_and_check(logical_plan, state.config_options(), |_plan, rule| {
+        let analyzed_plan = state.analyzer().execute_and_check(
+            logical_plan,
+            state.config_options(),
+            |_plan, rule| {
                 tracing::trace!("Analyzer rule '{}' applied", rule.name());
-            })?;
+            },
+        )?;
         tracing::debug!("Analysis complete");
 
         // Logical optimize (custom + builtin rules)
-        let optimized_plan =
-            state
-                .optimizer()
-                .optimize(analyzed_plan, &state, |_plan, rule| {
-                    tracing::trace!("Optimizer rule '{}' applied", rule.name());
-                })?;
+        let optimized_plan = state
+            .optimizer()
+            .optimize(analyzed_plan, &state, |_plan, rule| {
+                tracing::trace!("Optimizer rule '{}' applied", rule.name());
+            })?;
         tracing::debug!("Logical optimization complete");
 
         // Physical plan
@@ -150,14 +151,15 @@ impl CustomQueryExecutor {
         tracing::debug!("Physical plan created");
 
         // Physical optimize (custom + builtin rules)
-        let physical_plan = state.physical_optimizers().iter().try_fold(
-            physical_plan,
-            |plan, optimizer| {
-                let result = optimizer.optimize(plan, state.config_options())?;
-                tracing::trace!("Physical optimizer '{}' applied", optimizer.name());
-                Ok(result) as Result<_>
-            },
-        )?;
+        let physical_plan =
+            state
+                .physical_optimizers()
+                .iter()
+                .try_fold(physical_plan, |plan, optimizer| {
+                    let result = optimizer.optimize(plan, state.config_options())?;
+                    tracing::trace!("Physical optimizer '{}' applied", optimizer.name());
+                    Ok(result) as Result<_>
+                })?;
         tracing::debug!("Physical optimization complete");
 
         // Execute
@@ -183,13 +185,29 @@ mod tests {
         let ctx = SessionContext::new();
         let executor = CustomQueryExecutor::new(ctx);
         // Just verify it creates without error
-        assert!(executor.context().state().config_options().execution.batch_size > 0);
+        assert!(
+            executor
+                .context()
+                .state()
+                .config_options()
+                .execution
+                .batch_size
+                > 0
+        );
     }
 
     #[tokio::test]
     async fn test_from_context() {
         let ctx = SessionContext::new();
         let executor = CustomQueryExecutor::from_context(ctx);
-        assert!(executor.context().state().config_options().execution.batch_size > 0);
+        assert!(
+            executor
+                .context()
+                .state()
+                .config_options()
+                .execution
+                .batch_size
+                > 0
+        );
     }
 }

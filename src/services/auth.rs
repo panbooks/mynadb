@@ -73,7 +73,10 @@ impl AuthMiddleware {
 
         match (username, password) {
             (Some(u), Some(p)) => {
-                debug!("Attempting authentication via query parameters (user: {})", u);
+                debug!(
+                    "Attempting authentication via query parameters (user: {})",
+                    u
+                );
                 self.validate_credentials(&u, &p)
             }
             _ => {

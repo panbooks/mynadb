@@ -32,7 +32,9 @@ fn main() {
         .to_string();
 
     // Get build timestamp
-    let build_time = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let build_time = chrono::Utc::now()
+        .format("%Y-%m-%d %H:%M:%S UTC")
+        .to_string();
 
     // Get rustc version
     let rustc_version = Command::new("rustc")

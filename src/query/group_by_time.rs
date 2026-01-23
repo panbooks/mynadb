@@ -251,8 +251,7 @@ impl GroupByTimeTransformer {
         time_bucket_expr: &str,
     ) -> Result<String, TransformError> {
         // Extract SELECT ... FROM portion
-        let select_pattern =
-            Regex::new(r"(?i)^(\s*SELECT\s+)(.*?)(\s+FROM\s+.*)$").unwrap();
+        let select_pattern = Regex::new(r"(?i)^(\s*SELECT\s+)(.*?)(\s+FROM\s+.*)$").unwrap();
 
         if let Some(caps) = select_pattern.captures(sql) {
             let select_keyword = caps.get(1).unwrap().as_str();
@@ -261,7 +260,10 @@ impl GroupByTimeTransformer {
 
             // Check for SELECT * which is not supported with GROUP BY time()
             // because aggregation requires explicit columns
-            if select_columns == "*" || select_columns.starts_with("*, ") || select_columns.contains(", *") {
+            if select_columns == "*"
+                || select_columns.starts_with("*, ")
+                || select_columns.contains(", *")
+            {
                 return Err(TransformError::InvalidSqlSyntax(
                     "SELECT * is not supported with GROUP BY time(). Please specify columns explicitly, e.g., SELECT mean(column_name) FROM table GROUP BY time(5m)".to_string()
                 ));
@@ -277,7 +279,10 @@ impl GroupByTimeTransformer {
                 transformed_columns
             };
 
-            Ok(format!("{}{}{}", select_keyword, final_columns, from_onwards))
+            Ok(format!(
+                "{}{}{}",
+                select_keyword, final_columns, from_onwards
+            ))
         } else {
             Err(TransformError::InvalidSqlSyntax(
                 "Could not parse SELECT clause".to_string(),
@@ -293,8 +298,7 @@ impl GroupByTimeTransformer {
         // Transform each function
         for (influx_fn, datafusion_fn) in &func_map {
             // Match function call pattern: func(column)
-            let pattern =
-                Regex::new(&format!(r"(?i)\b{}\s*\(\s*([^)]+)\s*\)", influx_fn)).unwrap();
+            let pattern = Regex::new(&format!(r"(?i)\b{}\s*\(\s*([^)]+)\s*\)", influx_fn)).unwrap();
 
             result = pattern
                 .replace_all(&result, |caps: &regex::Captures| {
@@ -333,10 +337,15 @@ impl GroupByTimeTransformer {
             let new_group_by = if other_columns.is_empty() {
                 format!("{}{}", group_by_keyword, time_bucket_expr)
             } else {
-                format!("{}{}, {}", group_by_keyword, time_bucket_expr, other_columns)
+                format!(
+                    "{}{}, {}",
+                    group_by_keyword, time_bucket_expr, other_columns
+                )
             };
 
-            Ok(group_by_pattern.replace(sql, new_group_by.as_str()).to_string())
+            Ok(group_by_pattern
+                .replace(sql, new_group_by.as_str())
+                .to_string())
         } else {
             Ok(sql.to_string())
         }
@@ -358,7 +367,10 @@ impl GroupByTimeTransformer {
         if let Some(caps) = limit_pattern.captures(sql) {
             let limit_clause = caps.get(1).unwrap().as_str();
             let sql_without_limit = limit_pattern.replace(sql, "").to_string();
-            Ok(format!("{} ORDER BY time{}", sql_without_limit, limit_clause))
+            Ok(format!(
+                "{} ORDER BY time{}",
+                sql_without_limit, limit_clause
+            ))
         } else {
             Ok(format!("{} ORDER BY time", sql.trim_end()))
         }
@@ -469,11 +481,15 @@ mod tests {
         assert!(result.contains("avg(usage)"));
         assert!(result.contains("as mean_usage"));
 
-        let result = transformer.transform_aggregates("sum(value), count(*)").unwrap();
+        let result = transformer
+            .transform_aggregates("sum(value), count(*)")
+            .unwrap();
         assert!(result.contains("sum(value)"));
         assert!(result.contains("count(*)"));
 
-        let result = transformer.transform_aggregates("spread(temperature)").unwrap();
+        let result = transformer
+            .transform_aggregates("spread(temperature)")
+            .unwrap();
         assert!(result.contains("max(temperature) - min(temperature)"));
     }
 
@@ -498,9 +514,7 @@ mod tests {
         let transformer = GroupByTimeTransformer::new();
 
         let result = transformer
-            .transform(
-                "SELECT mean(usage) FROM cpu GROUP BY time(1h, 15m) fill(previous)",
-            )
+            .transform("SELECT mean(usage) FROM cpu GROUP BY time(1h, 15m) fill(previous)")
             .unwrap();
 
         assert!(result.was_transformed);
@@ -514,9 +528,7 @@ mod tests {
         let transformer = GroupByTimeTransformer::new();
 
         let result = transformer
-            .transform(
-                "SELECT mean(usage) FROM cpu GROUP BY time(5m), host, region",
-            )
+            .transform("SELECT mean(usage) FROM cpu GROUP BY time(5m), host, region")
             .unwrap();
 
         assert!(result.was_transformed);
@@ -543,9 +555,7 @@ mod tests {
         let transformer = GroupByTimeTransformer::new();
 
         let result = transformer
-            .transform(
-                "SELECT mean(usage) FROM cpu GROUP BY time(5m) LIMIT 100",
-            )
+            .transform("SELECT mean(usage) FROM cpu GROUP BY time(5m) LIMIT 100")
             .unwrap();
 
         assert!(result.was_transformed);
