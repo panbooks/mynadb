@@ -381,13 +381,15 @@ async fn main() {
         .start_background_flush(config.cache.flush_interval_secs);
 
     // Initialize core components
-    info!("Initializing query engine");
+    info!("Initializing query engine with memtable support");
     let query_cache_config = query_cache::QueryCacheConfig::from(&config.query_cache);
-    let query_engine = Arc::new(query_engine::QueryEngine::new_with_options(
+    let cache_arc = Arc::new(cache.clone());
+    let query_engine = Arc::new(query_engine::QueryEngine::new_with_memtable(
         &config.storage.data_dir,
         Some(storage.clone()),
         query_cache_config,
         config.query.use_custom_table_provider,
+        cache_arc,
     ));
 
     info!("Initializing database manager");

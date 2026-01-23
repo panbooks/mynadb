@@ -2,9 +2,12 @@ use crate::query::create_custom_session_state;
 use crate::query::fill_processor::{FillError, FillProcessor};
 use crate::query::functions::create_time_bucket_udf;
 use crate::query::group_by_time::GroupByTimeTransformer;
+use crate::query::memtable_provider::MemtableProvider;
 use crate::query::table_provider::{ParquetTableConfig, ParquetTableProvider};
 use crate::query::time_interval::FillOption;
+use crate::query::union_provider::UnionTableProvider;
 use crate::query_cache::{QueryCacheConfig, QueryCacheKey, QueryCacheStats, QueryResultCache, SharedQueryResultCache};
+use crate::storage::cache::DataCache;
 use crate::storage::storage::Storage;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::arrow::array::{Array, RecordBatch};
@@ -425,6 +428,8 @@ pub struct QueryEngine {
     query_cache: SharedQueryResultCache,
     // Use custom ParquetTableProvider instead of ListingTable
     use_custom_table_provider: bool,
+    // Write cache for memtable queries (enables querying fresh data before flush)
+    write_cache: Option<Arc<DataCache>>,
 }
 
 /// Default memory limit for query execution (16GB)
@@ -515,11 +520,23 @@ impl QueryEngine {
     }
 
     pub fn new(data_dir: &str) -> Self {
-        Self::new_with_options(data_dir, None, QueryCacheConfig::default(), false)
+        Self::new_with_options(data_dir, None, QueryCacheConfig::default(), false, None)
     }
 
     pub fn new_with_query_cache(data_dir: &str, storage: Option<Arc<Storage>>, query_cache_config: QueryCacheConfig) -> Self {
-        Self::new_with_options(data_dir, storage, query_cache_config, false)
+        Self::new_with_options(data_dir, storage, query_cache_config, false, None)
+    }
+
+    /// Create with write cache for memtable queries
+    /// This enables querying data that hasn't been flushed to Parquet yet
+    pub fn new_with_memtable(
+        data_dir: &str,
+        storage: Option<Arc<Storage>>,
+        query_cache_config: QueryCacheConfig,
+        use_custom_table_provider: bool,
+        write_cache: Arc<DataCache>,
+    ) -> Self {
+        Self::new_with_options(data_dir, storage, query_cache_config, use_custom_table_provider, Some(write_cache))
     }
 
     pub fn new_with_options(
@@ -527,6 +544,7 @@ impl QueryEngine {
         storage: Option<Arc<Storage>>,
         query_cache_config: QueryCacheConfig,
         use_custom_table_provider: bool,
+        write_cache: Option<Arc<DataCache>>,
     ) -> Self {
         let ctx = Self::create_optimized_context();
         let metadata_cache = Arc::new(TableMetadataCache::new());
@@ -550,8 +568,9 @@ impl QueryEngine {
         };
 
         let table_provider_type = if use_custom_table_provider { "custom" } else { "listing" };
-        info!("QueryEngine initialized: storage={}, table_provider={}, metadata_cache=enabled, query_cache={}",
-              storage_type, table_provider_type, if query_cache.is_enabled() { "enabled" } else { "disabled" });
+        let memtable_status = if write_cache.is_some() { "enabled" } else { "disabled" };
+        info!("QueryEngine initialized: storage={}, table_provider={}, metadata_cache=enabled, query_cache={}, memtable={}",
+              storage_type, table_provider_type, if query_cache.is_enabled() { "enabled" } else { "disabled" }, memtable_status);
 
         QueryEngine {
             ctx,
@@ -561,6 +580,7 @@ impl QueryEngine {
             metadata_cache,
             query_cache,
             use_custom_table_provider,
+            write_cache,
         }
     }
 
@@ -643,6 +663,7 @@ impl QueryEngine {
 
     /// Register a table in catalog.schema.table format with partition support
     /// Uses cache to avoid re-scanning directories on every query
+    /// Also supports memtable-only tables (data only in cache, not yet flushed)
     pub async fn register_table(
         &self,
         catalog_name: &str,
@@ -675,18 +696,29 @@ impl QueryEngine {
             self.data_dir, catalog_name, schema_name, table_name
         );
 
+        // Check if table path exists on disk
+        let path_exists = if self.storage.is_none() || self.storage.as_ref().map(|s| s.is_local()).unwrap_or(true) {
+            std::path::Path::new(&table_path).exists()
+        } else {
+            true // Assume exists for object storage
+        };
+
         // Check cache first for table info
         let (has_partitions, partitions) = if let Some(cached) = self.metadata_cache.get_table_info(catalog_name, schema_name, table_name) {
             // Use cached partition info
             debug!("Using cached table info for {}.{}.{}", catalog_name, schema_name, table_name);
             (cached.has_partitions, cached.partitions)
         } else {
-            // Cache miss - need to scan directory
-            // For local storage, check if path exists
-            if self.storage.is_none() || self.storage.as_ref().map(|s| s.is_local()).unwrap_or(true) {
-                if !std::path::Path::new(&table_path).exists() {
-                    return Err(format!("Table path not found: {}", table_path));
+            // Cache miss - need to scan directory or check for memtable-only
+            if !path_exists {
+                // Table path doesn't exist - check if we have cached data (memtable-only)
+                if let Some(ref cache) = self.write_cache {
+                    if cache.has_cached_data(catalog_name, schema_name, table_name) {
+                        // Register memtable-only table
+                        return self.register_memtable_only(catalog_name, schema_name, table_name).await;
+                    }
                 }
+                return Err(format!("Table path not found: {}", table_path));
             }
 
             // Discover partitions
@@ -829,6 +861,7 @@ impl QueryEngine {
     }
 
     /// Helper to register a TableProvider in the catalog
+    /// If write cache is available and has data for this table, wraps with UnionTableProvider
     fn register_provider(
         &self,
         catalog_name: &str,
@@ -842,8 +875,114 @@ impl QueryEngine {
         let schema = catalog.schema(schema_name)
             .ok_or_else(|| format!("Schema '{}.{}' not found", catalog_name, schema_name))?;
 
-        schema.register_table(table_name.to_string(), provider)
+        // Check if we have cached data and should create a union
+        let final_provider = self.maybe_wrap_with_memtable(
+            catalog_name,
+            schema_name,
+            table_name,
+            provider,
+        )?;
+
+        schema.register_table(table_name.to_string(), final_provider)
             .map_err(|e| format!("Failed to register table '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
+
+        Ok(())
+    }
+
+    /// Wrap a table provider with UnionTableProvider if there is cached data
+    /// Returns the original provider if no cached data exists
+    fn maybe_wrap_with_memtable(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+        parquet_provider: Arc<dyn datafusion::catalog::TableProvider>,
+    ) -> Result<Arc<dyn datafusion::catalog::TableProvider>, String> {
+        // Check if we have a write cache
+        let cache = match &self.write_cache {
+            Some(c) => c,
+            None => return Ok(parquet_provider),
+        };
+
+        // Check if there is cached data for this table
+        if !cache.has_cached_data(catalog_name, schema_name, table_name) {
+            return Ok(parquet_provider);
+        }
+
+        // Create memtable provider
+        let memtable_provider = match MemtableProvider::try_new(
+            cache.clone(),
+            catalog_name,
+            schema_name,
+            table_name,
+        ) {
+            Some(p) => Arc::new(p),
+            None => return Ok(parquet_provider), // No schema available, skip memtable
+        };
+
+        // Create union of memtable + parquet
+        let full_name = format!("{}.{}.{}", catalog_name, schema_name, table_name);
+        let union_provider = UnionTableProvider::new(
+            memtable_provider,
+            parquet_provider,
+            full_name.clone(),
+        ).map_err(|e| format!("Failed to create union provider for '{}': {}", full_name, e))?;
+
+        let stats = cache.get_table_cache_stats(catalog_name, schema_name, table_name);
+        debug!(
+            "Created memtable union for {}: {} cached rows in {} batches",
+            full_name, stats.total_rows, stats.total_batches
+        );
+
+        Ok(Arc::new(union_provider))
+    }
+
+    /// Register a memtable-only table (data only in cache, no Parquet files yet)
+    async fn register_memtable_only(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+    ) -> Result<(), String> {
+        let cache = self.write_cache.as_ref()
+            .ok_or_else(|| "Write cache not available".to_string())?;
+
+        let memtable_provider = MemtableProvider::try_new(
+            cache.clone(),
+            catalog_name,
+            schema_name,
+            table_name,
+        ).ok_or_else(|| format!(
+            "No cached data available for {}.{}.{}",
+            catalog_name, schema_name, table_name
+        ))?;
+
+        // Ensure catalog and schema exist
+        self.ensure_schema_in_catalog(catalog_name, schema_name).await?;
+
+        let full_name = format!("{}.{}.{}", catalog_name, schema_name, table_name);
+        let stats = cache.get_table_cache_stats(catalog_name, schema_name, table_name);
+
+        let catalog = self.ctx.catalog(catalog_name)
+            .ok_or_else(|| format!("Catalog '{}' not found", catalog_name))?;
+
+        let schema = catalog.schema(schema_name)
+            .ok_or_else(|| format!("Schema '{}.{}' not found", catalog_name, schema_name))?;
+
+        schema.register_table(table_name.to_string(), Arc::new(memtable_provider))
+            .map_err(|e| format!("Failed to register memtable '{}.{}.{}': {}", catalog_name, schema_name, table_name, e))?;
+
+        debug!(
+            "Registered memtable-only table {}: {} cached rows in {} batches",
+            full_name, stats.total_rows, stats.total_batches
+        );
+
+        // Track registration
+        let mut catalogs = self.registered_catalogs.write().await;
+        catalogs
+            .entry(catalog_name.to_string())
+            .or_insert_with(HashSet::new)
+            .insert(schema_name.to_string());
 
         Ok(())
     }

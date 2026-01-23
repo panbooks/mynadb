@@ -597,3 +597,196 @@ impl std::fmt::Display for CacheFullError {
 }
 
 impl std::error::Error for CacheFullError {}
+
+// ============================================================================
+// Memtable Read API
+// ============================================================================
+// These methods allow the query engine to read cached data that hasn't been
+// flushed to Parquet yet, enabling immediate query visibility for fresh writes.
+
+impl DataCache {
+    /// Check if there is any cached data for a specific table
+    /// This is a fast check that avoids collecting data
+    pub fn has_cached_data(&self, catalog: &str, schema: &str, table: &str) -> bool {
+        for shard in self.shards.iter() {
+            let data = shard.data.lock();
+            for (key, batches) in data.iter() {
+                if key.0 == catalog && key.1 == schema && key.2 == table && !batches.is_empty() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Get all RecordBatches for a specific table across all date partitions
+    /// Returns cloned batches to avoid holding locks during query execution
+    ///
+    /// # Arguments
+    /// * `catalog` - Database/catalog name
+    /// * `schema` - Schema/service name
+    /// * `table` - Table/measurement name
+    /// * `date_filter` - Optional date partition filter (date as i32)
+    pub fn get_table_batches(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date_filter: Option<i32>,
+    ) -> Vec<RecordBatch> {
+        let mut result = Vec::new();
+
+        for shard in self.shards.iter() {
+            let data = shard.data.lock();
+            for (key, batches) in data.iter() {
+                // Check if key matches (catalog, schema, table)
+                if key.0 == catalog && key.1 == schema && key.2 == table {
+                    // Apply date filter if provided
+                    if let Some(date) = date_filter {
+                        if key.3 != date {
+                            continue;
+                        }
+                    }
+                    // Clone batches to avoid holding lock
+                    result.extend(batches.iter().cloned());
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Get all RecordBatches for a table with date range filter
+    ///
+    /// # Arguments
+    /// * `catalog` - Database/catalog name
+    /// * `schema` - Schema/service name
+    /// * `table` - Table/measurement name
+    /// * `min_date` - Minimum date (inclusive), None for no lower bound
+    /// * `max_date` - Maximum date (inclusive), None for no upper bound
+    pub fn get_table_batches_in_range(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        min_date: Option<i32>,
+        max_date: Option<i32>,
+    ) -> Vec<RecordBatch> {
+        let mut result = Vec::new();
+
+        for shard in self.shards.iter() {
+            let data = shard.data.lock();
+            for (key, batches) in data.iter() {
+                if key.0 == catalog && key.1 == schema && key.2 == table {
+                    let date = key.3;
+                    // Apply date range filter
+                    if let Some(min) = min_date {
+                        if date < min {
+                            continue;
+                        }
+                    }
+                    if let Some(max) = max_date {
+                        if date > max {
+                            continue;
+                        }
+                    }
+                    result.extend(batches.iter().cloned());
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Get the schema for cached data of a specific table
+    /// Returns the schema from the first available batch, or None if no data cached
+    pub fn get_table_schema(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Option<Arc<Schema>> {
+        for shard in self.shards.iter() {
+            let data = shard.data.lock();
+            for (key, batches) in data.iter() {
+                if key.0 == catalog && key.1 == schema && key.2 == table {
+                    if let Some(batch) = batches.first() {
+                        return Some(batch.schema());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Get list of date partitions that have cached data for a table
+    pub fn get_cached_partitions(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Vec<i32> {
+        let mut dates: Vec<i32> = Vec::new();
+
+        for shard in self.shards.iter() {
+            let data = shard.data.lock();
+            for (key, batches) in data.iter() {
+                if key.0 == catalog && key.1 == schema && key.2 == table && !batches.is_empty() {
+                    if !dates.contains(&key.3) {
+                        dates.push(key.3);
+                    }
+                }
+            }
+        }
+
+        dates.sort();
+        dates
+    }
+
+    /// Get statistics about cached data for a table
+    pub fn get_table_cache_stats(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> TableCacheStats {
+        let mut total_rows = 0usize;
+        let mut total_batches = 0usize;
+        let mut total_size_bytes = 0usize;
+        let mut partition_count = 0usize;
+        let mut partitions_seen: Vec<i32> = Vec::new();
+
+        for shard in self.shards.iter() {
+            let data = shard.data.lock();
+            for (key, batches) in data.iter() {
+                if key.0 == catalog && key.1 == schema && key.2 == table {
+                    for batch in batches {
+                        total_rows += batch.num_rows();
+                        total_size_bytes += batch.get_array_memory_size();
+                        total_batches += 1;
+                    }
+                    if !partitions_seen.contains(&key.3) {
+                        partitions_seen.push(key.3);
+                        partition_count += 1;
+                    }
+                }
+            }
+        }
+
+        TableCacheStats {
+            total_rows,
+            total_batches,
+            total_size_bytes,
+            partition_count,
+        }
+    }
+}
+
+/// Statistics about cached data for a specific table
+#[derive(Debug, Clone)]
+pub struct TableCacheStats {
+    pub total_rows: usize,
+    pub total_batches: usize,
+    pub total_size_bytes: usize,
+    pub partition_count: usize,
+}
