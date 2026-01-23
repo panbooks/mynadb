@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Object Store - S3, MinIO, and Aliyun OSS configuration for cloud storage">
+  <title>Object Store - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>M</text></svg>">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">M</span>
+        MynaDB
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Features</h4>
+        <ul class="sidebar-nav">
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+          <li><a href="object-store.html" class="active">Object Store</a></li>
+          <li><a href="retention.html">Retention Policies</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="high-availability.html">High Availability</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>API Reference</h4>
+        <ul class="sidebar-nav">
+          <li><a href="api.html">HTTP API</a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>Object Store Support</h1>
+
+      <p>MynaDB supports cloud object storage backends including AWS S3, MinIO, and Aliyun OSS. This enables scalable, cost-effective storage for large time series datasets.</p>
+
+      <h2>Storage Architecture</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>┌─────────────────────────────────────────────────────────────┐
+│                        MynaDB                                │
+│                                                              │
+│   ┌─────────────────┐    ┌─────────────────────────────┐    │
+│   │   Write Path    │    │        Read Path            │    │
+│   │                 │    │                             │    │
+│   │  DataCache      │    │  QueryEngine                │    │
+│   │  (In-Memory)    │    │  (DataFusion)               │    │
+│   └────────┬────────┘    └──────────────┬──────────────┘    │
+│            │                            │                    │
+│            ▼                            ▼                    │
+│   ┌─────────────────────────────────────────────────────┐   │
+│   │              Storage Abstraction Layer               │   │
+│   │                                                      │   │
+│   │   • Local Filesystem                                 │   │
+│   │   • AWS S3                                           │   │
+│   │   • MinIO                                            │   │
+│   │   • Aliyun OSS                                       │   │
+│   └──────────────────────────┬──────────────────────────┘   │
+└──────────────────────────────┼──────────────────────────────┘
+                               │
+            ┌──────────────────┼──────────────────┐
+            │                  │                  │
+            ▼                  ▼                  ▼
+    ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+    │   AWS S3     │   │    MinIO     │   │  Aliyun OSS  │
+    │              │   │              │   │              │
+    │  s3://bucket │   │  minio://    │   │  oss://      │
+    └──────────────┘   └──────────────┘   └──────────────┘</code></pre>
+        </div>
+      </div>
+
+      <h2>Configuration</h2>
+
+      <h3>Local Storage (Default)</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[storage]
+# Local filesystem storage
+backend = "local"
+data_dir = "/data/mynadb"</code></pre>
+        </div>
+      </div>
+
+      <h3>AWS S3</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[storage]
+backend = "s3"
+data_dir = "/data/mynadb"  # Local cache/WAL directory
+
+[storage.s3]
+bucket = "my-mynadb-bucket"
+region = "us-west-2"
+
+# Credentials (optional if using IAM roles)
+access_key = "AKIAIOSFODNN7EXAMPLE"
+secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+# Optional: custom endpoint for S3-compatible services
+# endpoint = "https://s3.us-west-2.amazonaws.com"
+
+# Optional: path prefix within bucket
+prefix = "mynadb-data"</code></pre>
+        </div>
+      </div>
+
+      <h3>MinIO</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[storage]
+backend = "minio"
+data_dir = "/data/mynadb"
+
+[storage.s3]
+bucket = "mynadb"
+region = "us-east-1"  # Can be any value for MinIO
+
+# MinIO credentials
+access_key = "minioadmin"
+secret_key = "minioadmin"
+
+# MinIO endpoint
+endpoint = "http://localhost:9000"
+
+# Allow HTTP (required for local MinIO)
+allow_http = true</code></pre>
+        </div>
+      </div>
+
+      <h3>Aliyun OSS</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[storage]
+backend = "oss"
+data_dir = "/data/mynadb"
+
+[storage.s3]
+bucket = "my-oss-bucket"
+region = "oss-cn-hangzhou"
+
+# Aliyun credentials
+access_key = "your-access-key-id"
+secret_key = "your-access-key-secret"
+
+# OSS endpoint
+endpoint = "https://oss-cn-hangzhou.aliyuncs.com"</code></pre>
+        </div>
+      </div>
+
+      <h2>Setting Up MinIO (Local Development)</h2>
+
+      <h3>Docker Setup</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Run MinIO with Docker
+docker run -d \
+  --name minio \
+  -p 9000:9000 \
+  -p 9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin \
+  -e MINIO_ROOT_PASSWORD=minioadmin \
+  -v minio-data:/data \
+  minio/minio server /data --console-address ":9001"
+
+# Create a bucket using MinIO client
+docker exec minio mc alias set local http://localhost:9000 minioadmin minioadmin
+docker exec minio mc mb local/mynadb</code></pre>
+        </div>
+      </div>
+
+      <h3>Docker Compose</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">yaml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>version: '3.8'
+services:
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+
+  mynadb:
+    image: mynadb:latest
+    ports:
+      - "7000:7000"
+      - "7001:7001"
+    volumes:
+      - ./config.toml:/etc/mynadb/config.toml
+    depends_on:
+      - minio
+
+volumes:
+  minio-data:</code></pre>
+        </div>
+      </div>
+
+      <h2>IAM Role Authentication (AWS)</h2>
+
+      <p>When running on AWS (EC2, ECS, EKS), you can use IAM roles instead of access keys:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[storage]
+backend = "s3"
+data_dir = "/data/mynadb"
+
+[storage.s3]
+bucket = "my-mynadb-bucket"
+region = "us-west-2"
+# No access_key or secret_key - uses IAM role</code></pre>
+        </div>
+      </div>
+
+      <h3>Required IAM Policy</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">json</span>
+        </div>
+        <div class="code-content">
+          <pre><code>{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::my-mynadb-bucket",
+        "arn:aws:s3:::my-mynadb-bucket/*"
+      ]
+    }
+  ]
+}</code></pre>
+        </div>
+      </div>
+
+      <h2>File Cache for Object Store</h2>
+
+      <p>When using Object Store, enable the file cache to reduce latency:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[file_cache]
+# Enable file caching (highly recommended for Object Store)
+enabled = true
+
+# Local SSD cache directory
+cache_dir = "/var/cache/mynadb/parquet"
+
+# Maximum cache size (100 GB)
+max_size_bytes = 107374182400
+
+# Save cache index every 5 minutes
+auto_save_interval_secs = 300</code></pre>
+        </div>
+      </div>
+
+      <h2>Data Layout</h2>
+
+      <p>MynaDB organizes data in Object Store using the following structure:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>s3://bucket/[prefix]/
+├── catalog_name/
+│   ├── schema_name/
+│   │   └── table_name/
+│   │       ├── date=2024-01-15/
+│   │       │   ├── L0_abc123.parquet
+│   │       │   ├── L0_def456.parquet
+│   │       │   └── L1_merged_001.parquet
+│   │       └── date=2024-01-16/
+│   │           └── L0_ghi789.parquet
+│   └── _system/
+│       └── series_stats/
+│           └── catalog_name.parquet
+└── _metadata/
+    └── catalog_snapshot.json</code></pre>
+        </div>
+      </div>
+
+      <h2>Performance Considerations</h2>
+
+      <h3>Network Latency</h3>
+
+      <ul>
+        <li>Object Store operations have higher latency than local disk</li>
+        <li>Enable file cache to mitigate read latency</li>
+        <li>Place MynaDB instances in the same region as your bucket</li>
+      </ul>
+
+      <h3>Write Performance</h3>
+
+      <ul>
+        <li>Writes are buffered in the DataCache (in-memory)</li>
+        <li>Background flush writes to Object Store asynchronously</li>
+        <li>Increase <code>flush_interval_secs</code> for better batching</li>
+      </ul>
+
+      <h3>Read Performance</h3>
+
+      <ul>
+        <li>Use file cache for frequently accessed data</li>
+        <li>Pre-warm cache for predictable query patterns</li>
+        <li>Leverage partition pruning with date filters</li>
+      </ul>
+
+      <h2>Monitoring</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Check storage stats
+curl http://localhost:7000/stats
+
+# Check cache stats (includes file cache)
+curl http://localhost:7000/cache/stats
+
+# List files in a table
+curl http://localhost:7000/partitions/mydb/default/cpu</code></pre>
+        </div>
+      </div>
+
+      <h2>Migration</h2>
+
+      <h3>Local to S3</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># 1. Stop MynaDB
+systemctl stop mynadb
+
+# 2. Sync data to S3
+aws s3 sync /data/mynadb s3://my-bucket/mynadb-data/
+
+# 3. Update config.toml to use S3
+# 4. Start MynaDB
+systemctl start mynadb</code></pre>
+        </div>
+      </div>
+
+      <h3>S3 to Local</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># 1. Stop MynaDB
+systemctl stop mynadb
+
+# 2. Sync data from S3
+aws s3 sync s3://my-bucket/mynadb-data/ /data/mynadb
+
+# 3. Update config.toml to use local storage
+# 4. Start MynaDB
+systemctl start mynadb</code></pre>
+        </div>
+      </div>
+
+      <div class="doc-nav">
+        <a href="mysql-protocol.html" class="doc-nav-prev">
+          <span>&#8592;</span> MySQL Protocol
+        </a>
+        <a href="retention.html" class="doc-nav-next">
+          Retention Policies <span>&#8594;</span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

@@ -3,22 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Stats Service Line Protocol - InfluxDB Line Protocol format for writing time series data">
-  <title>Line Protocol - Stats Service</title>
+  <meta name="description" content="MynaDB Line Protocol - InfluxDB Line Protocol format for writing time series data">
+  <title>Line Protocol - MynaDB</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/style.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>M</text></svg>">
 </head>
 <body>
   <!-- Navigation -->
   <nav class="navbar">
     <div class="container">
       <a href="../index.html" class="navbar-brand">
-        <span class="logo-icon">S</span>
-        Stats Service
+        <span class="logo-icon">M</span>
+        MynaDB
       </a>
 
       <ul class="navbar-nav">
@@ -30,7 +30,7 @@
       </ul>
 
       <div class="navbar-actions">
-        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
           <span class="btn-icon">&#9733;</span> GitHub
         </a>
       </div>
@@ -94,16 +94,16 @@
       <h1>InfluxDB Line Protocol</h1>
 
       <p>
-        Stats Service uses the InfluxDB Line Protocol for data ingestion. This text-based format
+        MynaDB uses the InfluxDB Line Protocol for data ingestion. This text-based format
         is simple, human-readable, and efficient for writing time series data.
       </p>
 
       <div class="callout callout-info">
         <div class="callout-title">&#128161; Compatibility</div>
         <p>
-          Stats Service is compatible with InfluxDB Line Protocol v1. If you're already using
+          MynaDB is compatible with InfluxDB Line Protocol v1. If you're already using
           InfluxDB, Telegraf, or other tools that output Line Protocol, you can send data directly
-          to Stats Service with minimal changes.
+          to MynaDB with minimal changes.
         </p>
       </div>
 
@@ -310,7 +310,7 @@ cpu,host=server01 usage=74.8 1704067320000000000
       <h2>Schema Strategy</h2>
 
       <p>
-        Stats Service supports two schema strategies that determine how data is organized
+        MynaDB supports two schema strategies that determine how data is organized
         into schemas and tables. This is configured via <code>schema.strategy</code>.
       </p>
 
@@ -404,7 +404,7 @@ path,host=server01 value="C:\\Users\\admin"</code></pre>
 
       <h3>Precision</h3>
 
-      <p>Stats Service accepts timestamps in nanosecond precision by default:</p>
+      <p>MynaDB accepts timestamps in nanosecond precision by default:</p>
 
       <table class="table">
         <thead>
@@ -531,7 +531,7 @@ temperature,sensor=outdoor value=75.5</code></pre>
 
       <h2>Integration with Telegraf</h2>
 
-      <p>Configure Telegraf to send data to Stats Service:</p>
+      <p>Configure Telegraf to send data to MynaDB:</p>
 
       <div class="code-block">
         <div class="code-header">

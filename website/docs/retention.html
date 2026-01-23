@@ -3,22 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Stats Service Retention Policies - Automatic data expiration and partition management">
-  <title>Retention Policies - Stats Service</title>
+  <meta name="description" content="MynaDB Retention Policies - Automatic data expiration and partition management">
+  <title>Retention Policies - MynaDB</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/style.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>M</text></svg>">
 </head>
 <body>
   <!-- Navigation -->
   <nav class="navbar">
     <div class="container">
       <a href="../index.html" class="navbar-brand">
-        <span class="logo-icon">S</span>
-        Stats Service
+        <span class="logo-icon">M</span>
+        MynaDB
       </a>
 
       <ul class="navbar-nav">
@@ -30,7 +30,7 @@
       </ul>
 
       <div class="navbar-actions">
-        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
           <span class="btn-icon">&#9733;</span> GitHub
         </a>
       </div>
@@ -94,7 +94,7 @@
       <h1>Retention Policies</h1>
 
       <p>
-        Stats Service automatically manages disk space by deleting old date-partitioned data.
+        MynaDB automatically manages disk space by deleting old date-partitioned data.
         Configure retention policies to automatically expire data after a specified number of days,
         or manually trigger retention via the API.
       </p>
@@ -553,7 +553,7 @@ grep -A 5 '\[retention\]' config.toml
           <pre><code><span class="token-comment"># Check file permissions</span>
 ls -la /data0/stats/data/mydb/default/cpu/
 
-<span class="token-comment"># Ensure stats-service user can delete</span>
+<span class="token-comment"># Ensure mynadb user can delete</span>
 chown -R statsservice:statsservice /data0/stats/data/</code></pre>
         </div>
       </div>
@@ -570,7 +570,7 @@ chown -R statsservice:statsservice /data0/stats/data/</code></pre>
 lsof +D /data0/stats/data/ | grep deleted
 
 <span class="token-comment"># Restart service to release file handles</span>
-systemctl restart stats-service</code></pre>
+systemctl restart mynadb</code></pre>
         </div>
       </div>
 

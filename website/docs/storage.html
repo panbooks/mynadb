@@ -3,21 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Stats Service Storage - Parquet format and partitioning">
-  <title>Storage - Stats Service</title>
+  <meta name="description" content="MynaDB Storage - Parquet format and partitioning">
+  <title>Storage - MynaDB</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/style.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>M</text></svg>">
 </head>
 <body>
   <nav class="navbar">
     <div class="container">
       <a href="../index.html" class="navbar-brand">
-        <span class="logo-icon">S</span>
-        Stats Service
+        <span class="logo-icon">M</span>
+        MynaDB
       </a>
       <ul class="navbar-nav">
         <li><a href="index.html">Documentation</a></li>
@@ -27,7 +27,7 @@
         <li><a href="examples.html">Examples</a></li>
       </ul>
       <div class="navbar-actions">
-        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
           <span class="btn-icon">&#9733;</span> GitHub
         </a>
       </div>
@@ -90,7 +90,7 @@
       <h1>Storage</h1>
 
       <p class="lead">
-        Stats Service stores time series data in Apache Parquet format, a columnar storage format
+        MynaDB stores time series data in Apache Parquet format, a columnar storage format
         optimized for analytical queries. This page explains the storage architecture, partitioning
         strategy, and optimization techniques.
       </p>
@@ -131,7 +131,7 @@
 
       <p>
         <a href="https://parquet.apache.org/" target="_blank">Apache Parquet</a> is a columnar
-        storage format designed for efficient data processing. It's the foundation of Stats Service's
+        storage format designed for efficient data processing. It's the foundation of MynaDB's
         high-performance storage.
       </p>
 
@@ -191,7 +191,7 @@
 
       <h2 id="directory">Directory Structure</h2>
 
-      <p>Stats Service organizes files in a hierarchical structure:</p>
+      <p>MynaDB organizes files in a hierarchical structure:</p>
 
       <div class="code-block">
         <div class="code-content">
@@ -342,7 +342,7 @@ L2_1705485145_i9j0k1l2.parquet    <span class="token-comment"># Level 2, more co
       <h2 id="compression">Compression</h2>
 
       <p>
-        Parquet supports multiple compression codecs. Stats Service uses Snappy by default
+        Parquet supports multiple compression codecs. MynaDB uses Snappy by default
         for a good balance of speed and compression ratio.
       </p>
 

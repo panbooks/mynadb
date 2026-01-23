@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB MySQL Protocol - Connect using MySQL clients, DBeaver, or Grafana">
+  <title>MySQL Protocol - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>M</text></svg>">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">M</span>
+        MynaDB
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Features</h4>
+        <ul class="sidebar-nav">
+          <li><a href="mysql-protocol.html" class="active">MySQL Protocol</a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+          <li><a href="retention.html">Retention Policies</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="high-availability.html">High Availability</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>API Reference</h4>
+        <ul class="sidebar-nav">
+          <li><a href="api.html">HTTP API</a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>MySQL Protocol Support</h1>
+
+      <p>MynaDB implements the MySQL wire protocol, allowing you to connect using any MySQL-compatible client. This enables seamless integration with existing tools like mysql-cli, DBeaver, Grafana, and more.</p>
+
+      <h2>Configuration</h2>
+
+      <p>Enable the MySQL protocol server in your <code>config.toml</code>:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[mysql]
+# Enable MySQL protocol server
+enabled = true
+
+# Port for MySQL connections (default: 3307)
+port = 3307
+
+# Bind address
+bind = "0.0.0.0"
+
+# Maximum concurrent connections
+max_connections = 100</code></pre>
+        </div>
+      </div>
+
+      <h2>Connecting with MySQL CLI</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Connect to MynaDB
+mysql -h localhost -P 3307 -u root
+
+# Connect to a specific database
+mysql -h localhost -P 3307 -u root mydb
+
+# Execute a query directly
+mysql -h localhost -P 3307 -u root -e "SELECT * FROM mydb.default.cpu LIMIT 10"</code></pre>
+        </div>
+      </div>
+
+      <h2>Supported Commands</h2>
+
+      <h3>Database Commands</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>-- List all databases (catalogs)
+SHOW DATABASES;
+
+-- Switch to a database
+USE mydb;
+
+-- Show current database
+SELECT DATABASE();</code></pre>
+        </div>
+      </div>
+
+      <h3>Table Commands</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>-- List all tables in current database
+SHOW TABLES;
+
+-- List tables in a specific schema
+SHOW TABLES FROM default;
+
+-- Show table schema
+DESCRIBE cpu;
+DESC cpu;
+
+-- Show create table (schema info)
+SHOW CREATE TABLE cpu;</code></pre>
+        </div>
+      </div>
+
+      <h3>Query Commands</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>-- Standard SQL queries work as expected
+SELECT host, AVG(usage) as avg_cpu
+FROM cpu
+WHERE timestamp > NOW() - INTERVAL 1 HOUR
+GROUP BY host
+ORDER BY avg_cpu DESC;
+
+-- Fully qualified table names
+SELECT * FROM mydb.default.cpu LIMIT 10;
+
+-- Time-based queries
+SELECT
+  time_bucket('5 minutes', timestamp) as bucket,
+  host,
+  AVG(usage) as avg_usage
+FROM cpu
+GROUP BY bucket, host
+ORDER BY bucket;</code></pre>
+        </div>
+      </div>
+
+      <h2>Connecting with GUI Tools</h2>
+
+      <h3>DBeaver</h3>
+
+      <ol>
+        <li>Create a new connection: Database &rarr; New Database Connection</li>
+        <li>Select "MySQL" as the database type</li>
+        <li>Configure connection:
+          <ul>
+            <li>Host: <code>localhost</code></li>
+            <li>Port: <code>3307</code></li>
+            <li>Database: <code>mydb</code> (or leave empty)</li>
+            <li>Username: <code>root</code></li>
+            <li>Password: (leave empty or use configured password)</li>
+          </ul>
+        </li>
+        <li>Click "Test Connection" then "Finish"</li>
+      </ol>
+
+      <h3>Grafana</h3>
+
+      <ol>
+        <li>Add a new data source</li>
+        <li>Select "MySQL" as the type</li>
+        <li>Configure:
+          <ul>
+            <li>Host: <code>localhost:3307</code></li>
+            <li>Database: <code>mydb</code></li>
+            <li>User: <code>root</code></li>
+          </ul>
+        </li>
+        <li>Save & Test</li>
+      </ol>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>Example Grafana Query:
+
+SELECT
+  $__timeGroup(timestamp, $__interval) as time,
+  host,
+  AVG(usage) as usage
+FROM cpu
+WHERE $__timeFilter(timestamp)
+GROUP BY time, host
+ORDER BY time</code></pre>
+        </div>
+      </div>
+
+      <h3>DataGrip / IntelliJ</h3>
+
+      <ol>
+        <li>File &rarr; New &rarr; Data Source &rarr; MySQL</li>
+        <li>Configure:
+          <ul>
+            <li>Host: <code>localhost</code></li>
+            <li>Port: <code>3307</code></li>
+            <li>User: <code>root</code></li>
+          </ul>
+        </li>
+        <li>Test Connection and Apply</li>
+      </ol>
+
+      <h2>Python Connection</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">python</span>
+        </div>
+        <div class="code-content">
+          <pre><code>import mysql.connector
+
+# Connect to MynaDB
+conn = mysql.connector.connect(
+    host="localhost",
+    port=3307,
+    user="root",
+    database="mydb"
+)
+
+cursor = conn.cursor()
+
+# Execute query
+cursor.execute("""
+    SELECT host, AVG(usage) as avg_cpu
+    FROM cpu
+    WHERE timestamp > NOW() - INTERVAL 1 HOUR
+    GROUP BY host
+""")
+
+# Fetch results
+for row in cursor.fetchall():
+    print(f"Host: {row[0]}, Avg CPU: {row[1]:.2f}%")
+
+cursor.close()
+conn.close()</code></pre>
+        </div>
+      </div>
+
+      <h2>Node.js Connection</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">javascript</span>
+        </div>
+        <div class="code-content">
+          <pre><code>const mysql = require('mysql2/promise');
+
+async function query() {
+  const conn = await mysql.createConnection({
+    host: 'localhost',
+    port: 3307,
+    user: 'root',
+    database: 'mydb'
+  });
+
+  const [rows] = await conn.execute(`
+    SELECT host, AVG(usage) as avg_cpu
+    FROM cpu
+    WHERE timestamp > NOW() - INTERVAL 1 HOUR
+    GROUP BY host
+  `);
+
+  console.log(rows);
+  await conn.end();
+}
+
+query();</code></pre>
+        </div>
+      </div>
+
+      <h2>Supported SQL Syntax</h2>
+
+      <p>MynaDB supports standard SQL via Apache DataFusion. Key features include:</p>
+
+      <ul>
+        <li><strong>SELECT</strong> with WHERE, GROUP BY, HAVING, ORDER BY, LIMIT</li>
+        <li><strong>Aggregations</strong>: COUNT, SUM, AVG, MIN, MAX, STDDEV, etc.</li>
+        <li><strong>Window Functions</strong>: ROW_NUMBER, RANK, LAG, LEAD, etc.</li>
+        <li><strong>Joins</strong>: INNER, LEFT, RIGHT, FULL OUTER</li>
+        <li><strong>Subqueries</strong>: Correlated and non-correlated</li>
+        <li><strong>CTEs</strong>: WITH clause for common table expressions</li>
+        <li><strong>Time Functions</strong>: NOW(), time_bucket(), date_trunc()</li>
+      </ul>
+
+      <h2>Limitations</h2>
+
+      <p>The MySQL protocol implementation has some limitations:</p>
+
+      <ul>
+        <li><strong>Read-only</strong>: INSERT/UPDATE/DELETE are not supported via MySQL protocol (use HTTP API for writes)</li>
+        <li><strong>No transactions</strong>: BEGIN/COMMIT/ROLLBACK are no-ops</li>
+        <li><strong>No stored procedures</strong>: Only ad-hoc SQL queries are supported</li>
+        <li><strong>No prepared statements with parameters</strong>: Use string interpolation for dynamic queries</li>
+      </ul>
+
+      <h2>Authentication</h2>
+
+      <p>MynaDB supports basic authentication for MySQL connections:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[mysql]
+enabled = true
+port = 3307
+
+# Authentication (optional)
+[mysql.auth]
+enabled = true
+username = "mynadb"
+password = "secret123"</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Connect with authentication
+mysql -h localhost -P 3307 -u mynadb -psecret123</code></pre>
+        </div>
+      </div>
+
+      <div class="doc-nav">
+        <a href="caching.html" class="doc-nav-prev">
+          <span>&#8592;</span> Caching
+        </a>
+        <a href="object-store.html" class="doc-nav-next">
+          Object Store <span>&#8594;</span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

@@ -3,21 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Stats Service Troubleshooting - Common issues and solutions">
-  <title>Troubleshooting - Stats Service</title>
+  <meta name="description" content="MynaDB Troubleshooting - Common issues and solutions">
+  <title>Troubleshooting - MynaDB</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/style.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>M</text></svg>">
 </head>
 <body>
   <nav class="navbar">
     <div class="container">
       <a href="../index.html" class="navbar-brand">
-        <span class="logo-icon">S</span>
-        Stats Service
+        <span class="logo-icon">M</span>
+        MynaDB
       </a>
       <ul class="navbar-nav">
         <li><a href="index.html">Documentation</a></li>
@@ -27,7 +27,7 @@
         <li><a href="examples.html">Examples</a></li>
       </ul>
       <div class="navbar-actions">
-        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
           <span class="btn-icon">&#9733;</span> GitHub
         </a>
       </div>
@@ -89,7 +89,7 @@
     <main class="docs-content">
       <h1>Troubleshooting</h1>
 
-      <p>Common issues and their solutions when working with Stats Service.</p>
+      <p>Common issues and their solutions when working with MynaDB.</p>
 
       <h2 id="table-not-found">Table Not Found</h2>
 
@@ -155,13 +155,13 @@ curl 'http://localhost:7000/query/mydb' -d 'SELECT MIN(timestamp), MAX(timestamp
       <div class="code-block">
         <div class="code-content">
           <pre><code><span class="token-comment"># 1. Check if server is running</span>
-ps aux | grep stats-service
+ps aux | grep mynadb
 
 <span class="token-comment"># 2. Check port availability</span>
 netstat -tlnp | grep 7000
 
 <span class="token-comment"># 3. Check server logs</span>
-journalctl -u stats-service -f
+journalctl -u mynadb -f
 
 <span class="token-comment"># 4. Test health endpoint</span>
 curl http://localhost:7000/health</code></pre>
@@ -275,12 +275,12 @@ flush_interval_secs = 15              # Flush more frequently</code></pre>
 
       <ol>
         <li>Check the server logs for detailed error messages</li>
-        <li>Search <a href="https://github.com/anthropics/stats-service/issues" target="_blank">GitHub Issues</a></li>
+        <li>Search <a href="https://github.com/mynadb/mynadb/issues" target="_blank">GitHub Issues</a></li>
         <li>Open a new issue with reproduction steps</li>
       </ol>
 
       <div class="cards-grid">
-        <a href="https://github.com/anthropics/stats-service/issues" class="card" target="_blank">
+        <a href="https://github.com/mynadb/mynadb/issues" class="card" target="_blank">
           <div class="card-icon">&#128172;</div>
           <h3>GitHub Issues</h3>
           <p>Report bugs or ask questions.</p>

@@ -3,21 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Stats Service FAQ - Frequently asked questions and answers">
-  <title>FAQ - Stats Service</title>
+  <meta name="description" content="MynaDB FAQ - Frequently asked questions and answers">
+  <title>FAQ - MynaDB</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/style.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>M</text></svg>">
 </head>
 <body>
   <nav class="navbar">
     <div class="container">
       <a href="../index.html" class="navbar-brand">
-        <span class="logo-icon">S</span>
-        Stats Service
+        <span class="logo-icon">M</span>
+        MynaDB
       </a>
       <ul class="navbar-nav">
         <li><a href="index.html">Documentation</a></li>
@@ -27,7 +27,7 @@
         <li><a href="examples.html">Examples</a></li>
       </ul>
       <div class="navbar-actions">
-        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
           <span class="btn-icon">&#9733;</span> GitHub
         </a>
       </div>
@@ -90,27 +90,27 @@
       <h1>Frequently Asked Questions</h1>
 
       <p class="lead">
-        Common questions about Stats Service, its features, and best practices for time series data management.
+        Common questions about MynaDB, its features, and best practices for time series data management.
       </p>
 
       <h2 id="general">General</h2>
 
-      <h3>What is Stats Service?</h3>
+      <h3>What is MynaDB?</h3>
       <p>
-        Stats Service is a high-performance time series database written in Rust. It ingests data via
+        MynaDB is a high-performance time series database written in Rust. It ingests data via
         InfluxDB Line Protocol, stores it in Apache Parquet format, and provides SQL queries through
         Apache DataFusion. It's designed for metrics, monitoring, and analytics workloads.
       </p>
 
-      <h3>Is Stats Service compatible with InfluxDB?</h3>
+      <h3>Is MynaDB compatible with InfluxDB?</h3>
       <p>
-        Stats Service uses InfluxDB Line Protocol for data ingestion, making it compatible with many
+        MynaDB uses InfluxDB Line Protocol for data ingestion, making it compatible with many
         existing InfluxDB clients and tools. However, the query interface uses SQL instead of InfluxQL
         or Flux, providing more flexibility and familiarity for most users.
       </p>
 
       <h3>What are the system requirements?</h3>
-      <p>Stats Service runs on Linux, macOS, and Windows with minimal requirements:</p>
+      <p>MynaDB runs on Linux, macOS, and Windows with minimal requirements:</p>
       <ul>
         <li><strong>CPU:</strong> 2+ cores recommended</li>
         <li><strong>Memory:</strong> 512MB minimum, 2GB+ recommended for production</li>
@@ -120,9 +120,9 @@
 
       <h2 id="data">Data & Storage</h2>
 
-      <h3>What storage format does Stats Service use?</h3>
+      <h3>What storage format does MynaDB use?</h3>
       <p>
-        Stats Service stores data in Apache Parquet format, a columnar storage format optimized for
+        MynaDB stores data in Apache Parquet format, a columnar storage format optimized for
         analytical queries. Parquet provides excellent compression ratios and fast query performance
         for time series data.
       </p>
@@ -179,16 +179,16 @@ default_days = 30    <span class="token-comment"># Keep data for 30 days</span><
 
       <h2 id="queries">Queries</h2>
 
-      <h3>What query language does Stats Service support?</h3>
+      <h3>What query language does MynaDB support?</h3>
       <p>
-        Stats Service supports standard SQL via Apache DataFusion. This includes SELECT, WHERE,
+        MynaDB supports standard SQL via Apache DataFusion. This includes SELECT, WHERE,
         GROUP BY, ORDER BY, JOIN, and aggregate functions. See the
         <a href="sql-queries.html">SQL Queries guide</a> for details.
       </p>
 
       <h3>Why do I need to call /flush before querying new data?</h3>
       <p>
-        Stats Service buffers incoming data in memory for performance. Data is periodically flushed
+        MynaDB buffers incoming data in memory for performance. Data is periodically flushed
         to disk (default: every 30 seconds). Call <code>/flush</code> to immediately persist buffered
         data if you need to query it right away.
       </p>
@@ -239,7 +239,7 @@ curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu LIMIT 10'</code></
       <h3>What is compaction and when should I run it?</h3>
       <p>
         Compaction merges small Parquet files into larger ones, improving query performance and
-        reducing storage overhead. Stats Service runs compaction automatically, but you can also
+        reducing storage overhead. MynaDB runs compaction automatically, but you can also
         trigger it manually:
       </p>
 
@@ -296,9 +296,9 @@ curl -X POST http://localhost:7000/compact/mydb/cpu</code></pre>
         </table>
       </div>
 
-      <h3>Can I use DataFusion CLI with Stats Service?</h3>
+      <h3>Can I use DataFusion CLI with MynaDB?</h3>
       <p>
-        Yes! Stats Service's Arrow Flight interface is compatible with DataFusion CLI:
+        Yes! MynaDB's Arrow Flight interface is compatible with DataFusion CLI:
       </p>
 
       <div class="code-block">
@@ -316,13 +316,13 @@ curl -X POST http://localhost:7000/compact/mydb/cpu</code></pre>
         backing up.
       </p>
 
-      <h3>Can I run multiple Stats Service instances?</h3>
+      <h3>Can I run multiple MynaDB instances?</h3>
       <p>
         Yes, with High Availability mode. Configure a master-slave setup for replication and
         automatic failover. See the <a href="high-availability.html">High Availability guide</a>.
       </p>
 
-      <h3>How do I monitor Stats Service?</h3>
+      <h3>How do I monitor MynaDB?</h3>
       <p>Use the built-in endpoints:</p>
 
       <div class="code-block">
@@ -342,8 +342,8 @@ curl http://localhost:7000/tables/mydb</code></pre>
 
       <h3>Can I migrate from InfluxDB?</h3>
       <p>
-        Yes. Since Stats Service uses InfluxDB Line Protocol, you can export data from InfluxDB
-        and replay it to Stats Service. Tools like Telegraf can write to both simultaneously
+        Yes. Since MynaDB uses InfluxDB Line Protocol, you can export data from InfluxDB
+        and replay it to MynaDB. Tools like Telegraf can write to both simultaneously
         during migration.
       </p>
 
@@ -364,7 +364,7 @@ curl http://localhost:7000/tables/mydb</code></pre>
           <span class="card-link">View <span>&#8594;</span></span>
         </a>
 
-        <a href="https://github.com/anthropics/stats-service/issues" class="card" target="_blank">
+        <a href="https://github.com/mynadb/mynadb/issues" class="card" target="_blank">
           <div class="card-icon">&#128172;</div>
           <h3>GitHub Issues</h3>
           <p>Ask questions or report bugs.</p>

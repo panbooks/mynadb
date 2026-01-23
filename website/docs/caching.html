@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Caching - Multi-level caching for metadata, queries, and Parquet files">
+  <title>Caching - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>M</text></svg>">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <span class="logo-icon">M</span>
+        MynaDB
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html" class="active">Caching</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Features</h4>
+        <ul class="sidebar-nav">
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+          <li><a href="retention.html">Retention Policies</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="high-availability.html">High Availability</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>API Reference</h4>
+        <ul class="sidebar-nav">
+          <li><a href="api.html">HTTP API</a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>Multi-Level Caching</h1>
+
+      <p>MynaDB implements a sophisticated multi-level caching architecture to maximize query performance. This guide explains the different cache layers and how to configure them.</p>
+
+      <h2>Cache Architecture Overview</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>┌─────────────────────────────────────────────────────────────┐
+│                        Query Engine                          │
+│                                                              │
+│  ┌─────────────────────┐      ┌─────────────────────────┐   │
+│  │   Metadata Cache    │      │   Query Result Cache    │   │
+│  │  (Table info, etc.) │      │   (SQL -> Results)      │   │
+│  └──────────┬──────────┘      └───────────┬─────────────┘   │
+│             │                              │                  │
+│             ▼                              ▼                  │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │              Parquet File Cache (Disk)                  │ │
+│  │         Local SSD cache for Object Store files          │ │
+│  └──────────────────────────┬──────────────────────────────┘ │
+│                             │                                 │
+└─────────────────────────────┼─────────────────────────────────┘
+                              │
+                              ▼
+                 ┌─────────────────────────┐
+                 │     Object Store        │
+                 │  (S3, MinIO, OSS)       │
+                 └─────────────────────────┘</code></pre>
+        </div>
+      </div>
+
+      <h2>1. Metadata Cache</h2>
+
+      <p>The metadata cache stores table and file information to avoid expensive directory scans during query planning.</p>
+
+      <h3>What's Cached</h3>
+
+      <ul>
+        <li><strong>Table Info</strong>: Catalog, schema, table names, partition information</li>
+        <li><strong>File Listings</strong>: List of Parquet files per partition</li>
+        <li><strong>Parquet Metadata</strong>: File footers with row group statistics</li>
+        <li><strong>Schema Information</strong>: Column names, types, and statistics</li>
+      </ul>
+
+      <h3>Cache Management API</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Get cache statistics
+curl http://localhost:7000/cache/stats
+
+# Pre-warm cache for entire catalog
+curl -X POST http://localhost:7000/cache/prewarm/mydb
+
+# Pre-warm cache for specific table
+curl -X POST http://localhost:7000/cache/prewarm/mydb/default/cpu
+
+# Clear all caches
+curl -X POST http://localhost:7000/cache/clear
+
+# Get Parquet file statistics for a table
+curl http://localhost:7000/cache/parquet/mydb/default/cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>Cache Statistics Response</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">json</span>
+        </div>
+        <div class="code-content">
+          <pre><code>{
+  "metadata_cache": {
+    "table_info_entries": 42,
+    "file_listing_entries": 156,
+    "parquet_metadata_entries": 1024,
+    "memory_usage_bytes": 52428800
+  },
+  "query_cache": {
+    "entries": 128,
+    "hits": 4521,
+    "misses": 892,
+    "hit_rate": 0.835,
+    "memory_usage_bytes": 134217728
+  }
+}</code></pre>
+        </div>
+      </div>
+
+      <h2>2. Query Result Cache</h2>
+
+      <p>Caches the results of SQL queries to avoid re-executing expensive queries.</p>
+
+      <h3>Configuration</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[query_cache]
+# Enable query result caching
+enabled = true
+
+# Maximum cache size in MB
+max_size_mb = 256
+
+# Maximum number of cached queries
+max_entries = 1000
+
+# Cache TTL in seconds (5 minutes)
+ttl_secs = 300
+
+# Only cache queries that take longer than this (ms)
+min_query_time_ms = 10</code></pre>
+        </div>
+      </div>
+
+      <h3>How It Works</h3>
+
+      <ul>
+        <li>Cache key is computed from: database name + SQL query text</li>
+        <li>Results are cached only if query execution time exceeds <code>min_query_time_ms</code></li>
+        <li>Cache is automatically invalidated when data is written to referenced tables</li>
+        <li>Entries expire after <code>ttl_secs</code> seconds</li>
+      </ul>
+
+      <h3>Cache Invalidation</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Clear only query result cache
+curl -X POST http://localhost:7000/cache/clear/results
+
+# Cache is automatically invalidated on:
+# - Data writes to a table
+# - Compaction of a table
+# - Manual flush</code></pre>
+        </div>
+      </div>
+
+      <h2>3. Parquet File Cache (Disk Cache)</h2>
+
+      <p>When using Object Store backends (S3, MinIO), MynaDB can cache Parquet files on local SSD to reduce network latency.</p>
+
+      <h3>Configuration</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[file_cache]
+# Enable file caching (for Object Store backends)
+enabled = true
+
+# Cache directory on local SSD
+cache_dir = "/var/cache/mynadb/parquet"
+
+# Maximum cache size (100 GB)
+max_size_bytes = 107374182400
+
+# Index save interval in seconds
+auto_save_interval_secs = 300</code></pre>
+        </div>
+      </div>
+
+      <h3>Cache Eviction Strategy</h3>
+
+      <p>The file cache uses a priority-based LRU eviction strategy that considers:</p>
+
+      <ul>
+        <li><strong>Recency</strong>: How recently was the file accessed?</li>
+        <li><strong>Frequency</strong>: How often is the file accessed?</li>
+        <li><strong>Partition Date</strong>: Recent partitions are prioritized (time series workloads typically query recent data)</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>Priority Score = Recency * Frequency * Partition_Bonus
+
+Partition Bonus:
+  - Today:       10x
+  - Yesterday:   8x
+  - This week:   5x
+  - This month:  2x
+  - Older:       1x
+
+Lower scores are evicted first.</code></pre>
+        </div>
+      </div>
+
+      <h3>Cache Flow</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>Query Request
+     │
+     ▼
+┌─────────────┐
+│ Check Cache │──────────────────┐
+└─────────────┘                  │
+     │                           │ Miss
+     │ Hit                       ▼
+     │                  ┌─────────────────┐
+     ▼                  │ Fetch from S3   │
+┌─────────────┐         └────────┬────────┘
+│ Read Local  │                  │
+│ SSD File    │                  ▼
+└─────────────┘         ┌─────────────────┐
+     │                  │ Write to Cache  │
+     │                  └────────┬────────┘
+     ▼                           │
+┌─────────────────────────────────┐
+│       Return Data               │
+└─────────────────────────────────┘</code></pre>
+        </div>
+      </div>
+
+      <h2>Best Practices</h2>
+
+      <h3>For High Query Performance</h3>
+
+      <ul>
+        <li>Enable query result cache for dashboards with repeated queries</li>
+        <li>Pre-warm metadata cache on startup for frequently queried tables</li>
+        <li>Use local SSD for file cache when using Object Store</li>
+        <li>Set appropriate TTL based on data freshness requirements</li>
+      </ul>
+
+      <h3>For Memory Management</h3>
+
+      <ul>
+        <li>Monitor cache memory usage via <code>/cache/stats</code></li>
+        <li>Adjust <code>max_size_mb</code> based on available RAM</li>
+        <li>Use <code>min_query_time_ms</code> to avoid caching trivial queries</li>
+        <li>Clear caches periodically if memory is constrained</li>
+      </ul>
+
+      <h3>For Object Store Workloads</h3>
+
+      <ul>
+        <li>Size file cache based on working set (recent partitions)</li>
+        <li>Place cache on NVMe SSD for best performance</li>
+        <li>Monitor cache hit rate and adjust size accordingly</li>
+        <li>Consider pre-warming cache for predictable query patterns</li>
+      </ul>
+
+      <h2>Monitoring</h2>
+
+      <p>Monitor cache effectiveness using the stats endpoint:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Full cache statistics
+curl http://localhost:7000/cache/stats | jq .
+
+# Key metrics to watch:
+# - hit_rate: Should be > 80% for effective caching
+# - memory_usage: Should not exceed configured limits
+# - evictions: High eviction rate may indicate undersized cache</code></pre>
+        </div>
+      </div>
+
+      <div class="doc-nav">
+        <a href="storage.html" class="doc-nav-prev">
+          <span>&#8592;</span> Storage
+        </a>
+        <a href="mysql-protocol.html" class="doc-nav-next">
+          MySQL Protocol <span>&#8594;</span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

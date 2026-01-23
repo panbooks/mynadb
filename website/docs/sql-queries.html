@@ -3,21 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Stats Service SQL Query Guide - Complete SQL reference">
-  <title>SQL Queries - Stats Service</title>
+  <meta name="description" content="MynaDB SQL Query Guide - Complete SQL reference">
+  <title>SQL Queries - MynaDB</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/style.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>M</text></svg>">
 </head>
 <body>
   <nav class="navbar">
     <div class="container">
       <a href="../index.html" class="navbar-brand">
-        <span class="logo-icon">S</span>
-        Stats Service
+        <span class="logo-icon">M</span>
+        MynaDB
       </a>
       <ul class="navbar-nav">
         <li><a href="index.html">Documentation</a></li>
@@ -27,7 +27,7 @@
         <li><a href="examples.html">Examples</a></li>
       </ul>
       <div class="navbar-actions">
-        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
           <span class="btn-icon">&#9733;</span> GitHub
         </a>
       </div>
@@ -90,7 +90,7 @@
       <h1>SQL Query Guide</h1>
 
       <p>
-        Stats Service uses Apache DataFusion for SQL queries, supporting standard SQL syntax
+        MynaDB uses Apache DataFusion for SQL queries, supporting standard SQL syntax
         including JOINs, aggregations, window functions, CTEs, and subqueries.
       </p>
 
@@ -120,7 +120,7 @@ curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'</code></p
 
       <h2 id="table-names">Table Naming</h2>
 
-      <p>Stats Service uses <code>catalog.schema.table</code> structure:</p>
+      <p>MynaDB uses <code>catalog.schema.table</code> structure:</p>
 
       <div class="table-wrapper">
         <table>

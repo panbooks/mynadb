@@ -3,22 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Stats Service Quick Start Guide - Get up and running in minutes">
-  <title>Quick Start - Stats Service</title>
+  <meta name="description" content="MynaDB Quick Start Guide - Get up and running in minutes">
+  <title>Quick Start - MynaDB</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/style.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>S</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='15' width='100' height='100'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>M</text></svg>">
 </head>
 <body>
   <!-- Navigation -->
   <nav class="navbar">
     <div class="container">
       <a href="../index.html" class="navbar-brand">
-        <span class="logo-icon">S</span>
-        Stats Service
+        <span class="logo-icon">M</span>
+        MynaDB
       </a>
 
       <ul class="navbar-nav">
@@ -30,7 +30,7 @@
       </ul>
 
       <div class="navbar-actions">
-        <a href="https://github.com/anthropics/stats-service" class="btn btn-secondary" target="_blank">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
           <span class="btn-icon">&#9733;</span> GitHub
         </a>
       </div>
@@ -93,7 +93,7 @@
     <main class="docs-content">
       <h1>Quick Start Guide</h1>
 
-      <p>Get Stats Service up and running in under 5 minutes. This guide covers building, running, writing data, and querying.</p>
+      <p>Get MynaDB up and running in under 5 minutes. This guide covers building, running, writing data, and querying.</p>
 
       <h2>Prerequisites</h2>
 
@@ -116,14 +116,14 @@
         </div>
         <div class="code-content">
           <pre><code><span class="token-comment"># Clone the repository</span>
-git clone https://github.com/anthropics/stats-service.git
-cd stats-service
+git clone https://github.com/mynadb/mynadb.git
+cd mynadb
 
 <span class="token-comment"># Build in release mode</span>
 cargo build --release
 
 <span class="token-comment"># Run the server</span>
-./target/release/stats-service</code></pre>
+./target/release/mynadb</code></pre>
         </div>
       </div>
 
@@ -131,7 +131,7 @@ cargo build --release
 
       <div class="code-block">
         <div class="code-content">
-          <pre><code>Stats Service starting...
+          <pre><code>MynaDB starting...
 HTTP server listening on 0.0.0.0:7000
 Arrow Flight listening on 0.0.0.0:7001
 Ready to accept connections</code></pre>
@@ -140,7 +140,7 @@ Ready to accept connections</code></pre>
 
       <h2>Step 2: Write Data</h2>
 
-      <p>Stats Service accepts data in <strong>InfluxDB Line Protocol</strong> format:</p>
+      <p>MynaDB accepts data in <strong>InfluxDB Line Protocol</strong> format:</p>
 
       <div class="code-block">
         <div class="code-header">
@@ -340,7 +340,7 @@ JOIN memory m ON c.host = m.host
       <p>You've successfully:</p>
 
       <ul>
-        <li>&#10003; Built and started Stats Service</li>
+        <li>&#10003; Built and started MynaDB</li>
         <li>&#10003; Written time series data using Line Protocol</li>
         <li>&#10003; Flushed data to Parquet storage</li>
         <li>&#10003; Queried data using SQL</li>
@@ -360,14 +360,14 @@ JOIN memory m ON c.host = m.host
         <a href="architecture.html" class="card">
           <div class="card-icon">&#127959;</div>
           <h3>Architecture</h3>
-          <p>Understand how Stats Service works under the hood.</p>
+          <p>Understand how MynaDB works under the hood.</p>
           <span class="card-link">Read more <span>&#8594;</span></span>
         </a>
 
         <a href="configuration.html" class="card">
           <div class="card-icon">&#9881;</div>
           <h3>Configuration</h3>
-          <p>Customize Stats Service for your workload.</p>
+          <p>Customize MynaDB for your workload.</p>
           <span class="card-link">Read more <span>&#8594;</span></span>
         </a>
       </div>
