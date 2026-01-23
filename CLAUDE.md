@@ -41,6 +41,16 @@ src/
 ├── services/        # API Layer - HTTP, Flight, MySQL, auth
 ├── storage/         # Write Path - line protocol, cache, WAL, parquet
 ├── query/           # Read Path - DataFusion integration, optimizers
+│   ├── analyzers/       # Query semantic analysis rules
+│   ├── cache/           # Metadata and query result caching
+│   ├── catalog/         # Schema/table metadata management
+│   ├── functions/       # Custom UDFs (time_bucket, first_value, last_value)
+│   ├── logical_optimizers/   # Logical plan optimizations
+│   ├── physical_optimizers/  # Physical plan optimizations
+│   ├── providers/       # TableProvider implementations (Parquet, memtable, union)
+│   ├── timeseries/      # Time series utilities (GROUP BY time, fill)
+│   ├── query_engine.rs  # Main query orchestrator
+│   └── executor.rs      # Custom execution pipeline
 └── jobs/            # Background Jobs - compaction, retention
 ```
 
@@ -50,11 +60,15 @@ src/
 |-----------|-----------|---------|
 | `services/` | `api.rs`, `flight_service.rs`, `mysql_service.rs` | External interfaces (REST, gRPC, MySQL wire) |
 | `storage/` | `cache.rs`, `wal.rs`, `line_protocol.rs`, `parquet_writer.rs` | Write path, data persistence |
-| `query/` | `query_engine.rs`, `executor.rs`, `table_provider.rs` | SQL execution, DataFusion integration |
+| `query/` | `query_engine.rs`, `executor.rs` | SQL execution, DataFusion integration |
 | `query/analyzers/` | `timestamp_to_date.rs` | Query semantic analysis rules |
+| `query/cache/` | `metadata_cache.rs`, `query_cache.rs` | Table metadata and query result caching |
+| `query/catalog/` | `manager.rs`, `memory_manager.rs` | Metadata management |
+| `query/functions/` | `time_bucket.rs`, `first_last.rs` | Custom UDFs/UDAFs |
 | `query/logical_optimizers/` | `partition_filter_pushdown.rs` | Logical plan optimizations |
 | `query/physical_optimizers/` | `scan_config.rs` | Physical plan optimizations |
-| `query/catalog/` | `manager.rs`, `memory_manager.rs` | Metadata management |
+| `query/providers/` | `table_provider.rs`, `memtable_provider.rs`, `union_provider.rs` | TableProvider implementations |
+| `query/timeseries/` | `time_interval.rs`, `group_by_time.rs`, `fill_processor.rs` | Time series query processing |
 | `jobs/` | `compactor.rs`, `retention_manager.rs` | Background maintenance |
 
 ### Adding New Code
@@ -64,6 +78,10 @@ src/
 | New API endpoint | `services/api.rs` + route in `main.rs` |
 | New protocol | `services/` |
 | Query optimizer rule | `query/analyzers/` or `query/logical_optimizers/` |
+| Custom UDF/UDAF | `query/functions/` |
+| TableProvider | `query/providers/` |
+| Time series utility | `query/timeseries/` |
+| Query/metadata cache | `query/cache/` |
 | Background task | `jobs/` |
 | Configuration option | `config.rs` |
 
