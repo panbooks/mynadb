@@ -31,7 +31,6 @@ use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion::prelude::Expr;
-use futures::stream;
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;

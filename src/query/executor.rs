@@ -18,7 +18,6 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
 use futures::StreamExt;
-use std::sync::Arc;
 
 /// Create a SessionState with custom analyzer and optimizer rules
 pub fn create_custom_session_state(base_state: SessionState) -> SessionState {
