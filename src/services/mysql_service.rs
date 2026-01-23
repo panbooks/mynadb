@@ -1,4 +1,5 @@
 use crate::query_engine::QueryEngine;
+use crate::storage::cache::DataCache;
 use msql_srv::{
     Column, ColumnFlags, ColumnType, ErrorKind, InitWriter, MysqlIntermediary, MysqlShim,
     ParamParser, QueryResultWriter, StatementMetaWriter,
@@ -10,19 +11,26 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 use tracing::{debug, error, info};
 
-/// MySQL protocol service for stats-service
+/// MySQL protocol service for MynaDB
 pub struct MysqlService {
     query_engine: Arc<QueryEngine>,
     runtime_handle: Handle,
     data_dir: String,
+    data_cache: Arc<DataCache>,
 }
 
 impl MysqlService {
-    pub fn new(query_engine: Arc<QueryEngine>, runtime_handle: Handle, data_dir: String) -> Self {
+    pub fn new(
+        query_engine: Arc<QueryEngine>,
+        runtime_handle: Handle,
+        data_dir: String,
+        data_cache: Arc<DataCache>,
+    ) -> Self {
         Self {
             query_engine,
             runtime_handle,
             data_dir,
+            data_cache,
         }
     }
 
@@ -38,8 +46,10 @@ impl MysqlService {
                     let query_engine = self.query_engine.clone();
                     let runtime_handle = self.runtime_handle.clone();
                     let data_dir = self.data_dir.clone();
+                    let data_cache = self.data_cache.clone();
                     std::thread::spawn(move || {
-                        let session = MysqlSession::new(query_engine, runtime_handle, data_dir);
+                        let session =
+                            MysqlSession::new(query_engine, runtime_handle, data_dir, data_cache);
                         if let Err(e) = MysqlIntermediary::run_on_tcp(session, stream) {
                             error!("MySQL session error: {}", e);
                         }
@@ -60,6 +70,7 @@ struct MysqlSession {
     query_engine: Arc<QueryEngine>,
     runtime_handle: Handle,
     data_dir: String,
+    data_cache: Arc<DataCache>,
     current_db: Option<String>,
     prepared_statements: HashMap<u32, PreparedStatement>,
     next_stmt_id: u32,
@@ -73,11 +84,17 @@ struct PreparedStatement {
 }
 
 impl MysqlSession {
-    fn new(query_engine: Arc<QueryEngine>, runtime_handle: Handle, data_dir: String) -> Self {
+    fn new(
+        query_engine: Arc<QueryEngine>,
+        runtime_handle: Handle,
+        data_dir: String,
+        data_cache: Arc<DataCache>,
+    ) -> Self {
         Self {
             query_engine,
             runtime_handle,
             data_dir,
+            data_cache,
             current_db: None,
             prepared_statements: HashMap::new(),
             next_stmt_id: 1,
@@ -447,14 +464,19 @@ impl<W: Read + Write> MysqlShim<W> for MysqlSession {
 
 impl MysqlSession {
     /// Handle SHOW DATABASES command
+    /// Returns databases from both filesystem and in-memory cache
     fn handle_show_databases<W: Read + Write>(
         &self,
         results: QueryResultWriter<W>,
     ) -> io::Result<()> {
         // List databases from data directory
         let data_dir = self.data_dir.clone();
+        let data_cache = self.data_cache.clone();
+
         let databases = self.runtime_handle.block_on(async {
             let mut databases = Vec::new();
+
+            // Get databases from filesystem
             if let Ok(entries) = std::fs::read_dir(&data_dir) {
                 for entry in entries.flatten() {
                     if entry.path().is_dir() {
@@ -466,6 +488,16 @@ impl MysqlSession {
                     }
                 }
             }
+
+            // Get databases from cache (memtable) - may not be flushed yet
+            let cached_dbs = data_cache.get_cached_catalogs();
+            for db in cached_dbs {
+                if !databases.contains(&db) {
+                    databases.push(db);
+                }
+            }
+
+            databases.sort();
             databases
         });
 
@@ -485,6 +517,7 @@ impl MysqlSession {
     }
 
     /// Handle SHOW TABLES command
+    /// Returns tables from both filesystem and in-memory cache
     fn handle_show_tables<W: Read + Write>(&self, results: QueryResultWriter<W>) -> io::Result<()> {
         let db = match &self.current_db {
             Some(db) => db.clone(),
@@ -493,8 +526,10 @@ impl MysqlSession {
             }
         };
 
+        let data_cache = self.data_cache.clone();
+
         let tables = self.runtime_handle.block_on(async {
-            // Get schemas and tables
+            // Get schemas and tables from filesystem (via query engine)
             let mut all_tables = Vec::new();
             if let Ok(schemas) = self.query_engine.list_schemas(&db).await {
                 for schema in schemas {
@@ -506,6 +541,20 @@ impl MysqlSession {
                     }
                 }
             }
+
+            // Get schemas and tables from cache (memtable) - may not be flushed yet
+            let cached_schemas = data_cache.get_cached_schemas(&db);
+            for schema in cached_schemas {
+                let cached_tables = data_cache.get_cached_tables(&db, &schema);
+                for table in cached_tables {
+                    let full_name = format!("{}.{}", schema, table);
+                    if !all_tables.contains(&full_name) {
+                        all_tables.push(full_name);
+                    }
+                }
+            }
+
+            all_tables.sort();
             all_tables
         });
 

@@ -778,6 +778,57 @@ impl DataCache {
             partition_count,
         }
     }
+
+    /// Get list of all catalogs (databases) that have cached data
+    pub fn get_cached_catalogs(&self) -> Vec<String> {
+        let mut catalogs: Vec<String> = Vec::new();
+
+        for shard in self.shards.iter() {
+            let data = shard.data.lock();
+            for (key, batches) in data.iter() {
+                if !batches.is_empty() && !catalogs.contains(&key.0) {
+                    catalogs.push(key.0.clone());
+                }
+            }
+        }
+
+        catalogs.sort();
+        catalogs
+    }
+
+    /// Get list of all schemas for a catalog that have cached data
+    pub fn get_cached_schemas(&self, catalog: &str) -> Vec<String> {
+        let mut schemas: Vec<String> = Vec::new();
+
+        for shard in self.shards.iter() {
+            let data = shard.data.lock();
+            for (key, batches) in data.iter() {
+                if key.0 == catalog && !batches.is_empty() && !schemas.contains(&key.1) {
+                    schemas.push(key.1.clone());
+                }
+            }
+        }
+
+        schemas.sort();
+        schemas
+    }
+
+    /// Get list of all tables for a catalog/schema that have cached data
+    pub fn get_cached_tables(&self, catalog: &str, schema: &str) -> Vec<String> {
+        let mut tables: Vec<String> = Vec::new();
+
+        for shard in self.shards.iter() {
+            let data = shard.data.lock();
+            for (key, batches) in data.iter() {
+                if key.0 == catalog && key.1 == schema && !batches.is_empty() && !tables.contains(&key.2) {
+                    tables.push(key.2.clone());
+                }
+            }
+        }
+
+        tables.sort();
+        tables
+    }
 }
 
 /// Statistics about cached data for a specific table
