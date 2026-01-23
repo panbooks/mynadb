@@ -34,6 +34,7 @@
 //! ```
 
 pub mod analyzers;
+pub mod catalog;
 pub mod executor;
 pub mod fill_processor;
 pub mod functions;
@@ -50,4 +51,5 @@ pub mod time_interval;
 pub mod types;
 pub mod union_provider;
 
+pub use catalog::{MemoryMetadataManager, MetadataManager};
 pub use executor::create_custom_session_state;
