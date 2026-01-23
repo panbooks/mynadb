@@ -1,10 +1,11 @@
 [package]
-name = "stats"
+name = "mynadb"
 version = "0.2.8"
 edition = "2021"
+description = "mynadb, the voice of your machines"
 
 [[bin]]
-name = "tsdb-stats"
+name = "mynadb"
 path = "src/main.rs"
 
 [dependencies]

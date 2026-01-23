@@ -87,7 +87,7 @@ echo
 # Start service
 echo "2. Starting service..."
 cargo build --release > /dev/null 2>&1
-../target/release/tsdb-stats -c /tmp/test_schema_bloom/config.toml > /tmp/test_schema_bloom/service.log 2>&1 &
+../target/release/mynadb -c /tmp/test_schema_bloom/config.toml > /tmp/test_schema_bloom/service.log 2>&1 &
 SERVICE_PID=$!
 
 # Wait for service to start

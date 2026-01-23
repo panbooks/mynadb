@@ -1,10 +1,12 @@
 # CLAUDE_CONTEXT.md
 
-This document provides a detailed technical overview of the Stats Service (MynaDB) codebase for AI assistants working on this project.
+This document provides a detailed technical overview of the MynaDB codebase for AI assistants working on this project.
 
 ## Project Overview
 
-Stats Service is a time-series database written in Rust that:
+**MynaDB** - *The Voice of Your Machines*
+
+MynaDB is a time-series database written in Rust that:
 - Ingests data via InfluxDB line protocol over HTTP
 - Stores data in Parquet format with date-based partitioning
 - Provides SQL queries via Apache DataFusion and Arrow Flight

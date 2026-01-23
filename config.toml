@@ -9,7 +9,7 @@ flight_port = 7001
 
 [storage]
 # Data directory path (use absolute path in production)
-data_dir = "/data0/stats/data"
+data_dir = "/data0/mynadb/data"
 
 # System directory name (for metadata like series stats, retention exclusions)
 system_dir = "_system"
@@ -20,7 +20,7 @@ system_dir = "_system"
 backend = "local"
 
 # Data directory for local storage
-data_dir = "/data0/stats/data"
+data_dir = "/data0/mynadb/data"
 
 # S3/MinIO/OSS configuration (only used when backend != "local")
 # bucket = "my-bucket"
@@ -36,7 +36,7 @@ data_dir = "/data0/stats/data"
 # allow_http = true
 
 # Optional prefix for all paths in the bucket
-# prefix = "stats-data"
+# prefix = "mynadb"
 
 [schema]
 # Schema/Table naming strategy
@@ -129,10 +129,10 @@ write_rate_limit_mb_per_sec = 0
 level = "info"
 
 # Log directory path
-log_dir = "/data0/stats/logs"
+log_dir = "/data0/mynadb/logs"
 
 # Log file name prefix
-file_prefix = "stats-service"
+file_prefix = "mynadb-service"
 
 # Log file rotation: daily, hourly, never
 rotation = "daily"

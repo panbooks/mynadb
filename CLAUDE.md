@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Stats Service is a time series database written in Rust that ingests data via InfluxDB line protocol, stores it in Parquet format, and provides SQL queries via Apache DataFusion.
+**MynaDB** - *The Voice of Your Machines*
+
+MynaDB is a time series database written in Rust that ingests data via InfluxDB line protocol, stores it in Parquet format, and provides SQL queries via Apache DataFusion.
 
 ## Build and Run
 
@@ -132,7 +134,7 @@ interval_secs = 3600     # Check every hour
 
 ## Schema/Table Naming Strategies
 
-Stats Service supports two strategies for mapping InfluxDB line protocol to catalog.schema.table structure:
+MynaDB supports two strategies for mapping InfluxDB line protocol to catalog.schema.table structure:
 
 ### Strategy 1: ServiceAsSchema (Default)
 
@@ -263,7 +265,7 @@ curl "http://localhost:7000/analyze/mydb?sql=SELECT%20*%20FROM%20cpu%20WHERE%20d
 
 ## Retention Policy
 
-Stats Service automatically deletes old date-partitioned data to manage disk space.
+MynaDB automatically deletes old date-partitioned data to manage disk space.
 
 ### Configuration
 

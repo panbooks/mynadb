@@ -171,7 +171,7 @@ impl AuthMiddleware {
             // Return 401 Unauthorized
             (
                 StatusCode::UNAUTHORIZED,
-                [("WWW-Authenticate", "Basic realm=\"Stats Service\"")],
+                [("WWW-Authenticate", "Basic realm=\"MynaDB\"")],
                 "Authentication required. Please provide valid credentials via Authorization header or u/p query parameters.",
             )
                 .into_response()

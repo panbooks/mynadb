@@ -10,8 +10,8 @@ NC='\033[0m' # No Color
 
 # Configuration
 SOURCE_DIR="./"
-DEPLOY_DIR="/opt/tsdb-stats"
-SERVICE_NAME="tsdb-stats"
+DEPLOY_DIR="/opt/mynadb"
+SERVICE_NAME="mynadb"
 SYSTEMD_SERVICE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 # Print colored message
@@ -37,7 +37,7 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-print_info "Starting deployment of TSDB Stats Service..."
+print_info "Starting deployment of MynaDB..."
 
 # Step 1: Build release binary
 #print_info "Building release binary..."
@@ -64,9 +64,9 @@ mkdir -p ${DEPLOY_DIR}
 
 # Step 4: Copy binary
 print_info "Copying binary..."
-cp -f ${SOURCE_DIR}/tsdb-stats ${DEPLOY_DIR}/
+cp -f ${SOURCE_DIR}/mynadb ${DEPLOY_DIR}/
 cp -rf ${SOURCE_DIR}/tools ${DEPLOY_DIR}/
-chmod +x ${DEPLOY_DIR}/tsdb-stats
+chmod +x ${DEPLOY_DIR}/mynadb
 print_success "Binary copied"
 
 # Step 5: Copy configuration file
@@ -87,7 +87,7 @@ print_success "Configuration updated"
 
 # Step 7: Install systemd service
 print_info "Installing systemd service..."
-cp -f tsdb-stats.service ${SYSTEMD_SERVICE}
+cp -f mynadb.service ${SYSTEMD_SERVICE}
 systemctl daemon-reload
 print_success "Systemd service installed"
 
@@ -118,7 +118,7 @@ if systemctl is-active --quiet ${SERVICE_NAME}; then
     echo "  - Stop service:     systemctl stop ${SERVICE_NAME}"
     echo "  - Start service:    systemctl start ${SERVICE_NAME}"
     echo "  - Restart service:  systemctl restart ${SERVICE_NAME}"
-    echo "  - Check version:    ${DEPLOY_DIR}/tsdb-stats version"
+    echo "  - Check version:    ${DEPLOY_DIR}/mynadb version"
     echo "  - Test HTTP:        curl http://localhost:7000/health"
     echo "  - View version:     curl http://localhost:7000/version"
 else
