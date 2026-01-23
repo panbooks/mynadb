@@ -216,7 +216,12 @@ impl Compactor {
         config: &CompactionConfig,
         metadata_manager: SharedMetadataManager,
     ) -> Self {
-        Self::with_storage_metadata_and_config(data_dir, Some(storage), config, Some(metadata_manager))
+        Self::with_storage_metadata_and_config(
+            data_dir,
+            Some(storage),
+            config,
+            Some(metadata_manager),
+        )
     }
 
     fn with_storage_metadata_and_config(
@@ -302,11 +307,7 @@ impl Compactor {
         row_count: u64,
         size_bytes: u64,
     ) -> FileInfo {
-        let file_name = path
-            .rsplit('/')
-            .next()
-            .unwrap_or(path)
-            .to_string();
+        let file_name = path.rsplit('/').next().unwrap_or(path).to_string();
 
         FileInfo {
             path: path.to_string(),
@@ -873,7 +874,11 @@ impl Compactor {
                 output_size,
             );
             if let Err(e) = manager.register_file(file_info).await {
-                warn!("Failed to register compacted file {}: {}", output.display(), e);
+                warn!(
+                    "Failed to register compacted file {}: {}",
+                    output.display(),
+                    e
+                );
             }
         }
 
@@ -1057,7 +1062,16 @@ impl Compactor {
             info!("Minor compaction: {} L0 files → L1", l0_files.len());
 
             let rows = self
-                .compact_level_files(path, &l0_files, 0, config, catalog, schema, table, partition_id)
+                .compact_level_files(
+                    path,
+                    &l0_files,
+                    0,
+                    config,
+                    catalog,
+                    schema,
+                    table,
+                    partition_id,
+                )
                 .await?;
             total_rows += rows;
             compaction_happened = true;
@@ -1110,7 +1124,16 @@ impl Compactor {
                 }
 
                 let rows = self
-                    .compact_level_files(path, &level_files, current_level, config, catalog, schema, table, partition_id)
+                    .compact_level_files(
+                        path,
+                        &level_files,
+                        current_level,
+                        config,
+                        catalog,
+                        schema,
+                        table,
+                        partition_id,
+                    )
                     .await?;
                 total_rows += rows;
                 compaction_happened = true;
@@ -1240,7 +1263,10 @@ impl Compactor {
                     file_size,
                 );
                 if let Err(e) = manager.register_file(file_info).await {
-                    warn!("Failed to register compacted file {}: {}", compacted_filename, e);
+                    warn!(
+                        "Failed to register compacted file {}: {}",
+                        compacted_filename, e
+                    );
                 }
             }
 

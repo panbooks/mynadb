@@ -34,22 +34,17 @@
 //! ```
 
 pub mod analyzers;
+pub mod cache;
 pub mod catalog;
 pub mod executor;
-pub mod fill_processor;
 pub mod functions;
-pub mod group_by_time;
 pub mod logical_optimizers;
-pub mod memtable_provider;
-pub mod metadata_cache;
 pub mod physical_optimizers;
-pub mod query_cache;
+pub mod providers;
 pub mod query_engine;
 pub mod sql_utils;
-pub mod table_provider;
-pub mod time_interval;
+pub mod timeseries;
 pub mod types;
-pub mod union_provider;
 
-pub use catalog::{MemoryMetadataManager, MetadataManager};
+// Re-exports for backward compatibility
 pub use executor::create_custom_session_state;
