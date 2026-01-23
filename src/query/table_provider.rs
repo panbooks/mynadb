@@ -416,56 +416,45 @@ impl ParquetTableProvider {
         expr: &Expr,
         filters: &mut Vec<PartitionFilter>,
     ) {
-        match expr {
-            Expr::BinaryExpr(binary) => {
-                // Check if this is a comparison on the partition column
-                if let Expr::Column(col) = binary.left.as_ref() {
-                    if col.name == partition_column {
-                        if let Expr::Literal(scalar) = binary.right.as_ref() {
-                            if let Some(value) = scalar
-                                .to_string()
-                                .strip_prefix("Utf8(\"")
-                                .and_then(|s| s.strip_suffix("\")"))
-                            {
-                                let filter = match binary.op {
-                                    datafusion::logical_expr::Operator::Eq => {
-                                        PartitionFilter::Eq(value.to_string())
-                                    }
-                                    datafusion::logical_expr::Operator::Gt => {
-                                        PartitionFilter::Gt(value.to_string())
-                                    }
-                                    datafusion::logical_expr::Operator::GtEq => {
-                                        PartitionFilter::GtEq(value.to_string())
-                                    }
-                                    datafusion::logical_expr::Operator::Lt => {
-                                        PartitionFilter::Lt(value.to_string())
-                                    }
-                                    datafusion::logical_expr::Operator::LtEq => {
-                                        PartitionFilter::LtEq(value.to_string())
-                                    }
-                                    _ => return,
-                                };
-                                filters.push(filter);
-                            }
+        if let Expr::BinaryExpr(binary) = expr {
+            // Check if this is a comparison on the partition column
+            if let Expr::Column(col) = binary.left.as_ref() {
+                if col.name == partition_column {
+                    if let Expr::Literal(scalar) = binary.right.as_ref() {
+                        if let Some(value) = scalar
+                            .to_string()
+                            .strip_prefix("Utf8(\"")
+                            .and_then(|s| s.strip_suffix("\")"))
+                        {
+                            let filter = match binary.op {
+                                datafusion::logical_expr::Operator::Eq => {
+                                    PartitionFilter::Eq(value.to_string())
+                                }
+                                datafusion::logical_expr::Operator::Gt => {
+                                    PartitionFilter::Gt(value.to_string())
+                                }
+                                datafusion::logical_expr::Operator::GtEq => {
+                                    PartitionFilter::GtEq(value.to_string())
+                                }
+                                datafusion::logical_expr::Operator::Lt => {
+                                    PartitionFilter::Lt(value.to_string())
+                                }
+                                datafusion::logical_expr::Operator::LtEq => {
+                                    PartitionFilter::LtEq(value.to_string())
+                                }
+                                _ => return,
+                            };
+                            filters.push(filter);
                         }
                     }
                 }
-
-                // Recurse into AND expressions
-                if binary.op == datafusion::logical_expr::Operator::And {
-                    Self::extract_partition_filter_from_expr(
-                        partition_column,
-                        &binary.left,
-                        filters,
-                    );
-                    Self::extract_partition_filter_from_expr(
-                        partition_column,
-                        &binary.right,
-                        filters,
-                    );
-                }
             }
-            _ => {}
+
+            // Recurse into AND expressions
+            if binary.op == datafusion::logical_expr::Operator::And {
+                Self::extract_partition_filter_from_expr(partition_column, &binary.left, filters);
+                Self::extract_partition_filter_from_expr(partition_column, &binary.right, filters);
+            }
         }
     }
 

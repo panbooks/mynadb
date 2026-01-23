@@ -518,6 +518,7 @@ async fn main() {
             state.query_engine.clone(),
             tokio::runtime::Handle::current(),
             config.storage.data_dir.clone(),
+            Arc::new(state.cache.clone()),
         );
         let mysql_addr = config.mysql_addr();
         Some(tokio::task::spawn_blocking(move || {
