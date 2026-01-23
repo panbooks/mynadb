@@ -4,25 +4,23 @@
 //! and in-memory data (memtable). Supports automatic table registration, query caching,
 //! and InfluxDB-compatible GROUP BY time() syntax.
 
+use crate::query::cache::metadata_cache::{CacheStatistics, TableMetadataCache, TableParquetStats};
+use crate::query::cache::query_cache::{
+    QueryCacheConfig, QueryCacheKey, QueryCacheStats, QueryResultCache, SharedQueryResultCache,
+};
 use crate::query::create_custom_session_state;
-use crate::query::fill_processor::FillProcessor;
 use crate::query::functions::{
     create_first_value_udaf, create_last_value_udaf, create_time_bucket_udf,
 };
-use crate::query::group_by_time::GroupByTimeTransformer;
-use crate::query::memtable_provider::MemtableProvider;
-use crate::query::metadata_cache::{CacheStatistics, TableMetadataCache, TableParquetStats};
+use crate::query::providers::{
+    MemtableProvider, ParquetTableConfig, ParquetTableProvider, UnionTableProvider,
+};
 use crate::query::sql_utils::{
     extract_optimization_info, extract_table_references, extract_time_range,
     inject_date_predicates, qualify_table_names, summarize_plan,
 };
-use crate::query::table_provider::{ParquetTableConfig, ParquetTableProvider};
-use crate::query::time_interval::FillOption;
+use crate::query::timeseries::{FillOption, FillProcessor, GroupByTimeTransformer};
 use crate::query::types::{QueryAnalysis, QueryExplainResult};
-use crate::query::union_provider::UnionTableProvider;
-use crate::query_cache::{
-    QueryCacheConfig, QueryCacheKey, QueryCacheStats, QueryResultCache, SharedQueryResultCache,
-};
 use crate::storage::cache::DataCache;
 use crate::storage::storage::Storage;
 use datafusion::arrow::array::{Array, RecordBatch};

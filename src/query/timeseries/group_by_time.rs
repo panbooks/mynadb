@@ -22,7 +22,7 @@
 //! ORDER BY time
 //! ```
 
-use crate::query::time_interval::{FillOption, TimeInterval};
+use super::time_interval::{FillOption, TimeInterval};
 use regex::Regex;
 use std::collections::HashMap;
 

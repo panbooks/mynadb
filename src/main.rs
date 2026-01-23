@@ -5,7 +5,7 @@ mod services;
 mod storage;
 
 use jobs::{compactor, database_manager, logger, profiling, retention_manager};
-use query::{catalog, catalog::MetadataManager, query_cache, query_engine};
+use query::{cache::query_cache, catalog, catalog::MetadataManager, query_engine};
 use services::{api, auth, flight_service, mysql_service};
 use storage::{cache, file_cache, line_protocol, parquet_writer, storage as storage_mod, wal};
 
@@ -172,7 +172,10 @@ async fn perform_wal_recovery(
                 match cache.flush().await {
                     Ok(files) => {
                         info!("Recovery flush complete: {} file(s) written", files.len());
-                        welcome!("   ✅ Recovery complete: {} Parquet file(s) written", files.len());
+                        welcome!(
+                            "   ✅ Recovery complete: {} Parquet file(s) written",
+                            files.len()
+                        );
 
                         wal.set_recovery_mode(false);
                         if let Err(e) = wal.cleanup_old_data_wal_files().await {
@@ -541,13 +544,7 @@ async fn main() {
     let file_cache: Option<file_cache::SharedFileCache> = if !storage.is_local() {
         info!("Initializing file cache for object storage");
         let cache_dir = format!("{}/_cache/parquet", config.storage.data_dir);
-        let max_size = config
-            .storage
-            .file_cache_size_gb
-            .unwrap_or(100)
-            * 1024
-            * 1024
-            * 1024;
+        let max_size = config.storage.file_cache_size_gb.unwrap_or(100) * 1024 * 1024 * 1024;
         match file_cache::DiskFileCache::new_at(&cache_dir, max_size).await {
             Ok(cache) => {
                 info!(

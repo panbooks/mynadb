@@ -11,7 +11,7 @@
 //! - `fill(linear)` - Linear interpolation between adjacent values
 //! - `fill(<number>)` - Fill with a constant value
 
-use crate::query::time_interval::FillOption;
+use super::time_interval::FillOption;
 use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, Int64Array, StringArray, UInt64Array,
 };
