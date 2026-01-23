@@ -14,31 +14,69 @@ MynaDB is a time series database written in Rust that ingests data via InfluxDB 
 # Build
 cargo build --release
 
-# Run (starts HTTP on port 7000, Arrow Flight on port 7001)
+# Run (starts HTTP on 7000, Arrow Flight on 7001, MySQL on 7002)
 cargo run --release
+
+# Run with custom config
+cargo run --release -- -c config.production.toml
 
 # Run tests
 cargo test
 
 # Run specific module tests
-cargo test --lib series_tracker
 cargo test --lib cache
 cargo test --lib compactor
+cargo test --lib wal
 
 # Create release archive
 ./build.sh
 ```
+
+## Source Code Structure
+
+```
+src/
+├── main.rs          # Entry point, server initialization
+├── config.rs        # Configuration structs and loading
+├── services/        # API Layer - HTTP, Flight, MySQL, auth
+├── storage/         # Write Path - line protocol, cache, WAL, parquet
+├── query/           # Read Path - DataFusion integration, optimizers
+└── jobs/            # Background Jobs - compaction, retention
+```
+
+### Module Responsibilities
+
+| Directory | Key Files | Purpose |
+|-----------|-----------|---------|
+| `services/` | `api.rs`, `flight_service.rs`, `mysql_service.rs` | External interfaces (REST, gRPC, MySQL wire) |
+| `storage/` | `cache.rs`, `wal.rs`, `line_protocol.rs`, `parquet_writer.rs` | Write path, data persistence |
+| `query/` | `query_engine.rs`, `executor.rs`, `table_provider.rs` | SQL execution, DataFusion integration |
+| `query/analyzers/` | `timestamp_to_date.rs` | Query semantic analysis rules |
+| `query/logical_optimizers/` | `partition_filter_pushdown.rs` | Logical plan optimizations |
+| `query/physical_optimizers/` | `scan_config.rs` | Physical plan optimizations |
+| `query/catalog/` | `manager.rs`, `memory_manager.rs` | Metadata management |
+| `jobs/` | `compactor.rs`, `retention_manager.rs` | Background maintenance |
+
+### Adding New Code
+
+| Type | Location |
+|------|----------|
+| New API endpoint | `services/api.rs` + route in `main.rs` |
+| New protocol | `services/` |
+| Query optimizer rule | `query/analyzers/` or `query/logical_optimizers/` |
+| Background task | `jobs/` |
+| Configuration option | `config.rs` |
 
 ## Architecture
 
 ### Data Flow
 
 ```
-HTTP POST /write/:db → Line Protocol Parser → DataCache (in-memory)
-    → Background Flush (30s) → Parquet Files (L0)
+HTTP POST /write/:db → Line Protocol Parser → WAL → DataCache (in-memory)
+    → Background Flush → Parquet Files (L0)
     → Compactor → Merged Files (L1, L2, ...)
 
-HTTP GET /query/:db or Arrow Flight → QueryEngine (DataFusion) → Parquet Files → Results
+HTTP GET /query/:db or Arrow Flight or MySQL → QueryEngine (DataFusion) → Parquet Files → Results
 ```
 
 ### Storage Structure (Catalog/Schema/Table)
@@ -51,12 +89,12 @@ data/
 └── {catalog}/              # Database name from URI /write/{db}
     ├── {schema}/           # Extracted from "service" tag (or "default")
     │   └── {table}/        # Measurement name
-    │       ├── L0_*.parquet    # Recent writes
-    │       ├── L1_*.parquet    # First compaction level
-    │       └── L2_*.parquet    # Higher compaction levels
+    │       └── date=YYYY-MM-DD/
+    │           ├── L0_*.parquet    # Recent writes
+    │           ├── L1_*.parquet    # First compaction level
+    │           └── L2_*.parquet    # Higher compaction levels
     └── _system/
         └── series_stats/
-            └── {catalog}.parquet
 ```
 
 **Strategy 2: ServiceAsTable**
@@ -65,11 +103,9 @@ data/
 └── {catalog}/              # Database name from URI /write/{db}
     ├── default/            # Fixed schema name
     │   └── {table}/        # Extracted from "service" tag (or "default")
-    │       ├── L0_*.parquet    # Recent writes
-    │       └── ...
+    │       └── date=YYYY-MM-DD/
+    │           └── *.parquet
     └── _system/
-        └── series_stats/
-            └── {catalog}.parquet
 ```
 
 **Naming Rules:**
@@ -78,58 +114,64 @@ data/
 - No service tag → uses `default_name` from config
 - In ServiceAsTable mode, measurement name is stored as a `measurement` tag
 
-### Core Modules
-
-| Module | File | Purpose |
-|--------|------|---------|
-| HTTP Server | `main.rs` | REST API endpoints, Axum routing |
-| Arrow Flight | `flight_service.rs` | gRPC streaming queries, DataFusion-cli compatible |
-| Cache | `cache.rs` | In-memory buffering, background flush to Parquet |
-| Query Engine | `query_engine.rs` | DataFusion SQL execution, table auto-registration |
-| Compactor | `compactor.rs` | LSM-tree style multi-level compaction |
-| Retention Manager | `retention_manager.rs` | Automatic deletion of old partitions |
-| Series Tracker | `series_tracker.rs` | Cardinality tracking per database |
-| Line Protocol | `line_protocol.rs` | InfluxDB line protocol parser |
-| Parquet Writer | `parquet_writer.rs` | Arrow to Parquet file I/O |
-| Config | `config.rs` | TOML configuration loading |
-| Database Manager | `database_manager.rs` | Database CRUD operations |
-
 ### Key Configuration (config.toml)
 
 ```toml
 [server]
 http_port = 7000
 flight_port = 7001
+mysql_enabled = true     # Enable MySQL wire protocol
+mysql_port = 7002
 
 [storage]
-data_dir = "/data0/stats/data"
+data_dir = "/data0/mynadb/data"
+
+# Object store: "local", "s3", "minio", "oss"
+[storage.object_store]
+backend = "local"
+# bucket = "my-bucket"   # For S3/MinIO/OSS
+# endpoint = "http://..."  # Custom endpoint
 
 [schema]
-strategy = "service_as_schema"  # "service_as_schema" (default) or "service_as_table"
-tag_keys = ["MONITOR.service", "hierarchy_2", "service"]  # Tags to extract service from
+strategy = "service_as_schema"  # or "service_as_table"
+tag_keys = ["MONITOR.service", "hierarchy_2", "service"]
 default_name = "default"
-prefix_numeric = true  # "1" → "service_1"
+prefix_numeric = true
 
 [cache]
-flush_interval_secs = 30
+flush_interval_secs = 60
+max_size_mb = 4096
+
+[wal]
+enabled = true
+sync_on_write = false    # true=durable, false=faster
+rotate_size_mb = 128
 
 [query_cache]
-enabled = true           # Enable query result caching
-max_size_mb = 256        # Maximum cache size
-max_entries = 1000       # Maximum cached queries
-ttl_secs = 300           # Cache TTL (5 minutes)
-min_query_time_ms = 10   # Only cache queries >10ms
+enabled = true
+max_size_mb = 256
+ttl_secs = 300
+min_query_time_ms = 10   # Only cache slow queries
 
 [compaction]
-min_files = 4
+min_files = 5
 max_level = 5
-max_concurrent_compactions = 8  # LSM compaction parallelism
-full_compaction_max_concurrent = 2  # Full compaction parallelism (lower to avoid OOM)
+max_concurrent_compactions = 8
+full_compaction_max_concurrent = 2
 
 [retention]
-enabled = true           # Enable automatic retention
-default_days = 7         # Delete partitions older than 7 days
-interval_secs = 3600     # Check every hour
+enabled = true
+default_days = 7
+interval_secs = 3600
+
+[auth]
+enabled = false
+username = "admin"
+password = "secret"
+
+[logging]
+level = "info"
+log_dir = "/data0/mynadb/logs"
 ```
 
 ## Schema/Table Naming Strategies
@@ -205,27 +247,40 @@ SELECT * FROM mydb.default.service_1 WHERE measurement = 'cpu'
 
 ## API Endpoints
 
+### Data Operations
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/write/:db` | POST | Write data (InfluxDB line protocol) |
 | `/query/:db` | GET/POST | SQL queries |
-| `/explain/:db` | GET/POST | Query execution plan (predicate pushdown, pruning info) |
-| `/analyze/:db` | GET/POST | Query analysis (partitions, files, optimizations) |
-| `/compact/:db[/:measurement]` | POST | Trigger compaction |
+| `/explain/:db` | GET/POST | Query execution plan |
+| `/analyze/:db` | GET/POST | Query analysis (partitions, files) |
 | `/flush` | POST | Manual cache flush |
-| `/stats` | GET | Write cache statistics |
+
+### Schema & Metadata
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `/tables/:db` | GET | List tables |
 | `/schema/:db/:table` | GET | Get table schema |
 | `/partitions/:catalog/:schema/:table` | GET | List partitions |
-| `/partitions/:catalog/:schema/:table/:date` | DELETE | Delete specific partition |
-| `/retention/:catalog/:schema/:table` | POST | Delete old partitions (body: `{older_than_days: N}` or `{before_date: "YYYY-MM-DD"}`) |
-| `/cache/stats` | GET | All cache statistics (metadata + query result caches) |
-| `/cache/prewarm/:catalog` | POST | Pre-warm metadata cache for entire catalog (database) |
-| `/cache/prewarm/:catalog/:schema/:table` | POST | Pre-warm metadata cache for specific table |
-| `/cache/clear` | POST | Clear all caches (metadata + query results) |
-| `/cache/clear/results` | POST | Clear only query result cache |
-| `/cache/parquet/:catalog/:schema/:table` | GET | Get Parquet file statistics for table |
+| `/partitions/:catalog/:schema/:table/:date` | DELETE | Delete partition |
+
+### Maintenance
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/compact/:db[/:measurement]` | POST | Trigger compaction |
+| `/retention/:catalog/:schema/:table` | POST | Delete old partitions |
+| `/cache/stats` | GET | Cache statistics |
+| `/cache/prewarm/:catalog` | POST | Pre-warm metadata cache |
+| `/cache/clear` | POST | Clear all caches |
+
+### Monitoring & Debug
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `/health` | GET | Health check |
+| `/stats` | GET | Write cache statistics |
+| `/memory` | GET | Memory usage stats |
+| `/debug/heap` | GET | Heap profile |
+| `/debug/cpu` | GET | CPU profile |
 
 ## Query Performance Optimizations
 
@@ -340,17 +395,15 @@ All test scripts are in `scripts/`:
 | `test_build.sh` | Build | Verify compilation |
 | `test_write.sh` | Write/Schema | Test catalog.schema.table structure |
 | `test_schemas.sh` | Write/Schema | Test schema/table listing APIs |
-| `test_partitions.sh` | Partition | Partition management features |
+| `test_partitions.sh` | Partition | Partition management |
 | `test_partition_query.sh` | Partition | Query partitions after restart |
 | `test_compaction.sh` | Compaction | Basic leveled compaction |
-| `test_compaction_multilevel.sh` | Compaction | Multi-level L0→L1→L2... |
-| `test_compaction_nonpartitioned.sh` | Compaction | Non-partitioned tables |
-| `test_compaction_aggressive.sh` | Compaction | Lower threshold compaction |
-| `test_compaction_dual_strategy.sh` | Compaction | **NEW:** Comprehensive dual strategy test (LSM + Full) |
-| `test_compaction_quick.sh` | Compaction | **NEW:** Quick validation of both strategies |
-| `test_full_compaction_now.sh` | Compaction | **NEW:** Force full compaction at current hour |
-| `test_series_stats.sh` | Series Stats | Cardinality tracking |
-| `test_comprehensive.sh` | Comprehensive | Full test with queries |
+| `test_compaction_multilevel.sh` | Compaction | Multi-level L0→L1→L2 |
+| `test_compaction_dual_strategy.sh` | Compaction | LSM + Full compaction strategies |
+| `test_auth.sh` | Auth | Basic authentication |
+| `test_auth_comprehensive.sh` | Auth | Full auth test suite |
+| `test_mysql.sh` | MySQL | MySQL wire protocol |
+| `test_group_by_time.sh` | Query | Time bucket aggregations |
+| `test_comprehensive.sh` | E2E | Full integration test |
 
-See `scripts/README_COMPACTION_TESTS.md` for detailed compaction testing documentation.
-
+Profiling scripts: `generate_flamegraph.sh`, `analyze_profile.sh`, `analyze_memory.sh`
