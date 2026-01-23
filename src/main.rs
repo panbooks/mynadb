@@ -31,7 +31,7 @@ pub mod version {
     pub const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
 
     pub fn print_version() {
-        println!("Stats Service");
+        println!("MynaDB - The Voice of Your Machines");
         println!("  Version:       {}", GIT_VERSION);
         println!("  Git Hash:      {}", GIT_HASH);
         println!("  Commit Date:   {}", GIT_COMMIT_DATE);
@@ -41,11 +41,12 @@ pub mod version {
     }
 }
 
-/// Stats Service - Time series database with Arrow Flight API
+/// MynaDB - The Voice of Your Machines
+/// Time series database with Arrow Flight API
 #[derive(Parser, Debug)]
-#[command(name = "stats-service")]
+#[command(name = "mynadb")]
 #[command(version = env!("GIT_VERSION"))]
-#[command(about = "Time series database with Arrow Flight API", long_about = None)]
+#[command(about = "MynaDB - The Voice of Your Machines", long_about = None)]
 struct Cli {
     /// Path to configuration file
     #[arg(short = 'c', long = "config", default_value = "config.toml")]
@@ -65,7 +66,7 @@ enum Commands {
 /// Initialize and print welcome banner
 fn print_welcome_banner(config: &Config) {
     welcome!("═══════════════════════════════════════════════════════");
-    welcome!("  📊 Stats Service - Time Series Stats Database");
+    welcome!("  🐦 MynaDB - The Voice of Your Machines");
     welcome!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
     welcome!("  Built: {}", env!("BUILD_TIME"));
     welcome!("═══════════════════════════════════════════════════════");
@@ -370,7 +371,7 @@ async fn main() {
     }
 
     print_welcome_banner(&config);
-    info!("Stats Service starting with config: {:?}", *config);
+    info!("MynaDB starting with config: {:?}", *config);
 
     std::fs::create_dir_all(&config.storage.data_dir).expect("Failed to create data directory");
 

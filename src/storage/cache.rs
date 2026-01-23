@@ -399,10 +399,7 @@ impl DataCache {
                 let shard_data = shard.take();
                 flushed_size += shard_size;
                 for (key, mut batches) in shard_data {
-                    all_data
-                        .entry(key)
-                        .or_insert_with(Vec::new)
-                        .append(&mut batches);
+                    all_data.entry(key).or_default().append(&mut batches);
                 }
             }
         }

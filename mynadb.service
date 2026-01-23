@@ -1,18 +1,18 @@
 [Unit]
-Description=TSDB Stats Service
+Description=MynaDB - The Voice of Your Machines
 After=network.target
 
 [Service]
 Type=simple
 User=root
 Group=root
-WorkingDirectory=/opt/tsdb-stats
-ExecStart=/opt/tsdb-stats/tsdb-stats
+WorkingDirectory=/opt/mynadb
+ExecStart=/opt/mynadb/mynadb
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=tsdb-stats
+SyslogIdentifier=mynadb
 
 # Performance and security settings
 LimitNOFILE=655360

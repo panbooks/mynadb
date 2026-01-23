@@ -487,6 +487,7 @@ fn extract_scalar_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use datafusion::arrow::array::RecordBatch;
     use datafusion::arrow::datatypes::{Field, Schema};
     use datafusion::prelude::*;

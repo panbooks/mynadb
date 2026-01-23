@@ -21,10 +21,10 @@ REPL_PORT=7003
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-BINARY="$PROJECT_DIR/target/release/tsdb-stats"
+BINARY="$PROJECT_DIR/target/release/mynadb"
 
 if [ ! -f "$BINARY" ]; then
-    BINARY="$PROJECT_DIR/target/debug/tsdb-stats"
+    BINARY="$PROJECT_DIR/target/debug/mynadb"
 fi
 
 setup() {

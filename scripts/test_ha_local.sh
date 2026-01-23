@@ -26,14 +26,14 @@ SLAVE_FLIGHT_PORT=7101
 # Find the binary
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-BINARY="$PROJECT_DIR/target/release/tsdb-stats"
+BINARY="$PROJECT_DIR/target/release/mynadb"
 
 if [ ! -f "$BINARY" ]; then
-    BINARY="$PROJECT_DIR/target/debug/tsdb-stats"
+    BINARY="$PROJECT_DIR/target/debug/mynadb"
 fi
 
 if [ ! -f "$BINARY" ]; then
-    echo -e "${RED}Error: tsdb-stats binary not found. Run 'cargo build --release' first.${NC}"
+    echo -e "${RED}Error: mynadb binary not found. Run 'cargo build --release' first.${NC}"
     exit 1
 fi
 

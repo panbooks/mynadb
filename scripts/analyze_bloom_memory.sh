@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Memory analysis script for stats-service
+# Memory analysis script for MynaDB
 # Analyzes memory usage and provides optimization recommendations
 
 set -e
@@ -58,14 +58,14 @@ calculate_bloom_memory() {
 }
 
 # Get PID
-PID=$(pgrep tsdb-stats || echo "")
+PID=$(pgrep mynadb || echo "")
 
 if [ -z "$PID" ]; then
-    echo -e "${RED}Error: tsdb-stats process not found${NC}"
+    echo -e "${RED}Error: mynadb process not found${NC}"
     exit 1
 fi
 
-print_header "Stats Service Memory Analysis"
+print_header "MynaDB Memory Analysis"
 
 # System memory info
 print_section "System Memory"
@@ -73,7 +73,7 @@ free -h | grep -E "Mem:|Swap:"
 
 # Process memory info
 print_section "Process Memory Usage"
-ps aux | grep tsdb-stats | grep -v grep | awk '{printf "PID: %s\nVSZ: %s KB\nRSS: %s KB (%.1f%%)\n", $2, $5, $6, $4}'
+ps aux | grep mynadb | grep -v grep | awk '{printf "PID: %s\nVSZ: %s KB\nRSS: %s KB (%.1f%%)\n", $2, $5, $6, $4}'
 
 # Convert to human readable
 RSS_KB=$(ps -p $PID -o rss= | tr -d ' ')
@@ -191,7 +191,7 @@ print_header "Memory Profiling Complete"
 
 echo ""
 echo "For continuous monitoring:"
-echo "  watch -n 5 'ps aux | grep tsdb-stats | grep -v grep'"
+echo "  watch -n 5 'ps aux | grep mynadb | grep -v grep'"
 echo ""
 echo "For detailed memory tracking:"
 echo "  pidstat -r -p $PID 1"

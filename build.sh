@@ -22,10 +22,10 @@ cargo build --release
 rm -rf dist.tar
 mkdir -p dist
 
-cp -f target/release/tsdb-stats dist/
+cp -f target/release/mynadb dist/
 cp -f config.toml dist/
 cp -f deploy.sh dist/
-cp -f tsdb-stats.service dist/
+cp -f mynadb.service dist/
 
 rm -f "${archive}"
 tar czf "${archive}" dist/
