@@ -1,5 +1,9 @@
 use crate::query::create_custom_session_state;
+use crate::query::fill_processor::{FillError, FillProcessor};
+use crate::query::functions::create_time_bucket_udf;
+use crate::query::group_by_time::GroupByTimeTransformer;
 use crate::query::table_provider::{ParquetTableConfig, ParquetTableProvider};
+use crate::query::time_interval::FillOption;
 use crate::query_cache::{QueryCacheConfig, QueryCacheKey, QueryCacheStats, QueryResultCache, SharedQueryResultCache};
 use crate::storage::storage::Storage;
 use chrono::{DateTime, TimeZone, Utc};
@@ -501,7 +505,13 @@ impl QueryEngine {
 
         // Apply custom analyzer and optimizer rules
         let custom_state = create_custom_session_state(base_ctx.state());
-        SessionContext::new_with_state(custom_state)
+        let ctx = SessionContext::new_with_state(custom_state);
+
+        // Register custom UDFs
+        ctx.register_udf(create_time_bucket_udf());
+        debug!("Registered time_bucket UDF");
+
+        ctx
     }
 
     pub fn new(data_dir: &str) -> Self {
@@ -1239,6 +1249,7 @@ impl QueryEngine {
     /// Automatically qualifies unqualified table names with catalog.schema
     /// Uses query result cache for repeated queries
     /// Injects date predicates for smart partition pruning when timestamp filters are present
+    /// Supports InfluxDB-style GROUP BY time(interval) syntax
     pub async fn execute_query_with_db(
         &self,
         sql: &str,
@@ -1267,6 +1278,14 @@ impl QueryEngine {
         // This converts timestamp filters to date partition filters for better pruning
         let optimized_sql = self.inject_date_predicates(&qualified_sql);
 
+        // Transform GROUP BY time() syntax if present
+        let transformer = GroupByTimeTransformer::new();
+        let transformed = transformer
+            .transform(&optimized_sql)
+            .map_err(|e| format!("GROUP BY time() transformation error: {}", e))?;
+
+        let final_sql = &transformed.sql;
+
         debug!("SQL: {}", sql);
         if qualified_sql != sql {
             debug!("Qualified: {}", qualified_sql);
@@ -1274,11 +1293,59 @@ impl QueryEngine {
         if optimized_sql != qualified_sql {
             debug!("Optimized (date predicates injected): {}", optimized_sql);
         }
+        if transformed.was_transformed {
+            debug!("GROUP BY time() transformed: {}", final_sql);
+        }
 
         // Execute query and measure time
         let start_time = Instant::now();
-        let result = self.execute_query(&optimized_sql).await?;
+        let mut result = self.execute_query(final_sql).await?;
         let query_time_ms = start_time.elapsed().as_millis() as u64;
+
+        // Apply fill post-processing if needed
+        if transformed.was_transformed && !matches!(transformed.fill_option, FillOption::None) {
+            if let Some(interval_nanos) = transformed.interval_nanos {
+                // Find the time column index (first column named "time")
+                let time_col_idx = if !result.is_empty() {
+                    result[0]
+                        .schema()
+                        .fields()
+                        .iter()
+                        .position(|f| f.name() == "time")
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+
+                // Find group column indices
+                let group_col_indices: Vec<usize> = if !result.is_empty() {
+                    transformed
+                        .group_columns
+                        .iter()
+                        .filter_map(|col_name| {
+                            result[0]
+                                .schema()
+                                .fields()
+                                .iter()
+                                .position(|f| f.name() == col_name)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                let processor = FillProcessor::new(
+                    interval_nanos,
+                    transformed.fill_option.clone(),
+                    time_col_idx,
+                    group_col_indices,
+                );
+
+                result = processor
+                    .apply(result)
+                    .map_err(|e| format!("Fill processing error: {}", e))?;
+            }
+        }
 
         // Cache the result
         let referenced_tables: Vec<String> = table_refs

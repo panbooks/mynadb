@@ -35,11 +35,19 @@
 
 pub mod analyzers;
 pub mod executor;
+pub mod fill_processor;
+pub mod functions;
+pub mod group_by_time;
 pub mod logical_optimizers;
 pub mod physical_optimizers;
 pub mod query_cache;
 pub mod query_engine;
 pub mod table_provider;
+pub mod time_interval;
 
 pub use executor::{create_custom_session_state, CustomQueryExecutor};
+pub use fill_processor::{FillError, FillProcessor};
+pub use functions::create_time_bucket_udf;
+pub use group_by_time::{GroupByTimeTransformer, TransformError, TransformedQuery};
 pub use table_provider::{ParquetExecPlan, ParquetFileInfo, ParquetTableConfig, ParquetTableProvider};
+pub use time_interval::{FillOption, GroupByTimeClause, TimeInterval};

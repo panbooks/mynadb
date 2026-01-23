@@ -4155,6 +4155,7 @@ dependencies = [
  "pprof",
  "prost 0.13.5",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
