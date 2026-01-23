@@ -40,11 +40,14 @@ pub mod functions;
 pub mod group_by_time;
 pub mod logical_optimizers;
 pub mod memtable_provider;
+pub mod metadata_cache;
 pub mod physical_optimizers;
 pub mod query_cache;
 pub mod query_engine;
+pub mod sql_utils;
 pub mod table_provider;
 pub mod time_interval;
+pub mod types;
 pub mod union_provider;
 
 pub use executor::{create_custom_session_state, CustomQueryExecutor};
