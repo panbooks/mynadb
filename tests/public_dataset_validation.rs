@@ -410,7 +410,7 @@ impl Drop for TestServer {
 fn download_dataset(url: &str) -> Result<String, String> {
     println!("Downloading: {}", url);
     let response = ureq::get(url)
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(120))
         .call()
         .map_err(|e| format!("Download failed: {}", e))?;
     response
@@ -427,7 +427,7 @@ fn download_csv_as_line_protocol(
 ) -> Result<String, String> {
     println!("Downloading CSV: {}", url);
     let response = ureq::get(url)
-        .timeout(Duration::from_secs(60))
+        .timeout(Duration::from_secs(120))
         .call()
         .map_err(|e| format!("Download failed: {}", e))?;
     let body = response
@@ -852,55 +852,168 @@ fn test_air_sensor_data() {
 
 #[test]
 #[ignore]
-fn test_machine_production_data() {
-    // Uses InfluxDB's machine production sample data
-    let url = "https://raw.githubusercontent.com/influxdata/influxdb2-sample-data/master/machine-production-data/machine-production.lp";
+fn test_bird_migration_data() {
+    // Uses InfluxDB's bird migration sample data
+    // Dataset contains: migration measurement with id tag, lat/lon fields
+    let url = "https://raw.githubusercontent.com/influxdata/influxdb2-sample-data/master/bird-migration-data/bird-migration.line";
 
-    let server = TestServer::start(TEST_HTTP_PORT + 20, &format!("{}_machine", TEST_DATA_DIR));
-    let db = "machine_test";
+    let server = TestServer::start(TEST_HTTP_PORT + 20, &format!("{}_bird", TEST_DATA_DIR));
+    let db = "bird_test";
 
-    let data = download_dataset(url).expect("Failed to download machine data");
+    let data = download_dataset(url).expect("Failed to download bird migration data");
     let subset: String = data.lines().take(500).collect::<Vec<_>>().join("\n");
-    println!("Loaded {} lines of machine data", subset.lines().count());
+    println!("Loaded {} lines of bird migration data", subset.lines().count());
 
+    // =========================================================================
+    // STEP 1: Compute expected values from raw data BEFORE writing
+    // =========================================================================
+    let expected = compute_expected_values(&subset);
+    println!("Expected values computed from raw data:");
+    println!("  - Total rows: {}", expected.row_count);
+    println!("  - Distinct ids: {}", expected.distinct_tag_count("id"));
+    if let Some(sum) = expected.field_sums.get("lat") {
+        println!("  - SUM(lat): {:.4}", sum);
+    }
+    if let Some(sum) = expected.field_sums.get("lon") {
+        println!("  - SUM(lon): {:.4}", sum);
+    }
+    if let Some(min) = expected.field_mins.get("lat") {
+        println!("  - MIN(lat): {:.4}", min);
+    }
+    if let Some(max) = expected.field_maxs.get("lat") {
+        println!("  - MAX(lat): {:.4}", max);
+    }
+
+    // Write to MynaDB
     server.write_line_protocol(db, &subset).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    // Test queries - measurement name is 'machinery'
-    let result = server.query(db, "SELECT COUNT(*) as cnt FROM default.machinery")
-        .expect("Count query failed");
-    println!("Machine data row count: {:?}", result);
+    // =========================================================================
+    // STEP 2: Verify COUNT(*) matches expected
+    // Determine measurement name from data
+    // =========================================================================
+    let measurement = subset.lines().next()
+        .and_then(|line| line.split(',').next())
+        .unwrap_or("migration");
+    println!("Detected measurement: {}", measurement);
 
-    let result = server.query(db, "SELECT * FROM default.machinery LIMIT 5")
-        .expect("Select query failed");
-    println!("Machine data sample: {:?}", result);
+    let result = server.query(db, &format!("SELECT COUNT(*) as cnt FROM default.{}", measurement))
+        .expect("Count query failed");
+
+    let actual_count = result.as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("cnt"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as usize;
+
+    println!("COUNT(*) - Expected: {}, Actual: {}", expected.row_count, actual_count);
+    assert_eq!(actual_count, expected.row_count,
+        "Row count mismatch: expected {}, got {}", expected.row_count, actual_count);
+    println!("✓ COUNT(*) verified: {}", actual_count);
+
+    // =========================================================================
+    // STEP 3: Verify SUM(lat) matches expected
+    // =========================================================================
+    let result = server.query(db, &format!("SELECT SUM(lat) as total FROM default.{}", measurement))
+        .expect("SUM query failed");
+
+    let actual_sum = result.as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("total"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let expected_sum = *expected.field_sums.get("lat").unwrap_or(&0.0);
+    let tolerance = expected_sum.abs() * 1e-9 + 1e-15;
+    println!("SUM(lat) - Expected: {:.6}, Actual: {:.6}", expected_sum, actual_sum);
+    assert!((actual_sum - expected_sum).abs() < tolerance,
+        "SUM(lat) mismatch: expected {}, got {}", expected_sum, actual_sum);
+    println!("✓ SUM(lat) verified");
+
+    // =========================================================================
+    // STEP 4: Verify AVG(lon) matches expected
+    // =========================================================================
+    let result = server.query(db, &format!("SELECT AVG(lon) as avg_val FROM default.{}", measurement))
+        .expect("AVG query failed");
+
+    let actual_avg = result.as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("avg_val"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let expected_avg = expected.field_avg("lon").unwrap_or(0.0);
+    let tolerance = expected_avg.abs() * 1e-9 + 1e-15;
+    println!("AVG(lon) - Expected: {:.6}, Actual: {:.6}", expected_avg, actual_avg);
+    assert!((actual_avg - expected_avg).abs() < tolerance,
+        "AVG(lon) mismatch: expected {}, got {}", expected_avg, actual_avg);
+    println!("✓ AVG(lon) verified");
+
+    // =========================================================================
+    // STEP 5: Verify MIN/MAX(lat) match expected
+    // =========================================================================
+    let result = server.query(db, &format!("SELECT MIN(lat) as min_val, MAX(lat) as max_val FROM default.{}", measurement))
+        .expect("MIN/MAX query failed");
+
+    let row = result.as_array().and_then(|a| a.first()).expect("Expected result row");
+    let actual_min = row.get("min_val").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let actual_max = row.get("max_val").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+    let expected_min = *expected.field_mins.get("lat").unwrap_or(&0.0);
+    let expected_max = *expected.field_maxs.get("lat").unwrap_or(&0.0);
+
+    println!("MIN(lat) - Expected: {:.6}, Actual: {:.6}", expected_min, actual_min);
+    println!("MAX(lat) - Expected: {:.6}, Actual: {:.6}", expected_max, actual_max);
+
+    let min_tolerance = expected_min.abs() * 1e-9 + 1e-15;
+    let max_tolerance = expected_max.abs() * 1e-9 + 1e-15;
+    assert!((actual_min - expected_min).abs() < min_tolerance,
+        "MIN(lat) mismatch: expected {}, got {}", expected_min, actual_min);
+    assert!((actual_max - expected_max).abs() < max_tolerance,
+        "MAX(lat) mismatch: expected {}, got {}", expected_max, actual_max);
+    println!("✓ MIN/MAX(lat) verified");
+
+    // =========================================================================
+    // STEP 6: Verify COUNT(DISTINCT id) matches expected
+    // =========================================================================
+    let result = server.query(db, &format!("SELECT COUNT(DISTINCT id) as cnt FROM default.{}", measurement))
+        .expect("Distinct count query failed");
+
+    let actual_distinct = result.as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("cnt"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as usize;
+
+    let expected_distinct = expected.distinct_tag_count("id");
+    println!("COUNT(DISTINCT id) - Expected: {}, Actual: {}", expected_distinct, actual_distinct);
+    assert_eq!(actual_distinct, expected_distinct,
+        "Distinct id count mismatch: expected {}, got {}", expected_distinct, actual_distinct);
+    println!("✓ COUNT(DISTINCT id) verified: {}", actual_distinct);
+
+    // =========================================================================
+    // STEP 7: Verify GROUP BY counts sum to total
+    // =========================================================================
+    let result = server.query(db,
+        &format!("SELECT id, COUNT(*) as cnt FROM default.{} GROUP BY id", measurement)
+    ).expect("Group by query failed");
+
+    let rows = result.as_array().expect("Expected array result");
+    let group_count = rows.len();
+    let sum_of_groups: i64 = rows.iter()
+        .filter_map(|r| r.get("cnt").and_then(|v| v.as_i64()))
+        .sum();
+
+    println!("GROUP BY id: {} groups, sum of counts = {}", group_count, sum_of_groups);
+    assert_eq!(group_count, expected_distinct,
+        "Number of groups ({}) should equal COUNT(DISTINCT) ({})", group_count, expected_distinct);
+    assert_eq!(sum_of_groups as usize, expected.row_count,
+        "Sum of group counts ({}) should equal total count ({})", sum_of_groups, expected.row_count);
+    println!("✓ GROUP BY counts verified: {} groups summing to {}", group_count, sum_of_groups);
+
+    println!("\n✅ All bird migration data validations passed!");
 }
 
-#[test]
-#[ignore]
-fn test_bitcoin_price_data() {
-    // Uses InfluxDB's crypto price sample data
-    let url = "https://raw.githubusercontent.com/influxdata/influxdb2-sample-data/master/bitcoin-price-data/bitcoin-historical-annotated.lp";
-
-    let server = TestServer::start(TEST_HTTP_PORT + 30, &format!("{}_bitcoin", TEST_DATA_DIR));
-    let db = "crypto_test";
-
-    let data = download_dataset(url).expect("Failed to download bitcoin data");
-    let subset: String = data.lines().take(1000).collect::<Vec<_>>().join("\n");
-    println!("Loaded {} lines of bitcoin data", subset.lines().count());
-
-    server.write_line_protocol(db, &subset).expect("Write failed");
-    server.flush().expect("Flush failed");
-
-    // Test queries
-    let result = server.query(db, "SELECT COUNT(*) as cnt FROM default.coindesk")
-        .expect("Count query failed");
-    println!("Bitcoin row count: {:?}", result);
-
-    let result = server.query(db, "SELECT * FROM default.coindesk ORDER BY time DESC LIMIT 5")
-        .expect("Select query failed");
-    println!("Bitcoin recent prices: {:?}", result);
-}
 
 #[test]
 #[ignore]
@@ -924,58 +1037,314 @@ fn test_usgs_earthquake_data() {
     let subset: String = line_protocol.lines().take(500).collect::<Vec<_>>().join("\n");
     println!("Loaded {} earthquake records", subset.lines().count());
 
+    // =========================================================================
+    // STEP 1: Compute expected values from raw data BEFORE writing
+    // =========================================================================
+    let expected = compute_expected_values(&subset);
+    println!("Expected values computed from raw data:");
+    println!("  - Total rows: {}", expected.row_count);
+    println!("  - Distinct types: {}", expected.distinct_tag_count("type"));
+    println!("  - Distinct magTypes: {}", expected.distinct_tag_count("magType"));
+    if let Some(sum) = expected.field_sums.get("mag") {
+        println!("  - SUM(mag): {:.4}", sum);
+    }
+    if let Some(sum) = expected.field_sums.get("depth") {
+        println!("  - SUM(depth): {:.4}", sum);
+    }
+    if let Some(min) = expected.field_mins.get("mag") {
+        println!("  - MIN(mag): {:.4}", min);
+    }
+    if let Some(max) = expected.field_maxs.get("mag") {
+        println!("  - MAX(mag): {:.4}", max);
+    }
+
+    // Write to MynaDB
     server.write_line_protocol(db, &subset).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    // Test queries
+    // =========================================================================
+    // STEP 2: Verify COUNT(*) matches expected
+    // =========================================================================
     let result = server.query(db, "SELECT COUNT(*) as cnt FROM default.earthquake")
         .expect("Count query failed");
-    println!("Earthquake count: {:?}", result);
 
-    let result = server.query(db, "SELECT * FROM default.earthquake LIMIT 5")
-        .expect("Select query failed");
-    println!("Earthquake sample: {:?}", result);
+    let actual_count = result.as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("cnt"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as usize;
 
-    // Group by type
+    println!("COUNT(*) - Expected: {}, Actual: {}", expected.row_count, actual_count);
+    assert_eq!(actual_count, expected.row_count,
+        "Row count mismatch: expected {}, got {}", expected.row_count, actual_count);
+    println!("✓ COUNT(*) verified: {}", actual_count);
+
+    // =========================================================================
+    // STEP 3: Verify SUM(mag) matches expected
+    // =========================================================================
+    let result = server.query(db, "SELECT SUM(mag) as total FROM default.earthquake")
+        .expect("SUM query failed");
+
+    let actual_sum = result.as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("total"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let expected_sum = *expected.field_sums.get("mag").unwrap_or(&0.0);
+    let tolerance = expected_sum.abs() * 1e-9 + 1e-15;
+    println!("SUM(mag) - Expected: {:.6}, Actual: {:.6}", expected_sum, actual_sum);
+    assert!((actual_sum - expected_sum).abs() < tolerance,
+        "SUM(mag) mismatch: expected {}, got {}", expected_sum, actual_sum);
+    println!("✓ SUM(mag) verified");
+
+    // =========================================================================
+    // STEP 4: Verify AVG(depth) matches expected
+    // =========================================================================
+    let result = server.query(db, "SELECT AVG(depth) as avg_val FROM default.earthquake")
+        .expect("AVG query failed");
+
+    let actual_avg = result.as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("avg_val"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let expected_avg = expected.field_avg("depth").unwrap_or(0.0);
+    let tolerance = expected_avg.abs() * 1e-9 + 1e-15;
+    println!("AVG(depth) - Expected: {:.6}, Actual: {:.6}", expected_avg, actual_avg);
+    assert!((actual_avg - expected_avg).abs() < tolerance,
+        "AVG(depth) mismatch: expected {}, got {}", expected_avg, actual_avg);
+    println!("✓ AVG(depth) verified");
+
+    // =========================================================================
+    // STEP 5: Verify MIN/MAX(mag) match expected
+    // =========================================================================
+    let result = server.query(db, "SELECT MIN(mag) as min_val, MAX(mag) as max_val FROM default.earthquake")
+        .expect("MIN/MAX query failed");
+
+    let row = result.as_array().and_then(|a| a.first()).expect("Expected result row");
+    let actual_min = row.get("min_val").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let actual_max = row.get("max_val").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+    let expected_min = *expected.field_mins.get("mag").unwrap_or(&0.0);
+    let expected_max = *expected.field_maxs.get("mag").unwrap_or(&0.0);
+
+    println!("MIN(mag) - Expected: {:.6}, Actual: {:.6}", expected_min, actual_min);
+    println!("MAX(mag) - Expected: {:.6}, Actual: {:.6}", expected_max, actual_max);
+
+    let min_tolerance = expected_min.abs() * 1e-9 + 1e-15;
+    let max_tolerance = expected_max.abs() * 1e-9 + 1e-15;
+    assert!((actual_min - expected_min).abs() < min_tolerance,
+        "MIN(mag) mismatch: expected {}, got {}", expected_min, actual_min);
+    assert!((actual_max - expected_max).abs() < max_tolerance,
+        "MAX(mag) mismatch: expected {}, got {}", expected_max, actual_max);
+    println!("✓ MIN/MAX(mag) verified");
+
+    // =========================================================================
+    // STEP 6: Verify COUNT(DISTINCT type) matches expected
+    // =========================================================================
+    let result = server.query(db, "SELECT COUNT(DISTINCT type) as cnt FROM default.earthquake")
+        .expect("Distinct count query failed");
+
+    let actual_distinct = result.as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("cnt"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as usize;
+
+    let expected_distinct = expected.distinct_tag_count("type");
+    println!("COUNT(DISTINCT type) - Expected: {}, Actual: {}", expected_distinct, actual_distinct);
+    assert_eq!(actual_distinct, expected_distinct,
+        "Distinct type count mismatch: expected {}, got {}", expected_distinct, actual_distinct);
+    println!("✓ COUNT(DISTINCT type) verified: {}", actual_distinct);
+
+    // =========================================================================
+    // STEP 7: Verify GROUP BY type counts sum to total
+    // =========================================================================
     let result = server.query(db,
         "SELECT type, COUNT(*) as cnt FROM default.earthquake GROUP BY type"
     ).expect("Group by query failed");
-    println!("Earthquakes by type: {:?}", result);
+
+    let rows = result.as_array().expect("Expected array result");
+    let group_count = rows.len();
+    let sum_of_groups: i64 = rows.iter()
+        .filter_map(|r| r.get("cnt").and_then(|v| v.as_i64()))
+        .sum();
+
+    println!("GROUP BY type: {} groups, sum of counts = {}", group_count, sum_of_groups);
+    assert_eq!(group_count, expected_distinct,
+        "Number of groups ({}) should equal COUNT(DISTINCT) ({})", group_count, expected_distinct);
+    assert_eq!(sum_of_groups as usize, expected.row_count,
+        "Sum of group counts ({}) should equal total count ({})", sum_of_groups, expected.row_count);
+    println!("✓ GROUP BY counts verified: {} groups summing to {}", group_count, sum_of_groups);
+
+    println!("\n✅ All USGS earthquake data validations passed!");
 }
 
 #[test]
 #[ignore]
-fn test_nyc_taxi_sample() {
-    // NYC TLC trip data sample (very small sample from GitHub)
-    let url = "https://raw.githubusercontent.com/plotly/datasets/master/uber-rides-data1.csv";
+fn test_iris_sample() {
+    // Iris dataset from GitHub - classic small dataset for testing
+    let url = "https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv";
 
-    let server = TestServer::start(TEST_HTTP_PORT + 50, &format!("{}_taxi", TEST_DATA_DIR));
-    let db = "taxi_test";
+    let server = TestServer::start(TEST_HTTP_PORT + 50, &format!("{}_iris", TEST_DATA_DIR));
+    let db = "iris_test";
 
-    // Download and convert CSV
+    // Download and convert CSV - Iris flower data with species tag and measurement fields
     let line_protocol = download_csv_as_line_protocol(
         url,
-        "rides",
-        &["Base"],
-        &["Lat", "Lon"],
+        "flower",
+        &["species"],
+        &["sepal_length", "sepal_width", "petal_length", "petal_width"],
         None, // Use sequential timestamps
-    ).expect("Failed to download taxi data");
+    ).expect("Failed to download iris data");
 
-    let subset: String = line_protocol.lines().take(1000).collect::<Vec<_>>().join("\n");
-    println!("Loaded {} ride records", subset.lines().count());
+    let subset: String = line_protocol.lines().take(150).collect::<Vec<_>>().join("\n");
+    println!("Loaded {} flower records", subset.lines().count());
 
+    // =========================================================================
+    // STEP 1: Compute expected values from raw data BEFORE writing
+    // =========================================================================
+    let expected = compute_expected_values(&subset);
+    println!("Expected values computed from raw data:");
+    println!("  - Total rows: {}", expected.row_count);
+    println!("  - Distinct species: {}", expected.distinct_tag_count("species"));
+    if let Some(sum) = expected.field_sums.get("sepal_length") {
+        println!("  - SUM(sepal_length): {:.4}", sum);
+    }
+    if let Some(sum) = expected.field_sums.get("petal_width") {
+        println!("  - SUM(petal_width): {:.4}", sum);
+    }
+    if let Some(min) = expected.field_mins.get("sepal_length") {
+        println!("  - MIN(sepal_length): {:.4}", min);
+    }
+    if let Some(max) = expected.field_maxs.get("sepal_length") {
+        println!("  - MAX(sepal_length): {:.4}", max);
+    }
+
+    // Write to MynaDB
     server.write_line_protocol(db, &subset).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    // Test queries
-    let result = server.query(db, "SELECT COUNT(*) as cnt FROM default.rides")
+    // =========================================================================
+    // STEP 2: Verify COUNT(*) matches expected
+    // =========================================================================
+    let result = server.query(db, "SELECT COUNT(*) as cnt FROM default.flower")
         .expect("Count query failed");
-    println!("Ride count: {:?}", result);
 
+    let actual_count = result.as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("cnt"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as usize;
+
+    println!("COUNT(*) - Expected: {}, Actual: {}", expected.row_count, actual_count);
+    assert_eq!(actual_count, expected.row_count,
+        "Row count mismatch: expected {}, got {}", expected.row_count, actual_count);
+    println!("✓ COUNT(*) verified: {}", actual_count);
+
+    // =========================================================================
+    // STEP 3: Verify SUM(sepal_length) matches expected
+    // =========================================================================
+    let result = server.query(db, "SELECT SUM(sepal_length) as total FROM default.flower")
+        .expect("SUM query failed");
+
+    let actual_sum = result.as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("total"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let expected_sum = *expected.field_sums.get("sepal_length").unwrap_or(&0.0);
+    let tolerance = expected_sum.abs() * 1e-9 + 1e-15;
+    println!("SUM(sepal_length) - Expected: {:.6}, Actual: {:.6}", expected_sum, actual_sum);
+    assert!((actual_sum - expected_sum).abs() < tolerance,
+        "SUM(sepal_length) mismatch: expected {}, got {}", expected_sum, actual_sum);
+    println!("✓ SUM(sepal_length) verified");
+
+    // =========================================================================
+    // STEP 4: Verify AVG(petal_width) matches expected
+    // =========================================================================
+    let result = server.query(db, "SELECT AVG(petal_width) as avg_val FROM default.flower")
+        .expect("AVG query failed");
+
+    let actual_avg = result.as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("avg_val"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let expected_avg = expected.field_avg("petal_width").unwrap_or(0.0);
+    let tolerance = expected_avg.abs() * 1e-9 + 1e-15;
+    println!("AVG(petal_width) - Expected: {:.6}, Actual: {:.6}", expected_avg, actual_avg);
+    assert!((actual_avg - expected_avg).abs() < tolerance,
+        "AVG(petal_width) mismatch: expected {}, got {}", expected_avg, actual_avg);
+    println!("✓ AVG(petal_width) verified");
+
+    // =========================================================================
+    // STEP 5: Verify MIN/MAX(sepal_length) match expected
+    // =========================================================================
+    let result = server.query(db, "SELECT MIN(sepal_length) as min_val, MAX(sepal_length) as max_val FROM default.flower")
+        .expect("MIN/MAX query failed");
+
+    let row = result.as_array().and_then(|a| a.first()).expect("Expected result row");
+    let actual_min = row.get("min_val").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let actual_max = row.get("max_val").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+    let expected_min = *expected.field_mins.get("sepal_length").unwrap_or(&0.0);
+    let expected_max = *expected.field_maxs.get("sepal_length").unwrap_or(&0.0);
+
+    println!("MIN(sepal_length) - Expected: {:.6}, Actual: {:.6}", expected_min, actual_min);
+    println!("MAX(sepal_length) - Expected: {:.6}, Actual: {:.6}", expected_max, actual_max);
+
+    let min_tolerance = expected_min.abs() * 1e-9 + 1e-15;
+    let max_tolerance = expected_max.abs() * 1e-9 + 1e-15;
+    assert!((actual_min - expected_min).abs() < min_tolerance,
+        "MIN(sepal_length) mismatch: expected {}, got {}", expected_min, actual_min);
+    assert!((actual_max - expected_max).abs() < max_tolerance,
+        "MAX(sepal_length) mismatch: expected {}, got {}", expected_max, actual_max);
+    println!("✓ MIN/MAX(sepal_length) verified");
+
+    // =========================================================================
+    // STEP 6: Verify COUNT(DISTINCT species) matches expected
+    // =========================================================================
+    let result = server.query(db, "SELECT COUNT(DISTINCT species) as cnt FROM default.flower")
+        .expect("Distinct count query failed");
+
+    let actual_distinct = result.as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("cnt"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as usize;
+
+    let expected_distinct = expected.distinct_tag_count("species");
+    println!("COUNT(DISTINCT species) - Expected: {}, Actual: {}", expected_distinct, actual_distinct);
+    assert_eq!(actual_distinct, expected_distinct,
+        "Distinct species count mismatch: expected {}, got {}", expected_distinct, actual_distinct);
+    println!("✓ COUNT(DISTINCT species) verified: {}", actual_distinct);
+
+    // =========================================================================
+    // STEP 7: Verify GROUP BY species counts sum to total
+    // =========================================================================
     let result = server.query(db,
-        "SELECT Base, COUNT(*) as trip_count FROM default.rides GROUP BY Base"
+        "SELECT species, COUNT(*) as cnt FROM default.flower GROUP BY species"
     ).expect("Group by query failed");
-    println!("Trips by base: {:?}", result);
+
+    let rows = result.as_array().expect("Expected array result");
+    let group_count = rows.len();
+    let sum_of_groups: i64 = rows.iter()
+        .filter_map(|r| r.get("cnt").and_then(|v| v.as_i64()))
+        .sum();
+
+    println!("GROUP BY species: {} groups, sum of counts = {}", group_count, sum_of_groups);
+    assert_eq!(group_count, expected_distinct,
+        "Number of groups ({}) should equal COUNT(DISTINCT) ({})", group_count, expected_distinct);
+    assert_eq!(sum_of_groups as usize, expected.row_count,
+        "Sum of group counts ({}) should equal total count ({})", sum_of_groups, expected.row_count);
+    println!("✓ GROUP BY counts verified: {} groups summing to {}", group_count, sum_of_groups);
+
+    println!("\n✅ All iris flower data validations passed!");
 }
 
 #[test]
