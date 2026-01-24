@@ -2846,6 +2846,7 @@ dependencies = [
  "ureq",
  "url",
  "urlencoding",
+ "walkdir",
  "wildmatch",
 ]
 
