@@ -57,6 +57,7 @@ chrono = "0.4"
 proptest = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
+walkdir = "2"
 
 [[bench]]
 name = "line_protocol_bench"
