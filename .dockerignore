@@ -1,0 +1,30 @@
+# Build artifacts
+target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# Test data
+test_data/
+tests/data/
+
+# Logs
+*.log
+
+# Temp files
+*.tmp
+.DS_Store
+
+# Deploy configs (we'll mount them separately)
+deploy/

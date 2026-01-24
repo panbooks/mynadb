@@ -1,9 +1,20 @@
+mod cluster;
 mod config;
 mod jobs;
 mod query;
 mod services;
 mod storage;
 
+use cluster::{
+    api as cluster_api,
+    cache_invalidation::CacheInvalidationHandler,
+    config::ClusterConfig,
+    coordinator::{self, Coordinator},
+    election::LeaderElection,
+    metrics::cluster_metrics,
+    node::{NodeInfo, NodeRegistration, NodeRole, HealthChecker},
+    write_coordinator::WriteCoordinator,
+};
 use jobs::{compactor, database_manager, logger, profiling, retention_manager};
 use query::{
     cache::{hot_partition_cache, query_cache},
@@ -243,9 +254,133 @@ fn start_wal_cleanup_task(wal: &Arc<wal::Wal>, config: &Config) {
     });
 }
 
+/// Initialize cluster components
+async fn initialize_cluster(config: &Config) -> cluster_api::status::ClusterState {
+    if !config.cluster.enabled {
+        info!("Cluster mode is disabled");
+        return cluster_api::status::ClusterState::disabled();
+    }
+
+    info!("Initializing cluster mode");
+    welcome!("");
+    welcome!("🌐 Cluster Mode: ENABLED");
+
+    // Initialize coordinator
+    let coordinator = match coordinator::create_coordinator(&config.cluster.coordinator).await {
+        Ok(c) => {
+            info!(
+                "Cluster coordinator connected: type={}",
+                c.coordinator_type()
+            );
+            welcome!("   Coordinator: {} (connected)", c.coordinator_type());
+            c
+        }
+        Err(e) => {
+            error!("Failed to connect to cluster coordinator: {}", e);
+            welcome!("   ⚠️  Coordinator connection failed: {}", e);
+            return cluster_api::status::ClusterState::disabled();
+        }
+    };
+
+    // Generate node ID if not specified
+    let node_id = config.cluster.effective_node_id();
+    info!("Node ID: {}", node_id);
+    welcome!("   Node ID: {}", node_id);
+
+    // Parse node role
+    let role: NodeRole = config.cluster.role.parse().unwrap_or(NodeRole::Hybrid);
+    info!("Node role: {}", role);
+    welcome!("   Role: {}", role);
+
+    // Create node info
+    let node_info = NodeInfo::new(
+        node_id.clone(),
+        config.cluster.advertise_addr.clone(),
+        role,
+        config.server.http_port,
+        config.server.flight_port,
+    );
+    let node_info_arc = Arc::new(parking_lot::RwLock::new(node_info));
+
+    // Initialize node registration
+    let heartbeat_interval = std::time::Duration::from_secs(
+        config.cluster.coordinator.heartbeat_interval_secs
+    );
+    let registration = Arc::new(NodeRegistration::new(
+        Arc::clone(&coordinator),
+        node_info_arc.read().clone(),
+        heartbeat_interval,
+    ));
+
+    // Register with the cluster
+    match registration.register().await {
+        Ok(_) => {
+            info!("Node registered with cluster");
+            welcome!("   ✅ Registered with cluster");
+        }
+        Err(e) => {
+            error!("Failed to register with cluster: {}", e);
+            welcome!("   ⚠️  Registration failed: {}", e);
+        }
+    }
+
+    // Initialize health checker
+    let health_checker = Arc::new(HealthChecker::new(
+        Arc::clone(&registration),
+        Arc::clone(&coordinator),
+        std::time::Duration::from_secs(config.cluster.health.check_interval_secs),
+        config.cluster.health.unhealthy_threshold as u64 * config.cluster.health.check_interval_secs,
+    ));
+
+    // Initialize leader election (for compaction)
+    let election = Arc::new(LeaderElection::new(
+        Arc::clone(&coordinator),
+        node_id.clone(),
+        config.cluster.compaction.election_key.clone(),
+        std::time::Duration::from_secs(config.cluster.compaction.election_lease_ttl_secs),
+    ));
+
+    // Start leader election if this node can run compaction
+    if role == NodeRole::Compactor || role == NodeRole::Hybrid {
+        if let Err(e) = election.start().await {
+            warn!("Failed to start leader election: {}", e);
+        } else {
+            info!("Leader election started");
+            welcome!("   Leader election: started");
+        }
+    }
+
+    // Activate the node
+    match registration.activate().await {
+        Ok(_) => {
+            info!("Node activated");
+            welcome!("   ✅ Node activated");
+        }
+        Err(e) => {
+            error!("Failed to activate node: {}", e);
+        }
+    }
+
+    // Start health checks
+    health_checker.start();
+    info!("Health checker started");
+
+    // Update metrics
+    cluster_metrics().set_coordinator_connected(true);
+
+    cluster_api::status::ClusterState {
+        enabled: true,
+        node_info: Some(node_info_arc),
+        registration: Some(registration),
+        election: Some(election),
+        health_checker: Some(health_checker),
+        coordinator: Some(coordinator),
+    }
+}
+
 /// Build the Axum router with all routes
-fn build_router(state: api::AppState, auth_middleware: Arc<auth::AuthMiddleware>) -> Router {
-    Router::new()
+fn build_router(state: api::AppState, auth_middleware: Arc<auth::AuthMiddleware>, cluster_state: cluster_api::status::ClusterState) -> Router {
+    let app_router = Router::new()
         .route("/", get(api::home))
         .route("/health", get(api::health))
         .route("/version", get(api::version_handler))
@@ -327,10 +462,29 @@ fn build_router(state: api::AppState, auth_middleware: Arc<auth::AuthMiddleware>
             "/retention/:catalog/:schema/:table",
             post(api::delete_old_partitions_handler),
         )
+        .route("/metrics", get(metrics_handler))
         .fallback(api::log_request)
         .with_state(state)
         .layer(axum::middleware::from_fn(auth::auth_middleware_fn))
-        .layer(axum::Extension(auth_middleware))
+        .layer(axum::Extension(auth_middleware));
+
+    // Create cluster routes on a separate router with Extension-based state
+    let cluster_router: Router<()> = Router::new()
+        .route("/cluster/status", get(cluster_api::status::cluster_status_handler))
+        .route("/cluster/nodes", get(cluster_api::status::cluster_nodes_handler))
+        .route("/cluster/leader", get(cluster_api::status::cluster_leader_handler))
+        .route("/cluster/health", get(cluster_api::status::cluster_health_handler))
+        .route("/cluster/drain", post(cluster_api::management::drain_node_handler))
+        .route("/cluster/remove", delete(cluster_api::management::remove_node_handler))
+        .layer(axum::Extension(cluster_state));
+
+    // Merge the routers
+    app_router.merge(cluster_router)
+}
+
+/// GET /metrics - Prometheus metrics endpoint
+async fn metrics_handler() -> String {
+    cluster_metrics().gather()
 }
 
 /// Print server configuration information
@@ -546,6 +700,9 @@ async fn main() {
         start_wal_cleanup_task(wal_arc, &config);
     }
 
+    // Initialize cluster components
+    let cluster_state = initialize_cluster(&config).await;
+
     // Initialize file cache (only for object storage backends)
     let file_cache: Option<file_cache::SharedFileCache> = if !storage.is_local() {
         info!("Initializing file cache for object storage");
@@ -594,7 +751,7 @@ async fn main() {
         config.auth.username
     );
 
-    let app = build_router(state.clone(), auth_middleware);
+    let app = build_router(state.clone(), auth_middleware, cluster_state);
 
     print_server_info(&config);
 

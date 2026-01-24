@@ -7,6 +7,7 @@
 pub mod config;
 pub mod storage;
 pub mod query;
+pub mod cluster;
 
 // Re-export at crate root for internal `crate::` imports to work
 pub use storage::line_protocol;

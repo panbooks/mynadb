@@ -1,0 +1,65 @@
+---
+# Headless service for StatefulSet pod discovery
+apiVersion: v1
+kind: Service
+metadata:
+  name: mynadb-headless
+  labels:
+    app: mynadb
+spec:
+  clusterIP: None
+  selector:
+    app: mynadb
+  ports:
+    - name: http
+      port: 7000
+      targetPort: 7000
+    - name: flight
+      port: 7001
+      targetPort: 7001
+    - name: mysql
+      port: 7002
+      targetPort: 7002
+
+---
+# Load balancer service for external access
+apiVersion: v1
+kind: Service
+metadata:
+  name: mynadb
+  labels:
+    app: mynadb
+spec:
+  type: LoadBalancer
+  selector:
+    app: mynadb
+  ports:
+    - name: http
+      port: 7000
+      targetPort: 7000
+    - name: flight
+      port: 7001
+      targetPort: 7001
+    - name: mysql
+      port: 7002
+      targetPort: 7002
+
+---
+# Internal service for cluster-to-cluster communication
+apiVersion: v1
+kind: Service
+metadata:
+  name: mynadb-internal
+  labels:
+    app: mynadb
+spec:
+  type: ClusterIP
+  selector:
+    app: mynadb
+  ports:
+    - name: http
+      port: 7000
+      targetPort: 7000
+    - name: flight
+      port: 7001
+      targetPort: 7001
