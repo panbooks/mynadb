@@ -670,6 +670,465 @@ cargo +nightly fuzz run fuzz_line_protocol -- -max_total_time=60
         </div>
       </div>
 
+      <h2 id="data-integrity">Phase A: Data Integrity Tests</h2>
+
+      <p>
+        Data integrity tests verify that MynaDB correctly handles data throughout its lifecycle:
+        write, flush, compaction, recovery, and query. These tests ensure <strong>zero data loss</strong>
+        and <strong>exact value preservation</strong> under all conditions.
+      </p>
+
+      <div class="callout" style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-left: 4px solid #f59e0b; padding: 1rem 1.5rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <div class="callout-title" style="color: #d97706; font-weight: 600;">&#128274; 29 Data Integrity Tests</div>
+        <p style="margin-top: 0.5rem;">Comprehensive coverage of write/read roundtrips, WAL recovery, compaction preservation, and data consistency.</p>
+      </div>
+
+      <h3>Write/Read Roundtrip Tests (11 tests)</h3>
+
+      <p>These tests verify that data written to MynaDB can be read back with <strong>exact precision</strong>:</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Test</th>
+              <th>Description</th>
+              <th>Verification</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_roundtrip_basic_float</code></td>
+              <td>Float field values (23.456, 19.876, etc.)</td>
+              <td>SUM matches expected with &lt;0.001 tolerance</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_integer_fields</code></td>
+              <td>Integer field values (100i, 250i, 75i)</td>
+              <td>Exact SUM match</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_boolean_fields</code></td>
+              <td>Boolean field values (true/false)</td>
+              <td>Count of true values preserved</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_string_fields</code></td>
+              <td>String field values with quotes</td>
+              <td>Row count preserved</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_mixed_types</code></td>
+              <td>Float + integer + boolean + string in one write</td>
+              <td>All field types preserved</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_large_batch</code></td>
+              <td>1000 rows in single write</td>
+              <td>COUNT=1000, SUM matches</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_special_characters</code></td>
+              <td>Tags with /api/v1, hyphens, underscores</td>
+              <td>All rows queryable</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_many_tags</code></td>
+              <td>7 tags per data point</td>
+              <td>All tags preserved</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_many_fields</code></td>
+              <td>10 fields per data point</td>
+              <td>All field values preserved</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_precision_floats</code></td>
+              <td>Scientific notation (1e-15, 1e15)</td>
+              <td>Extreme values preserved</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_timestamp_preservation</code></td>
+              <td>Explicit nanosecond timestamps</td>
+              <td>Time ordering preserved</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>WAL Recovery Tests (4 tests)</h3>
+
+      <p>
+        Write-Ahead Log (WAL) recovery tests verify that <strong>unflushed data is never lost</strong>
+        after a crash. These tests simulate crashes and verify complete data recovery.
+      </p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Test</th>
+              <th>Scenario</th>
+              <th>Verification</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_wal_recovery_basic</code></td>
+              <td>Write 3 rows → crash → restart</td>
+              <td>All 3 rows recovered with exact values</td>
+            </tr>
+            <tr>
+              <td><code>test_wal_recovery_multiple_writes</code></td>
+              <td>5 separate write operations → crash</td>
+              <td>All 5 writes recovered</td>
+            </tr>
+            <tr>
+              <td><code>test_wal_recovery_after_partial_flush</code></td>
+              <td>Flush batch 1 → write batch 2 → crash</td>
+              <td>Both flushed and unflushed data present</td>
+            </tr>
+            <tr>
+              <td><code>test_wal_recovery_large_batch</code></td>
+              <td>Write 500 rows → crash → restart</td>
+              <td>COUNT=500, SUM matches exactly</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Compaction Preservation Tests (5 tests)</h3>
+
+      <p>
+        Compaction tests verify that the LSM-tree compaction process <strong>never loses or corrupts data</strong>.
+        Data is written across multiple flushes, then compacted, with verification before and after.
+      </p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Test</th>
+              <th>Scenario</th>
+              <th>Verification</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_compaction_preserves_count</code></td>
+              <td>4 batches × 100 rows → compact</td>
+              <td>COUNT=400 before and after</td>
+            </tr>
+            <tr>
+              <td><code>test_compaction_preserves_values</code></td>
+              <td>Known values across 3 batches</td>
+              <td>SUM, MIN, MAX unchanged</td>
+            </tr>
+            <tr>
+              <td><code>test_compaction_preserves_all_field_types</code></td>
+              <td>Float, int, bool, string fields</td>
+              <td>All types preserved after compaction</td>
+            </tr>
+            <tr>
+              <td><code>test_compaction_preserves_tags</code></td>
+              <td>3 hosts × 3 regions × 3 batches</td>
+              <td>Tag-filtered queries return same results</td>
+            </tr>
+            <tr>
+              <td><code>test_compaction_multilevel</code></td>
+              <td>10 batches triggering L0→L1→L2</td>
+              <td>COUNT=500, SUM unchanged through all levels</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Running Data Integrity Tests</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Run all data integrity tests (requires sequential execution)</span>
+cargo test --test data_integrity -- --test-threads=1
+
+<span class="token-comment"># Run only roundtrip tests</span>
+cargo test --test data_integrity test_roundtrip -- --test-threads=1
+
+<span class="token-comment"># Run only WAL recovery tests</span>
+cargo test --test data_integrity test_wal -- --test-threads=1
+
+<span class="token-comment"># Run only compaction tests</span>
+cargo test --test data_integrity test_compaction -- --test-threads=1
+
+<span class="token-comment"># Run with verbose output</span>
+cargo test --test data_integrity -- --test-threads=1 --nocapture</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Important: Sequential Execution</div>
+        <p>Data integrity tests must run with <code>--test-threads=1</code> because each test starts its own MynaDB server instance. Parallel execution would cause port conflicts.</p>
+      </div>
+
+      <h2 id="concurrency">Phase B: Concurrency & Stress Tests</h2>
+
+      <p>
+        Concurrency tests verify that MynaDB maintains <strong>data consistency under concurrent load</strong>.
+        These tests simulate real-world scenarios with multiple writers, readers, and background operations
+        happening simultaneously.
+      </p>
+
+      <div class="callout" style="background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%); border-left: 4px solid #8b5cf6; padding: 1rem 1.5rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <div class="callout-title" style="color: #7c3aed; font-weight: 600;">&#9889; 13 Concurrency Tests</div>
+        <p style="margin-top: 0.5rem;">Multi-threaded writes, read consistency during operations, and stress testing at <strong>8000+ writes/second</strong>.</p>
+      </div>
+
+      <h3>Concurrent Write Tests (4 tests)</h3>
+
+      <p>These tests verify that <strong>no writes are lost</strong> when multiple threads write simultaneously:</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Test</th>
+              <th>Scenario</th>
+              <th>Verification</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_concurrent_writes_single_table</code></td>
+              <td>4 threads × 100 writes to same table</td>
+              <td>COUNT=400, no errors</td>
+            </tr>
+            <tr>
+              <td><code>test_concurrent_writes_multiple_tables</code></td>
+              <td>4 threads × 50 writes to different tables</td>
+              <td>Each table has exactly 50 rows</td>
+            </tr>
+            <tr>
+              <td><code>test_concurrent_writes_no_duplicates</code></td>
+              <td>4 threads with unique IDs</td>
+              <td>COUNT(DISTINCT id) = total writes</td>
+            </tr>
+            <tr>
+              <td><code>test_concurrent_writes_with_flush</code></td>
+              <td>3 writers + 1 flusher running concurrently</td>
+              <td>No writes lost during flush</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Read Consistency Tests (3 tests)</h3>
+
+      <p>These tests verify that <strong>reads never see inconsistent or corrupted data</strong> during background operations:</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Test</th>
+              <th>Scenario</th>
+              <th>Verification</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_read_during_write</code></td>
+              <td>Continuous reads while 100 rows written</td>
+              <td>Count never decreases below initial</td>
+            </tr>
+            <tr>
+              <td><code>test_read_during_compaction</code></td>
+              <td>Queries during L0→L1 compaction</td>
+              <td>Count stays constant throughout</td>
+            </tr>
+            <tr>
+              <td><code>test_query_isolation</code></td>
+              <td>Aggregation queries during batch writes</td>
+              <td>No query failures or corrupted results</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Stress Tests (3 tests)</h3>
+
+      <p>These tests push MynaDB to its limits to verify behavior under <strong>extreme load</strong>:</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Test</th>
+              <th>Scenario</th>
+              <th>Performance</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_stress_high_throughput_writes</code></td>
+              <td>8 threads × 250 writes</td>
+              <td><strong>8000+ writes/second</strong></td>
+            </tr>
+            <tr>
+              <td><code>test_stress_mixed_read_write</code></td>
+              <td>2 writers + 4 readers</td>
+              <td>No inconsistent reads</td>
+            </tr>
+            <tr>
+              <td><code>test_stress_burst_writes</code></td>
+              <td>5 bursts of 200 writes each</td>
+              <td>All bursts preserved</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Data Consistency Tests (3 tests)</h3>
+
+      <p>These tests verify <strong>aggregate consistency</strong> during concurrent modifications:</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Test</th>
+              <th>Scenario</th>
+              <th>Verification</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_consistency_aggregation_during_writes</code></td>
+              <td>SUM queries during inserts</td>
+              <td>Sum never decreases</td>
+            </tr>
+            <tr>
+              <td><code>test_consistency_count_monotonic</code></td>
+              <td>COUNT queries during inserts</td>
+              <td>Count is monotonically non-decreasing</td>
+            </tr>
+            <tr>
+              <td><code>test_no_data_loss_under_load</code></td>
+              <td>6 threads + periodic flushes</td>
+              <td>Every written ID present in final result</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Running Concurrency Tests</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Run all concurrency tests (requires sequential execution)</span>
+cargo test --test concurrency -- --test-threads=1
+
+<span class="token-comment"># Run only concurrent write tests</span>
+cargo test --test concurrency test_concurrent -- --test-threads=1
+
+<span class="token-comment"># Run only stress tests</span>
+cargo test --test concurrency test_stress -- --test-threads=1
+
+<span class="token-comment"># Run only consistency tests</span>
+cargo test --test concurrency test_consistency -- --test-threads=1
+
+<span class="token-comment"># Run with verbose output to see throughput metrics</span>
+cargo test --test concurrency test_stress_high_throughput -- --test-threads=1 --nocapture</code></pre>
+        </div>
+      </div>
+
+      <h2 id="test-quick-reference">Quick Reference: Running Tests</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+<span class="token-comment"># COMPLETE TEST SUITE</span>
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+
+<span class="token-comment"># Run all unit tests (fast, ~10 seconds)</span>
+cargo test
+
+<span class="token-comment"># Run all integration tests</span>
+cargo test --test data_integrity -- --test-threads=1
+cargo test --test concurrency -- --test-threads=1
+cargo test --test correctness -- --test-threads=1
+cargo test --test property
+
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+<span class="token-comment"># PHASE A: DATA INTEGRITY</span>
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+
+<span class="token-comment"># All data integrity tests (29 tests, ~4 minutes)</span>
+cargo test --test data_integrity -- --test-threads=1
+
+<span class="token-comment"># Roundtrip tests only (11 tests)</span>
+cargo test --test data_integrity test_roundtrip -- --test-threads=1
+
+<span class="token-comment"># WAL recovery tests only (4 tests)</span>
+cargo test --test data_integrity test_wal -- --test-threads=1
+
+<span class="token-comment"># Compaction tests only (5 tests)</span>
+cargo test --test data_integrity test_compaction -- --test-threads=1
+
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+<span class="token-comment"># PHASE B: CONCURRENCY & STRESS</span>
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+
+<span class="token-comment"># All concurrency tests (13 tests, ~2 minutes)</span>
+cargo test --test concurrency -- --test-threads=1
+
+<span class="token-comment"># Concurrent write tests only</span>
+cargo test --test concurrency test_concurrent -- --test-threads=1
+
+<span class="token-comment"># Stress tests only (includes throughput metrics)</span>
+cargo test --test concurrency test_stress -- --test-threads=1 --nocapture
+
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+<span class="token-comment"># PERFORMANCE BENCHMARKS</span>
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+
+<span class="token-comment"># Run all benchmarks</span>
+cargo bench
+
+<span class="token-comment"># Run specific benchmark</span>
+cargo bench --bench line_protocol_bench
+
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+<span class="token-comment"># FUZZ TESTING (requires nightly)</span>
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+
+<span class="token-comment"># Run for 60 seconds</span>
+cargo +nightly fuzz run fuzz_line_protocol -- -max_total_time=60</code></pre>
+        </div>
+      </div>
+
       <h2>CI/CD Integration</h2>
 
       <p>All tests run automatically in CI/CD pipelines:</p>
