@@ -73,7 +73,7 @@ pub fn parse_line_protocol(line: &str, schema_config: &SchemaConfig) -> Result<P
 /// Parse field set from line protocol
 /// Format: field=value[,field=value...]
 /// Values can be: float (1.5), integer (1i), string ("hello"), boolean (true/false)
-fn parse_fields(field_str: &str) -> Result<HashMap<String, FieldValue>, String> {
+pub fn parse_fields(field_str: &str) -> Result<HashMap<String, FieldValue>, String> {
     let parts: Vec<&str> = field_str.split(',').collect();
     let mut fields = HashMap::with_capacity(parts.len());
 
@@ -92,7 +92,7 @@ fn parse_fields(field_str: &str) -> Result<HashMap<String, FieldValue>, String> 
 }
 
 /// Parse a single field value
-fn parse_field_value(value: &str) -> Result<FieldValue, String> {
+pub fn parse_field_value(value: &str) -> Result<FieldValue, String> {
     let value = value.trim();
 
     // Boolean: true, false, t, f, TRUE, FALSE, T, F
