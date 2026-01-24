@@ -839,6 +839,1056 @@ fn test_group_by_tag() {
 }
 
 // ============================================================================
+// Floating Point Edge Cases
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_zero_values() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu value=0.0 {}\n\
+         cpu value=0.0 {}\n\
+         cpu value=0.0 {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM cpu").unwrap();
+    let avg = server.query_scalar(&db, "SELECT AVG(value) FROM cpu").unwrap();
+    let count = server.query_count(&db, "SELECT COUNT(*) FROM cpu").unwrap();
+
+    assert!((sum - 0.0).abs() < 0.0001, "SUM of zeros should be 0");
+    assert!((avg - 0.0).abs() < 0.0001, "AVG of zeros should be 0");
+    assert_eq!(count, 3, "COUNT should be 3");
+}
+
+#[test]
+#[ignore]
+fn test_mixed_positive_negative_cancel() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    // Values that sum to exactly zero
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu value=100.0 {}\n\
+         cpu value=-50.0 {}\n\
+         cpu value=-50.0 {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM cpu").unwrap();
+    assert!(
+        sum.abs() < 0.0001,
+        "SUM should be 0 (100 - 50 - 50), got {}",
+        sum
+    );
+}
+
+#[test]
+#[ignore]
+fn test_precision_decimals() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    // Test decimal precision
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu value=0.1 {}\n\
+         cpu value=0.2 {}",
+        now,
+        now + 1_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM cpu").unwrap();
+    // 0.1 + 0.2 should be close to 0.3 (floating point)
+    assert!(
+        (sum - 0.3).abs() < 0.0001,
+        "SUM should be ~0.3, got {}",
+        sum
+    );
+}
+
+#[test]
+#[ignore]
+fn test_scientific_notation_values() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu value=1.5e10 {}\n\
+         cpu value=2.5e10 {}",
+        now,
+        now + 1_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM cpu").unwrap();
+    let expected = 4.0e10;
+    let tolerance = expected * 1e-10;
+    assert!(
+        (sum - expected).abs() < tolerance,
+        "Scientific notation SUM failed: expected {}, got {}",
+        expected,
+        sum
+    );
+}
+
+// ============================================================================
+// Integer Field Edge Cases
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_integer_fields() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    // Integer fields use 'i' suffix in line protocol
+    let data = format!(
+        "cpu count=100i {}\n\
+         cpu count=200i {}\n\
+         cpu count=300i {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let sum = server.query_scalar(&db, "SELECT SUM(count) FROM cpu").unwrap();
+    assert!(
+        (sum - 600.0).abs() < 0.0001,
+        "Integer SUM should be 600, got {}",
+        sum
+    );
+}
+
+#[test]
+#[ignore]
+fn test_large_integer_values() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let large: i64 = 1_000_000_000_000; // 1 trillion
+    let data = format!(
+        "cpu count={}i {}\n\
+         cpu count={}i {}",
+        large,
+        now,
+        large,
+        now + 1_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let sum = server.query_scalar(&db, "SELECT SUM(count) FROM cpu").unwrap();
+    let expected = (2 * large) as f64;
+    let tolerance = expected * 1e-10;
+    assert!(
+        (sum - expected).abs() < tolerance,
+        "Large integer SUM failed: expected {}, got {}",
+        expected,
+        sum
+    );
+}
+
+#[test]
+#[ignore]
+fn test_negative_integers() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu count=-100i {}\n\
+         cpu count=50i {}\n\
+         cpu count=-25i {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let sum = server.query_scalar(&db, "SELECT SUM(count) FROM cpu").unwrap();
+    assert!(
+        (sum - (-75.0)).abs() < 0.0001,
+        "Negative integer SUM should be -75, got {}",
+        sum
+    );
+}
+
+// ============================================================================
+// Boolean Field Edge Cases
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_boolean_fields() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu,host=a active=true {}\n\
+         cpu,host=b active=false {}\n\
+         cpu,host=c active=true {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    // Count all
+    let count = server.query_count(&db, "SELECT COUNT(*) FROM cpu").unwrap();
+    assert_eq!(count, 3, "Should have 3 rows");
+
+    // Filter by boolean
+    let true_count = server
+        .query_count(&db, "SELECT COUNT(*) FROM cpu WHERE active = true")
+        .unwrap();
+    assert_eq!(true_count, 2, "Should have 2 active=true rows");
+}
+
+// ============================================================================
+// String Field Edge Cases
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_string_fields() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "logs,host=a message=\"hello\" {}\n\
+         logs,host=b message=\"world\" {}",
+        now,
+        now + 1_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server.query_count(&db, "SELECT COUNT(*) FROM logs").unwrap();
+    assert_eq!(count, 2, "Should have 2 rows");
+
+    // Filter by string
+    let hello_count = server
+        .query_count(&db, "SELECT COUNT(*) FROM logs WHERE message = 'hello'")
+        .unwrap();
+    assert_eq!(hello_count, 1, "Should have 1 message='hello' row");
+}
+
+// ============================================================================
+// Mixed Field Types
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_multiple_field_types() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    // Line with float, integer, boolean, and string fields
+    let data = format!(
+        "system,host=server01 cpu=75.5,memory=8192i,active=true,status=\"running\" {}",
+        now
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    // Query each field type
+    let cpu = server.query_scalar(&db, "SELECT cpu FROM system").unwrap();
+    assert!((cpu - 75.5).abs() < 0.0001, "CPU should be 75.5");
+
+    let memory = server.query_scalar(&db, "SELECT memory FROM system").unwrap();
+    assert!((memory - 8192.0).abs() < 0.0001, "Memory should be 8192");
+}
+
+// ============================================================================
+// Tag Edge Cases
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_many_tags() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    // 10 tags
+    let data = format!(
+        "cpu,t1=v1,t2=v2,t3=v3,t4=v4,t5=v5,t6=v6,t7=v7,t8=v8,t9=v9,t10=v10 value=1.0 {}",
+        now
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server.query_count(&db, "SELECT COUNT(*) FROM cpu").unwrap();
+    assert_eq!(count, 1, "Should have 1 row");
+
+    // Filter by various tags
+    let filtered = server
+        .query_count(&db, "SELECT COUNT(*) FROM cpu WHERE t5 = 'v5'")
+        .unwrap();
+    assert_eq!(filtered, 1, "Tag filter should work");
+}
+
+#[test]
+#[ignore]
+fn test_numeric_tag_values() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu,host=123,port=8080 value=1.0 {}\n\
+         cpu,host=456,port=8081 value=2.0 {}",
+        now,
+        now + 1_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    // Tags are strings, even if they look like numbers
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM cpu WHERE host = '123'")
+        .unwrap();
+    assert_eq!(count, 1, "Numeric tag filter should work");
+}
+
+#[test]
+#[ignore]
+fn test_hyphen_in_tag_values() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu,host=server-01,region=us-west-2 value=1.0 {}",
+        now
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM cpu WHERE host = 'server-01'")
+        .unwrap();
+    assert_eq!(count, 1, "Hyphenated tag filter should work");
+
+    let count2 = server
+        .query_count(&db, "SELECT COUNT(*) FROM cpu WHERE region = 'us-west-2'")
+        .unwrap();
+    assert_eq!(count2, 1, "Multi-hyphen tag filter should work");
+}
+
+// ============================================================================
+// Timestamp Edge Cases
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_epoch_timestamp() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    // Unix epoch: January 1, 1970
+    let data = "cpu value=1.0 0";
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server.query_count(&db, "SELECT COUNT(*) FROM cpu").unwrap();
+    assert_eq!(count, 1, "Epoch timestamp should be accepted");
+}
+
+#[test]
+#[ignore]
+fn test_future_timestamp() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    // Year 2100: 4102444800 seconds since epoch
+    let future_ts: i64 = 4102444800_000_000_000;
+    let data = format!("cpu value=1.0 {}", future_ts);
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server.query_count(&db, "SELECT COUNT(*) FROM cpu").unwrap();
+    assert_eq!(count, 1, "Future timestamp should be accepted");
+}
+
+#[test]
+#[ignore]
+fn test_millisecond_precision_timestamps() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    // Timestamps 1ms apart
+    let base: i64 = 1700000000_000_000_000;
+    let data = format!(
+        "cpu value=1.0 {}\n\
+         cpu value=2.0 {}\n\
+         cpu value=3.0 {}",
+        base,
+        base + 1_000_000, // +1ms
+        base + 2_000_000  // +2ms
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server.query_count(&db, "SELECT COUNT(*) FROM cpu").unwrap();
+    assert_eq!(count, 3, "Millisecond-precision timestamps should be distinct");
+}
+
+#[test]
+#[ignore]
+fn test_nanosecond_precision_timestamps() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    // Timestamps 1 nanosecond apart
+    let base: i64 = 1700000000_000_000_000;
+    let data = format!(
+        "cpu value=1.0 {}\n\
+         cpu value=2.0 {}\n\
+         cpu value=3.0 {}",
+        base,
+        base + 1, // +1ns
+        base + 2  // +2ns
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server.query_count(&db, "SELECT COUNT(*) FROM cpu").unwrap();
+    assert_eq!(count, 3, "Nanosecond-precision timestamps should be distinct");
+}
+
+// ============================================================================
+// Query Filter Edge Cases
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_greater_than_filter() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu value=10.0 {}\n\
+         cpu value=20.0 {}\n\
+         cpu value=30.0 {}\n\
+         cpu value=40.0 {}\n\
+         cpu value=50.0 {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000,
+        now + 3_000_000_000,
+        now + 4_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM cpu WHERE value > 25")
+        .unwrap();
+    assert_eq!(count, 3, "Should have 3 values > 25");
+
+    let count_ge = server
+        .query_count(&db, "SELECT COUNT(*) FROM cpu WHERE value >= 30")
+        .unwrap();
+    assert_eq!(count_ge, 3, "Should have 3 values >= 30");
+
+    let count_lt = server
+        .query_count(&db, "SELECT COUNT(*) FROM cpu WHERE value < 25")
+        .unwrap();
+    assert_eq!(count_lt, 2, "Should have 2 values < 25");
+}
+
+#[test]
+#[ignore]
+fn test_between_filter() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu value=10.0 {}\n\
+         cpu value=20.0 {}\n\
+         cpu value=30.0 {}\n\
+         cpu value=40.0 {}\n\
+         cpu value=50.0 {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000,
+        now + 3_000_000_000,
+        now + 4_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM cpu WHERE value BETWEEN 20 AND 40")
+        .unwrap();
+    assert_eq!(count, 3, "BETWEEN 20 AND 40 should match 3 rows");
+}
+
+#[test]
+#[ignore]
+fn test_in_clause_filter() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu,region=us-east value=1.0 {}\n\
+         cpu,region=us-west value=2.0 {}\n\
+         cpu,region=eu-west value=3.0 {}\n\
+         cpu,region=ap-south value=4.0 {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000,
+        now + 3_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server
+        .query_count(
+            &db,
+            "SELECT COUNT(*) FROM cpu WHERE region IN ('us-east', 'us-west')",
+        )
+        .unwrap();
+    assert_eq!(count, 2, "IN clause should match 2 rows");
+
+    let count_not = server
+        .query_count(
+            &db,
+            "SELECT COUNT(*) FROM cpu WHERE region NOT IN ('us-east', 'us-west')",
+        )
+        .unwrap();
+    assert_eq!(count_not, 2, "NOT IN clause should match 2 rows");
+}
+
+#[test]
+#[ignore]
+fn test_like_filter() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu,host=server01 value=1.0 {}\n\
+         cpu,host=server02 value=2.0 {}\n\
+         cpu,host=server10 value=3.0 {}\n\
+         cpu,host=database01 value=4.0 {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000,
+        now + 3_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    // Prefix match
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM cpu WHERE host LIKE 'server%'")
+        .unwrap();
+    assert_eq!(count, 3, "LIKE 'server%' should match 3 rows");
+
+    // Single character wildcard
+    let count2 = server
+        .query_count(&db, "SELECT COUNT(*) FROM cpu WHERE host LIKE 'server0_'")
+        .unwrap();
+    assert_eq!(count2, 2, "LIKE 'server0_' should match 2 rows");
+}
+
+#[test]
+#[ignore]
+fn test_compound_filter() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu,region=us-east,host=a value=10.0 {}\n\
+         cpu,region=us-east,host=b value=20.0 {}\n\
+         cpu,region=us-west,host=c value=30.0 {}\n\
+         cpu,region=us-west,host=d value=40.0 {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000,
+        now + 3_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    // AND filter
+    let count = server
+        .query_count(
+            &db,
+            "SELECT COUNT(*) FROM cpu WHERE region = 'us-east' AND value > 15",
+        )
+        .unwrap();
+    assert_eq!(count, 1, "AND filter should match 1 row");
+
+    // OR filter
+    let count_or = server
+        .query_count(
+            &db,
+            "SELECT COUNT(*) FROM cpu WHERE region = 'us-east' OR value > 35",
+        )
+        .unwrap();
+    assert_eq!(count_or, 3, "OR filter should match 3 rows");
+}
+
+// ============================================================================
+// ORDER BY and LIMIT Edge Cases
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_order_by_asc_desc() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu value=30.0 {}\n\
+         cpu value=10.0 {}\n\
+         cpu value=20.0 {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    // Test MIN matches ORDER BY ASC LIMIT 1
+    let min = server.query_scalar(&db, "SELECT MIN(value) FROM cpu").unwrap();
+    let first_asc = server
+        .query_scalar(&db, "SELECT value FROM cpu ORDER BY value ASC LIMIT 1")
+        .unwrap();
+    assert!(
+        (min - first_asc).abs() < 0.0001,
+        "MIN should equal first value in ASC order"
+    );
+
+    // Test MAX matches ORDER BY DESC LIMIT 1
+    let max = server.query_scalar(&db, "SELECT MAX(value) FROM cpu").unwrap();
+    let first_desc = server
+        .query_scalar(&db, "SELECT value FROM cpu ORDER BY value DESC LIMIT 1")
+        .unwrap();
+    assert!(
+        (max - first_desc).abs() < 0.0001,
+        "MAX should equal first value in DESC order"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_limit_offset() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let mut data = String::new();
+    for i in 0..10 {
+        data.push_str(&format!("cpu value={}.0 {}\n", i, now + i * 1_000_000_000));
+    }
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    // LIMIT without OFFSET
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM (SELECT * FROM cpu LIMIT 5)")
+        .unwrap();
+    assert_eq!(count, 5, "LIMIT 5 should return 5 rows");
+
+    // LIMIT 0
+    let count_zero = server
+        .query_count(&db, "SELECT COUNT(*) FROM (SELECT * FROM cpu LIMIT 0)")
+        .unwrap();
+    assert_eq!(count_zero, 0, "LIMIT 0 should return 0 rows");
+}
+
+// ============================================================================
+// DISTINCT Edge Cases
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_distinct_values() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu,region=us-east value=1.0 {}\n\
+         cpu,region=us-west value=2.0 {}\n\
+         cpu,region=us-east value=3.0 {}\n\
+         cpu,region=eu-west value=4.0 {}\n\
+         cpu,region=us-west value=5.0 {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000,
+        now + 3_000_000_000,
+        now + 4_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    // DISTINCT should return 3 unique regions
+    let result = server
+        .query(&db, "SELECT DISTINCT region FROM cpu ORDER BY region")
+        .unwrap();
+    let rows = result.as_array().expect("Expected array");
+    assert_eq!(rows.len(), 3, "Should have 3 distinct regions");
+}
+
+#[test]
+#[ignore]
+fn test_count_distinct() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu,host=a value=1.0 {}\n\
+         cpu,host=b value=2.0 {}\n\
+         cpu,host=a value=3.0 {}\n\
+         cpu,host=c value=4.0 {}\n\
+         cpu,host=b value=5.0 {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000,
+        now + 3_000_000_000,
+        now + 4_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server
+        .query_count(&db, "SELECT COUNT(DISTINCT host) FROM cpu")
+        .unwrap();
+    assert_eq!(count, 3, "COUNT(DISTINCT host) should be 3");
+}
+
+// ============================================================================
+// Large Dataset Edge Cases
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_large_batch_write() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let batch_size = 1000;
+    let mut data = String::new();
+    let mut expected_sum = 0.0;
+
+    for i in 0..batch_size {
+        let value = i as f64;
+        expected_sum += value;
+        data.push_str(&format!("cpu value={} {}\n", value, now + i * 1_000_000));
+    }
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server.query_count(&db, "SELECT COUNT(*) FROM cpu").unwrap();
+    assert_eq!(count, batch_size as i64, "Should have {} rows", batch_size);
+
+    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM cpu").unwrap();
+    assert!(
+        (sum - expected_sum).abs() < 0.01,
+        "SUM should be {}, got {}",
+        expected_sum,
+        sum
+    );
+}
+
+#[test]
+#[ignore]
+fn test_multiple_writes_accumulate() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+
+    // First write
+    let data1 = format!(
+        "cpu value=1.0 {}\n\
+         cpu value=2.0 {}",
+        now,
+        now + 1_000_000_000
+    );
+    server.write(&db, &data1).expect("Write 1 failed");
+
+    // Second write
+    let data2 = format!(
+        "cpu value=3.0 {}\n\
+         cpu value=4.0 {}",
+        now + 2_000_000_000,
+        now + 3_000_000_000
+    );
+    server.write(&db, &data2).expect("Write 2 failed");
+
+    // Third write
+    let data3 = format!("cpu value=5.0 {}", now + 4_000_000_000);
+    server.write(&db, &data3).expect("Write 3 failed");
+
+    server.flush().expect("Flush failed");
+
+    let count = server.query_count(&db, "SELECT COUNT(*) FROM cpu").unwrap();
+    assert_eq!(count, 5, "All writes should accumulate");
+
+    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM cpu").unwrap();
+    assert!(
+        (sum - 15.0).abs() < 0.0001,
+        "SUM should be 15.0 (1+2+3+4+5)"
+    );
+}
+
+// ============================================================================
+// Many Fields Edge Cases
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_many_fields() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    // 10 fields
+    let data = format!(
+        "system f1=1.0,f2=2.0,f3=3.0,f4=4.0,f5=5.0,f6=6.0,f7=7.0,f8=8.0,f9=9.0,f10=10.0 {}",
+        now
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server.query_count(&db, "SELECT COUNT(*) FROM system").unwrap();
+    assert_eq!(count, 1, "Should have 1 row");
+
+    // Query individual fields
+    let f1 = server.query_scalar(&db, "SELECT f1 FROM system").unwrap();
+    let f10 = server.query_scalar(&db, "SELECT f10 FROM system").unwrap();
+    assert!((f1 - 1.0).abs() < 0.0001, "f1 should be 1.0");
+    assert!((f10 - 10.0).abs() < 0.0001, "f10 should be 10.0");
+
+    // Sum of all fields
+    let sum = server
+        .query_scalar(&db, "SELECT f1+f2+f3+f4+f5+f6+f7+f8+f9+f10 FROM system")
+        .unwrap();
+    assert!((sum - 55.0).abs() < 0.0001, "Sum of fields should be 55.0");
+}
+
+// ============================================================================
+// Measurement Name Edge Cases
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_measurement_with_underscore() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!("system_metrics value=1.0 {}", now);
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM system_metrics")
+        .unwrap();
+    assert_eq!(count, 1, "Underscore measurement should work");
+}
+
+#[test]
+#[ignore]
+fn test_measurement_with_numbers() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!("cpu123 value=1.0 {}", now);
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM cpu123")
+        .unwrap();
+    assert_eq!(count, 1, "Numeric suffix measurement should work");
+}
+
+// ============================================================================
+// Aggregation with GROUP BY Edge Cases
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_group_by_with_having() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu,host=a value=10.0 {}\n\
+         cpu,host=a value=20.0 {}\n\
+         cpu,host=b value=5.0 {}\n\
+         cpu,host=c value=100.0 {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000,
+        now + 3_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    // HAVING filters groups
+    let result = server
+        .query(
+            &db,
+            "SELECT host, SUM(value) as total FROM cpu GROUP BY host HAVING SUM(value) > 10 ORDER BY host",
+        )
+        .unwrap();
+
+    let rows = result.as_array().expect("Expected array");
+    // host 'a' has sum=30, host 'c' has sum=100, both > 10
+    // host 'b' has sum=5, excluded by HAVING
+    assert_eq!(rows.len(), 2, "HAVING should filter to 2 groups");
+}
+
+#[test]
+#[ignore]
+fn test_group_by_multiple_columns() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    let data = format!(
+        "cpu,region=us,host=a value=10.0 {}\n\
+         cpu,region=us,host=a value=20.0 {}\n\
+         cpu,region=us,host=b value=30.0 {}\n\
+         cpu,region=eu,host=a value=40.0 {}",
+        now,
+        now + 1_000_000_000,
+        now + 2_000_000_000,
+        now + 3_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    let result = server
+        .query(
+            &db,
+            "SELECT region, host, COUNT(*) as cnt FROM cpu GROUP BY region, host ORDER BY region, host",
+        )
+        .unwrap();
+
+    let rows = result.as_array().expect("Expected array");
+    // Should have 3 groups: (eu, a), (us, a), (us, b)
+    assert_eq!(rows.len(), 3, "Should have 3 groups");
+}
+
+// ============================================================================
+// Time Range Query Edge Cases
+// ============================================================================
+
+#[test]
+#[ignore]
+fn test_time_range_filter() {
+    let server = TestServer::start();
+    let db = server.unique_db();
+
+    let base = 1700000000_000_000_000i64;
+    let data = format!(
+        "cpu value=1.0 {}\n\
+         cpu value=2.0 {}\n\
+         cpu value=3.0 {}\n\
+         cpu value=4.0 {}\n\
+         cpu value=5.0 {}",
+        base,
+        base + 1_000_000_000,
+        base + 2_000_000_000,
+        base + 3_000_000_000,
+        base + 4_000_000_000
+    );
+
+    server.write(&db, &data).expect("Write failed");
+    server.flush().expect("Flush failed");
+
+    // Filter by timestamp range
+    let count = server
+        .query_count(
+            &db,
+            &format!(
+                "SELECT COUNT(*) FROM cpu WHERE timestamp >= {} AND timestamp < {}",
+                base + 1_000_000_000,
+                base + 4_000_000_000
+            ),
+        )
+        .unwrap();
+    assert_eq!(count, 3, "Time range should match 3 rows");
+}
+
+// ============================================================================
 // Test Runner Helper
 // ============================================================================
 
