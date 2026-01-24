@@ -1,0 +1,44 @@
+[package]
+name = "mynadb-fuzz"
+version = "0.0.0"
+authors = ["Automatically generated"]
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+# Only needed for time_interval parsing
+chrono = "0.4"
+
+[dev-dependencies]
+# No dev dependencies needed for fuzz targets
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_line_protocol"
+path = "fuzz_targets/fuzz_line_protocol.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_time_interval"
+path = "fuzz_targets/fuzz_time_interval.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_field_value"
+path = "fuzz_targets/fuzz_field_value.rs"
+test = false
+doc = false
+bench = false

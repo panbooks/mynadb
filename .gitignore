@@ -23,3 +23,12 @@ Thumbs.db
 # Local config (keep config.toml tracked)
 config.local.toml
 /logs/
+
+# Fuzz testing artifacts
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/Cargo.lock
+
+# Property testing regressions
+*.proptest-regressions
