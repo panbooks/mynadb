@@ -764,4 +764,320 @@ proptest! {
         prop_assert_eq!(fields1.get("a"), fields2.get("a"));
         prop_assert_eq!(fields1.get("b"), fields2.get("b"));
     }
+
+    /// Property: Tag order doesn't affect parsing
+    #[test]
+    fn prop_tag_order_independent(
+        measurement in measurement_strategy(),
+        tag1_key in tag_key_strategy(),
+        tag1_val in tag_value_strategy(),
+        tag2_key in tag_key_strategy(),
+        tag2_val in tag_value_strategy(),
+    ) {
+        // Ensure different tag keys
+        prop_assume!(tag1_key != tag2_key);
+
+        let line1 = format!("{},{}={},{}={} value=1.0", measurement, tag1_key, tag1_val, tag2_key, tag2_val);
+        let line2 = format!("{},{}={},{}={} value=1.0", measurement, tag2_key, tag2_val, tag1_key, tag1_val);
+
+        let result1 = parse_line_with_tags(&line1);
+        let result2 = parse_line_with_tags(&line2);
+
+        prop_assert!(result1.is_ok(), "line1 parse failed: {}", line1);
+        prop_assert!(result2.is_ok(), "line2 parse failed: {}", line2);
+
+        let (m1, tags1, _) = result1.unwrap();
+        let (m2, tags2, _) = result2.unwrap();
+
+        prop_assert_eq!(m1, m2, "Measurement should match");
+        prop_assert_eq!(tags1, tags2, "Tags should match regardless of order");
+    }
+
+    /// Property: Whitespace trimming is consistent
+    #[test]
+    fn prop_whitespace_trimming(
+        measurement in measurement_strategy(),
+        leading_spaces in 0usize..3,
+        trailing_spaces in 0usize..3,
+    ) {
+        let base_line = format!("{} value=1.0", measurement);
+        let padded_line = format!(
+            "{}{}{}",
+            " ".repeat(leading_spaces),
+            base_line,
+            " ".repeat(trailing_spaces)
+        );
+
+        let result1 = parse_line_simple(&base_line);
+        let result2 = parse_line_simple(&padded_line);
+
+        prop_assert!(result1.is_ok());
+        prop_assert!(result2.is_ok());
+
+        let (m1, _) = result1.unwrap();
+        let (m2, _) = result2.unwrap();
+        prop_assert_eq!(m1, m2, "Measurement should match after trimming");
+    }
+
+    /// Property: Very large field count doesn't cause issues
+    #[test]
+    fn prop_many_fields_parse(field_count in 5usize..15) {
+        let mut line = "test".to_string();
+        let mut expected_fields = HashMap::new();
+
+        for i in 0..field_count {
+            let field_name = format!("f{}", i);
+            let field_value = i as f64;
+            if i == 0 {
+                line.push_str(&format!(" {}={}", field_name, field_value));
+            } else {
+                line.push_str(&format!(",{}={}", field_name, field_value));
+            }
+            expected_fields.insert(field_name, field_value);
+        }
+
+        let result = parse_line_simple(&line);
+        prop_assert!(result.is_ok(), "Failed to parse: {}", line);
+
+        let (_, fields) = result.unwrap();
+        prop_assert_eq!(fields.len(), field_count, "Field count mismatch");
+
+        for (key, expected_val) in &expected_fields {
+            let actual = fields.get(key).cloned().unwrap_or(f64::NAN);
+            prop_assert!(
+                (actual - expected_val).abs() < 0.0001,
+                "Field {} mismatch: expected {}, got {}",
+                key, expected_val, actual
+            );
+        }
+    }
+
+    /// Property: Negative values are preserved
+    #[test]
+    fn prop_negative_values_preserved(value in -1000.0f64..-0.001) {
+        let line = format!("test value={}", value);
+        let result = parse_line_simple(&line);
+        prop_assert!(result.is_ok());
+
+        let (_, fields) = result.unwrap();
+        let parsed = fields.get("value").cloned().unwrap_or(0.0);
+        let tolerance = value.abs() * 1e-10 + 1e-15;
+        prop_assert!(
+            (parsed - value).abs() < tolerance,
+            "Negative value mismatch: expected {}, got {}",
+            value, parsed
+        );
+    }
+
+    /// Property: Zero is preserved exactly
+    #[test]
+    fn prop_zero_preserved(_dummy in 0..1) {
+        let line = "test value=0.0";
+        let result = parse_line_simple(line);
+        prop_assert!(result.is_ok());
+
+        let (_, fields) = result.unwrap();
+        let parsed = fields.get("value").cloned().unwrap_or(f64::NAN);
+        prop_assert!(
+            parsed == 0.0,
+            "Zero not preserved: got {}",
+            parsed
+        );
+    }
+
+    /// Property: Very small numbers are handled
+    #[test]
+    fn prop_small_numbers_handled(exp in -15i32..-1) {
+        let value = 10f64.powi(exp);
+        let line = format!("test value={}", value);
+        let result = parse_line_simple(&line);
+        prop_assert!(result.is_ok());
+
+        let (_, fields) = result.unwrap();
+        let parsed = fields.get("value").cloned().unwrap_or(0.0);
+        let tolerance = value.abs() * 1e-10 + 1e-20;
+        prop_assert!(
+            (parsed - value).abs() < tolerance,
+            "Small number mismatch: expected {}, got {}",
+            value, parsed
+        );
+    }
+
+    /// Property: Measurement name length doesn't affect parsing
+    #[test]
+    fn prop_long_measurement_name(length in 1usize..50) {
+        let measurement: String = (0..length).map(|_| 'a').collect();
+        let line = format!("{} value=1.0", measurement);
+        let result = parse_line_simple(&line);
+        prop_assert!(result.is_ok());
+
+        let (parsed_measurement, _) = result.unwrap();
+        prop_assert_eq!(parsed_measurement, measurement);
+    }
+}
+
+// ============================================================================
+// Edge Case Unit Tests (Specific Known Edge Cases)
+// ============================================================================
+
+#[test]
+fn test_edge_case_empty_line() {
+    let result = parse_line_simple("");
+    assert!(result.is_err() || result.unwrap().1.is_empty());
+}
+
+#[test]
+fn test_edge_case_whitespace_only() {
+    let result = parse_line_simple("   ");
+    assert!(result.is_err() || result.unwrap().1.is_empty());
+}
+
+#[test]
+fn test_edge_case_measurement_only() {
+    let result = parse_line_simple("cpu");
+    // Should fail - no fields
+    assert!(result.is_err() || result.unwrap().1.is_empty());
+}
+
+#[test]
+fn test_edge_case_single_char_measurement() {
+    let result = parse_line_simple("m value=1.0");
+    assert!(result.is_ok());
+    let (measurement, fields) = result.unwrap();
+    assert_eq!(measurement, "m");
+    assert!(fields.contains_key("value"));
+}
+
+#[test]
+fn test_edge_case_single_char_field() {
+    let result = parse_line_simple("test v=1.0");
+    assert!(result.is_ok());
+    let (_, fields) = result.unwrap();
+    assert!(fields.contains_key("v"));
+}
+
+#[test]
+fn test_edge_case_underscore_in_names() {
+    let result = parse_line_simple("my_measurement my_field=1.0");
+    assert!(result.is_ok());
+    let (measurement, fields) = result.unwrap();
+    assert_eq!(measurement, "my_measurement");
+    assert!(fields.contains_key("my_field"));
+}
+
+#[test]
+fn test_edge_case_numeric_suffix_measurement() {
+    let result = parse_line_simple("cpu123 value=1.0");
+    assert!(result.is_ok());
+    let (measurement, _) = result.unwrap();
+    assert_eq!(measurement, "cpu123");
+}
+
+#[test]
+fn test_edge_case_integer_field() {
+    let result = parse_line_integer("test count=42i");
+    assert!(result.is_ok());
+    let (_, value) = result.unwrap();
+    assert_eq!(value, 42);
+}
+
+#[test]
+fn test_edge_case_negative_integer() {
+    let result = parse_line_integer("test count=-100i");
+    assert!(result.is_ok());
+    let (_, value) = result.unwrap();
+    assert_eq!(value, -100);
+}
+
+#[test]
+fn test_edge_case_large_integer() {
+    let result = parse_line_integer("test count=9223372036854775807i");
+    assert!(result.is_ok());
+    let (_, value) = result.unwrap();
+    assert_eq!(value, i64::MAX);
+}
+
+#[test]
+fn test_edge_case_boolean_true() {
+    let result = parse_line_boolean("test active=true");
+    assert!(result.is_ok());
+    let (_, value) = result.unwrap();
+    assert!(value);
+}
+
+#[test]
+fn test_edge_case_boolean_false() {
+    let result = parse_line_boolean("test active=false");
+    assert!(result.is_ok());
+    let (_, value) = result.unwrap();
+    assert!(!value);
+}
+
+#[test]
+fn test_edge_case_boolean_t() {
+    let result = parse_line_boolean("test active=t");
+    assert!(result.is_ok());
+    let (_, value) = result.unwrap();
+    assert!(value);
+}
+
+#[test]
+fn test_edge_case_boolean_f() {
+    let result = parse_line_boolean("test active=f");
+    assert!(result.is_ok());
+    let (_, value) = result.unwrap();
+    assert!(!value);
+}
+
+#[test]
+fn test_edge_case_scientific_notation() {
+    let result = parse_line_simple("test value=1.5e10");
+    assert!(result.is_ok());
+    let (_, fields) = result.unwrap();
+    let value = fields.get("value").cloned().unwrap_or(0.0);
+    assert!((value - 1.5e10).abs() < 1e5);
+}
+
+#[test]
+fn test_edge_case_negative_scientific() {
+    let result = parse_line_simple("test value=-2.5e-5");
+    assert!(result.is_ok());
+    let (_, fields) = result.unwrap();
+    let value = fields.get("value").cloned().unwrap_or(0.0);
+    assert!((value - (-2.5e-5)).abs() < 1e-10);
+}
+
+#[test]
+fn test_edge_case_many_tags() {
+    let line = "cpu,t1=v1,t2=v2,t3=v3,t4=v4,t5=v5 value=1.0";
+    let result = parse_line_with_tags(line);
+    assert!(result.is_ok());
+    let (_, tags, _) = result.unwrap();
+    assert_eq!(tags.len(), 5);
+}
+
+#[test]
+fn test_edge_case_timestamp_zero() {
+    let result = parse_line_with_timestamp("test value=1.0 0");
+    assert!(result.is_ok());
+    let (_, _, ts) = result.unwrap();
+    assert_eq!(ts, Some(0));
+}
+
+#[test]
+fn test_edge_case_no_timestamp() {
+    let result = parse_line_with_timestamp("test value=1.0");
+    assert!(result.is_ok());
+    let (_, _, ts) = result.unwrap();
+    assert_eq!(ts, None);
+}
+
+#[test]
+fn test_edge_case_future_timestamp() {
+    let future_ts = 4102444800_000_000_000i64; // Year 2100
+    let line = format!("test value=1.0 {}", future_ts);
+    let result = parse_line_with_timestamp(&line);
+    assert!(result.is_ok());
+    let (_, _, ts) = result.unwrap();
+    assert_eq!(ts, Some(future_ts));
 }
