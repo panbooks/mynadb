@@ -252,6 +252,14 @@ p {
   box-shadow: var(--shadow-glow);
 }
 
+.navbar-brand .logo-img {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-lg);
+  animation: logoFloat 3s ease-in-out infinite;
+  box-shadow: var(--shadow-glow);
+}
+
 @keyframes logoFloat {
   0%, 100% { transform: translateY(0) rotate(0deg); }
   50% { transform: translateY(-3px) rotate(2deg); }
