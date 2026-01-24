@@ -12,11 +12,8 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 
-# Only needed for time_interval parsing
-chrono = "0.4"
-
-[dev-dependencies]
-# No dev dependencies needed for fuzz targets
+# Depend on the actual mynadb library to test real code
+mynadb = { path = ".." }
 
 # Prevent this from interfering with workspaces
 [workspace]

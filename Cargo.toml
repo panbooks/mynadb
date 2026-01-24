@@ -4,6 +4,10 @@ version = "0.2.8"
 edition = "2021"
 description = "mynadb, the voice of your machines"
 
+[lib]
+name = "mynadb"
+path = "src/lib.rs"
+
 [[bin]]
 name = "mynadb"
 path = "src/main.rs"

@@ -1,86 +1,15 @@
 //! Fuzz target for field value parser
 //!
-//! Tests that the field value parser handles arbitrary input without panicking.
-//! Field values can be: float (1.5), integer (1i), string ("hello"), boolean (true/false)
+//! Tests the REAL parse_field_value and parse_fields functions from
+//! src/storage/line_protocol.rs to find edge cases and potential panics.
 
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
 use arbitrary::Arbitrary;
 
-/// Field value types supported by InfluxDB line protocol
-#[derive(Debug, Clone)]
-pub enum FieldValue {
-    Float(f64),
-    Integer(i64),
-    String(String),
-    Boolean(bool),
-}
-
-/// Parse a single field value from InfluxDB line protocol
-///
-/// Supported formats:
-/// - Boolean: true, false, t, f, TRUE, FALSE, T, F
-/// - String: "..." or '...'
-/// - Integer: ends with 'i' (e.g., 42i, -100i)
-/// - Float: any valid floating point number (e.g., 1.5, -3.14, 1e10)
-fn parse_field_value(value: &str) -> Result<FieldValue, &'static str> {
-    let value = value.trim();
-
-    if value.is_empty() {
-        return Err("Empty value");
-    }
-
-    // Boolean: true, false, t, f, TRUE, FALSE, T, F
-    match value.to_lowercase().as_str() {
-        "true" | "t" => return Ok(FieldValue::Boolean(true)),
-        "false" | "f" => return Ok(FieldValue::Boolean(false)),
-        _ => {}
-    }
-
-    // String: "..." or '...'
-    if value.len() >= 2 {
-        if (value.starts_with('"') && value.ends_with('"'))
-            || (value.starts_with('\'') && value.ends_with('\''))
-        {
-            let s = &value[1..value.len() - 1];
-            return Ok(FieldValue::String(s.to_string()));
-        }
-    }
-
-    // Integer: ends with 'i' (e.g., 42i)
-    if value.ends_with('i') && value.len() > 1 {
-        let num_str = &value[..value.len() - 1];
-        if let Ok(n) = num_str.parse::<i64>() {
-            return Ok(FieldValue::Integer(n));
-        }
-        // If parsing failed, fall through to try as float or string
-    }
-
-    // Float: default numeric type
-    if let Ok(f) = value.parse::<f64>() {
-        // Check for special float values
-        if f.is_nan() || f.is_infinite() {
-            return Ok(FieldValue::Float(f));
-        }
-        return Ok(FieldValue::Float(f));
-    }
-
-    // Fallback: treat as unquoted string
-    Ok(FieldValue::String(value.to_string()))
-}
-
-/// Parse a key=value pair
-fn parse_field_pair(pair: &str) -> Result<(String, FieldValue), &'static str> {
-    let (key, value) = pair.split_once('=').ok_or("No equals sign")?;
-
-    if key.is_empty() {
-        return Err("Empty key");
-    }
-
-    let field_value = parse_field_value(value)?;
-    Ok((key.to_string(), field_value))
-}
+// Import the REAL parsers from the mynadb library
+use mynadb::storage::line_protocol::{parse_field_value, parse_fields};
 
 /// Structured input for more targeted fuzzing
 #[derive(Debug, Arbitrary)]
@@ -94,7 +23,7 @@ struct FieldInput {
 }
 
 impl FieldInput {
-    fn to_string(&self) -> String {
+    fn to_field_string(&self) -> String {
         let mut result = self.value.clone();
 
         if self.add_i_suffix {
@@ -110,21 +39,32 @@ impl FieldInput {
 }
 
 fuzz_target!(|data: &[u8]| {
-    // Test 1: Raw byte input as string
+    // Try to parse as UTF-8 string
     if let Ok(input) = std::str::from_utf8(data) {
-        // Test field value parsing - should not panic
+        // Test field value parsing with the REAL function - should not panic
         let _ = parse_field_value(input);
 
         // Test with trimmed input
-        let _ = parse_field_value(input.trim());
+        let trimmed = input.trim();
+        if !trimmed.is_empty() {
+            let _ = parse_field_value(trimmed);
+        }
 
-        // Test field pair parsing
-        let _ = parse_field_pair(input);
+        // Test field set parsing (comma-separated key=value pairs)
+        let _ = parse_fields(input);
+
+        // Test with lowercase
+        let lower = input.to_lowercase();
+        let _ = parse_field_value(&lower);
     }
 
-    // Test 2: Structured input for more targeted fuzzing
+    // Test structured input for more targeted fuzzing
     if let Ok(structured) = FieldInput::arbitrary(&mut arbitrary::Unstructured::new(data)) {
-        let value_str = structured.to_string();
+        let value_str = structured.to_field_string();
         let _ = parse_field_value(&value_str);
+
+        // Also test as a field set: key=value
+        let field_set = format!("field={}", value_str);
+        let _ = parse_fields(&field_set);
     }
 });
