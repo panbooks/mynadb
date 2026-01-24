@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Enterprise Cluster - Distributed time series database with shared-storage architecture">
+  <title>Enterprise Cluster - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Guides</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">All Guides</a></li>
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="retention.html">Retention Policies</a></li>
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html" class="active">Enterprise Cluster</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>API Reference</h4>
+        <ul class="sidebar-nav">
+          <li><a href="api.html">HTTP API</a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="testing.html">Testing</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <div class="docs-badge" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">
+        NEW IN v0.3.0
+      </div>
+
+      <h1>Enterprise Cluster</h1>
+
+      <p class="lead">
+        Scale without limits. MynaDB Enterprise Edition transforms the standalone database into a distributed,
+        horizontally-scalable cluster with compute-storage separation. Add nodes on demand, scale to petabytes,
+        and achieve 11-nines durability with S3-based storage.
+      </p>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #eff6ff, #dbeafe); border-left: 4px solid #3b82f6; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>Cloud-Native by Design:</strong> Perfect for Kubernetes deployments with stateless compute nodes,
+        automatic scaling, and no data rebalancing required.
+      </div>
+
+      <h2>Architecture Overview</h2>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
+                              Clients
+                                 │
+                                 ▼
+                         ┌─────────────┐
+                         │Load Balancer│
+                         │  (HAProxy)  │
+                         └──────┬──────┘
+                                │
+           ┌────────────────────┼────────────────────┐
+           │                    │                    │
+           ▼                    ▼                    ▼
+    ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
+    │   Node 1    │      │   Node 2    │      │   Node 3    │
+    │  (Compute)  │      │  (Compute)  │      │  (Compute)  │
+    │ + LocalCache│      │ + LocalCache│      │ + LocalCache│
+    └──────┬──────┘      └──────┬──────┘      └──────┬──────┘
+           │                    │                    │
+           └────────────────────┼────────────────────┘
+                                │
+                                ▼
+    ┌─────────────────────────────────────────────────────────┐
+    │                   SHARED OBJECT STORAGE                  │
+    │                    (S3 / MinIO / OSS)                    │
+    └─────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+    ┌─────────────────────────────────────────────────────────┐
+    │                  COORDINATION SERVICE                    │
+    │    etcd: Locks • Leader Election • Cache Invalidation   │
+    └─────────────────────────────────────────────────────────┘
+        </pre>
+      </div>
+
+      <h2>Key Benefits</h2>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #10b981, #34d399);">&#128200;</div>
+          <h3>Auto-Scaling</h3>
+          <p>Add or remove compute nodes without data migration. Scale from 3 to 100+ nodes seamlessly.</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #3b82f6, #60a5fa);">&#128274;</div>
+          <h3>11-Nines Durability</h3>
+          <p>S3 object storage provides 99.999999999% durability. Your data is safe.</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #f59e0b, #fbbf24);">&#128176;</div>
+          <h3>Cost Efficient</h3>
+          <p>Single data copy in cheap object storage. No replication overhead.</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa);">&#9889;</div>
+          <h3>Instant Failover</h3>
+          <p>Stateless nodes mean instant recovery. No leader election delays.</p>
+        </div>
+      </div>
+
+      <h2>Cluster Components</h2>
+
+      <h3>1. Coordinator (etcd)</h3>
+      <p>
+        The coordinator provides distributed primitives for cluster coordination:
+      </p>
+      <ul>
+        <li><strong>Distributed Locks:</strong> Partition-level locking for write coordination</li>
+        <li><strong>Leader Election:</strong> Single leader for background tasks (compaction)</li>
+        <li><strong>Pub/Sub:</strong> Real-time cache invalidation across nodes</li>
+        <li><strong>Service Discovery:</strong> Node registration and health tracking</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">etcd Key Structure</span>
+        </div>
+        <div class="code-content">
+<pre><code>/mynadb/
+├── nodes/{node_id}              # Node registration (ephemeral)
+├── locks/
+│   ├── write/{partition}        # Partition write locks
+│   └── compaction/{path}        # Compaction locks
+├── leader/
+│   └── compactor                # Compaction leader
+└── cache/
+    └── invalidate               # Cache invalidation channel</code></pre>
+        </div>
+      </div>
+
+      <h3>2. Node Registration</h3>
+      <p>
+        Each node registers itself with the coordinator on startup:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Node Info</span>
+        </div>
+        <div class="code-content">
+<pre><code>{
+  "node_id": "mynadb-1",
+  "advertise_addr": "mynadb-1.cluster.local:7000",
+  "role": "hybrid",
+  "state": "active",
+  "http_port": 7000,
+  "flight_port": 7001,
+  "mysql_port": 7002,
+  "version": "0.3.0",
+  "is_leader": true
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>3. Write Coordination</h3>
+      <p>
+        Writes are coordinated using partition-level locks to prevent conflicts:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Write Flow</span>
+        </div>
+        <div class="code-content">
+<pre><code>1. Client → POST /write/:db
+2. Parse line protocol
+3. Acquire partition lock (etcd)
+4. Write to WAL (node-prefixed path)
+5. Buffer in memory cache
+6. Return 204 OK
+7. (Background) Flush to S3
+8. Release lock
+9. Publish cache invalidation</code></pre>
+        </div>
+      </div>
+
+      <h3>4. Cache Invalidation</h3>
+      <p>
+        When one node writes data, all other nodes are notified to invalidate their caches:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Invalidation Message</span>
+        </div>
+        <div class="code-content">
+<pre><code>{
+  "paths": ["mydb/default/cpu/date=2024-01-15/L0_1705312800.parquet"],
+  "reason": "NewFile",
+  "source_node": "mynadb-1",
+  "timestamp": 1705312800
+}</code></pre>
+        </div>
+      </div>
+
+      <h2>Configuration</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">config.toml</span>
+        </div>
+        <div class="code-content">
+<pre><code>[cluster]
+enabled = true
+node_id = ""                    # Auto-generated if empty
+advertise_addr = "0.0.0.0:7000"
+role = "hybrid"                 # "compute", "compactor", "hybrid"
+
+[cluster.coordinator]
+type = "etcd"
+endpoints = ["etcd-1:2379", "etcd-2:2379", "etcd-3:2379"]
+lock_prefix = "/mynadb/locks/"
+lock_ttl_secs = 30
+heartbeat_interval_secs = 5
+
+[cluster.cache]
+invalidation_channel = "/mynadb/cache/invalidate"
+
+[cluster.compaction]
+leader_only = true
+election_key = "/mynadb/leader/compactor"
+
+[cluster.health]
+check_interval_secs = 10
+unhealthy_threshold = 3</code></pre>
+        </div>
+      </div>
+
+      <h2>Cluster API</h2>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Endpoint</th>
+            <th>Method</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/cluster/status</code></td>
+            <td>GET</td>
+            <td>Overall cluster status and this node's info</td>
+          </tr>
+          <tr>
+            <td><code>/cluster/nodes</code></td>
+            <td>GET</td>
+            <td>List all registered nodes</td>
+          </tr>
+          <tr>
+            <td><code>/cluster/leader</code></td>
+            <td>GET</td>
+            <td>Current leader information</td>
+          </tr>
+          <tr>
+            <td><code>/cluster/health</code></td>
+            <td>GET</td>
+            <td>Cluster health check</td>
+          </tr>
+          <tr>
+            <td><code>/cluster/drain?node_id=xxx</code></td>
+            <td>POST</td>
+            <td>Drain a node (prepare for removal)</td>
+          </tr>
+          <tr>
+            <td><code>/cluster/remove?node_id=xxx</code></td>
+            <td>DELETE</td>
+            <td>Remove a node from the cluster</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Example: Cluster Status</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+<pre><code>curl http://localhost:7000/cluster/status</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Response</span>
+        </div>
+        <div class="code-content">
+<pre><code>{
+  "enabled": true,
+  "node_id": "mynadb-1",
+  "role": "hybrid",
+  "state": "active",
+  "is_leader": true,
+  "leader_id": "mynadb-1",
+  "total_nodes": 3,
+  "healthy_nodes": 3,
+  "coordinator_type": "etcd",
+  "coordinator_connected": true
+}</code></pre>
+        </div>
+      </div>
+
+      <h2>Deployment</h2>
+
+      <h3>Kubernetes</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+<pre><code># Create namespace
+kubectl create namespace mynadb
+
+# Apply manifests
+kubectl apply -f deploy/kubernetes/configmap.yaml
+kubectl apply -f deploy/kubernetes/service.yaml
+kubectl apply -f deploy/kubernetes/deployment.yaml
+kubectl apply -f deploy/kubernetes/hpa.yaml
+
+# Check status
+kubectl get pods -n mynadb
+kubectl get svc -n mynadb</code></pre>
+        </div>
+      </div>
+
+      <h3>Docker Compose</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+<pre><code># Start cluster with etcd and MinIO
+docker-compose -f deploy/docker-compose.cluster.yaml up -d
+
+# Verify nodes
+curl http://localhost:7000/cluster/nodes
+
+# Write to node 1
+curl -X POST http://localhost:7000/write/testdb \
+  -d "cpu,host=a value=1"
+
+# Query from node 2 (port 7010)
+curl http://localhost:7010/query/testdb \
+  -d "SELECT * FROM cpu"
+
+# Check HAProxy stats
+open http://localhost:8404/stats</code></pre>
+        </div>
+      </div>
+
+      <h2>Metrics</h2>
+
+      <p>Prometheus metrics are available at <code>/metrics</code>:</p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>mynadb_cluster_nodes_total</code></td>
+            <td>Gauge</td>
+            <td>Total number of nodes</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_nodes_healthy</code></td>
+            <td>Gauge</td>
+            <td>Number of healthy nodes</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_is_leader</code></td>
+            <td>Gauge</td>
+            <td>1 if this node is leader</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_lock_acquisitions_total</code></td>
+            <td>Counter</td>
+            <td>Lock acquisition count</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_cache_invalidations_total</code></td>
+            <td>Counter</td>
+            <td>Cache invalidations sent</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Performance</h2>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Standalone</th>
+            <th>Cluster (cache hit)</th>
+            <th>Cluster (cache miss)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Write Latency (p50)</td>
+            <td>5-10ms</td>
+            <td>10-30ms</td>
+            <td>50-100ms</td>
+          </tr>
+          <tr>
+            <td>Write Latency (p99)</td>
+            <td>20-50ms</td>
+            <td>50-100ms</td>
+            <td>150-300ms</td>
+          </tr>
+          <tr>
+            <td>Query Latency (p50)</td>
+            <td>10-50ms</td>
+            <td>10-50ms</td>
+            <td>100-300ms</td>
+          </tr>
+          <tr>
+            <td>Write Throughput</td>
+            <td>100K pts/s</td>
+            <td>100K pts/s/node</td>
+            <td>-</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Comparison</h2>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>MynaDB Cluster</th>
+            <th>Shared-Nothing (Raft)</th>
+            <th>Master-Slave</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Complexity</td>
+            <td>Medium</td>
+            <td>Very High</td>
+            <td>Low</td>
+          </tr>
+          <tr>
+            <td>Auto-scaling</td>
+            <td><strong>Excellent</strong></td>
+            <td>Hard (rebalancing)</td>
+            <td>None</td>
+          </tr>
+          <tr>
+            <td>Durability</td>
+            <td><strong>S3 (11 nines)</strong></td>
+            <td>Raft quorum</td>
+            <td>Replication lag</td>
+          </tr>
+          <tr>
+            <td>Failover time</td>
+            <td><strong>Instant</strong></td>
+            <td>10-15s</td>
+            <td>10-30s</td>
+          </tr>
+          <tr>
+            <td>Best for</td>
+            <td>Cloud, elastic</td>
+            <td>On-prem, strong consistency</td>
+            <td>Simple HA</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="docs-nav">
+        <a href="high-availability.html" class="docs-nav-prev">&larr; High Availability</a>
+        <a href="configuration.html" class="docs-nav-next">Configuration &rarr;</a>
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2025 MynaDB. The Voice of Your Machines.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>
