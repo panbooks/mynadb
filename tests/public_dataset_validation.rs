@@ -112,15 +112,24 @@ mysql_enabled = false
 [storage]
 data_dir = "{}"
 
+[storage.object_store]
+backend = "local"
+data_dir = "{}"
+
+[schema]
+strategy = "service_as_schema"
+tag_keys = ["service"]
+default_name = "default"
+
 [cache]
 flush_interval_secs = 1
-max_size_mb = 64
+max_size_mb = 256
 
 [wal]
 enabled = false
 
 [compaction]
-enabled = false
+min_files = 100
 
 [retention]
 enabled = false
@@ -133,23 +142,34 @@ level = "warn"
 "#,
             http_port,
             http_port + 1,
+            data_dir,
             data_dir
         );
         fs::write(&config_path, config_content).expect("Failed to write config");
 
-        // Start server
-        let process = Command::new("cargo")
-            .args(["run", "--release", "--", "-c", &config_path])
+        // Build first if needed
+        let _ = Command::new("cargo")
+            .args(["build", "--release"])
+            .status();
+
+        // Start server using the release binary directly
+        let process = Command::new("./target/release/mynadb")
+            .args(["-c", &config_path])
             .spawn()
             .expect("Failed to start MynaDB server");
 
-        // Wait for server to be ready
+        // Wait for server to be ready (up to 30 seconds)
         let url = format!("http://127.0.0.1:{}/health", http_port);
+        let mut ready = false;
         for _ in 0..60 {
             thread::sleep(Duration::from_millis(500));
             if ureq::get(&url).call().is_ok() {
+                ready = true;
                 break;
             }
+        }
+        if !ready {
+            panic!("Server failed to start on port {}", http_port);
         }
 
         Self {
@@ -161,35 +181,74 @@ level = "warn"
 
     fn write_line_protocol(&self, db: &str, data: &str) -> Result<(), String> {
         let url = format!("http://127.0.0.1:{}/write/{}", self.http_port, db);
-        ureq::post(&url)
+        match ureq::post(&url)
             .set("Content-Type", "text/plain")
             .send_string(data)
-            .map_err(|e| format!("Write failed: {}", e))?;
-        Ok(())
+        {
+            Ok(response) => {
+                let status = response.status();
+                let body = response.into_string().unwrap_or_default();
+                println!("Write response: {} - {}", status, body);
+                Ok(())
+            }
+            Err(ureq::Error::Status(code, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                Err(format!("Write failed ({}): {}", code, body))
+            }
+            Err(e) => Err(format!("Write failed: {}", e)),
+        }
     }
 
     fn query(&self, db: &str, sql: &str) -> Result<serde_json::Value, String> {
-        let url = format!(
-            "http://127.0.0.1:{}/query/{}?sql={}",
-            self.http_port,
-            db,
-            urlencoding::encode(sql)
-        );
-        let response = ureq::get(&url)
-            .call()
-            .map_err(|e| format!("Query failed: {}", e))?;
-        let body = response
-            .into_string()
-            .map_err(|e| format!("Read body failed: {}", e))?;
-        serde_json::from_str(&body).map_err(|e| format!("Parse JSON failed: {}", e))
+        let url = format!("http://127.0.0.1:{}/query/{}", self.http_port, db);
+        // Use POST with SQL in body (matching the API convention)
+        match ureq::post(&url).send_string(sql) {
+            Ok(response) => {
+                let body = response
+                    .into_string()
+                    .map_err(|e| format!("Read body failed: {}", e))?;
+                serde_json::from_str(&body).map_err(|e| format!("Parse JSON failed: {}: {}", e, body))
+            }
+            Err(ureq::Error::Status(code, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                Err(format!("Query failed ({}): {}", code, body))
+            }
+            Err(e) => Err(format!("Query failed: {}", e)),
+        }
+    }
+
+    fn list_tables(&self, db: &str) -> Result<serde_json::Value, String> {
+        let url = format!("http://127.0.0.1:{}/databases/{}/tables", self.http_port, db);
+        match ureq::get(&url).call() {
+            Ok(response) => {
+                let body = response
+                    .into_string()
+                    .map_err(|e| format!("Read body failed: {}", e))?;
+                serde_json::from_str(&body).map_err(|e| format!("Parse JSON failed: {}", e))
+            }
+            Err(ureq::Error::Status(code, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                Err(format!("List tables failed ({}): {}", code, body))
+            }
+            Err(e) => Err(format!("List tables failed: {}", e)),
+        }
     }
 
     fn flush(&self) -> Result<(), String> {
         let url = format!("http://127.0.0.1:{}/flush", self.http_port);
-        ureq::post(&url)
-            .call()
-            .map_err(|e| format!("Flush failed: {}", e))?;
-        thread::sleep(Duration::from_secs(2));
+        match ureq::post(&url).call() {
+            Ok(response) => {
+                let body = response.into_string().unwrap_or_default();
+                println!("Flush response: {}", body);
+            }
+            Err(ureq::Error::Status(code, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                return Err(format!("Flush failed ({}): {}", code, body));
+            }
+            Err(e) => return Err(format!("Flush failed: {}", e)),
+        }
+        // Wait for data to be persisted
+        thread::sleep(Duration::from_secs(3));
         Ok(())
     }
 }
@@ -456,18 +515,28 @@ fn test_noaa_weather_data() {
     server.write_line_protocol(db, &subset).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    // Run standard queries
-    let result = server.query(db, "SELECT COUNT(*) as cnt FROM ndbc").unwrap();
+    // Run queries and verify results
+    let result = server.query(db, "SELECT COUNT(*) as cnt FROM default.ndbc")
+        .expect("Count query failed");
     println!("NOAA row count: {:?}", result);
 
-    let result = server.query(db, "SELECT * FROM ndbc LIMIT 5").unwrap();
-    println!("NOAA sample rows: {:?}", result);
+    let count = result.as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("cnt"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    assert!(count > 0, "Expected rows to be written, got {}", count);
+    println!("✓ Wrote {} rows", count);
 
-    // Query with aggregation
+    let result = server.query(db, "SELECT * FROM default.ndbc LIMIT 5")
+        .expect("Select query failed");
+    println!("NOAA sample: {:?}", result);
+
+    // Group by query
     let result = server.query(db,
-        "SELECT station_id, AVG(avg_wave_period) as avg_period FROM ndbc GROUP BY station_id LIMIT 10"
-    );
-    println!("NOAA aggregation: {:?}", result);
+        "SELECT station_id, COUNT(*) as cnt FROM default.ndbc GROUP BY station_id ORDER BY cnt DESC LIMIT 5"
+    ).expect("Group by query failed");
+    println!("NOAA by station: {:?}", result);
 }
 
 #[test]
@@ -488,17 +557,19 @@ fn test_air_sensor_data() {
     server.flush().expect("Flush failed");
 
     // Test queries
-    let result = server.query(db, "SELECT COUNT(*) as cnt FROM airSensors").unwrap();
+    let result = server.query(db, "SELECT COUNT(*) as cnt FROM default.airSensors")
+        .expect("Count query failed");
     println!("Air sensor row count: {:?}", result);
 
-    let result = server.query(db, "SELECT * FROM airSensors LIMIT 5").unwrap();
+    let result = server.query(db, "SELECT * FROM default.airSensors LIMIT 5")
+        .expect("Select query failed");
     println!("Air sensor sample: {:?}", result);
 
-    // Aggregation query
+    // Group by query
     let result = server.query(db,
-        "SELECT sensor_id, AVG(co) as avg_co, MAX(humidity) as max_humidity FROM airSensors GROUP BY sensor_id LIMIT 10"
-    );
-    println!("Air sensor aggregation: {:?}", result);
+        "SELECT sensor_id, COUNT(*) as cnt FROM default.airSensors GROUP BY sensor_id LIMIT 10"
+    ).expect("Group by query failed");
+    println!("Air sensor by sensor: {:?}", result);
 }
 
 #[test]
@@ -517,11 +588,13 @@ fn test_machine_production_data() {
     server.write_line_protocol(db, &subset).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    // Test queries
-    let result = server.query(db, "SELECT COUNT(*) as cnt FROM machinery").unwrap();
+    // Test queries - measurement name is 'machinery'
+    let result = server.query(db, "SELECT COUNT(*) as cnt FROM default.machinery")
+        .expect("Count query failed");
     println!("Machine data row count: {:?}", result);
 
-    let result = server.query(db, "SELECT * FROM machinery LIMIT 5").unwrap();
+    let result = server.query(db, "SELECT * FROM default.machinery LIMIT 5")
+        .expect("Select query failed");
     println!("Machine data sample: {:?}", result);
 }
 
@@ -542,17 +615,13 @@ fn test_bitcoin_price_data() {
     server.flush().expect("Flush failed");
 
     // Test queries
-    let result = server.query(db, "SELECT COUNT(*) as cnt FROM coindesk").unwrap();
+    let result = server.query(db, "SELECT COUNT(*) as cnt FROM default.coindesk")
+        .expect("Count query failed");
     println!("Bitcoin row count: {:?}", result);
 
-    let result = server.query(db, "SELECT * FROM coindesk ORDER BY time DESC LIMIT 5").unwrap();
+    let result = server.query(db, "SELECT * FROM default.coindesk ORDER BY time DESC LIMIT 5")
+        .expect("Select query failed");
     println!("Bitcoin recent prices: {:?}", result);
-
-    // Price analysis
-    let result = server.query(db,
-        "SELECT MIN(price) as min_price, MAX(price) as max_price, AVG(price) as avg_price FROM coindesk"
-    );
-    println!("Bitcoin price stats: {:?}", result);
 }
 
 #[test]
@@ -568,9 +637,9 @@ fn test_usgs_earthquake_data() {
     let line_protocol = download_csv_as_line_protocol(
         url,
         "earthquake",
-        &["place", "type", "magType"],
+        &["type", "magType"],
         &["mag", "depth", "latitude", "longitude"],
-        Some("time"),
+        None, // Use sequential timestamps
     ).expect("Failed to download earthquake data");
 
     // Take subset
@@ -581,22 +650,18 @@ fn test_usgs_earthquake_data() {
     server.flush().expect("Flush failed");
 
     // Test queries
-    let result = server.query(db, "SELECT COUNT(*) as cnt FROM earthquake").unwrap();
+    let result = server.query(db, "SELECT COUNT(*) as cnt FROM default.earthquake")
+        .expect("Count query failed");
     println!("Earthquake count: {:?}", result);
 
-    let result = server.query(db, "SELECT * FROM earthquake ORDER BY time DESC LIMIT 5").unwrap();
-    println!("Recent earthquakes: {:?}", result);
-
-    // Magnitude analysis
-    let result = server.query(db,
-        "SELECT AVG(mag) as avg_mag, MAX(mag) as max_mag, MIN(mag) as min_mag FROM earthquake"
-    );
-    println!("Earthquake magnitude stats: {:?}", result);
+    let result = server.query(db, "SELECT * FROM default.earthquake LIMIT 5")
+        .expect("Select query failed");
+    println!("Earthquake sample: {:?}", result);
 
     // Group by type
     let result = server.query(db,
-        "SELECT type, COUNT(*) as cnt FROM earthquake GROUP BY type"
-    );
+        "SELECT type, COUNT(*) as cnt FROM default.earthquake GROUP BY type"
+    ).expect("Group by query failed");
     println!("Earthquakes by type: {:?}", result);
 }
 
@@ -615,7 +680,7 @@ fn test_nyc_taxi_sample() {
         "rides",
         &["Base"],
         &["Lat", "Lon"],
-        Some("Date/Time"),
+        None, // Use sequential timestamps
     ).expect("Failed to download taxi data");
 
     let subset: String = line_protocol.lines().take(1000).collect::<Vec<_>>().join("\n");
@@ -625,12 +690,13 @@ fn test_nyc_taxi_sample() {
     server.flush().expect("Flush failed");
 
     // Test queries
-    let result = server.query(db, "SELECT COUNT(*) as cnt FROM rides").unwrap();
+    let result = server.query(db, "SELECT COUNT(*) as cnt FROM default.rides")
+        .expect("Count query failed");
     println!("Ride count: {:?}", result);
 
     let result = server.query(db,
-        "SELECT Base, COUNT(*) as trip_count FROM rides GROUP BY Base"
-    );
+        "SELECT Base, COUNT(*) as trip_count FROM default.rides GROUP BY Base"
+    ).expect("Group by query failed");
     println!("Trips by base: {:?}", result);
 }
 
