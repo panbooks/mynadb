@@ -6,11 +6,11 @@ use super::identity::{NodeId, NodeInfo, NodeState};
 use super::registration::NodeRegistration;
 use crate::cluster::coordinator::Coordinator;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use parking_lot::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -78,7 +78,9 @@ impl HealthReport {
     pub fn new(node_id: NodeId, checks: Vec<HealthCheck>) -> Self {
         let status = checks.iter().fold(HealthStatus::Healthy, |acc, check| {
             match (acc, check.status) {
-                (HealthStatus::Unhealthy, _) | (_, HealthStatus::Unhealthy) => HealthStatus::Unhealthy,
+                (HealthStatus::Unhealthy, _) | (_, HealthStatus::Unhealthy) => {
+                    HealthStatus::Unhealthy
+                }
                 (HealthStatus::Degraded, _) | (_, HealthStatus::Degraded) => HealthStatus::Degraded,
                 (HealthStatus::Unknown, _) | (_, HealthStatus::Unknown) => HealthStatus::Unknown,
                 _ => HealthStatus::Healthy,
@@ -187,8 +189,16 @@ impl HealthChecker {
         let coord_connected = self.coordinator.is_connected().await;
         results.push(HealthCheck {
             name: "coordinator".to_string(),
-            status: if coord_connected { HealthStatus::Healthy } else { HealthStatus::Unhealthy },
-            message: if coord_connected { None } else { Some("Coordinator not connected".to_string()) },
+            status: if coord_connected {
+                HealthStatus::Healthy
+            } else {
+                HealthStatus::Unhealthy
+            },
+            message: if coord_connected {
+                None
+            } else {
+                Some("Coordinator not connected".to_string())
+            },
             checked_at: Utc::now(),
             duration_ms: coord_start.elapsed().as_millis() as u64,
         });
@@ -221,7 +231,8 @@ impl HealthChecker {
                 timer.tick().await;
 
                 let node_id = registration.node_id();
-                let check_names: Vec<String> = checks.read().iter().map(|(n, _)| n.clone()).collect();
+                let check_names: Vec<String> =
+                    checks.read().iter().map(|(n, _)| n.clone()).collect();
 
                 let mut results = Vec::new();
 
@@ -245,8 +256,16 @@ impl HealthChecker {
                 let coord_connected = coordinator.is_connected().await;
                 results.push(HealthCheck {
                     name: "coordinator".to_string(),
-                    status: if coord_connected { HealthStatus::Healthy } else { HealthStatus::Unhealthy },
-                    message: if coord_connected { None } else { Some("Coordinator not connected".to_string()) },
+                    status: if coord_connected {
+                        HealthStatus::Healthy
+                    } else {
+                        HealthStatus::Unhealthy
+                    },
+                    message: if coord_connected {
+                        None
+                    } else {
+                        Some("Coordinator not connected".to_string())
+                    },
                     checked_at: Utc::now(),
                     duration_ms: coord_start.elapsed().as_millis() as u64,
                 });
@@ -322,18 +341,21 @@ impl HealthChecker {
         let health = self.node_health.read();
         let now = Utc::now();
 
-        health.iter().map(|(id, h)| {
-            let status = if now - h.last_seen > self.unhealthy_threshold {
-                HealthStatus::Unhealthy
-            } else if h.state == NodeState::Draining {
-                HealthStatus::Degraded
-            } else if h.state == NodeState::Active {
-                HealthStatus::Healthy
-            } else {
-                HealthStatus::Unknown
-            };
-            (id.clone(), status)
-        }).collect()
+        health
+            .iter()
+            .map(|(id, h)| {
+                let status = if now - h.last_seen > self.unhealthy_threshold {
+                    HealthStatus::Unhealthy
+                } else if h.state == NodeState::Draining {
+                    HealthStatus::Degraded
+                } else if h.state == NodeState::Active {
+                    HealthStatus::Healthy
+                } else {
+                    HealthStatus::Unknown
+                };
+                (id.clone(), status)
+            })
+            .collect()
     }
 }
 

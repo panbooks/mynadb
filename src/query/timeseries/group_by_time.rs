@@ -331,10 +331,7 @@ impl GroupByTimeTransformer {
         result = last_pattern
             .replace_all(&result, |caps: &regex::Captures| {
                 let arg = caps.get(1).unwrap().as_str();
-                format!(
-                    "last_value({}, {}) as last_{}",
-                    arg, self.time_column, arg
-                )
+                format!("last_value({}, {}) as last_{}", arg, self.time_column, arg)
             })
             .to_string();
 
@@ -528,7 +525,9 @@ mod tests {
         let transformer = GroupByTimeTransformer::new();
 
         let result = transformer
-            .transform("SELECT mean(usage) FROM cpu WHERE time >= 1704067200000000000 GROUP BY time(5m)")
+            .transform(
+                "SELECT mean(usage) FROM cpu WHERE time >= 1704067200000000000 GROUP BY time(5m)",
+            )
             .unwrap();
 
         assert!(result.was_transformed);

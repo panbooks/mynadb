@@ -2,12 +2,12 @@
 //!
 //! Exports metrics about cluster health, coordination, and performance.
 
+use parking_lot::RwLock;
 use prometheus::{
-    Counter, CounterVec, Gauge, GaugeVec, Histogram, HistogramOpts, HistogramVec,
-    IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+    Counter, CounterVec, Gauge, GaugeVec, Histogram, HistogramOpts, HistogramVec, IntCounter,
+    IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
 };
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 /// Cluster metrics collection
 pub struct ClusterMetrics {
@@ -74,28 +74,33 @@ impl ClusterMetrics {
         let nodes_total = IntGauge::new(
             "mynadb_cluster_nodes_total",
             "Total number of nodes registered in the cluster",
-        ).unwrap();
+        )
+        .unwrap();
 
         let nodes_healthy = IntGauge::new(
             "mynadb_cluster_nodes_healthy",
             "Number of healthy nodes in the cluster",
-        ).unwrap();
+        )
+        .unwrap();
 
         let is_leader = IntGauge::new(
             "mynadb_cluster_is_leader",
             "Whether this node is the compaction leader (1 = leader, 0 = follower)",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Election metrics
         let leader_elections_total = IntCounter::new(
             "mynadb_cluster_leader_elections_total",
             "Total number of leader elections this node has won",
-        ).unwrap();
+        )
+        .unwrap();
 
         let leader_time_seconds = Counter::new(
             "mynadb_cluster_leader_time_seconds",
             "Total time this node has been the leader (seconds)",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Lock metrics
         let lock_acquisitions_total = IntCounterVec::new(
@@ -104,31 +109,37 @@ impl ClusterMetrics {
                 "Total lock acquisition attempts by result",
             ),
             &["result"], // success, failure, timeout
-        ).unwrap();
+        )
+        .unwrap();
 
         let lock_wait_seconds = HistogramVec::new(
             HistogramOpts::new(
                 "mynadb_cluster_lock_wait_seconds",
                 "Time spent waiting for locks",
-            ).buckets(vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]),
+            )
+            .buckets(vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]),
             &["lock_type"], // write, compaction, metadata
-        ).unwrap();
+        )
+        .unwrap();
 
         let locks_held = IntGauge::new(
             "mynadb_cluster_locks_held",
             "Number of distributed locks currently held by this node",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Cache invalidation metrics
         let cache_invalidations_sent_total = IntCounter::new(
             "mynadb_cluster_cache_invalidations_sent_total",
             "Total cache invalidation messages sent",
-        ).unwrap();
+        )
+        .unwrap();
 
         let cache_invalidations_received_total = IntCounter::new(
             "mynadb_cluster_cache_invalidations_received_total",
             "Total cache invalidation messages received",
-        ).unwrap();
+        )
+        .unwrap();
 
         let cache_invalidations_by_reason = IntCounterVec::new(
             Opts::new(
@@ -136,21 +147,25 @@ impl ClusterMetrics {
                 "Cache invalidations by reason",
             ),
             &["reason"], // new_file, file_deleted, compacted, etc.
-        ).unwrap();
+        )
+        .unwrap();
 
         // Coordinator metrics
         let coordinator_connected = IntGauge::new(
             "mynadb_cluster_coordinator_connected",
             "Whether the coordinator (etcd) is connected (1 = connected, 0 = disconnected)",
-        ).unwrap();
+        )
+        .unwrap();
 
         let coordinator_operation_seconds = HistogramVec::new(
             HistogramOpts::new(
                 "mynadb_cluster_coordinator_operation_seconds",
                 "Coordinator operation latency",
-            ).buckets(vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+            )
+            .buckets(vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
             &["operation"], // get, put, delete, lock, unlock, watch
-        ).unwrap();
+        )
+        .unwrap();
 
         let coordinator_errors_total = IntCounterVec::new(
             Opts::new(
@@ -158,18 +173,21 @@ impl ClusterMetrics {
                 "Total coordinator errors by operation",
             ),
             &["operation"],
-        ).unwrap();
+        )
+        .unwrap();
 
         // Write coordination metrics
         let writes_coordinated_total = IntCounter::new(
             "mynadb_cluster_writes_coordinated_total",
             "Total write operations coordinated with locks",
-        ).unwrap();
+        )
+        .unwrap();
 
         let write_lock_contention_total = IntCounter::new(
             "mynadb_cluster_write_lock_contention_total",
             "Number of times a write had to wait for a lock",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Health check metrics
         let health_checks_total = IntCounterVec::new(
@@ -178,12 +196,14 @@ impl ClusterMetrics {
                 "Total health checks by result",
             ),
             &["status"], // healthy, degraded, unhealthy
-        ).unwrap();
+        )
+        .unwrap();
 
         let last_health_check_timestamp = IntGauge::new(
             "mynadb_cluster_last_health_check_timestamp",
             "Unix timestamp of the last health check",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Register all metrics
         let metrics = Self {
@@ -218,21 +238,49 @@ impl ClusterMetrics {
         let _ = self.registry.register(Box::new(self.nodes_total.clone()));
         let _ = self.registry.register(Box::new(self.nodes_healthy.clone()));
         let _ = self.registry.register(Box::new(self.is_leader.clone()));
-        let _ = self.registry.register(Box::new(self.leader_elections_total.clone()));
-        let _ = self.registry.register(Box::new(self.leader_time_seconds.clone()));
-        let _ = self.registry.register(Box::new(self.lock_acquisitions_total.clone()));
-        let _ = self.registry.register(Box::new(self.lock_wait_seconds.clone()));
+        let _ = self
+            .registry
+            .register(Box::new(self.leader_elections_total.clone()));
+        let _ = self
+            .registry
+            .register(Box::new(self.leader_time_seconds.clone()));
+        let _ = self
+            .registry
+            .register(Box::new(self.lock_acquisitions_total.clone()));
+        let _ = self
+            .registry
+            .register(Box::new(self.lock_wait_seconds.clone()));
         let _ = self.registry.register(Box::new(self.locks_held.clone()));
-        let _ = self.registry.register(Box::new(self.cache_invalidations_sent_total.clone()));
-        let _ = self.registry.register(Box::new(self.cache_invalidations_received_total.clone()));
-        let _ = self.registry.register(Box::new(self.cache_invalidations_by_reason.clone()));
-        let _ = self.registry.register(Box::new(self.coordinator_connected.clone()));
-        let _ = self.registry.register(Box::new(self.coordinator_operation_seconds.clone()));
-        let _ = self.registry.register(Box::new(self.coordinator_errors_total.clone()));
-        let _ = self.registry.register(Box::new(self.writes_coordinated_total.clone()));
-        let _ = self.registry.register(Box::new(self.write_lock_contention_total.clone()));
-        let _ = self.registry.register(Box::new(self.health_checks_total.clone()));
-        let _ = self.registry.register(Box::new(self.last_health_check_timestamp.clone()));
+        let _ = self
+            .registry
+            .register(Box::new(self.cache_invalidations_sent_total.clone()));
+        let _ = self
+            .registry
+            .register(Box::new(self.cache_invalidations_received_total.clone()));
+        let _ = self
+            .registry
+            .register(Box::new(self.cache_invalidations_by_reason.clone()));
+        let _ = self
+            .registry
+            .register(Box::new(self.coordinator_connected.clone()));
+        let _ = self
+            .registry
+            .register(Box::new(self.coordinator_operation_seconds.clone()));
+        let _ = self
+            .registry
+            .register(Box::new(self.coordinator_errors_total.clone()));
+        let _ = self
+            .registry
+            .register(Box::new(self.writes_coordinated_total.clone()));
+        let _ = self
+            .registry
+            .register(Box::new(self.write_lock_contention_total.clone()));
+        let _ = self
+            .registry
+            .register(Box::new(self.health_checks_total.clone()));
+        let _ = self
+            .registry
+            .register(Box::new(self.last_health_check_timestamp.clone()));
     }
 
     /// Get the registry
@@ -253,8 +301,12 @@ impl ClusterMetrics {
     /// Record a lock acquisition attempt
     pub fn record_lock_acquisition(&self, success: bool, wait_time_secs: f64, lock_type: &str) {
         let result = if success { "success" } else { "failure" };
-        self.lock_acquisitions_total.with_label_values(&[result]).inc();
-        self.lock_wait_seconds.with_label_values(&[lock_type]).observe(wait_time_secs);
+        self.lock_acquisitions_total
+            .with_label_values(&[result])
+            .inc();
+        self.lock_wait_seconds
+            .with_label_values(&[lock_type])
+            .observe(wait_time_secs);
     }
 
     /// Record a cache invalidation
@@ -264,21 +316,28 @@ impl ClusterMetrics {
         } else {
             self.cache_invalidations_received_total.inc();
         }
-        self.cache_invalidations_by_reason.with_label_values(&[reason]).inc();
+        self.cache_invalidations_by_reason
+            .with_label_values(&[reason])
+            .inc();
     }
 
     /// Record a coordinator operation
     pub fn record_coordinator_operation(&self, operation: &str, duration_secs: f64, success: bool) {
-        self.coordinator_operation_seconds.with_label_values(&[operation]).observe(duration_secs);
+        self.coordinator_operation_seconds
+            .with_label_values(&[operation])
+            .observe(duration_secs);
         if !success {
-            self.coordinator_errors_total.with_label_values(&[operation]).inc();
+            self.coordinator_errors_total
+                .with_label_values(&[operation])
+                .inc();
         }
     }
 
     /// Record a health check
     pub fn record_health_check(&self, status: &str) {
         self.health_checks_total.with_label_values(&[status]).inc();
-        self.last_health_check_timestamp.set(chrono::Utc::now().timestamp());
+        self.last_health_check_timestamp
+            .set(chrono::Utc::now().timestamp());
     }
 
     /// Update leader status
@@ -297,7 +356,8 @@ impl ClusterMetrics {
 
     /// Update coordinator connection status
     pub fn set_coordinator_connected(&self, connected: bool) {
-        self.coordinator_connected.set(if connected { 1 } else { 0 });
+        self.coordinator_connected
+            .set(if connected { 1 } else { 0 });
     }
 }
 

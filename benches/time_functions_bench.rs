@@ -57,9 +57,7 @@ fn bench_fill_option_parsing(c: &mut Criterion) {
     ];
 
     for (name, option) in options {
-        group.bench_function(name, |b| {
-            b.iter(|| FillOption::from_str(black_box(option)))
-        });
+        group.bench_function(name, |b| b.iter(|| FillOption::from_str(black_box(option))));
     }
 
     group.finish();
@@ -79,16 +77,20 @@ fn bench_time_bucket_raw(c: &mut Criterion) {
             .collect();
 
         group.throughput(Throughput::Elements(*size as u64));
-        group.bench_with_input(BenchmarkId::new("bucket_1min", size), &timestamps, |b, ts| {
-            b.iter(|| {
-                // Simulate time_bucket: floor((time - offset) / interval) * interval + offset
-                let offset = 0i64;
-                let _bucketed: Vec<i64> = ts
-                    .iter()
-                    .map(|&t| ((t - offset) / interval_1min) * interval_1min + offset)
-                    .collect();
-            })
-        });
+        group.bench_with_input(
+            BenchmarkId::new("bucket_1min", size),
+            &timestamps,
+            |b, ts| {
+                b.iter(|| {
+                    // Simulate time_bucket: floor((time - offset) / interval) * interval + offset
+                    let offset = 0i64;
+                    let _bucketed: Vec<i64> = ts
+                        .iter()
+                        .map(|&t| ((t - offset) / interval_1min) * interval_1min + offset)
+                        .collect();
+                })
+            },
+        );
     }
 
     group.finish();
@@ -238,9 +240,7 @@ fn bench_interval_parsing_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("interval_parsing_throughput");
 
     // Generate many interval strings
-    let intervals: Vec<String> = (0..10000)
-        .map(|i| format!("{}s", i % 3600))
-        .collect();
+    let intervals: Vec<String> = (0..10000).map(|i| format!("{}s", i % 3600)).collect();
 
     group.throughput(Throughput::Elements(intervals.len() as u64));
     group.bench_function("parse_10000_intervals", |b| {
@@ -261,8 +261,8 @@ fn bench_edge_case_intervals(c: &mut Criterion) {
     let edge_intervals = [
         // Very large values
         ("large_seconds", "999999999s"),
-        ("large_hours", "87600h"),    // 10 years in hours
-        ("large_days", "36500d"),     // 100 years in days
+        ("large_hours", "87600h"), // 10 years in hours
+        ("large_days", "36500d"),  // 100 years in days
         // Very small values
         ("one_nanosecond", "1ns"),
         ("one_microsecond", "1us"),
@@ -341,9 +341,7 @@ fn bench_edge_case_fill_options(c: &mut Criterion) {
     ];
 
     for (name, fill) in edge_fills {
-        group.bench_function(name, |b| {
-            b.iter(|| FillOption::from_str(black_box(fill)))
-        });
+        group.bench_function(name, |b| b.iter(|| FillOption::from_str(black_box(fill))));
     }
 
     group.finish();
@@ -364,9 +362,7 @@ fn bench_invalid_fill_options(c: &mut Criterion) {
     ];
 
     for (name, fill) in invalid_fills {
-        group.bench_function(name, |b| {
-            b.iter(|| FillOption::from_str(black_box(fill)))
-        });
+        group.bench_function(name, |b| b.iter(|| FillOption::from_str(black_box(fill))));
     }
 
     group.finish();
@@ -646,19 +642,15 @@ fn bench_out_of_order_timestamps(c: &mut Criterion) {
     ];
 
     for (name, timestamps) in scenarios {
-        group.bench_with_input(
-            BenchmarkId::new("order", name),
-            &timestamps,
-            |b, ts| {
-                b.iter(|| {
-                    let offset = 0i64;
-                    let _bucketed: Vec<i64> = ts
-                        .iter()
-                        .map(|&t| ((t - offset) / interval) * interval + offset)
-                        .collect();
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("order", name), &timestamps, |b, ts| {
+            b.iter(|| {
+                let offset = 0i64;
+                let _bucketed: Vec<i64> = ts
+                    .iter()
+                    .map(|&t| ((t - offset) / interval) * interval + offset)
+                    .collect();
+            })
+        });
     }
 
     group.finish();

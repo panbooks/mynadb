@@ -74,9 +74,7 @@ impl TestServer {
         let binary_path = if binary_path.exists() {
             binary_path
         } else {
-            std::env::current_dir()
-                .unwrap()
-                .join("target/debug/mynadb")
+            std::env::current_dir().unwrap().join("target/debug/mynadb")
         };
 
         // Start server directly and capture output for debugging
@@ -433,16 +431,8 @@ fn test_min_max_correctness() {
         .query_scalar(&db, "SELECT MAX(value) FROM cpu")
         .expect("MAX query failed");
 
-    assert!(
-        (min - 1.0).abs() < 0.0001,
-        "MIN should be 1.0, got {}",
-        min
-    );
-    assert!(
-        (max - 9.0).abs() < 0.0001,
-        "MAX should be 9.0, got {}",
-        max
-    );
+    assert!((min - 1.0).abs() < 0.0001, "MIN should be 1.0, got {}", min);
+    assert!((max - 9.0).abs() < 0.0001, "MAX should be 9.0, got {}", max);
 }
 
 // ============================================================================
@@ -462,10 +452,18 @@ fn test_single_row_aggregation() {
         .expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM cpu").unwrap();
-    let avg = server.query_scalar(&db, "SELECT AVG(value) FROM cpu").unwrap();
-    let min = server.query_scalar(&db, "SELECT MIN(value) FROM cpu").unwrap();
-    let max = server.query_scalar(&db, "SELECT MAX(value) FROM cpu").unwrap();
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM cpu")
+        .unwrap();
+    let avg = server
+        .query_scalar(&db, "SELECT AVG(value) FROM cpu")
+        .unwrap();
+    let min = server
+        .query_scalar(&db, "SELECT MIN(value) FROM cpu")
+        .unwrap();
+    let max = server
+        .query_scalar(&db, "SELECT MAX(value) FROM cpu")
+        .unwrap();
 
     assert!((sum - 42.0).abs() < 0.0001, "SUM of single row failed");
     assert!((avg - 42.0).abs() < 0.0001, "AVG of single row failed");
@@ -538,8 +536,8 @@ fn test_out_of_order_writes() {
          cpu value=1.0 {}\n\
          cpu value=2.0 {}",
         base + 2_000_000_000, // t3
-        base,                  // t1
-        base + 1_000_000_000   // t2
+        base,                 // t1
+        base + 1_000_000_000  // t2
     );
 
     server.write(&db, &data).expect("Write failed");
@@ -681,7 +679,11 @@ fn test_write_read_roundtrip() {
     for i in 0..100 {
         let value = (i as f64) * 1.5;
         expected_sum += value;
-        data.push_str(&format!("cpu value={} {}\n", value, now + i * 1_000_000_000));
+        data.push_str(&format!(
+            "cpu value={} {}\n",
+            value,
+            now + i * 1_000_000_000
+        ));
     }
 
     server.write(&db, &data).expect("Write failed");
@@ -803,7 +805,10 @@ fn test_group_by_tag() {
 
     // Query with GROUP BY
     let result = server
-        .query(&db, "SELECT host, SUM(value) FROM cpu GROUP BY host ORDER BY host")
+        .query(
+            &db,
+            "SELECT host, SUM(value) FROM cpu GROUP BY host ORDER BY host",
+        )
         .expect("Query failed");
 
     // Result format: [{"host": "a", "sum(...)": 40.0}, {"host": "b", "sum(...)": 60.0}]
@@ -812,7 +817,10 @@ fn test_group_by_tag() {
 
     // Host 'a': 10 + 30 = 40
     let row_a = results[0].as_object().expect("Expected object");
-    let host_a = row_a.get("host").and_then(|v| v.as_str()).expect("Expected host");
+    let host_a = row_a
+        .get("host")
+        .and_then(|v| v.as_str())
+        .expect("Expected host");
     assert_eq!(host_a, "a");
 
     // Find the SUM column (name may vary)
@@ -822,11 +830,18 @@ fn test_group_by_tag() {
         .map(|(_, v)| v.as_f64().unwrap_or(0.0))
         .next()
         .expect("Expected sum value");
-    assert!((sum_a - 40.0).abs() < 0.0001, "Host a sum should be 40.0, got {}", sum_a);
+    assert!(
+        (sum_a - 40.0).abs() < 0.0001,
+        "Host a sum should be 40.0, got {}",
+        sum_a
+    );
 
     // Host 'b': 20 + 40 = 60
     let row_b = results[1].as_object().expect("Expected object");
-    let host_b = row_b.get("host").and_then(|v| v.as_str()).expect("Expected host");
+    let host_b = row_b
+        .get("host")
+        .and_then(|v| v.as_str())
+        .expect("Expected host");
     assert_eq!(host_b, "b");
 
     let sum_b: f64 = row_b
@@ -835,7 +850,11 @@ fn test_group_by_tag() {
         .map(|(_, v)| v.as_f64().unwrap_or(0.0))
         .next()
         .expect("Expected sum value");
-    assert!((sum_b - 60.0).abs() < 0.0001, "Host b sum should be 60.0, got {}", sum_b);
+    assert!(
+        (sum_b - 60.0).abs() < 0.0001,
+        "Host b sum should be 60.0, got {}",
+        sum_b
+    );
 }
 
 // ============================================================================
@@ -861,8 +880,12 @@ fn test_zero_values() {
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM cpu").unwrap();
-    let avg = server.query_scalar(&db, "SELECT AVG(value) FROM cpu").unwrap();
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM cpu")
+        .unwrap();
+    let avg = server
+        .query_scalar(&db, "SELECT AVG(value) FROM cpu")
+        .unwrap();
     let count = server.query_count(&db, "SELECT COUNT(*) FROM cpu").unwrap();
 
     assert!((sum - 0.0).abs() < 0.0001, "SUM of zeros should be 0");
@@ -890,7 +913,9 @@ fn test_mixed_positive_negative_cancel() {
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM cpu").unwrap();
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM cpu")
+        .unwrap();
     assert!(
         sum.abs() < 0.0001,
         "SUM should be 0 (100 - 50 - 50), got {}",
@@ -916,7 +941,9 @@ fn test_precision_decimals() {
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM cpu").unwrap();
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM cpu")
+        .unwrap();
     // 0.1 + 0.2 should be close to 0.3 (floating point)
     assert!(
         (sum - 0.3).abs() < 0.0001,
@@ -942,7 +969,9 @@ fn test_scientific_notation_values() {
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM cpu").unwrap();
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM cpu")
+        .unwrap();
     let expected = 4.0e10;
     let tolerance = expected * 1e-10;
     assert!(
@@ -977,7 +1006,9 @@ fn test_integer_fields() {
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(count) FROM cpu").unwrap();
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(count) FROM cpu")
+        .unwrap();
     assert!(
         (sum - 600.0).abs() < 0.0001,
         "Integer SUM should be 600, got {}",
@@ -1005,7 +1036,9 @@ fn test_large_integer_values() {
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(count) FROM cpu").unwrap();
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(count) FROM cpu")
+        .unwrap();
     let expected = (2 * large) as f64;
     let tolerance = expected * 1e-10;
     assert!(
@@ -1035,7 +1068,9 @@ fn test_negative_integers() {
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(count) FROM cpu").unwrap();
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(count) FROM cpu")
+        .unwrap();
     assert!(
         (sum - (-75.0)).abs() < 0.0001,
         "Negative integer SUM should be -75, got {}",
@@ -1098,7 +1133,9 @@ fn test_string_fields() {
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM logs").unwrap();
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM logs")
+        .unwrap();
     assert_eq!(count, 2, "Should have 2 rows");
 
     // Filter by string
@@ -1132,7 +1169,9 @@ fn test_multiple_field_types() {
     let cpu = server.query_scalar(&db, "SELECT cpu FROM system").unwrap();
     assert!((cpu - 75.5).abs() < 0.0001, "CPU should be 75.5");
 
-    let memory = server.query_scalar(&db, "SELECT memory FROM system").unwrap();
+    let memory = server
+        .query_scalar(&db, "SELECT memory FROM system")
+        .unwrap();
     assert!((memory - 8192.0).abs() < 0.0001, "Memory should be 8192");
 }
 
@@ -1197,10 +1236,7 @@ fn test_hyphen_in_tag_values() {
     let db = server.unique_db();
 
     let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
-    let data = format!(
-        "cpu,host=server-01,region=us-west-2 value=1.0 {}",
-        now
-    );
+    let data = format!("cpu,host=server-01,region=us-west-2 value=1.0 {}", now);
 
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
@@ -1274,7 +1310,10 @@ fn test_millisecond_precision_timestamps() {
     server.flush().expect("Flush failed");
 
     let count = server.query_count(&db, "SELECT COUNT(*) FROM cpu").unwrap();
-    assert_eq!(count, 3, "Millisecond-precision timestamps should be distinct");
+    assert_eq!(
+        count, 3,
+        "Millisecond-precision timestamps should be distinct"
+    );
 }
 
 #[test]
@@ -1298,7 +1337,10 @@ fn test_nanosecond_precision_timestamps() {
     server.flush().expect("Flush failed");
 
     let count = server.query_count(&db, "SELECT COUNT(*) FROM cpu").unwrap();
-    assert_eq!(count, 3, "Nanosecond-precision timestamps should be distinct");
+    assert_eq!(
+        count, 3,
+        "Nanosecond-precision timestamps should be distinct"
+    );
 }
 
 // ============================================================================
@@ -1368,7 +1410,10 @@ fn test_between_filter() {
     server.flush().expect("Flush failed");
 
     let count = server
-        .query_count(&db, "SELECT COUNT(*) FROM cpu WHERE value BETWEEN 20 AND 40")
+        .query_count(
+            &db,
+            "SELECT COUNT(*) FROM cpu WHERE value BETWEEN 20 AND 40",
+        )
         .unwrap();
     assert_eq!(count, 3, "BETWEEN 20 AND 40 should match 3 rows");
 }
@@ -1509,7 +1554,9 @@ fn test_order_by_asc_desc() {
     server.flush().expect("Flush failed");
 
     // Test MIN matches ORDER BY ASC LIMIT 1
-    let min = server.query_scalar(&db, "SELECT MIN(value) FROM cpu").unwrap();
+    let min = server
+        .query_scalar(&db, "SELECT MIN(value) FROM cpu")
+        .unwrap();
     let first_asc = server
         .query_scalar(&db, "SELECT value FROM cpu ORDER BY value ASC LIMIT 1")
         .unwrap();
@@ -1519,7 +1566,9 @@ fn test_order_by_asc_desc() {
     );
 
     // Test MAX matches ORDER BY DESC LIMIT 1
-    let max = server.query_scalar(&db, "SELECT MAX(value) FROM cpu").unwrap();
+    let max = server
+        .query_scalar(&db, "SELECT MAX(value) FROM cpu")
+        .unwrap();
     let first_desc = server
         .query_scalar(&db, "SELECT value FROM cpu ORDER BY value DESC LIMIT 1")
         .unwrap();
@@ -1648,7 +1697,9 @@ fn test_large_batch_write() {
     let count = server.query_count(&db, "SELECT COUNT(*) FROM cpu").unwrap();
     assert_eq!(count, batch_size as i64, "Should have {} rows", batch_size);
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM cpu").unwrap();
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM cpu")
+        .unwrap();
     assert!(
         (sum - expected_sum).abs() < 0.01,
         "SUM should be {}, got {}",
@@ -1692,7 +1743,9 @@ fn test_multiple_writes_accumulate() {
     let count = server.query_count(&db, "SELECT COUNT(*) FROM cpu").unwrap();
     assert_eq!(count, 5, "All writes should accumulate");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM cpu").unwrap();
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM cpu")
+        .unwrap();
     assert!(
         (sum - 15.0).abs() < 0.0001,
         "SUM should be 15.0 (1+2+3+4+5)"
@@ -1719,7 +1772,9 @@ fn test_many_fields() {
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM system").unwrap();
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM system")
+        .unwrap();
     assert_eq!(count, 1, "Should have 1 row");
 
     // Query individual fields
@@ -1897,5 +1952,7 @@ fn test_time_range_filter() {
 #[test]
 #[ignore]
 fn run_all_correctness_tests() {
-    println!("Run correctness tests with: cargo test --test correctness -- --ignored --test-threads=1");
+    println!(
+        "Run correctness tests with: cargo test --test correctness -- --ignored --test-threads=1"
+    );
 }

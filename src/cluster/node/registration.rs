@@ -4,9 +4,9 @@
 
 use super::identity::{NodeId, NodeInfo, NodeState};
 use crate::cluster::coordinator::Coordinator;
+use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
-use parking_lot::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
@@ -68,9 +68,7 @@ impl NodeRegistration {
 
         // Register with a TTL so the key expires if the node dies
         let ttl = self.heartbeat_interval * 3; // 3x heartbeat interval
-        let lease_id = self.coordinator
-            .put_with_ttl(&key, &value, ttl)
-            .await?;
+        let lease_id = self.coordinator.put_with_ttl(&key, &value, ttl).await?;
 
         *self.lease_id.write() = Some(lease_id);
 

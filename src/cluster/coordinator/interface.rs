@@ -63,7 +63,10 @@ pub struct Subscription {
 
 impl Subscription {
     /// Create a new subscription
-    pub fn new(receiver: mpsc::Receiver<WatchEvent>, handle: Option<tokio::task::JoinHandle<()>>) -> Self {
+    pub fn new(
+        receiver: mpsc::Receiver<WatchEvent>,
+        handle: Option<tokio::task::JoinHandle<()>>,
+    ) -> Self {
         Self {
             receiver,
             _handle: handle,
@@ -151,7 +154,13 @@ pub trait Coordinator: Send + Sync {
     /// Acquire a lock (blocking with timeout)
     ///
     /// Waits up to `timeout` for the lock to become available.
-    async fn lock(&self, key: &str, holder: &str, ttl: Duration, timeout: Duration) -> Result<bool, String>;
+    async fn lock(
+        &self,
+        key: &str,
+        holder: &str,
+        ttl: Duration,
+        timeout: Duration,
+    ) -> Result<bool, String>;
 
     /// Release a lock
     ///
@@ -188,7 +197,12 @@ pub trait Coordinator: Send + Sync {
     ///
     /// Blocks until leadership is acquired or an error occurs.
     /// Returns a lease ID that must be kept alive.
-    async fn campaign(&self, election_key: &str, node_id: &str, ttl: Duration) -> Result<i64, String>;
+    async fn campaign(
+        &self,
+        election_key: &str,
+        node_id: &str,
+        ttl: Duration,
+    ) -> Result<i64, String>;
 
     /// Resign from leadership
     async fn resign(&self, election_key: &str, lease_id: i64) -> Result<(), String>;
@@ -210,8 +224,7 @@ pub trait CoordinatorExt: Coordinator {
     async fn get_string(&self, key: &str) -> Result<Option<String>, String> {
         match self.get(key).await? {
             Some(bytes) => {
-                let s = String::from_utf8(bytes)
-                    .map_err(|e| format!("Invalid UTF-8: {}", e))?;
+                let s = String::from_utf8(bytes).map_err(|e| format!("Invalid UTF-8: {}", e))?;
                 Ok(Some(s))
             }
             None => Ok(None),
@@ -224,7 +237,10 @@ pub trait CoordinatorExt: Coordinator {
     }
 
     /// Get a JSON value
-    async fn get_json<T: for<'de> Deserialize<'de> + Send>(&self, key: &str) -> Result<Option<T>, String> {
+    async fn get_json<T: for<'de> Deserialize<'de> + Send>(
+        &self,
+        key: &str,
+    ) -> Result<Option<T>, String> {
         match self.get(key).await? {
             Some(bytes) => {
                 let value: T = serde_json::from_slice(&bytes)
@@ -237,8 +253,8 @@ pub trait CoordinatorExt: Coordinator {
 
     /// Put a JSON value
     async fn put_json<T: Serialize + Sync>(&self, key: &str, value: &T) -> Result<(), String> {
-        let bytes = serde_json::to_vec(value)
-            .map_err(|e| format!("JSON serialize error: {}", e))?;
+        let bytes =
+            serde_json::to_vec(value).map_err(|e| format!("JSON serialize error: {}", e))?;
         self.put(key, &bytes).await
     }
 }

@@ -111,7 +111,8 @@ impl DistributedLock {
             return Ok(true);
         }
 
-        let acquired = self.coordinator
+        let acquired = self
+            .coordinator
             .try_lock(&self.key, &self.holder, self.options.ttl)
             .await?;
 
@@ -132,8 +133,14 @@ impl DistributedLock {
             return Ok(true);
         }
 
-        let acquired = self.coordinator
-            .lock(&self.key, &self.holder, self.options.ttl, self.options.timeout)
+        let acquired = self
+            .coordinator
+            .lock(
+                &self.key,
+                &self.holder,
+                self.options.ttl,
+                self.options.timeout,
+            )
             .await?;
 
         if acquired {
@@ -156,9 +163,7 @@ impl DistributedLock {
         // Stop renewal task
         self.stop_renewal();
 
-        let released = self.coordinator
-            .unlock(&self.key, &self.holder)
-            .await?;
+        let released = self.coordinator.unlock(&self.key, &self.holder).await?;
 
         if released {
             self.held.store(false, std::sync::atomic::Ordering::SeqCst);

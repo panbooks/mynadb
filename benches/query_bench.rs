@@ -29,9 +29,7 @@ fn generate_test_data(rows: usize, seed: u64) -> RecordBatch {
 
     let dates: Vec<i32> = (0..rows).map(|i| 19700 + (i as i32 % 30)).collect(); // days since epoch
 
-    let hosts: Vec<String> = (0..rows)
-        .map(|i| format!("server{:03}", i % 100))
-        .collect();
+    let hosts: Vec<String> = (0..rows).map(|i| format!("server{:03}", i % 100)).collect();
 
     let regions: Vec<String> = (0..rows)
         .map(|i| {
@@ -446,21 +444,17 @@ fn bench_query_repetition(c: &mut Criterion) {
     let sql = "SELECT region, AVG(cpu) FROM metrics WHERE cpu > 25 GROUP BY region";
 
     // Cold execution - create new context each time
-    group.bench_with_input(
-        BenchmarkId::new("execution", "cold"),
-        &batch,
-        |b, batch| {
-            b.iter(|| {
-                rt.block_on(async {
-                    let ctx = SessionContext::new();
-                    ctx.register_batch("metrics", batch.clone()).unwrap();
-                    let df = ctx.sql(sql).await.unwrap();
-                    let result = df.collect().await.unwrap();
-                    black_box(result);
-                })
+    group.bench_with_input(BenchmarkId::new("execution", "cold"), &batch, |b, batch| {
+        b.iter(|| {
+            rt.block_on(async {
+                let ctx = SessionContext::new();
+                ctx.register_batch("metrics", batch.clone()).unwrap();
+                let df = ctx.sql(sql).await.unwrap();
+                let result = df.collect().await.unwrap();
+                black_box(result);
             })
-        },
-    );
+        })
+    });
 
     // Warm execution - reuse pre-created context
     // Create context outside the benchmark loop
@@ -497,11 +491,20 @@ fn bench_edge_case_results(c: &mut Criterion) {
         // Single row result
         ("single_row", "SELECT * FROM metrics LIMIT 1"),
         // Last row only
-        ("offset_to_end", "SELECT * FROM metrics LIMIT 1 OFFSET 99999"),
+        (
+            "offset_to_end",
+            "SELECT * FROM metrics LIMIT 1 OFFSET 99999",
+        ),
         // Count of empty result
-        ("count_empty", "SELECT COUNT(*) FROM metrics WHERE cpu > 1000"),
+        (
+            "count_empty",
+            "SELECT COUNT(*) FROM metrics WHERE cpu > 1000",
+        ),
         // Aggregation on empty result
-        ("agg_empty", "SELECT SUM(cpu), AVG(cpu) FROM metrics WHERE cpu > 1000"),
+        (
+            "agg_empty",
+            "SELECT SUM(cpu), AVG(cpu) FROM metrics WHERE cpu > 1000",
+        ),
         // IN subquery with no matches
         (
             "in_subquery_empty",
@@ -551,10 +554,7 @@ fn bench_distinct(c: &mut Criterion) {
         // High cardinality DISTINCT (100000 timestamps)
         ("high_cardinality", "SELECT DISTINCT timestamp FROM metrics"),
         // Multi-column DISTINCT
-        (
-            "multi_column",
-            "SELECT DISTINCT host, region FROM metrics",
-        ),
+        ("multi_column", "SELECT DISTINCT host, region FROM metrics"),
         // DISTINCT with ORDER BY
         (
             "with_order_by",

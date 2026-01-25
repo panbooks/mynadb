@@ -254,7 +254,9 @@ impl DataCache {
         {
             let table_key = (catalog.to_string(), schema.to_string(), table.to_string());
             let mut tracker = self.cardinality_tracker.write();
-            let table_tracker = tracker.entry(table_key).or_insert_with(TableCardinalityTracker::new);
+            let table_tracker = tracker
+                .entry(table_key)
+                .or_insert_with(TableCardinalityTracker::new);
             for point in &points {
                 table_tracker.track_point(&point.tags);
             }
@@ -536,7 +538,10 @@ impl DataCache {
 
             // Get optimal tag sort order for this table (low cardinality first)
             let table_key = (catalog.clone(), schema.clone(), table.clone());
-            let tag_order = cardinality_info.get(&table_key).cloned().unwrap_or_default();
+            let tag_order = cardinality_info
+                .get(&table_key)
+                .cloned()
+                .unwrap_or_default();
 
             if !tag_order.is_empty() {
                 debug!(
@@ -556,12 +561,7 @@ impl DataCache {
             }
 
             match self.writer.write_batches_partitioned_with_sort_sync(
-                &catalog,
-                &schema,
-                &table,
-                date,
-                batches,
-                &tag_order,
+                &catalog, &schema, &table, date, batches, &tag_order,
             ) {
                 Ok(file_result) => {
                     debug!("Written to: {}", file_result.path);

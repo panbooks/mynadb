@@ -109,7 +109,10 @@ impl TestServer {
     }
 
     fn unique_db(&self) -> String {
-        format!("concurrencydb_{}", DB_COUNTER.fetch_add(1, Ordering::SeqCst))
+        format!(
+            "concurrencydb_{}",
+            DB_COUNTER.fetch_add(1, Ordering::SeqCst)
+        )
     }
 
     fn write(&self, db: &str, data: &str) -> Result<(), String> {
@@ -225,9 +228,7 @@ fn find_binary_path() -> std::path::PathBuf {
     if release.exists() {
         release
     } else {
-        std::env::current_dir()
-            .unwrap()
-            .join("target/debug/mynadb")
+        std::env::current_dir().unwrap().join("target/debug/mynadb")
     }
 }
 
@@ -291,7 +292,11 @@ fn test_concurrent_writes_single_table() {
 
         let handle = thread::spawn(move || {
             for i in 0..writes_per_thread {
-                let data = format!("concurrent,thread={} value={}", thread_id, thread_id * 1000 + i);
+                let data = format!(
+                    "concurrent,thread={} value={}",
+                    thread_id,
+                    thread_id * 1000 + i
+                );
                 match server.write(&db, &data) {
                     Ok(_) => {
                         total_writes.fetch_add(1, Ordering::SeqCst);
@@ -317,7 +322,9 @@ fn test_concurrent_writes_single_table() {
     let error_count = errors.load(Ordering::SeqCst);
     assert_eq!(error_count, 0, "Expected no write errors");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM concurrent").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM concurrent")
+        .expect("Count failed");
     let expected = (num_threads * writes_per_thread) as i64;
     assert_eq!(count, expected, "Expected {} rows, got {}", expected, count);
 }
@@ -366,7 +373,11 @@ fn test_concurrent_writes_multiple_tables() {
         let count = server
             .query_count(&db, &format!("SELECT COUNT(*) FROM {}", table_name))
             .expect(&format!("Count failed for {}", table_name));
-        assert_eq!(count, writes_per_thread as i64, "Table {} has wrong count", table_name);
+        assert_eq!(
+            count, writes_per_thread as i64,
+            "Table {} has wrong count",
+            table_name
+        );
     }
 }
 
@@ -402,7 +413,9 @@ fn test_concurrent_writes_no_duplicates() {
     server.flush().expect("Flush failed");
 
     // Verify count
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM nodups").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM nodups")
+        .expect("Count failed");
     let expected = (num_threads * writes_per_thread) as i64;
     assert_eq!(count, expected);
 
@@ -462,7 +475,9 @@ fn test_concurrent_writes_with_flush() {
     // Final flush
     server.flush().expect("Final flush failed");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM withflush").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM withflush")
+        .expect("Count failed");
     let expected = (num_writers * writes_per_writer) as i64;
     assert_eq!(count, expected, "Missing writes during concurrent flush");
 }
@@ -478,11 +493,15 @@ fn test_read_during_write() {
 
     // Write initial data
     for i in 0..10 {
-        server.write(&db, &format!("readwrite,id={} value={}", i, i)).expect("Initial write failed");
+        server
+            .write(&db, &format!("readwrite,id={} value={}", i, i))
+            .expect("Initial write failed");
     }
     server.flush().expect("Initial flush failed");
 
-    let initial_count = server.query_count(&db, "SELECT COUNT(*) FROM readwrite").expect("Initial count failed");
+    let initial_count = server
+        .query_count(&db, "SELECT COUNT(*) FROM readwrite")
+        .expect("Initial count failed");
     assert_eq!(initial_count, 10);
 
     let read_errors = Arc::new(AtomicU64::new(0));
@@ -544,11 +563,17 @@ fn test_read_during_write() {
     // Allow final flush
     server.flush().expect("Final flush failed");
 
-    let final_count = server.query_count(&db, "SELECT COUNT(*) FROM readwrite").expect("Final count failed");
+    let final_count = server
+        .query_count(&db, "SELECT COUNT(*) FROM readwrite")
+        .expect("Final count failed");
     assert_eq!(final_count, 110, "Expected 110 rows after all writes");
 
     let inconsistent = inconsistent_reads.load(Ordering::SeqCst);
-    assert_eq!(inconsistent, 0, "Found {} inconsistent reads (count < 10)", inconsistent);
+    assert_eq!(
+        inconsistent, 0,
+        "Found {} inconsistent reads (count < 10)",
+        inconsistent
+    );
 
     let min = min_seen.load(Ordering::SeqCst);
     assert!(min >= 10, "Saw count go below initial value: {}", min);
@@ -563,7 +588,12 @@ fn test_read_during_compaction() {
     for batch in 0..5 {
         let mut data = String::new();
         for i in 0..20 {
-            data.push_str(&format!("readcompact,batch={},id={} value={}\n", batch, i, batch * 20 + i));
+            data.push_str(&format!(
+                "readcompact,batch={},id={} value={}\n",
+                batch,
+                i,
+                batch * 20 + i
+            ));
         }
         server.write(&db, &data).expect("Write failed");
         server.flush().expect("Flush failed");
@@ -573,7 +603,9 @@ fn test_read_during_compaction() {
     let expected_sum = (0..100).sum::<i64>();
 
     // Verify before compaction
-    let count_before = server.query_count(&db, "SELECT COUNT(*) FROM readcompact").expect("Count failed");
+    let count_before = server
+        .query_count(&db, "SELECT COUNT(*) FROM readcompact")
+        .expect("Count failed");
     assert_eq!(count_before, expected_count);
 
     let read_errors = Arc::new(AtomicU64::new(0));
@@ -608,14 +640,28 @@ fn test_read_during_compaction() {
     read_handle.join().expect("Reader panicked");
 
     // Verify after compaction
-    let count_after = server.query_count(&db, "SELECT COUNT(*) FROM readcompact").expect("Count failed");
-    assert_eq!(count_after, expected_count, "Row count changed after compaction");
+    let count_after = server
+        .query_count(&db, "SELECT COUNT(*) FROM readcompact")
+        .expect("Count failed");
+    assert_eq!(
+        count_after, expected_count,
+        "Row count changed after compaction"
+    );
 
-    let sum_after = server.query_scalar(&db, "SELECT SUM(value) FROM readcompact").expect("Sum failed");
-    assert_eq!(sum_after as i64, expected_sum, "Sum changed after compaction");
+    let sum_after = server
+        .query_scalar(&db, "SELECT SUM(value) FROM readcompact")
+        .expect("Sum failed");
+    assert_eq!(
+        sum_after as i64, expected_sum,
+        "Sum changed after compaction"
+    );
 
     let inconsistent = inconsistent_counts.load(Ordering::SeqCst);
-    assert_eq!(inconsistent, 0, "Found {} inconsistent counts during compaction", inconsistent);
+    assert_eq!(
+        inconsistent, 0,
+        "Found {} inconsistent counts during compaction",
+        inconsistent
+    );
 }
 
 #[test]
@@ -631,7 +677,9 @@ fn test_query_isolation() {
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let initial_sum = server.query_scalar(&db, "SELECT SUM(value) FROM isolation").expect("Sum failed");
+    let initial_sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM isolation")
+        .expect("Sum failed");
     let expected_sum = (0..100).sum::<i64>() as f64;
     assert!((initial_sum - expected_sum).abs() < 0.01);
 
@@ -639,21 +687,29 @@ fn test_query_isolation() {
     for batch in 0..5 {
         let start_id = 100 + batch * 20;
         for i in start_id..start_id + 20 {
-            server.write(&db, &format!("isolation,id={} value={}", i, i)).expect("Write failed");
+            server
+                .write(&db, &format!("isolation,id={} value={}", i, i))
+                .expect("Write failed");
         }
 
         // Query after each batch - should succeed
-        let count = server.query_count(&db, "SELECT COUNT(*) FROM isolation").expect("Count failed");
+        let count = server
+            .query_count(&db, "SELECT COUNT(*) FROM isolation")
+            .expect("Count failed");
         assert!(count >= 100, "Count should be at least 100");
     }
 
     server.flush().expect("Final flush failed");
 
     // Verify final state
-    let final_count = server.query_count(&db, "SELECT COUNT(*) FROM isolation").expect("Count failed");
+    let final_count = server
+        .query_count(&db, "SELECT COUNT(*) FROM isolation")
+        .expect("Count failed");
     assert_eq!(final_count, 200);
 
-    let final_sum = server.query_scalar(&db, "SELECT SUM(value) FROM isolation").expect("Sum failed");
+    let final_sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM isolation")
+        .expect("Sum failed");
     let expected_final_sum = (0..200).sum::<i64>() as f64;
     assert!((final_sum - expected_final_sum).abs() < 0.01);
 }
@@ -681,7 +737,12 @@ fn test_stress_high_throughput_writes() {
 
         let handle = thread::spawn(move || {
             for i in 0..writes_per_thread {
-                let data = format!("stress,thread={},seq={} value={}", thread_id, i, thread_id * 1000 + i);
+                let data = format!(
+                    "stress,thread={},seq={} value={}",
+                    thread_id,
+                    i,
+                    thread_id * 1000 + i
+                );
                 if server.write(&db, &data).is_ok() {
                     total_writes.fetch_add(1, Ordering::SeqCst);
                 }
@@ -698,14 +759,20 @@ fn test_stress_high_throughput_writes() {
     let total = total_writes.load(Ordering::SeqCst);
     let expected = (num_threads * writes_per_thread) as u64;
 
-    eprintln!("Wrote {} rows in {:?} ({:.0} writes/sec)",
-        total, duration, total as f64 / duration.as_secs_f64());
+    eprintln!(
+        "Wrote {} rows in {:?} ({:.0} writes/sec)",
+        total,
+        duration,
+        total as f64 / duration.as_secs_f64()
+    );
 
     assert_eq!(total, expected, "Some writes failed");
 
     server.flush().expect("Flush failed");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM stress").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM stress")
+        .expect("Count failed");
     assert_eq!(count, expected as i64);
 }
 
@@ -716,12 +783,16 @@ fn test_stress_mixed_read_write() {
 
     // Initial data
     for i in 0..50 {
-        server.write(&db, &format!("mixed,id={} value={}", i, i)).expect("Initial write failed");
+        server
+            .write(&db, &format!("mixed,id={} value={}", i, i))
+            .expect("Initial write failed");
     }
     server.flush().expect("Initial flush failed");
 
     // Verify initial data is queryable before starting concurrent operations
-    let _ = server.query_count(&db, "SELECT COUNT(*) FROM mixed").expect("Initial query failed");
+    let _ = server
+        .query_count(&db, "SELECT COUNT(*) FROM mixed")
+        .expect("Initial query failed");
 
     let write_counter = Arc::new(AtomicU64::new(50));
     let read_counter = Arc::new(AtomicU64::new(0));
@@ -775,12 +846,18 @@ fn test_stress_mixed_read_write() {
 
     server.flush().expect("Final flush failed");
 
-    let final_count = server.query_count(&db, "SELECT COUNT(*) FROM mixed").expect("Final count failed");
+    let final_count = server
+        .query_count(&db, "SELECT COUNT(*) FROM mixed")
+        .expect("Final count failed");
     let expected = 50 + 2 * 100; // initial + 2 writers × 100 each
     assert_eq!(final_count, expected as i64);
 
     let inconsistent = inconsistent_reads.load(Ordering::SeqCst);
-    assert_eq!(inconsistent, 0, "Found {} inconsistent reads (count < 50)", inconsistent);
+    assert_eq!(
+        inconsistent, 0,
+        "Found {} inconsistent reads (count < 50)",
+        inconsistent
+    );
 
     let successful_reads = read_counter.load(Ordering::SeqCst);
     assert!(successful_reads > 0, "No successful reads completed");
@@ -798,7 +875,12 @@ fn test_stress_burst_writes() {
     for burst in 0..num_bursts {
         let mut data = String::new();
         for i in 0..writes_per_burst {
-            data.push_str(&format!("burst,burst={},seq={} value={}\n", burst, i, burst * 1000 + i));
+            data.push_str(&format!(
+                "burst,burst={},seq={} value={}\n",
+                burst,
+                i,
+                burst * 1000 + i
+            ));
         }
         server.write(&db, &data).expect("Burst write failed");
 
@@ -808,16 +890,25 @@ fn test_stress_burst_writes() {
 
     server.flush().expect("Flush failed");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM burst").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM burst")
+        .expect("Count failed");
     let expected = (num_bursts * writes_per_burst) as i64;
     assert_eq!(count, expected);
 
     // Verify all bursts present (burst is a tag, so compare as string)
     for burst in 0..num_bursts {
         let burst_count = server
-            .query_count(&db, &format!("SELECT COUNT(*) FROM burst WHERE burst = '{}'", burst))
+            .query_count(
+                &db,
+                &format!("SELECT COUNT(*) FROM burst WHERE burst = '{}'", burst),
+            )
             .expect("Burst count failed");
-        assert_eq!(burst_count, writes_per_burst as i64, "Burst {} has wrong count", burst);
+        assert_eq!(
+            burst_count, writes_per_burst as i64,
+            "Burst {} has wrong count",
+            burst
+        );
     }
 }
 
@@ -833,12 +924,16 @@ fn test_consistency_aggregation_during_writes() {
     // Write initial known dataset
     let mut initial_sum = 0i64;
     for i in 0..100 {
-        server.write(&db, &format!("aggtest,id={} value={}i", i, i)).expect("Write failed");
+        server
+            .write(&db, &format!("aggtest,id={} value={}i", i, i))
+            .expect("Write failed");
         initial_sum += i;
     }
     server.flush().expect("Flush failed");
 
-    let sum_before = server.query_scalar(&db, "SELECT SUM(value) FROM aggtest").expect("Sum failed");
+    let sum_before = server
+        .query_scalar(&db, "SELECT SUM(value) FROM aggtest")
+        .expect("Sum failed");
     assert_eq!(sum_before as i64, initial_sum);
 
     // Run aggregation queries while writing
@@ -863,13 +958,17 @@ fn test_consistency_aggregation_during_writes() {
 
     // Write more data
     for i in 100..200 {
-        server.write(&db, &format!("aggtest,id={} value={}i", i, i)).expect("Write failed");
+        server
+            .write(&db, &format!("aggtest,id={} value={}i", i, i))
+            .expect("Write failed");
     }
 
     agg_handle.join().expect("Aggregation thread panicked");
     server.flush().expect("Final flush failed");
 
-    let final_sum = server.query_scalar(&db, "SELECT SUM(value) FROM aggtest").expect("Final sum failed");
+    let final_sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM aggtest")
+        .expect("Final sum failed");
     let expected_sum: i64 = (0..200).sum();
     assert_eq!(final_sum as i64, expected_sum);
 }
@@ -881,7 +980,9 @@ fn test_consistency_count_monotonic() {
 
     // Initial data
     for i in 0..50 {
-        server.write(&db, &format!("monotonic,id={} value={}", i, i)).expect("Write failed");
+        server
+            .write(&db, &format!("monotonic,id={} value={}", i, i))
+            .expect("Write failed");
     }
     server.flush().expect("Flush failed");
 
@@ -902,7 +1003,9 @@ fn test_consistency_count_monotonic() {
 
     // Writer thread
     for i in 50..150 {
-        server.write(&db, &format!("monotonic,id={} value={}", i, i)).expect("Write failed");
+        server
+            .write(&db, &format!("monotonic,id={} value={}", i, i))
+            .expect("Write failed");
         if i % 20 == 0 {
             thread::sleep(Duration::from_millis(30));
         }
@@ -918,12 +1021,16 @@ fn test_consistency_count_monotonic() {
         assert!(
             counts[i] >= counts[i - 1],
             "Count decreased from {} to {} at position {}",
-            counts[i - 1], counts[i], i
+            counts[i - 1],
+            counts[i],
+            i
         );
     }
 
     // Final verification
-    let final_count = server.query_count(&db, "SELECT COUNT(*) FROM monotonic").expect("Final count failed");
+    let final_count = server
+        .query_count(&db, "SELECT COUNT(*) FROM monotonic")
+        .expect("Final count failed");
     assert_eq!(final_count, 150);
 }
 
@@ -973,7 +1080,9 @@ fn test_no_data_loss_under_load() {
     server.flush().expect("Final flush failed");
 
     let expected_count = written_ids.lock().unwrap().len() as i64;
-    let actual_count = server.query_count(&db, "SELECT COUNT(*) FROM noloss").expect("Count failed");
+    let actual_count = server
+        .query_count(&db, "SELECT COUNT(*) FROM noloss")
+        .expect("Count failed");
 
     assert_eq!(
         actual_count, expected_count,

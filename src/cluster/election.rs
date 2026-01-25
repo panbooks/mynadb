@@ -4,9 +4,9 @@
 //! (like compaction and retention) at a time.
 
 use crate::cluster::coordinator::Coordinator;
+use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
-use parking_lot::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
@@ -137,7 +137,9 @@ impl LeaderElection {
         // Resign if we're the leader
         if self.is_leader() {
             if let Some(lease_id) = *self.lease_id.read() {
-                self.coordinator.resign(&self.election_key, lease_id).await?;
+                self.coordinator
+                    .resign(&self.election_key, lease_id)
+                    .await?;
             }
         }
 
@@ -168,7 +170,10 @@ impl LeaderElection {
                     }
                     LeaderState::Campaigning | LeaderState::Follower => {
                         // Try to become leader
-                        match coordinator.campaign(&election_key, &node_id, lease_ttl).await {
+                        match coordinator
+                            .campaign(&election_key, &node_id, lease_ttl)
+                            .await
+                        {
                             Ok(lid) => {
                                 info!("Became leader: node_id={}, lease_id={}", node_id, lid);
                                 *state.write() = LeaderState::Leader;

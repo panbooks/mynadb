@@ -12,7 +12,7 @@ use cluster::{
     coordinator::{self, Coordinator},
     election::LeaderElection,
     metrics::cluster_metrics,
-    node::{NodeInfo, NodeRegistration, NodeRole, HealthChecker},
+    node::{HealthChecker, NodeInfo, NodeRegistration, NodeRole},
     write_coordinator::WriteCoordinator,
 };
 use jobs::{compactor, database_manager, logger, profiling, retention_manager};
@@ -303,9 +303,8 @@ async fn initialize_cluster(config: &Config) -> cluster_api::status::ClusterStat
     let node_info_arc = Arc::new(parking_lot::RwLock::new(node_info));
 
     // Initialize node registration
-    let heartbeat_interval = std::time::Duration::from_secs(
-        config.cluster.coordinator.heartbeat_interval_secs
-    );
+    let heartbeat_interval =
+        std::time::Duration::from_secs(config.cluster.coordinator.heartbeat_interval_secs);
     let registration = Arc::new(NodeRegistration::new(
         Arc::clone(&coordinator),
         node_info_arc.read().clone(),
@@ -329,7 +328,8 @@ async fn initialize_cluster(config: &Config) -> cluster_api::status::ClusterStat
         Arc::clone(&registration),
         Arc::clone(&coordinator),
         std::time::Duration::from_secs(config.cluster.health.check_interval_secs),
-        config.cluster.health.unhealthy_threshold as u64 * config.cluster.health.check_interval_secs,
+        config.cluster.health.unhealthy_threshold as u64
+            * config.cluster.health.check_interval_secs,
     ));
 
     // Initialize leader election (for compaction)
@@ -379,7 +379,11 @@ async fn initialize_cluster(config: &Config) -> cluster_api::status::ClusterStat
 }
 
 /// Build the Axum router with all routes
-fn build_router(state: api::AppState, auth_middleware: Arc<auth::AuthMiddleware>, cluster_state: cluster_api::status::ClusterState) -> Router {
+fn build_router(
+    state: api::AppState,
+    auth_middleware: Arc<auth::AuthMiddleware>,
+    cluster_state: cluster_api::status::ClusterState,
+) -> Router {
     let app_router = Router::new()
         .route("/", get(api::home))
         .route("/health", get(api::health))
@@ -470,12 +474,30 @@ fn build_router(state: api::AppState, auth_middleware: Arc<auth::AuthMiddleware>
 
     // Create cluster routes on a separate router with Extension-based state
     let cluster_router: Router<()> = Router::new()
-        .route("/cluster/status", get(cluster_api::status::cluster_status_handler))
-        .route("/cluster/nodes", get(cluster_api::status::cluster_nodes_handler))
-        .route("/cluster/leader", get(cluster_api::status::cluster_leader_handler))
-        .route("/cluster/health", get(cluster_api::status::cluster_health_handler))
-        .route("/cluster/drain", post(cluster_api::management::drain_node_handler))
-        .route("/cluster/remove", delete(cluster_api::management::remove_node_handler))
+        .route(
+            "/cluster/status",
+            get(cluster_api::status::cluster_status_handler),
+        )
+        .route(
+            "/cluster/nodes",
+            get(cluster_api::status::cluster_nodes_handler),
+        )
+        .route(
+            "/cluster/leader",
+            get(cluster_api::status::cluster_leader_handler),
+        )
+        .route(
+            "/cluster/health",
+            get(cluster_api::status::cluster_health_handler),
+        )
+        .route(
+            "/cluster/drain",
+            post(cluster_api::management::drain_node_handler),
+        )
+        .route(
+            "/cluster/remove",
+            delete(cluster_api::management::remove_node_handler),
+        )
         .layer(axum::Extension(cluster_state));
 
     // Merge the routers

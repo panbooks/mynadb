@@ -1663,10 +1663,7 @@ impl Compactor {
         }
 
         // Log the sort order being used
-        debug!(
-            "Compaction sort order: {}",
-            sort_order.join(" -> ")
-        );
+        debug!("Compaction sort order: {}", sort_order.join(" -> "));
 
         // Sort using lexicographic multi-column sort
         Self::sort_batch_by_columns(&merged, &sort_order)
@@ -1763,7 +1760,10 @@ impl Compactor {
     }
 
     /// Sort a RecordBatch by multiple columns using lexicographic sorting
-    fn sort_batch_by_columns(batch: &RecordBatch, sort_columns: &[String]) -> Result<RecordBatch, String> {
+    fn sort_batch_by_columns(
+        batch: &RecordBatch,
+        sort_columns: &[String],
+    ) -> Result<RecordBatch, String> {
         if sort_columns.is_empty() {
             return Ok(batch.clone());
         }
@@ -2559,9 +2559,7 @@ mod tests {
     #[test]
     fn test_estimate_cardinality_high_cardinality() {
         // Test with high cardinality (> 1000 distinct values)
-        let values: Vec<Option<String>> = (0..1500)
-            .map(|i| Some(format!("host-{}", i)))
-            .collect();
+        let values: Vec<Option<String>> = (0..1500).map(|i| Some(format!("host-{}", i))).collect();
         let values_ref: Vec<Option<&str>> = values.iter().map(|s| s.as_deref()).collect();
         let array = StringArray::from(values_ref);
         let array_ref: ArrayRef = Arc::new(array);
@@ -2678,11 +2676,7 @@ mod tests {
                     Some("2024-01-01"),
                     Some("2024-01-02"),
                 ])),
-                Arc::new(StringArray::from(vec![
-                    Some("us"),
-                    Some("eu"),
-                    Some("us"),
-                ])),
+                Arc::new(StringArray::from(vec![Some("us"), Some("eu"), Some("us")])),
                 Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0])),
             ],
         )
@@ -2972,8 +2966,7 @@ mod tests {
     fn test_cardinality_edge_case_near_threshold() {
         // Test cardinality right at threshold boundary (999, 1000, 1001)
         let make_array = |n: usize| -> ArrayRef {
-            let values: Vec<Option<String>> =
-                (0..n).map(|i| Some(format!("val-{}", i))).collect();
+            let values: Vec<Option<String>> = (0..n).map(|i| Some(format!("val-{}", i))).collect();
             let values_ref: Vec<Option<&str>> = values.iter().map(|s| s.as_deref()).collect();
             Arc::new(StringArray::from(values_ref))
         };
@@ -3059,6 +3052,10 @@ mod tests {
         }
 
         // Should have at most 1 transition (eu -> us or us -> eu)
-        assert!(transitions <= 1, "Expected contiguous regions, got {} transitions", transitions);
+        assert!(
+            transitions <= 1,
+            "Expected contiguous regions, got {} transitions",
+            transitions
+        );
     }
 }
