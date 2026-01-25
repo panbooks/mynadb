@@ -29,7 +29,13 @@ pub struct Config {
     pub wal: WalConfig,
     #[serde(default)]
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub cluster: ClusterConfig,
 }
+
+/// Cluster configuration
+/// Re-exported from the cluster module for convenience
+pub use crate::cluster::config::ClusterConfig;
 
 /// Server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -818,6 +824,7 @@ impl Default for Config {
             retention: RetentionConfig::default(),
             wal: WalConfig::default(),
             auth: AuthConfig::default(),
+            cluster: ClusterConfig::default(),
         }
     }
 }

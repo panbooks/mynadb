@@ -1,0 +1,83 @@
+[server]
+http_port = 7000
+flight_port = 7001
+mysql_enabled = true
+mysql_port = 7002
+
+[storage]
+data_dir = "/data/mynadb"
+
+[storage.object_store]
+backend = "minio"
+bucket = "mynadb"
+endpoint = "http://minio:9000"
+region = "us-east-1"
+
+[schema]
+strategy = "service_as_schema"
+tag_keys = ["service", "MONITOR.service", "hierarchy_2"]
+default_name = "default"
+prefix_numeric = true
+
+[cache]
+flush_interval_secs = 60
+max_size_mb = 1024
+
+[wal]
+enabled = true
+sync_on_write = false
+rotate_size_mb = 128
+
+[query_cache]
+enabled = true
+max_size_mb = 256
+ttl_secs = 300
+min_query_time_ms = 10
+
+[compaction]
+min_files = 5
+max_level = 5
+max_concurrent_compactions = 4
+full_compaction_max_concurrent = 1
+
+[retention]
+enabled = true
+default_days = 7
+interval_secs = 3600
+
+[auth]
+enabled = false
+
+[logging]
+level = "info"
+log_dir = "/data/mynadb/logs"
+
+[cluster]
+enabled = true
+node_id = "mynadb-3"
+advertise_addr = "mynadb-3:7000"
+role = "hybrid"
+
+[cluster.coordinator]
+type = "etcd"
+endpoints = ["etcd-1:2379", "etcd-2:2379", "etcd-3:2379"]
+lock_prefix = "/mynadb/locks/"
+cache_prefix = "/mynadb/cache/"
+lock_ttl_secs = 30
+heartbeat_interval_secs = 5
+
+[cluster.cache]
+invalidation_channel = "/mynadb/cache/invalidate"
+invalidation_method = "pubsub"
+
+[cluster.write]
+acquire_lock_timeout_secs = 10
+flush_notify = true
+
+[cluster.compaction]
+leader_only = true
+election_key = "/mynadb/leader/compactor"
+
+[cluster.health]
+check_interval_secs = 10
+unhealthy_threshold = 3

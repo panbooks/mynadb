@@ -494,6 +494,7 @@ checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
 dependencies = [
  "async-trait",
  "axum-core",
+ "axum-macros",
  "bytes",
  "futures-util",
  "http",
@@ -539,6 +540,17 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "axum-macros"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57d123550fa8d071b7255cb0cc04dc302baa6c8c4a79f55701552684d8399bce"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
 ]
 
 [[package]]
@@ -1713,6 +1725,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "etcd-client"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc0452bcc559431b16f472b7ab86e2f9ccd5f3c2da3795afbd6b773665e047fe"
+dependencies = [
+ "http",
+ "prost 0.13.5",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
+ "tower 0.4.13",
+ "tower-service",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2066,6 +2094,17 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hostname"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "617aaa3557aef3810a6369d0a99fac8a080891b68bd9f9812a1eeda0c0730cbd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-link",
+]
 
 [[package]]
 name = "http"
@@ -2821,13 +2860,16 @@ dependencies = [
  "crc32fast",
  "criterion",
  "datafusion",
+ "etcd-client",
  "futures",
+ "hostname",
  "msql-srv",
  "num_cpus",
  "object_store",
  "parking_lot",
  "parquet",
  "pprof",
+ "prometheus",
  "proptest",
  "prost 0.13.5",
  "rand 0.8.5",
@@ -2846,6 +2888,7 @@ dependencies = [
  "ureq",
  "url",
  "urlencoding",
+ "uuid",
  "walkdir",
  "wildmatch",
 ]
@@ -3351,7 +3394,7 @@ dependencies = [
  "nix",
  "once_cell",
  "prost 0.12.6",
- "prost-build",
+ "prost-build 0.12.6",
  "prost-derive 0.12.6",
  "sha2",
  "smallvec",
@@ -3396,6 +3439,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ee95bc4ef87b8d5ba32e8b7714ccc834865276eab0aed5c9958d00ec45f49e8"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "prometheus"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d33c28a30771f7f96db69893f78b857f7450d7e0237e9c8fc6427a81bae7ed1"
+dependencies = [
+ "cfg-if",
+ "fnv",
+ "lazy_static",
+ "memchr",
+ "parking_lot",
+ "protobuf",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -3459,6 +3517,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "prost-build"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
+dependencies = [
+ "heck",
+ "itertools 0.14.0",
+ "log",
+ "multimap",
+ "once_cell",
+ "petgraph",
+ "prettyplease",
+ "prost 0.13.5",
+ "prost-types 0.13.5",
+ "regex",
+ "syn 2.0.111",
+ "tempfile",
+]
+
+[[package]]
 name = "prost-derive"
 version = "0.12.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3501,6 +3579,12 @@ checksum = "52c2c1bf36ddb1a1c396b3601a3cec27c2462e45f07c386894ec3ccf5332bd16"
 dependencies = [
  "prost 0.13.5",
 ]
+
+[[package]]
+name = "protobuf"
+version = "2.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "106dd99e98437432fed6519dedecfade6a06a73bb7b2a1e019fdd2bee5778d94"
 
 [[package]]
 name = "ptr_meta"
@@ -4786,6 +4870,20 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "tonic-build"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9557ce109ea773b399c9b9e5dca39294110b74f1f342cb347a80d1fce8c26a11"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "prost-build 0.13.5",
+ "prost-types 0.13.5",
+ "quote",
+ "syn 2.0.111",
 ]
 
 [[package]]

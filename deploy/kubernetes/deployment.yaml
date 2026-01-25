@@ -1,0 +1,136 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mynadb
+  labels:
+    app: mynadb
+spec:
+  serviceName: mynadb-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mynadb
+  podManagementPolicy: Parallel
+  template:
+    metadata:
+      labels:
+        app: mynadb
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "7000"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: mynadb
+          image: mynadb:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 7000
+            - name: flight
+              containerPort: 7001
+            - name: mysql
+              containerPort: 7002
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: MYNADB_NODE_ID
+              value: "$(POD_NAME)"
+            - name: MYNADB_ADVERTISE_ADDR
+              value: "$(POD_NAME).mynadb-headless.$(POD_NAMESPACE).svc.cluster.local:7000"
+            # S3/MinIO configuration
+            - name: S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: mynadb-s3-credentials
+                  key: bucket
+                  optional: true
+            - name: S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: mynadb-s3-credentials
+                  key: endpoint
+                  optional: true
+            - name: AWS_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: mynadb-s3-credentials
+                  key: region
+                  optional: true
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mynadb-s3-credentials
+                  key: access_key
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mynadb-s3-credentials
+                  key: secret_key
+                  optional: true
+          volumeMounts:
+            - name: config
+              mountPath: /etc/mynadb
+            - name: data
+              mountPath: /data/mynadb
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "4Gi"
+              cpu: "2"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 7000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 7000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 7000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          lifecycle:
+            preStop:
+              httpGet:
+                path: /cluster/drain?node_id=$(POD_NAME)
+                port: 7000
+      volumes:
+        - name: config
+          configMap:
+            name: mynadb-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 10Gi
