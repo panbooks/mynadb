@@ -17,26 +17,15 @@ system_dir = "_system"
 # Object store configuration
 [storage.object_store]
 # Storage backend: "local" (default), "s3", "minio", "oss"
-backend = "local"
+backend = "minio"
 
-# Data directory for local storage
-data_dir = "/data0/mynadb/data"
-
-# S3/MinIO/OSS configuration (only used when backend != "local")
-# bucket = "my-bucket"
-# region = "us-east-1"
-# access_key = "your-access-key"
-# secret_key = "your-secret-key"
-
-# Custom endpoint for MinIO or Aliyun OSS
-# endpoint = "http://localhost:9000"  # MinIO example
-# endpoint = "https://oss-cn-hangzhou.aliyuncs.com"  # Aliyun OSS example
-
-# Allow HTTP connections (for local MinIO without TLS)
-# allow_http = true
-
-# Optional prefix for all paths in the bucket
-# prefix = "mynadb"
+# MinIO configuration
+bucket = "mynadb"
+region = "us-east-1"
+access_key = "minioadmin"
+secret_key = "minioadmin"
+endpoint = "http://localhost:9000"
+allow_http = true
 
 [schema]
 # Schema/Table naming strategy
