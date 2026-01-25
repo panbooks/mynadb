@@ -472,9 +472,13 @@ pub async fn flush_handler(State(state): State<AppState>) -> impl IntoResponse {
             let count = files.len();
             info!("Manual flush completed: {} files", count);
 
+            // Collect unique tables for cache invalidation
+            let mut invalidated_tables: std::collections::HashSet<(String, String, String)> =
+                std::collections::HashSet::new();
+
             // Register files with metadata manager if available
             if let Some(ref manager) = state.metadata_manager {
-                for file in files {
+                for file in &files {
                     let file_name = file
                         .path
                         .rsplit('/')
@@ -502,11 +506,38 @@ pub async fn flush_handler(State(state): State<AppState>) -> impl IntoResponse {
                     if let Err(e) = manager.register_file(file_info).await {
                         warn!("Failed to register file {}: {}", file.path, e);
                     }
+
+                    // Track table for cache invalidation
+                    invalidated_tables.insert((
+                        file.catalog.clone(),
+                        file.schema.clone(),
+                        file.table.clone(),
+                    ));
                 }
                 // Save metadata after registering new files
                 if let Err(e) = manager.save().await {
                     warn!("Failed to save metadata after manual flush: {}", e);
                 }
+            } else {
+                // Still need to track tables for cache invalidation even without metadata manager
+                for file in &files {
+                    invalidated_tables.insert((
+                        file.catalog.clone(),
+                        file.schema.clone(),
+                        file.table.clone(),
+                    ));
+                }
+            }
+
+            // Invalidate caches for all affected tables
+            for (catalog, schema, table) in &invalidated_tables {
+                state
+                    .query_engine
+                    .invalidate_table_cache(catalog, schema, table);
+                debug!(
+                    "Invalidated cache for {}.{}.{} after flush",
+                    catalog, schema, table
+                );
             }
 
             (StatusCode::OK, format!("Flushed {} file(s) to disk", count))
