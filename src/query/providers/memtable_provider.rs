@@ -81,7 +81,7 @@ impl MemtableProvider {
         schema_name: &str,
         table_name: &str,
     ) -> Option<Self> {
-        // Get schema from cached data
+        // Get schema from cached data (includes date column added at write time)
         let schema = cache.get_table_schema(catalog, schema_name, table_name)?;
 
         Some(Self {
@@ -296,7 +296,7 @@ impl ExecutionPlan for MemtableExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // Get all batches from cache for this table
+        // Get all batches from cache for this table (date column is already included)
         let batches =
             self.cache
                 .get_table_batches(&self.catalog, &self.schema_name, &self.table_name, None);
