@@ -181,6 +181,74 @@
     </div>
   </section>
 
+  <!-- Enterprise Cluster Section -->
+  <section class="section" style="background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 50%, #ede9fe 100%);">
+    <div class="container">
+      <div class="section-header">
+        <div style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.35rem 1rem; border-radius: 1rem; font-size: 0.8rem; font-weight: 600; margin-bottom: 1rem;">
+          NEW: ENTERPRISE EDITION
+        </div>
+        <h2>Scale Without Limits</h2>
+        <p>Distributed clustering with compute-storage separation. Add nodes on demand, achieve 11-nines durability.</p>
+      </div>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto; margin-bottom: 2rem;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.8rem; text-align: center;">
+                         ┌─────────────┐
+                         │Load Balancer│
+                         └──────┬──────┘
+          ┌──────────────────────┼──────────────────────┐
+          ▼                      ▼                      ▼
+   ┌─────────────┐        ┌─────────────┐        ┌─────────────┐
+   │   Node 1    │        │   Node 2    │        │   Node 3    │
+   │  (Compute)  │        │  (Compute)  │        │  (Compute)  │
+   └──────┬──────┘        └──────┬──────┘        └──────┬──────┘
+          └──────────────────────┼──────────────────────┘
+                                 ▼
+   ┌─────────────────────────────────────────────────────────────┐
+   │              SHARED OBJECT STORAGE (S3/MinIO/OSS)           │
+   └─────────────────────────────────────────────────────────────┘
+                                 ▼
+   ┌─────────────────────────────────────────────────────────────┐
+   │         COORDINATION (etcd): Locks • Leader • Pub/Sub       │
+   └─────────────────────────────────────────────────────────────┘
+        </pre>
+      </div>
+
+      <div class="features-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+        <div class="feature-card" style="background: white; border: 2px solid #7c3aed; padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #7c3aed, #a78bfa);">&#128200;</div>
+          <h3>Auto-Scaling</h3>
+          <p>Add or remove compute nodes without data migration. Stateless design.</p>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #8b5cf6; padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #8b5cf6, #c4b5fd);">&#128274;</div>
+          <h3>11-Nines Durability</h3>
+          <p>S3 object storage provides 99.999999999% durability.</p>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #a78bfa; padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #a78bfa, #ddd6fe);">&#9889;</div>
+          <h3>Instant Failover</h3>
+          <p>Stateless nodes mean instant recovery. No election delays.</p>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #c4b5fd; padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #c4b5fd, #ede9fe);">&#9729;</div>
+          <h3>Cloud-Native</h3>
+          <p>Perfect for Kubernetes with auto-scaling and self-healing.</p>
+        </div>
+      </div>
+
+      <div class="text-center" style="margin-top: 2rem;">
+        <a href="docs/cluster.html" class="btn btn-primary btn-lg" style="background: linear-gradient(135deg, #7c3aed, #a78bfa);">
+          <span>&#128214;</span> Learn About Enterprise Cluster
+        </a>
+      </div>
+    </div>
+  </section>
+
   <!-- Features Section -->
   <section class="section">
     <div class="container">
@@ -537,6 +605,13 @@ memory,host=server01 used=16.5,total=32.0
           <span class="card-link">Read more <span>&#8594;</span></span>
         </a>
 
+        <a href="docs/cluster.html" class="card" style="border: 2px solid #7c3aed;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #7c3aed, #a78bfa);">&#127760;</div>
+          <h3>Enterprise Cluster</h3>
+          <p>Distributed clustering with shared-storage architecture and auto-scaling.</p>
+          <span class="card-link" style="color: #7c3aed;">Read more <span>&#8594;</span></span>
+        </a>
+
         <a href="docs/caching.html" class="card">
           <div class="card-icon">&#128202;</div>
           <h3>Caching</h3>
@@ -594,11 +669,11 @@ memory,host=server01 used=16.5,total=32.0
         <div class="footer-column">
           <h4>Features</h4>
           <ul>
+            <li><a href="docs/cluster.html">Enterprise Cluster</a></li>
             <li><a href="docs/caching.html">Caching</a></li>
             <li><a href="docs/mysql-protocol.html">MySQL Protocol</a></li>
             <li><a href="docs/object-store.html">Object Store</a></li>
             <li><a href="docs/compaction.html">Compaction</a></li>
-            <li><a href="docs/retention.html">Retention</a></li>
           </ul>
         </div>
 
