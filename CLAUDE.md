@@ -23,10 +23,18 @@ cargo run --release -- -c config.production.toml
 # Run tests
 cargo test
 
-# Run specific module tests
+# Run specific module tests (uses substring matching)
 cargo test --lib cache
 cargo test --lib compactor
 cargo test --lib wal
+
+# Run benchmarks
+cargo bench --bench line_protocol_bench
+cargo bench --bench query_bench
+cargo bench --bench time_functions_bench
+
+# Format code (project uses rustfmt)
+cargo fmt
 
 # Create release archive
 ./build.sh
@@ -70,6 +78,7 @@ src/
 | `query/providers/` | `table_provider.rs`, `memtable_provider.rs`, `union_provider.rs` | TableProvider implementations |
 | `query/timeseries/` | `time_interval.rs`, `group_by_time.rs`, `fill_processor.rs` | Time series query processing |
 | `jobs/` | `compactor.rs`, `retention_manager.rs` | Background maintenance |
+| `cluster/` | `coordinator/`, `node/`, `election.rs` | Enterprise cluster mode (etcd-based) |
 
 ### Adding New Code
 
@@ -84,6 +93,7 @@ src/
 | Query/metadata cache | `query/cache/` |
 | Background task | `jobs/` |
 | Configuration option | `config.rs` |
+| Cluster coordination | `cluster/` |
 
 ## Architecture
 
@@ -190,71 +200,22 @@ password = "secret"
 [logging]
 level = "info"
 log_dir = "/data0/mynadb/logs"
+
+# Enterprise cluster mode (optional)
+[cluster]
+enabled = false
+# See docs/architecture-cluster.md for full cluster configuration
 ```
 
-## Schema/Table Naming Strategies
+## Cluster Mode (Enterprise)
 
-MynaDB supports two strategies for mapping InfluxDB line protocol to catalog.schema.table structure:
+MynaDB supports a distributed cluster mode using shared object storage (S3/MinIO/OSS) and etcd for coordination. Key characteristics:
+- **Compute-storage separation**: Stateless compute nodes, shared S3 storage
+- **Partition-level locking**: Writes coordinated via etcd distributed locks
+- **Cache invalidation**: Pub/sub for cross-node cache consistency
+- **Leader election**: Single node runs background tasks (compaction, retention)
 
-### Strategy 1: ServiceAsSchema (Default)
-
-**Configuration:**
-```toml
-[schema]
-strategy = "service_as_schema"
-```
-
-**Behavior:**
-- Service tag value → Schema name
-- Measurement name → Table name
-- Direct mapping from InfluxDB semantics
-
-**Example:**
-```bash
-# Line Protocol
-cpu,service=1,host=server01 usage=23.5
-
-# Storage Path
-data/mydb/service_1/cpu/
-
-# SQL Query
-SELECT * FROM mydb.service_1.cpu
-```
-
-**Use Case:** Multiple services, each with multiple measurements. Each service gets its own schema.
-
-### Strategy 2: ServiceAsTable
-
-**Configuration:**
-```toml
-[schema]
-strategy = "service_as_table"
-```
-
-**Behavior:**
-- Fixed schema name (from `default_name` config)
-- Service tag value → Table name
-- Measurement name → Stored as `measurement` tag in data
-
-**Example:**
-```bash
-# Line Protocol
-cpu,service=1,host=server01 usage=23.5
-
-# Storage Path
-data/mydb/default/service_1/
-
-# SQL Query
-SELECT * FROM mydb.default.service_1 WHERE measurement = 'cpu'
-```
-
-**Use Case:** Service-centric view where each service is a separate table. Query by measurement using the `measurement` tag.
-
-**Important Notes:**
-- The `tag_keys` configuration works for both strategies (extracts service value)
-- Numeric service values are prefixed with `service_` when `prefix_numeric = true`
-- When service tag is missing, uses `default_name` for both schema and table
-- In ServiceAsTable mode, original measurement name is preserved as a tag column
+See `docs/architecture-cluster.md` for full architecture details and `src/cluster/` for implementation.
 
 ## Code Standards
 

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MynaDB CPU Metrics Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>MynaDB CPU Metrics Dashboard</h1>
+            <p class="subtitle">Real-time CPU Usage Analysis by Host</p>
+        </header>
+
+        <div class="dashboard">
+            <!-- Bar Chart -->
+            <div class="chart-card">
+                <h2>CPU Usage by Host (Bar Chart)</h2>
+                <canvas id="barChart"></canvas>
+            </div>
+
+            <!-- Stacked Bar Chart -->
+            <div class="chart-card">
+                <h2>CPU Distribution (Stacked)</h2>
+                <canvas id="stackedChart"></canvas>
+            </div>
+
+            <!-- Doughnut Charts -->
+            <div class="chart-row">
+                <div class="chart-card small">
+                    <h3>db01 (us-east)</h3>
+                    <canvas id="doughnut1"></canvas>
+                    <p class="status high">High Load</p>
+                </div>
+                <div class="chart-card small">
+                    <h3>web01 (us-east)</h3>
+                    <canvas id="doughnut2"></canvas>
+                    <p class="status medium">Medium Load</p>
+                </div>
+                <div class="chart-card small">
+                    <h3>web02 (us-west)</h3>
+                    <canvas id="doughnut3"></canvas>
+                    <p class="status low">Low Load</p>
+                </div>
+            </div>
+
+            <!-- Data Table -->
+            <div class="chart-card">
+                <h2>Summary Table</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Host</th>
+                            <th>Region</th>
+                            <th>Avg User %</th>
+                            <th>Avg Idle %</th>
+                            <th>Avg System %</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>db01</td>
+                            <td>us-east</td>
+                            <td class="high">73.23</td>
+                            <td>17.60</td>
+                            <td>9.17</td>
+                            <td><span class="badge high">High Load</span></td>
+                        </tr>
+                        <tr>
+                            <td>web01</td>
+                            <td>us-east</td>
+                            <td class="medium">48.77</td>
+                            <td>38.93</td>
+                            <td>12.30</td>
+                            <td><span class="badge medium">Medium</span></td>
+                        </tr>
+                        <tr>
+                            <td>web02</td>
+                            <td>us-west</td>
+                            <td>28.50</td>
+                            <td class="low">62.10</td>
+                            <td>9.40</td>
+                            <td><span class="badge low">Low Load</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Query Info -->
+            <div class="chart-card">
+                <h2>Query Information</h2>
+                <div class="query-box">
+                    <h4>SQL Query:</h4>
+                    <pre><code>SELECT
+    host,
+    region,
+    AVG("user") as avg_user,
+    AVG(idle) as avg_idle,
+    AVG(system) as avg_system
+FROM prod.cpu
+GROUP BY host, region
+ORDER BY avg_user DESC</code></pre>
+                </div>
+                <div class="query-box">
+                    <h4>curl Command:</h4>
+                    <pre><code>curl -s 'http://localhost:7000/query/testdb' \
+  -d 'SELECT host, region, AVG("user") as avg_user, AVG(idle) as avg_idle, AVG(system) as avg_system FROM prod.cpu GROUP BY host, region ORDER BY avg_user DESC'</code></pre>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>MynaDB - The Voice of Your Machines | Data refreshed from in-memory cache</p>
+        </footer>
+    </div>
+
+    <script src="charts.js"></script>
+</body>
+</html>
