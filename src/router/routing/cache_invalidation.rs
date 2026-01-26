@@ -133,6 +133,9 @@ impl CacheInvalidationHandler {
     }
 
     /// Handle node updated event
+    ///
+    /// Note: When Meta sends a state update, it overrides local state (including Suspect).
+    /// This allows nodes to recover from local Suspect state when Meta confirms they're healthy.
     fn handle_node_updated(shard_cache: &ShardCache, event: &MetaEvent) {
         if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
             let node_id = payload["node_id"].as_str().unwrap_or_default();
@@ -143,6 +146,7 @@ impl CacheInvalidationHandler {
                 let state = match state_str {
                     "active" => NodeState::Active,
                     "draining" => NodeState::Draining,
+                    "suspect" => NodeState::Suspect,
                     _ => NodeState::Unhealthy,
                 };
 

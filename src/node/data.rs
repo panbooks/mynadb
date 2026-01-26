@@ -104,7 +104,8 @@ pub async fn start(config_path: &str) {
             labels: HashMap::new(),
         };
 
-        match client.register_node(node_info, 30000).await {
+        // Register with 10 second lease TTL (faster failure detection)
+        match client.register_node(node_info, 10000).await {
             Ok(id) => {
                 info!("Registered with Meta service, lease_id={}", id);
                 lease_id.store(id, Ordering::SeqCst);
@@ -188,12 +189,17 @@ pub fn stop(config_path: &str) {
 }
 
 /// Heartbeat loop to keep the lease alive with Meta service
+///
+/// Sends heartbeats every 2 seconds to maintain the 10-second lease.
+/// This gives us 5 heartbeat attempts before lease expires, providing
+/// resilience against temporary network issues.
 async fn heartbeat_loop(
     client: Arc<MetaClient>,
     lease_id: Arc<AtomicU64>,
     shutdown: Arc<AtomicBool>,
 ) {
-    let mut interval = tokio::time::interval(Duration::from_secs(5));
+    // Heartbeat every 2 seconds (5 attempts within 10s lease TTL)
+    let mut interval = tokio::time::interval(Duration::from_secs(2));
 
     loop {
         interval.tick().await;
@@ -212,7 +218,7 @@ async fn heartbeat_loop(
         match client.heartbeat(id).await {
             Ok(next_interval_ms) => {
                 // Adjust interval if server suggests different timing
-                if next_interval_ms > 0 && next_interval_ms != 5000 {
+                if next_interval_ms > 0 && next_interval_ms != 2000 {
                     interval = tokio::time::interval(Duration::from_millis(next_interval_ms as u64));
                 }
             }

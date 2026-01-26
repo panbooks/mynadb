@@ -35,6 +35,8 @@ pub enum NodeState {
     Active,
     Draining,
     Unhealthy,
+    /// Suspect - recent write failure, may recover
+    Suspect,
 }
 
 /// Partition key for routing
@@ -211,6 +213,11 @@ impl ShardCache {
     /// 1. Look up owner node_id from partition_owners
     /// 2. Look up DataNodeInfo from data_nodes (single source of truth)
     /// 3. If node is Active, use it; otherwise fall back to hash-based routing
+    ///
+    /// Node selection priority:
+    /// 1. Cached owner if Active
+    /// 2. Any Active node (hash-based)
+    /// 3. Any Suspect node (last resort, may have recovered)
     pub fn select_node_for_partition(&self, key: &PartitionKey) -> Option<DataNodeInfo> {
         // First check if we have a cached owner
         if let Some(owner_id) = self.get_partition_owner(key) {
@@ -224,10 +231,57 @@ impl ShardCache {
             // Node not found or unhealthy → fall through to hash-based
         }
 
-        // Fall back to hash-based selection
-        let nodes = self.get_active_data_nodes();
+        // Fall back to hash-based selection among Active nodes
+        let active_nodes = self.get_active_data_nodes();
+        if !active_nodes.is_empty() {
+            let hash = self.hash_partition_key(key);
+            let idx = (hash as usize) % active_nodes.len();
+            return Some(active_nodes[idx].clone());
+        }
+
+        // Last resort: try Suspect nodes (they may have recovered)
+        let suspect_nodes: Vec<_> = self
+            .data_nodes
+            .read()
+            .values()
+            .filter(|n| n.state == NodeState::Suspect)
+            .cloned()
+            .collect();
+
+        if !suspect_nodes.is_empty() {
+            warn!(
+                "No active nodes, using suspect node as last resort for partition {}",
+                key.to_path()
+            );
+            let hash = self.hash_partition_key(key);
+            let idx = (hash as usize) % suspect_nodes.len();
+            return Some(suspect_nodes[idx].clone());
+        }
+
+        warn!("No active or suspect data nodes available");
+        None
+    }
+
+    /// Select node for partition excluding specified nodes (for retry after failure)
+    ///
+    /// When a write fails, we retry on a different node. This method selects
+    /// the next candidate using consistent hashing, skipping nodes we've already tried.
+    pub fn select_node_for_partition_excluding(
+        &self,
+        key: &PartitionKey,
+        exclude: &std::collections::HashSet<String>,
+    ) -> Option<DataNodeInfo> {
+        // Get all active nodes that aren't excluded
+        let nodes: Vec<_> = self
+            .data_nodes
+            .read()
+            .values()
+            .filter(|n| n.state == NodeState::Active && !exclude.contains(&n.node_id))
+            .cloned()
+            .collect();
+
         if nodes.is_empty() {
-            warn!("No active data nodes available");
+            warn!("No active data nodes available after excluding {:?}", exclude);
             return None;
         }
 
@@ -235,6 +289,31 @@ impl ShardCache {
         let hash = self.hash_partition_key(key);
         let idx = (hash as usize) % nodes.len();
         Some(nodes[idx].clone())
+    }
+
+    /// Mark a node as suspect (recent write failure)
+    ///
+    /// Suspect nodes are temporarily avoided for new writes but can recover
+    /// automatically when the next health check succeeds or after a timeout.
+    pub fn mark_node_suspect(&self, node_id: &str) {
+        let mut nodes = self.data_nodes.write();
+        if let Some(node) = nodes.get_mut(node_id) {
+            if node.state == NodeState::Active {
+                info!("Marking node {} as suspect due to write failure", node_id);
+                node.state = NodeState::Suspect;
+            }
+        }
+    }
+
+    /// Record successful write to a node (clears suspect state)
+    pub fn record_node_success(&self, node_id: &str) {
+        let mut nodes = self.data_nodes.write();
+        if let Some(node) = nodes.get_mut(node_id) {
+            if node.state == NodeState::Suspect {
+                debug!("Node {} recovered from suspect state", node_id);
+                node.state = NodeState::Active;
+            }
+        }
     }
 
     /// Select node with load balancing (for reads)

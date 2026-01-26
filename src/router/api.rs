@@ -275,6 +275,7 @@ pub async fn list_data_nodes_handler(
                     NodeState::Active => "active",
                     NodeState::Draining => "draining",
                     NodeState::Unhealthy => "unhealthy",
+                    NodeState::Suspect => "suspect",
                 },
                 "load_score": n.load_score,
             })
