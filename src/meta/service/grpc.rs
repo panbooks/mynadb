@@ -518,40 +518,79 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
         let req = request.into_inner();
         let node = Arc::clone(&self.node);
         let topics: std::collections::HashSet<String> = req.topics.into_iter().collect();
-        let mut last_seq = req.start_sequence;
+        let start_sequence = req.start_sequence;
 
         let (tx, rx) = mpsc::channel(100);
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+            // First, catch up from start_sequence to current
+            // This ensures no events are missed if client reconnects
+            let mut last_seq = start_sequence;
+            let catchup_events = node.get_events_from(start_sequence, 10000).await;
+
+            for event in catchup_events {
+                // Filter by topic if specified
+                if !topics.is_empty() && !topics.contains(&event.topic) {
+                    last_seq = event.sequence + 1;
+                    continue;
+                }
+
+                let proto_event = proto::Event {
+                    sequence: event.sequence,
+                    event_type: i32::from(event.event_type),
+                    topic: event.topic.clone(),
+                    payload: event.payload.clone(),
+                    timestamp: event.timestamp,
+                    source_node: event.source_node.clone(),
+                };
+
+                if tx.send(Ok(proto_event)).await.is_err() {
+                    return; // Client disconnected
+                }
+
+                last_seq = event.sequence + 1;
+            }
+
+            // Now subscribe to real-time events via broadcast channel
+            let mut event_rx = node.subscribe_events();
 
             loop {
-                interval.tick().await;
+                match event_rx.recv().await {
+                    Ok(event) => {
+                        // Skip events we've already sent during catchup
+                        if event.sequence < last_seq {
+                            continue;
+                        }
 
-                // Get events from last sequence
-                let events = node.get_events_from(last_seq, 100).await;
+                        // Filter by topic if specified
+                        if !topics.is_empty() && !topics.contains(&event.topic) {
+                            continue;
+                        }
 
-                for event in events {
-                    // Filter by topic if specified
-                    if !topics.is_empty() && !topics.contains(&event.topic) {
-                        last_seq = event.sequence + 1;
-                        continue;
+                        let proto_event = proto::Event {
+                            sequence: event.sequence,
+                            event_type: i32::from(event.event_type),
+                            topic: event.topic,
+                            payload: event.payload,
+                            timestamp: event.timestamp,
+                            source_node: event.source_node,
+                        };
+
+                        if tx.send(Ok(proto_event)).await.is_err() {
+                            debug!("Client disconnected from event subscription");
+                            return; // Client disconnected
+                        }
                     }
-
-                    let proto_event = proto::Event {
-                        sequence: event.sequence,
-                        event_type: i32::from(event.event_type),
-                        topic: event.topic,
-                        payload: event.payload,
-                        timestamp: event.timestamp,
-                        source_node: event.source_node,
-                    };
-
-                    if tx.send(Ok(proto_event)).await.is_err() {
-                        return; // Client disconnected
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                        // We fell behind - log warning but continue
+                        // Client should use sequence numbers to detect gaps
+                        warn!("Event subscriber lagged by {} events", count);
                     }
-
-                    last_seq = event.sequence + 1;
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        // Channel closed - server shutting down
+                        info!("Event broadcast channel closed");
+                        return;
+                    }
                 }
             }
         });
