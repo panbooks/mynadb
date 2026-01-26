@@ -5,19 +5,66 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MynaDB CPU Metrics Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="css/styles.css?v=7">
 </head>
 <body>
     <div class="container">
+        <!-- Header with Controls -->
         <header>
-            <h1>MynaDB CPU Metrics Dashboard</h1>
-            <p class="subtitle">Real-time CPU Usage Analysis by Host</p>
+            <div class="header-left">
+                <h1>MynaDB Dashboard</h1>
+                <p class="subtitle">Real-time CPU Metrics Analysis</p>
+            </div>
+            <div class="header-controls">
+                <div class="control-group">
+                    <label for="hostFilter">Host:</label>
+                    <select id="hostFilter">
+                        <option value="all">All Hosts</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="refreshRate">Refresh:</label>
+                    <select id="refreshRate">
+                        <option value="10">10s</option>
+                        <option value="30" selected>30s</option>
+                        <option value="60">60s</option>
+                        <option value="0">Manual</option>
+                    </select>
+                </div>
+                <button id="refreshBtn" class="primary">Refresh</button>
+                <button id="themeToggle" class="icon-btn" title="Toggle Theme">☀️</button>
+            </div>
         </header>
 
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <div class="status-item">
+                <span id="statusDot" class="status-dot disconnected"></span>
+                <span id="statusText">Connecting...</span>
+            </div>
+            <div class="status-item">
+                <span>Last Update:</span>
+                <strong id="lastRefresh">--:--:--</strong>
+            </div>
+            <div class="status-item">
+                <span>Thresholds:</span>
+                <span style="color: var(--color-warning);">Warning &gt;60%</span>
+                <span style="color: var(--color-user);">Critical &gt;80%</span>
+            </div>
+            <div style="flex-grow: 1;"></div>
+            <div class="status-item">
+                <button id="exportCSV" title="Export CSV">CSV</button>
+                <button id="exportJSON" title="Export JSON">JSON</button>
+                <button id="exportPNG" title="Export Chart">PNG</button>
+                <button id="copyData" title="Copy to Clipboard">Copy</button>
+            </div>
+        </div>
+
+        <!-- Dashboard Grid -->
         <div class="dashboard">
             <!-- Bar Chart -->
             <div class="chart-card">
-                <h2>CPU Usage by Host (Bar Chart)</h2>
+                <h2>CPU Usage by Host</h2>
                 <canvas id="barChart"></canvas>
             </div>
 
@@ -27,27 +74,61 @@
                 <canvas id="stackedChart"></canvas>
             </div>
 
-            <!-- Doughnut Charts -->
-            <div class="chart-row">
-                <div class="chart-card small">
-                    <h3>db01 (us-east)</h3>
-                    <canvas id="doughnut1"></canvas>
-                    <p class="status high">High Load</p>
+            <!-- Time Series Line Chart -->
+            <div class="chart-card full-width">
+                <div class="chart-header">
+                    <h2>CPU Trend Over Time</h2>
+                    <div class="time-range-picker">
+                        <label>Time Range:</label>
+                        <select id="timeRange">
+                            <option value="5">Last 5 min</option>
+                            <option value="15" selected>Last 15 min</option>
+                            <option value="30">Last 30 min</option>
+                            <option value="60">Last 1 hour</option>
+                            <option value="180">Last 3 hours</option>
+                            <option value="360">Last 6 hours</option>
+                            <option value="1440">Last 24 hours</option>
+                        </select>
+                        <label>Bucket:</label>
+                        <select id="bucketSize">
+                            <option value="10">10s</option>
+                            <option value="30" selected>30s</option>
+                            <option value="60">1 min</option>
+                            <option value="300">5 min</option>
+                            <option value="900">15 min</option>
+                        </select>
+                    </div>
                 </div>
-                <div class="chart-card small">
-                    <h3>web01 (us-east)</h3>
-                    <canvas id="doughnut2"></canvas>
-                    <p class="status medium">Medium Load</p>
-                </div>
-                <div class="chart-card small">
-                    <h3>web02 (us-west)</h3>
-                    <canvas id="doughnut3"></canvas>
-                    <p class="status low">Low Load</p>
+                <canvas id="lineChart"></canvas>
+            </div>
+
+            <!-- Doughnut Charts Row -->
+            <div class="chart-card full-width">
+                <h2>Per-Host Breakdown</h2>
+                <div class="doughnut-row">
+                    <div class="doughnut-card">
+                        <h3 id="hostTitle1">Host 1</h3>
+                        <div id="value1" class="metric-value">--%</div>
+                        <canvas id="doughnut1"></canvas>
+                        <span id="status1" class="host-status normal">Normal</span>
+                    </div>
+                    <div class="doughnut-card">
+                        <h3 id="hostTitle2">Host 2</h3>
+                        <div id="value2" class="metric-value">--%</div>
+                        <canvas id="doughnut2"></canvas>
+                        <span id="status2" class="host-status normal">Normal</span>
+                    </div>
+                    <div class="doughnut-card">
+                        <h3 id="hostTitle3">Host 3</h3>
+                        <div id="value3" class="metric-value">--%</div>
+                        <canvas id="doughnut3"></canvas>
+                        <span id="status3" class="host-status normal">Normal</span>
+                    </div>
                 </div>
             </div>
 
-            <!-- Data Table -->
-            <div class="chart-card">
+            <!-- Summary Table -->
+            <div class="chart-card full-width">
                 <h2>Summary Table</h2>
                 <table>
                     <thead>
@@ -60,63 +141,55 @@
                             <th>Status</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="summaryTableBody">
                         <tr>
-                            <td>db01</td>
-                            <td>us-east</td>
-                            <td class="high">73.23</td>
-                            <td>17.60</td>
-                            <td>9.17</td>
-                            <td><span class="badge high">High Load</span></td>
-                        </tr>
-                        <tr>
-                            <td>web01</td>
-                            <td>us-east</td>
-                            <td class="medium">48.77</td>
-                            <td>38.93</td>
-                            <td>12.30</td>
-                            <td><span class="badge medium">Medium</span></td>
-                        </tr>
-                        <tr>
-                            <td>web02</td>
-                            <td>us-west</td>
-                            <td>28.50</td>
-                            <td class="low">62.10</td>
-                            <td>9.40</td>
-                            <td><span class="badge low">Low Load</span></td>
+                            <td colspan="6" style="text-align: center; padding: 30px;">
+                                <div class="loading"><div class="spinner"></div></div>
+                            </td>
                         </tr>
                     </tbody>
                 </table>
             </div>
 
-            <!-- Query Info -->
-            <div class="chart-card">
-                <h2>Query Information</h2>
-                <div class="query-box">
-                    <h4>SQL Query:</h4>
-                    <pre><code>SELECT
-    host,
-    region,
+            <!-- Query Reference -->
+            <div class="chart-card full-width">
+                <h2>Query Reference</h2>
+                <div class="query-section">
+                    <div class="query-box">
+                        <h4>SQL Query (GROUP BY time)</h4>
+                        <pre><code>SELECT
+    host, region,
     AVG("user") as avg_user,
     AVG(idle) as avg_idle,
     AVG(system) as avg_system
 FROM prod.cpu
-GROUP BY host, region
-ORDER BY avg_user DESC</code></pre>
-                </div>
-                <div class="query-box">
-                    <h4>curl Command:</h4>
-                    <pre><code>curl -s 'http://localhost:7000/query/testdb' \
-  -d 'SELECT host, region, AVG("user") as avg_user, AVG(idle) as avg_idle, AVG(system) as avg_system FROM prod.cpu GROUP BY host, region ORDER BY avg_user DESC'</code></pre>
+WHERE time >= 1704067200000000000
+GROUP BY time(30s), host, region</code></pre>
+                    </div>
+                    <div class="query-box">
+                        <h4>curl Command</h4>
+                        <pre><code>curl -s 'http://localhost:7000/query/testdb' \
+  -d 'SELECT host, region,
+      AVG("user") as avg_user
+  FROM prod.cpu
+  GROUP BY time(5m), host, region'</code></pre>
+                    </div>
                 </div>
             </div>
         </div>
 
         <footer>
-            <p>MynaDB - The Voice of Your Machines | Data refreshed from in-memory cache</p>
+            <p>MynaDB - The Voice of Your Machines |
+               <a href="https://github.com/panbooks/mynadb" style="color: var(--accent-cyan);">GitHub</a> |
+               Dashboard auto-refreshes every <span id="refreshDisplay">30</span> seconds
+            </p>
         </footer>
     </div>
 
-    <script src="charts.js"></script>
+    <!-- Load JavaScript modules (with cache busting) -->
+    <script src="js/api.js?v=7"></script>
+    <script src="js/charts.js?v=7"></script>
+    <script src="js/export.js?v=7"></script>
+    <script src="js/app.js?v=7"></script>
 </body>
 </html>
