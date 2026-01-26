@@ -1,19 +1,37 @@
 //! Data Node Connection Pool
 //!
-//! Manages gRPC connections to Data nodes with connection pooling.
+//! Manages Arrow Flight connections to Data nodes with connection pooling.
 
+use arrow::array::{RecordBatch, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow_flight::{
+    decode::FlightRecordBatchStream,
+    encode::FlightDataEncoderBuilder,
+    flight_service_client::FlightServiceClient,
+    Action, FlightData, FlightDescriptor, PutResult, Ticket,
+};
 use dashmap::DashMap;
+use futures::{stream, StreamExt, TryStreamExt};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::Channel;
 use tracing::{debug, error, info, warn};
 
-// Import generated protobuf types
-pub mod proto {
-    tonic::include_proto!("datanode");
+/// Write request metadata sent via Flight Ticket
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WriteTicket {
+    pub catalog: String,
+    pub fencing_token: Option<u64>,
 }
 
-use proto::data_node_service_client::DataNodeServiceClient;
+/// Query request metadata sent via Flight Ticket
+#[derive(Debug, Serialize, Deserialize)]
+pub struct QueryTicket {
+    pub catalog: String,
+    pub sql: String,
+    pub partitions: Option<Vec<String>>,
+}
 
 /// Connection pool configuration
 #[derive(Debug, Clone)]
@@ -40,12 +58,12 @@ impl Default for PoolConfig {
 #[derive(Debug, Clone)]
 pub struct DataNodeAddr {
     pub node_id: String,
-    pub grpc_addr: String,
+    pub flight_addr: String,
 }
 
-/// Connection pool for Data nodes
+/// Connection pool for Data nodes (Arrow Flight)
 pub struct DataNodePool {
-    /// Node ID → gRPC channel mapping
+    /// Node ID → Flight channel mapping
     channels: DashMap<String, Channel>,
 
     /// Node ID → address mapping
@@ -65,9 +83,10 @@ impl DataNodePool {
     }
 
     /// Add or update a Data node address
-    pub fn add_node(&self, node_id: &str, grpc_addr: &str) {
-        info!("Adding data node to pool: {} at {}", node_id, grpc_addr);
-        self.addresses.insert(node_id.to_string(), grpc_addr.to_string());
+    pub fn add_node(&self, node_id: &str, flight_addr: &str) {
+        info!("Adding data node to pool: {} at {}", node_id, flight_addr);
+        self.addresses
+            .insert(node_id.to_string(), flight_addr.to_string());
     }
 
     /// Remove a Data node
@@ -77,13 +96,13 @@ impl DataNodePool {
         self.channels.remove(node_id);
     }
 
-    /// Get a gRPC client for a Data node
-    pub async fn get_client(
+    /// Get a Flight client for a Data node
+    pub async fn get_flight_client(
         &self,
         node_id: &str,
-    ) -> Result<DataNodeServiceClient<Channel>, String> {
+    ) -> Result<FlightServiceClient<Channel>, String> {
         let channel = self.get_or_create_channel(node_id).await?;
-        Ok(DataNodeServiceClient::new(channel))
+        Ok(FlightServiceClient::new(channel))
     }
 
     /// Get or create a channel to a Data node
@@ -118,6 +137,149 @@ impl DataNodePool {
 
         info!("Connected to data node {} at {}", node_id, addr);
         Ok(channel)
+    }
+
+    /// Send a write request to a Data node using Flight DoPut
+    pub async fn write(
+        &self,
+        node_id: &str,
+        catalog: &str,
+        line_protocol: &str,
+        fencing_token: Option<u64>,
+    ) -> Result<u64, String> {
+        let mut client = self.get_flight_client(node_id).await?;
+
+        // Create write ticket
+        let ticket = WriteTicket {
+            catalog: catalog.to_string(),
+            fencing_token,
+        };
+
+        // Create a RecordBatch with line protocol data
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "line_protocol",
+            DataType::Utf8,
+            false,
+        )]));
+        let line_array = StringArray::from(vec![line_protocol]);
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(line_array)])
+            .map_err(|e| format!("Failed to create batch: {}", e))?;
+
+        // Create flight descriptor with write metadata
+        let descriptor = FlightDescriptor::new_cmd(serde_json::to_vec(&ticket).unwrap());
+
+        // Encode the batch as FlightData with descriptor
+        let batch_stream =
+            stream::iter(vec![batch].into_iter().map(Ok::<_, arrow_flight::error::FlightError>));
+
+        let flight_data_stream = FlightDataEncoderBuilder::new()
+            .with_flight_descriptor(Some(descriptor))
+            .build(batch_stream);
+
+        // Collect into Vec<FlightData>
+        let flight_data: Vec<FlightData> = flight_data_stream
+            .try_collect()
+            .await
+            .map_err(|e| format!("Failed to encode flight data: {}", e))?;
+
+        // Send via DoPut
+        let request = tonic::Request::new(stream::iter(flight_data.into_iter()));
+        let response = client
+            .do_put(request)
+            .await
+            .map_err(|e| format!("DoPut failed: {}", e))?;
+
+        // Read response
+        let mut result_stream = response.into_inner();
+        let mut points_written = 0u64;
+
+        while let Some(result) = result_stream.next().await {
+            let put_result = result.map_err(|e| format!("PutResult error: {}", e))?;
+            // Parse the app_metadata JSON to get points_written
+            if let Ok(metadata) =
+                serde_json::from_slice::<serde_json::Value>(&put_result.app_metadata)
+            {
+                if let Some(points) = metadata["points_written"].as_u64() {
+                    points_written = points;
+                }
+            }
+        }
+
+        Ok(points_written)
+    }
+
+    /// Execute a query on a Data node using Flight DoGet
+    pub async fn query(
+        &self,
+        node_id: &str,
+        catalog: &str,
+        sql: &str,
+        partitions: Option<Vec<String>>,
+    ) -> Result<Vec<RecordBatch>, String> {
+        let mut client = self.get_flight_client(node_id).await?;
+
+        // Create query ticket
+        let ticket = QueryTicket {
+            catalog: catalog.to_string(),
+            sql: sql.to_string(),
+            partitions,
+        };
+
+        let ticket_bytes = serde_json::to_vec(&ticket)
+            .map_err(|e| format!("Failed to serialize ticket: {}", e))?;
+
+        // Send DoGet request
+        let request = tonic::Request::new(Ticket::new(ticket_bytes));
+        let response = client
+            .do_get(request)
+            .await
+            .map_err(|e| format!("DoGet failed: {}", e))?;
+
+        // Decode the response stream into RecordBatches
+        // Map Status errors to FlightError for FlightRecordBatchStream
+        let mapped_stream = response.into_inner().map(|result| {
+            result.map_err(|status| {
+                arrow_flight::error::FlightError::Tonic(status)
+            })
+        });
+        let flight_stream = FlightRecordBatchStream::new_from_flight_data(mapped_stream);
+
+        let batches: Vec<RecordBatch> = flight_stream
+            .try_collect()
+            .await
+            .map_err(|e| format!("Failed to decode batches: {}", e))?;
+
+        Ok(batches)
+    }
+
+    /// Execute an action on a Data node (FLUSH, HEALTH, STATS)
+    pub async fn do_action(
+        &self,
+        node_id: &str,
+        action_type: &str,
+        body: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        let mut client = self.get_flight_client(node_id).await?;
+
+        let action = Action {
+            r#type: action_type.to_string(),
+            body: body.to_vec().into(),
+        };
+
+        let request = tonic::Request::new(action);
+        let response = client
+            .do_action(request)
+            .await
+            .map_err(|e| format!("DoAction failed: {}", e))?;
+
+        let mut results = Vec::new();
+        let mut stream = response.into_inner();
+        while let Some(result) = stream.next().await {
+            let r = result.map_err(|e| format!("Action result error: {}", e))?;
+            results.extend_from_slice(&r.body);
+        }
+
+        Ok(results)
     }
 
     /// Check if a node is in the pool

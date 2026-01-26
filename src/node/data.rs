@@ -7,7 +7,7 @@
 use super::common;
 use crate::config::Config;
 use crate::data::config::DataNodeConfig;
-use crate::data::server::grpc::{start_grpc_server, DataNodeGrpcService};
+use crate::data::server::flight::{start_flight_server, DataNodeFlightService};
 use crate::meta::client::MetaClient;
 use crate::storage::cache;
 use std::sync::Arc;
@@ -83,20 +83,25 @@ pub async fn start(config_path: &str) {
         }
     };
 
-    // Create gRPC service
-    let grpc_service = DataNodeGrpcService::new(
+    // Initialize query engine for local query execution
+    let query_engine = common::init_query_engine(&config, storage.clone(), data_cache.clone());
+
+    // Create Flight service (replaces gRPC)
+    let flight_service = DataNodeFlightService::new(
         data_cache,
+        query_engine,
         meta_client,
         config.schema.clone(),
         data_config.node_id.clone(),
     );
 
-    // Start gRPC server
+    // Start Flight server
     let addr = data_config
         .advertise_addr
         .parse()
         .expect("Invalid address");
     welcome!("  Data node started on {}", data_config.advertise_addr);
+    welcome!("  Protocol: Arrow Flight");
     welcome!("===============================================");
 
     // Set up signal handler for graceful shutdown
@@ -108,8 +113,8 @@ pub async fn start(config_path: &str) {
         std::process::exit(0);
     });
 
-    if let Err(e) = start_grpc_server(addr, grpc_service).await {
-        error!("Data gRPC server failed: {}", e);
+    if let Err(e) = start_flight_server(addr, flight_service).await {
+        error!("Data Flight server failed: {}", e);
         common::remove_pid_file(&config.storage.data_dir, NODE_TYPE);
     }
 }

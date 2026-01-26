@@ -4,6 +4,8 @@
 //! Currently implements single-node mode with sled-backed storage.
 //! Full multi-node Raft replication will be added in a later iteration.
 
+// TODO: log_store is incomplete - needs TypeConfig definition and openraft API updates
+// mod log_store;
 pub mod network;
 pub mod state_machine;
 

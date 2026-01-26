@@ -3,7 +3,7 @@
 //! The QueryCoordinator is responsible for:
 //! - Parsing SQL to extract table references and time ranges
 //! - Determining which Data nodes to query based on partition pruning
-//! - Fan-out queries to multiple Data nodes
+//! - Fan-out queries to multiple Data nodes via Arrow Flight
 //! - Aggregating results from partial queries
 
 use super::shard_cache::{DataNodeInfo, ShardCache};
@@ -11,7 +11,7 @@ use crate::router::client::DataNodePool;
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{debug, info, warn};
+use tracing::{debug, error};
 
 /// Query result from distributed execution
 #[derive(Debug)]
@@ -176,7 +176,7 @@ impl QueryCoordinator {
         })
     }
 
-    /// Fan-out query to target nodes and collect results
+    /// Fan-out query to target nodes via Arrow Flight and collect results
     async fn fan_out_query(
         &self,
         plan: &DistributedQueryPlan,
@@ -190,14 +190,22 @@ impl QueryCoordinator {
             let catalog = plan.catalog.clone();
 
             let future = async move {
-                match pool.get_client(&node_id).await {
-                    Ok(mut client) => {
-                        // TODO: Actually call the Data node gRPC Query service
-                        // For now, return empty result
-                        debug!("Would query {} with: {}", node_id, sql);
-                        Ok(Vec::<RecordBatch>::new())
+                debug!("Querying {} with: {}", node_id, sql);
+
+                // Execute query via Arrow Flight DoGet
+                match pool.query(&node_id, &catalog, &sql, None).await {
+                    Ok(batches) => {
+                        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+                        debug!(
+                            "Received {} batches ({} rows) from {}",
+                            batches.len(),
+                            total_rows,
+                            node_id
+                        );
+                        Ok(batches)
                     }
                     Err(e) => {
+                        error!("Query failed on {}: {}", node_id, e);
                         Err(format!("Failed to query {}: {}", node_id, e))
                     }
                 }
