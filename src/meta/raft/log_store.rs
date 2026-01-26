@@ -1,23 +1,38 @@
 //! Raft log store implementation using sled
+//!
+//! This module provides persistent storage for Raft log entries, vote state,
+//! and committed log ID using the sled embedded database.
 
-use crate::meta::raft::{NodeConfig, NodeId, TypeConfig};
-use crate::meta::types::MetaCommand;
-use openraft::storage::{LogFlushed, LogState, RaftLogStorage};
-use openraft::{Entry, LogId, OptionalSend, StoredMembership, Vote};
+use super::{Entry, LogId, NodeId, TypeConfig, Vote};
+use openraft::storage::{LogFlushed, LogState, RaftLogReader, RaftLogStorage};
+use openraft::{AnyError, OptionalSend, StorageError, StorageIOError};
 use parking_lot::RwLock;
 use sled::Db;
 use std::fmt::Debug;
 use std::ops::RangeBounds;
+use tracing::{debug, error};
 
 const KEY_VOTE: &[u8] = b"/raft/vote";
 const KEY_COMMITTED: &[u8] = b"/raft/committed";
+const KEY_LAST_PURGED: &[u8] = b"/raft/last_purged";
 const PREFIX_LOG: &str = "/raft/log/";
 
-/// Raft log store backed by sled
+/// Raft log store backed by sled embedded database
+///
+/// This store persists:
+/// - Log entries (indexed by log index)
+/// - Vote state (current voted-for candidate)
+/// - Committed log ID
+/// - Last purged log ID (for log compaction)
 pub struct SledLogStore {
+    /// Sled database instance
     db: Db,
-    vote: RwLock<Option<Vote<NodeId>>>,
-    committed: RwLock<Option<LogId<NodeId>>>,
+    /// Cached vote state
+    vote: RwLock<Option<Vote>>,
+    /// Cached committed log ID
+    committed: RwLock<Option<LogId>>,
+    /// Cached last purged log ID
+    last_purged: RwLock<Option<LogId>>,
 }
 
 impl SledLogStore {
@@ -36,10 +51,22 @@ impl SledLogStore {
             .flatten()
             .and_then(|v| bincode::deserialize(&v).ok());
 
+        let last_purged = db
+            .get(KEY_LAST_PURGED)
+            .ok()
+            .flatten()
+            .and_then(|v| bincode::deserialize(&v).ok());
+
+        debug!(
+            "SledLogStore initialized: vote={:?}, committed={:?}, last_purged={:?}",
+            vote, committed, last_purged
+        );
+
         Self {
             db,
             vote: RwLock::new(vote),
             committed: RwLock::new(committed),
+            last_purged: RwLock::new(last_purged),
         }
     }
 
@@ -81,27 +108,54 @@ impl SledLogStore {
                     .and_then(|s| s.parse().ok())
             })
     }
-}
 
-impl RaftLogStorage<TypeConfig> for SledLogStore {
-    type LogReader = Self;
-
-    async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, openraft::StorageError<NodeId>> {
-        let last = self.last_log_index();
-
-        let last_log_id = if let Some(index) = last {
+    /// Get the last log entry
+    fn last_log_entry(&self) -> Option<Entry> {
+        if let Some(index) = self.last_log_index() {
             let key = Self::log_key(index);
             self.db
                 .get(key.as_bytes())
                 .ok()
                 .flatten()
-                .and_then(|v| bincode::deserialize::<Entry<TypeConfig>>(&v).ok())
-                .map(|e| e.log_id)
+                .and_then(|v| bincode::deserialize(&v).ok())
         } else {
             None
-        };
+        }
+    }
 
-        let last_purged_log_id = None; // We don't track purged logs separately
+    /// Helper to create a storage error
+    fn storage_error(e: impl std::fmt::Display, context: &str) -> StorageError<NodeId> {
+        let msg = format!("{}: {}", context, e);
+        error!("{}", msg);
+        StorageError::IO {
+            source: StorageIOError::write(AnyError::error(msg)),
+        }
+    }
+}
+
+impl Clone for SledLogStore {
+    fn clone(&self) -> Self {
+        Self {
+            db: self.db.clone(),
+            vote: RwLock::new(self.vote.read().clone()),
+            committed: RwLock::new(self.committed.read().clone()),
+            last_purged: RwLock::new(self.last_purged.read().clone()),
+        }
+    }
+}
+
+impl RaftLogStorage<TypeConfig> for SledLogStore {
+    type LogReader = Self;
+
+    async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, StorageError<NodeId>> {
+        let last_purged_log_id = self.last_purged.read().clone();
+
+        let last_log_id = self.last_log_entry().map(|e| e.log_id);
+
+        debug!(
+            "get_log_state: last_purged={:?}, last_log={:?}",
+            last_purged_log_id, last_log_id
+        );
 
         Ok(LogState {
             last_purged_log_id,
@@ -110,101 +164,78 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
     }
 
     async fn get_log_reader(&mut self) -> Self::LogReader {
-        // Clone the database handle for reading
-        Self {
-            db: self.db.clone(),
-            vote: RwLock::new(self.vote.read().clone()),
-            committed: RwLock::new(self.committed.read().clone()),
-        }
+        self.clone()
     }
 
-    async fn save_vote(&mut self, vote: &Vote<NodeId>) -> Result<(), openraft::StorageError<NodeId>> {
-        let data = bincode::serialize(vote).map_err(|e| {
-            openraft::StorageError::IO {
-                source: openraft::StorageIOError::write_vote(&e),
-            }
-        })?;
+    async fn save_vote(&mut self, vote: &Vote) -> Result<(), StorageError<NodeId>> {
+        let data =
+            bincode::serialize(vote).map_err(|e| Self::storage_error(e, "serialize vote"))?;
 
-        self.db.insert(KEY_VOTE, data).map_err(|e| {
-            openraft::StorageError::IO {
-                source: openraft::StorageIOError::write_vote(&e),
-            }
-        })?;
+        self.db
+            .insert(KEY_VOTE, data)
+            .map_err(|e| Self::storage_error(e, "insert vote"))?;
 
-        self.db.flush().map_err(|e| {
-            openraft::StorageError::IO {
-                source: openraft::StorageIOError::write_vote(&e),
-            }
-        })?;
+        self.db
+            .flush()
+            .map_err(|e| Self::storage_error(e, "flush vote"))?;
 
         *self.vote.write() = Some(vote.clone());
+        debug!("Saved vote: {:?}", vote);
         Ok(())
     }
 
     async fn save_committed(
         &mut self,
-        committed: Option<LogId<NodeId>>,
-    ) -> Result<(), openraft::StorageError<NodeId>> {
+        committed: Option<LogId>,
+    ) -> Result<(), StorageError<NodeId>> {
         if let Some(ref c) = committed {
-            let data = bincode::serialize(c).map_err(|e| {
-                openraft::StorageError::IO {
-                    source: openraft::StorageIOError::write_logs(&e),
-                }
-            })?;
+            let data =
+                bincode::serialize(c).map_err(|e| Self::storage_error(e, "serialize committed"))?;
 
-            self.db.insert(KEY_COMMITTED, data).map_err(|e| {
-                openraft::StorageError::IO {
-                    source: openraft::StorageIOError::write_logs(&e),
-                }
-            })?;
+            self.db
+                .insert(KEY_COMMITTED, data)
+                .map_err(|e| Self::storage_error(e, "insert committed"))?;
         }
 
         *self.committed.write() = committed;
+        debug!("Saved committed: {:?}", committed);
         Ok(())
     }
 
-    async fn read_vote(&mut self) -> Result<Option<Vote<NodeId>>, openraft::StorageError<NodeId>> {
+    async fn read_vote(&mut self) -> Result<Option<Vote>, StorageError<NodeId>> {
         Ok(self.vote.read().clone())
-    }
-
-    async fn read_committed(&mut self) -> Result<Option<LogId<NodeId>>, openraft::StorageError<NodeId>> {
-        Ok(self.committed.read().clone())
     }
 
     async fn append<I>(
         &mut self,
         entries: I,
         callback: LogFlushed<TypeConfig>,
-    ) -> Result<(), openraft::StorageError<NodeId>>
+    ) -> Result<(), StorageError<NodeId>>
     where
-        I: IntoIterator<Item = Entry<TypeConfig>> + Send,
+        I: IntoIterator<Item = Entry> + Send,
     {
+        let mut count = 0;
         for entry in entries {
             let key = Self::log_key(entry.log_id.index);
-            let data = bincode::serialize(&entry).map_err(|e| {
-                openraft::StorageError::IO {
-                    source: openraft::StorageIOError::write_logs(&e),
-                }
-            })?;
+            let data = bincode::serialize(&entry)
+                .map_err(|e| Self::storage_error(e, "serialize entry"))?;
 
-            self.db.insert(key.as_bytes(), data).map_err(|e| {
-                openraft::StorageError::IO {
-                    source: openraft::StorageIOError::write_logs(&e),
-                }
-            })?;
+            self.db
+                .insert(key.as_bytes(), data)
+                .map_err(|e| Self::storage_error(e, "insert entry"))?;
+            count += 1;
         }
 
-        self.db.flush().map_err(|e| {
-            openraft::StorageError::IO {
-                source: openraft::StorageIOError::write_logs(&e),
-            }
-        })?;
+        self.db
+            .flush()
+            .map_err(|e| Self::storage_error(e, "flush entries"))?;
 
+        debug!("Appended {} log entries", count);
         callback.log_io_completed(Ok(()));
         Ok(())
     }
 
-    async fn truncate(&mut self, log_id: LogId<NodeId>) -> Result<(), openraft::StorageError<NodeId>> {
+    async fn truncate(&mut self, log_id: LogId) -> Result<(), StorageError<NodeId>> {
         // Remove all entries from log_id.index onwards
         let start_key = Self::log_key(log_id.index);
         let mut keys_to_remove = Vec::new();
@@ -218,18 +249,18 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
             }
         }
 
+        let count = keys_to_remove.len();
         for key in keys_to_remove {
-            self.db.remove(key).map_err(|e| {
-                openraft::StorageError::IO {
-                    source: openraft::StorageIOError::write_logs(&e),
-                }
-            })?;
+            self.db
+                .remove(key)
+                .map_err(|e| Self::storage_error(e, "remove entry"))?;
         }
 
+        debug!("Truncated {} entries from index {}", count, log_id.index);
         Ok(())
     }
 
-    async fn purge(&mut self, log_id: LogId<NodeId>) -> Result<(), openraft::StorageError<NodeId>> {
+    async fn purge(&mut self, log_id: LogId) -> Result<(), StorageError<NodeId>> {
         // Remove all entries up to and including log_id.index
         let end_key = Self::log_key(log_id.index + 1);
         let mut keys_to_remove = Vec::new();
@@ -243,24 +274,35 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
             }
         }
 
+        let count = keys_to_remove.len();
         for key in keys_to_remove {
-            self.db.remove(key).map_err(|e| {
-                openraft::StorageError::IO {
-                    source: openraft::StorageIOError::write_logs(&e),
-                }
-            })?;
+            self.db
+                .remove(key)
+                .map_err(|e| Self::storage_error(e, "purge entry"))?;
         }
 
+        // Update last purged
+        let data = bincode::serialize(&log_id)
+            .map_err(|e| Self::storage_error(e, "serialize last_purged"))?;
+        self.db
+            .insert(KEY_LAST_PURGED, data)
+            .map_err(|e| Self::storage_error(e, "insert last_purged"))?;
+
+        *self.last_purged.write() = Some(log_id);
+
+        debug!(
+            "Purged {} entries up to index {}",
+            count, log_id.index
+        );
         Ok(())
     }
 }
 
-// Implement LogReader trait
-impl openraft::storage::RaftLogReader<TypeConfig> for SledLogStore {
+impl RaftLogReader<TypeConfig> for SledLogStore {
     async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + OptionalSend>(
         &mut self,
         range: RB,
-    ) -> Result<Vec<Entry<TypeConfig>>, openraft::StorageError<NodeId>> {
+    ) -> Result<Vec<Entry>, StorageError<NodeId>> {
         let start = match range.start_bound() {
             std::ops::Bound::Included(&n) => n,
             std::ops::Bound::Excluded(&n) => n + 1,
@@ -294,16 +336,40 @@ impl openraft::storage::RaftLogReader<TypeConfig> for SledLogStore {
                     }
                 }
 
-                if let Ok(entry) = bincode::deserialize::<Entry<TypeConfig>>(&v) {
+                if let Ok(entry) = bincode::deserialize::<Entry>(&v) {
                     entries.push(entry);
                 }
             }
         }
 
+        debug!(
+            "Read {} log entries for range {:?}",
+            entries.len(),
+            range
+        );
         Ok(entries)
     }
+}
 
-    async fn read_vote(&mut self) -> Result<Option<Vote<NodeId>>, openraft::StorageError<NodeId>> {
-        Ok(self.vote.read().clone())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_log_store_vote() {
+        let dir = tempdir().unwrap();
+        let mut store = SledLogStore::open(dir.path()).unwrap();
+
+        // Initially no vote
+        assert!(store.read_vote().await.unwrap().is_none());
+
+        // Save a vote
+        let vote = openraft::Vote::new(1, 2);
+        store.save_vote(&vote).await.unwrap();
+
+        // Read it back
+        let read_vote = store.read_vote().await.unwrap();
+        assert_eq!(read_vote, Some(vote));
     }
 }

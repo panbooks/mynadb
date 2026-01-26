@@ -51,7 +51,7 @@ regex = "1.10"
 libc = "0.2"
 
 # Cluster support - Meta Service (Raft-based)
-openraft = { version = "0.9", features = ["serde"] }
+openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 sled = "0.34"
 dashmap = "6.0"
 prometheus = "0.13"
