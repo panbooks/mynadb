@@ -8,21 +8,13 @@ flight_host = "0.0.0.0"
 flight_port = 7001
 
 [storage]
-# Data directory path (use absolute path in production)
-data_dir = "/data0/mynadb/data"
-
-# System directory name (for metadata like series stats, retention exclusions)
-system_dir = "_system"
-
-# Object store configuration
-[storage.object_store]
 # Storage backend: "local" (default), "s3", "minio", "oss"
 backend = "local"
 
-# Data directory for local storage (must match [storage].data_dir for local backend)
+# Data directory for local storage (use absolute path in production)
 data_dir = "/data0/mynadb/data"
 
-# MinIO configuration
+# S3/MinIO/OSS configuration (when backend != "local")
 bucket = "mynadb"
 region = "us-east-1"
 access_key = "minioadmin"

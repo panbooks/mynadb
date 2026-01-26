@@ -599,10 +599,10 @@ async fn main() {
     // Initialize storage backend first (WAL depends on it)
     info!(
         "Initializing storage backend: {}",
-        config.storage.object_store.backend
+        config.storage.backend
     );
     let storage = Arc::new(
-        storage_mod::Storage::from_config(&config.storage.object_store)
+        storage_mod::Storage::from_config(&config.storage)
             .expect("Failed to initialize storage"),
     );
 
@@ -1017,9 +1017,9 @@ async fn run_data_node(_config_path: &str, config: &Config) {
     info!("Starting Data node {} on {}", data_config.node_id, data_config.advertise_addr);
 
     // Initialize storage backend
-    info!("Initializing storage backend: {}", config.storage.object_store.backend);
+    info!("Initializing storage backend: {}", config.storage.backend);
     let storage = Arc::new(
-        storage_mod::Storage::from_config(&config.storage.object_store)
+        storage_mod::Storage::from_config(&config.storage)
             .expect("Failed to initialize storage"),
     );
 

@@ -78,29 +78,9 @@ pub struct ServerConfig {
     pub mysql_enabled: bool,
 }
 
-/// Storage configuration
+/// Storage configuration (supports local filesystem and S3-compatible storage)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
-    /// Data directory path (for local storage)
-    #[serde(default = "default_data_dir")]
-    pub data_dir: String,
-
-    /// System directory name (for metadata like series stats, retention exclusions)
-    #[serde(default = "default_system_dir")]
-    pub system_dir: String,
-
-    /// Object store configuration
-    #[serde(default)]
-    pub object_store: ObjectStoreConfig,
-
-    /// File cache size in GB (for object store backends)
-    #[serde(default)]
-    pub file_cache_size_gb: Option<u64>,
-}
-
-/// Object store configuration for S3-compatible storage
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ObjectStoreConfig {
     /// Storage backend: "local", "s3", "minio", "oss"
     #[serde(default = "default_storage_backend")]
     pub backend: String,
@@ -136,9 +116,13 @@ pub struct ObjectStoreConfig {
     /// Allow HTTP connections (for local MinIO)
     #[serde(default)]
     pub allow_http: bool,
+
+    /// File cache size in GB (for object store backends)
+    #[serde(default)]
+    pub file_cache_size_gb: Option<u64>,
 }
 
-impl Default for ObjectStoreConfig {
+impl Default for StorageConfig {
     fn default() -> Self {
         Self {
             backend: default_storage_backend(),
@@ -150,6 +134,7 @@ impl Default for ObjectStoreConfig {
             endpoint: None,
             prefix: None,
             allow_http: false,
+            file_cache_size_gb: None,
         }
     }
 }
@@ -527,9 +512,6 @@ fn default_data_dir() -> String {
     "./data".to_string()
 }
 
-fn default_system_dir() -> String {
-    "_system".to_string()
-}
 
 fn default_storage_backend() -> String {
     "local".to_string()
@@ -713,17 +695,6 @@ impl Default for ServerConfig {
             mysql_host: default_mysql_host(),
             mysql_port: default_mysql_port(),
             mysql_enabled: default_mysql_enabled(),
-        }
-    }
-}
-
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self {
-            data_dir: default_data_dir(),
-            system_dir: default_system_dir(),
-            object_store: ObjectStoreConfig::default(),
-            file_cache_size_gb: None,
         }
     }
 }
