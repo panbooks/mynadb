@@ -75,6 +75,20 @@ impl PartitionKey {
             self.catalog, self.schema, self.table, self.date
         )
     }
+
+    /// Convert date string (YYYY-MM-DD) to i32 (days since Unix epoch)
+    pub fn date_as_i32(&self) -> i32 {
+        // Parse YYYY-MM-DD format
+        if let Ok(date) = chrono::NaiveDate::parse_from_str(&self.date, "%Y-%m-%d") {
+            let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+            (date - epoch).num_days() as i32
+        } else {
+            // Fallback to today if parse fails
+            let today = chrono::Utc::now().date_naive();
+            let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+            (today - epoch).num_days() as i32
+        }
+    }
 }
 
 /// Shard cache for partition→node mapping

@@ -29,6 +29,17 @@ pub struct WriteTicket {
     pub partition_key: Option<String>,
 }
 
+/// Batch write request metadata sent via Flight Descriptor
+/// Used when Router sends pre-converted RecordBatch to Data node
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchWriteTicket {
+    pub catalog: String,
+    pub schema: String,
+    pub table: String,
+    pub date: i32, // Days since Unix epoch (Date32 format)
+    pub fencing_token: Option<u64>,
+}
+
 /// Query request metadata sent via Flight Ticket
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QueryTicket {
@@ -212,6 +223,79 @@ impl DataNodePool {
         }
 
         Ok(points_written)
+    }
+
+    /// Send a pre-converted RecordBatch to a Data node using Flight DoPut
+    ///
+    /// This is the optimized write path where the Router has already parsed
+    /// line protocol and converted Points to RecordBatch. The Data node can
+    /// ingest the batch directly without re-parsing.
+    pub async fn write_batch(
+        &self,
+        node_id: &str,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date: i32,
+        batch: RecordBatch,
+        fencing_token: Option<u64>,
+    ) -> Result<u64, String> {
+        let mut client = self.get_flight_client(node_id).await?;
+
+        // Create batch write ticket with partition metadata
+        let ticket = BatchWriteTicket {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            date,
+            fencing_token,
+        };
+
+        // Create flight descriptor with batch write metadata
+        let descriptor = FlightDescriptor::new_cmd(serde_json::to_vec(&ticket).unwrap());
+
+        // Encode the RecordBatch as FlightData with descriptor
+        let batch_stream =
+            stream::iter(vec![batch].into_iter().map(Ok::<_, arrow_flight::error::FlightError>));
+
+        let flight_data_stream = FlightDataEncoderBuilder::new()
+            .with_flight_descriptor(Some(descriptor))
+            .build(batch_stream);
+
+        // Collect into Vec<FlightData>
+        let flight_data: Vec<FlightData> = flight_data_stream
+            .try_collect()
+            .await
+            .map_err(|e| format!("Failed to encode flight data: {}", e))?;
+
+        // Send via DoPut
+        let request = tonic::Request::new(stream::iter(flight_data.into_iter()));
+        let response = client
+            .do_put(request)
+            .await
+            .map_err(|e| format!("DoPut failed: {}", e))?;
+
+        // Read response
+        let mut result_stream = response.into_inner();
+        let mut rows_written = 0u64;
+
+        while let Some(result) = result_stream.next().await {
+            let put_result = result.map_err(|e| format!("PutResult error: {}", e))?;
+            // Parse the app_metadata JSON to get rows_written
+            if let Ok(metadata) =
+                serde_json::from_slice::<serde_json::Value>(&put_result.app_metadata)
+            {
+                if let Some(rows) = metadata["rows_written"].as_u64() {
+                    rows_written = rows;
+                }
+                // Also check points_written for backwards compatibility
+                if let Some(points) = metadata["points_written"].as_u64() {
+                    rows_written = points;
+                }
+            }
+        }
+
+        Ok(rows_written)
     }
 
     /// Execute a query on a Data node using Flight DoGet
