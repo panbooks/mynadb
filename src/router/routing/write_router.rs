@@ -3,17 +3,17 @@
 //! The WriteRouter is responsible for:
 //! - Parsing line protocol to extract partition information
 //! - Selecting target Data nodes based on partition affinity
-//! - Dispatching writes to Data nodes in parallel
+//! - Dispatching writes to Data nodes in parallel via Arrow Flight
 //! - Handling retries and failover
 
-use super::shard_cache::{DataNodeInfo, PartitionKey, ShardCache};
+use super::shard_cache::{PartitionKey, ShardCache};
 use crate::config::SchemaConfig;
 use crate::router::client::DataNodePool;
-use crate::storage::line_protocol::{parse_multiple_lines, Point};
+use crate::storage::line_protocol::{parse_line_protocol, Point};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 /// Write routing result
 #[derive(Debug)]
@@ -53,10 +53,10 @@ impl WriteRouter {
     /// Route a write request to appropriate Data nodes
     ///
     /// This method:
-    /// 1. Parses the line protocol
+    /// 1. Parses the line protocol (keeping original lines)
     /// 2. Groups points by partition key
     /// 3. Selects target Data nodes for each partition
-    /// 4. Dispatches writes in parallel
+    /// 4. Dispatches writes via Arrow Flight in parallel
     pub async fn route_write(
         &self,
         catalog: &str,
@@ -64,9 +64,9 @@ impl WriteRouter {
     ) -> WriteResult {
         let start = Instant::now();
 
-        // Parse line protocol
-        let points = parse_multiple_lines(line_protocol, &self.schema_config);
-        if points.is_empty() {
+        // Parse line protocol, keeping original lines for routing
+        let parsed_lines = self.parse_with_original_lines(line_protocol);
+        if parsed_lines.is_empty() {
             return WriteResult {
                 success: false,
                 points_written: 0,
@@ -76,14 +76,14 @@ impl WriteRouter {
             };
         }
 
-        let total_points = points.len();
+        let total_points = parsed_lines.len();
         debug!("Routing {} points for catalog {}", total_points, catalog);
 
-        // Group points by partition key
-        let partitions = self.group_by_partition(catalog, points);
+        // Group by partition key (with original line strings)
+        let partitions = self.group_by_partition_with_lines(catalog, parsed_lines);
 
         // Group partitions by target Data node
-        let node_batches = self.group_by_target_node(partitions);
+        let node_batches = self.group_by_target_node_with_lines(partitions);
 
         if node_batches.is_empty() {
             return WriteResult {
@@ -95,8 +95,8 @@ impl WriteRouter {
             };
         }
 
-        // Dispatch writes to Data nodes in parallel
-        let results = self.dispatch_writes(catalog, node_batches, line_protocol).await;
+        // Dispatch writes to Data nodes via Arrow Flight in parallel
+        let results = self.dispatch_writes(catalog, node_batches).await;
 
         // Aggregate results
         let mut total_written = 0u64;
@@ -125,15 +125,30 @@ impl WriteRouter {
         }
     }
 
-    /// Group points by partition key
-    fn group_by_partition(
+    /// Parse line protocol and keep original lines for routing
+    fn parse_with_original_lines(&self, line_protocol: &str) -> Vec<(String, Point)> {
+        let mut results = Vec::new();
+        for line in line_protocol.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Ok(point) = parse_line_protocol(line, &self.schema_config) {
+                results.push((line.to_string(), point));
+            }
+        }
+        results
+    }
+
+    /// Group points by partition key, keeping original line strings
+    fn group_by_partition_with_lines(
         &self,
         catalog: &str,
-        points: Vec<Point>,
-    ) -> HashMap<PartitionKey, Vec<Point>> {
-        let mut partitions: HashMap<PartitionKey, Vec<Point>> = HashMap::new();
+        parsed_lines: Vec<(String, Point)>,
+    ) -> HashMap<PartitionKey, Vec<String>> {
+        let mut partitions: HashMap<PartitionKey, Vec<String>> = HashMap::new();
 
-        for point in points {
+        for (original_line, point) in parsed_lines {
             let (schema, table) = match self.schema_config.strategy {
                 crate::config::SchemaTableStrategy::ServiceAsSchema => {
                     (point.service.clone(), point.measurement.clone())
@@ -153,25 +168,25 @@ impl WriteRouter {
                 date,
             };
 
-            partitions.entry(key).or_default().push(point);
+            partitions.entry(key).or_default().push(original_line);
         }
 
         partitions
     }
 
     /// Group partitions by target Data node
-    fn group_by_target_node(
+    fn group_by_target_node_with_lines(
         &self,
-        partitions: HashMap<PartitionKey, Vec<Point>>,
-    ) -> HashMap<String, Vec<(PartitionKey, Vec<Point>)>> {
-        let mut node_batches: HashMap<String, Vec<(PartitionKey, Vec<Point>)>> = HashMap::new();
+        partitions: HashMap<PartitionKey, Vec<String>>,
+    ) -> HashMap<String, Vec<(PartitionKey, Vec<String>)>> {
+        let mut node_batches: HashMap<String, Vec<(PartitionKey, Vec<String>)>> = HashMap::new();
 
-        for (partition_key, points) in partitions {
+        for (partition_key, lines) in partitions {
             if let Some(node) = self.shard_cache.select_node_for_partition(&partition_key) {
                 node_batches
                     .entry(node.node_id)
                     .or_default()
-                    .push((partition_key, points));
+                    .push((partition_key, lines));
             } else {
                 warn!("No node available for partition: {}", partition_key.to_path());
             }
@@ -180,12 +195,11 @@ impl WriteRouter {
         node_batches
     }
 
-    /// Dispatch writes to Data nodes in parallel
+    /// Dispatch writes to Data nodes via Arrow Flight in parallel
     async fn dispatch_writes(
         &self,
         catalog: &str,
-        node_batches: HashMap<String, Vec<(PartitionKey, Vec<Point>)>>,
-        _line_protocol: &str,
+        node_batches: HashMap<String, Vec<(PartitionKey, Vec<String>)>>,
     ) -> Vec<Result<u64, String>> {
         let mut futures = Vec::new();
 
@@ -196,24 +210,36 @@ impl WriteRouter {
             let future = async move {
                 let mut total_written = 0u64;
 
-                for (partition_key, points) in batches {
-                    // Convert points back to line protocol for transmission
-                    // In a real implementation, we'd serialize more efficiently
-                    let point_count = points.len() as u64;
+                for (partition_key, lines) in batches {
+                    let point_count = lines.len();
 
-                    // Get client from pool and send write
-                    match pool.get_client(&node_id).await {
-                        Ok(mut client) => {
-                            // TODO: Actually call the Data node gRPC service
-                            // For now, just simulate success
+                    // Concatenate lines into line protocol batch
+                    let batch_line_protocol = lines.join("\n");
+
+                    debug!(
+                        "Writing {} points to {} for partition {}",
+                        point_count, node_id, partition_key.to_path()
+                    );
+
+                    // Send write via Arrow Flight DoPut
+                    // fencing_token is None for now - will be added when Meta integration is complete
+                    match pool.write(&node_id, &catalog, &batch_line_protocol, None).await {
+                        Ok(written) => {
                             debug!(
-                                "Would write {} points to {} for partition {}",
-                                point_count, node_id, partition_key.to_path()
+                                "Successfully wrote {} points to {} for partition {}",
+                                written, node_id, partition_key.to_path()
                             );
-                            total_written += point_count;
+                            total_written += written;
                         }
                         Err(e) => {
-                            return Err(format!("Failed to get client for {}: {}", node_id, e));
+                            error!(
+                                "Failed to write to {} for partition {}: {}",
+                                node_id, partition_key.to_path(), e
+                            );
+                            return Err(format!(
+                                "Failed to write to {} for partition {}: {}",
+                                node_id, partition_key.to_path(), e
+                            ));
                         }
                     }
                 }

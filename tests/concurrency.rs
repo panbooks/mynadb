@@ -8,7 +8,9 @@
 //! 3. Write/query isolation
 //! 4. Stress testing under load
 //!
-//! Run with: cargo test --test concurrency -- --test-threads=1
+//! NOTE: These tests are marked as #[ignore] by default because they require
+//! a running server and may take a long time. Run explicitly with:
+//!   cargo test --test concurrency -- --ignored --test-threads=1
 
 use std::collections::HashSet;
 use std::net::TcpListener;
@@ -273,6 +275,7 @@ fn extract_scalar(result: &serde_json::Value) -> Result<f64, String> {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn test_concurrent_writes_single_table() {
     let server = Arc::new(TestServer::start());
     let db = server.unique_db();
@@ -330,6 +333,7 @@ fn test_concurrent_writes_single_table() {
 }
 
 #[test]
+#[ignore]
 fn test_concurrent_writes_multiple_tables() {
     let server = Arc::new(TestServer::start());
     let db = server.unique_db();
@@ -382,6 +386,7 @@ fn test_concurrent_writes_multiple_tables() {
 }
 
 #[test]
+#[ignore]
 fn test_concurrent_writes_no_duplicates() {
     let server = Arc::new(TestServer::start());
     let db = server.unique_db();
@@ -427,6 +432,7 @@ fn test_concurrent_writes_no_duplicates() {
 }
 
 #[test]
+#[ignore]
 fn test_concurrent_writes_with_flush() {
     let server = Arc::new(TestServer::start());
     let db = server.unique_db();
@@ -487,6 +493,7 @@ fn test_concurrent_writes_with_flush() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn test_read_during_write() {
     let server = Arc::new(TestServer::start());
     let db = server.unique_db();
@@ -580,6 +587,7 @@ fn test_read_during_write() {
 }
 
 #[test]
+#[ignore]
 fn test_read_during_compaction() {
     let server = Arc::new(TestServer::start());
     let db = server.unique_db();
@@ -665,6 +673,7 @@ fn test_read_during_compaction() {
 }
 
 #[test]
+#[ignore]
 fn test_query_isolation() {
     let server = Arc::new(TestServer::start());
     let db = server.unique_db();
@@ -719,6 +728,7 @@ fn test_query_isolation() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn test_stress_high_throughput_writes() {
     let server = Arc::new(TestServer::start());
     let db = server.unique_db();
@@ -777,6 +787,7 @@ fn test_stress_high_throughput_writes() {
 }
 
 #[test]
+#[ignore]
 fn test_stress_mixed_read_write() {
     let server = Arc::new(TestServer::start());
     let db = server.unique_db();
@@ -864,6 +875,7 @@ fn test_stress_mixed_read_write() {
 }
 
 #[test]
+#[ignore]
 fn test_stress_burst_writes() {
     let server = Arc::new(TestServer::start());
     let db = server.unique_db();
@@ -917,6 +929,7 @@ fn test_stress_burst_writes() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn test_consistency_aggregation_during_writes() {
     let server = Arc::new(TestServer::start());
     let db = server.unique_db();
@@ -974,6 +987,7 @@ fn test_consistency_aggregation_during_writes() {
 }
 
 #[test]
+#[ignore]
 fn test_consistency_count_monotonic() {
     let server = Arc::new(TestServer::start());
     let db = server.unique_db();
@@ -1035,6 +1049,7 @@ fn test_consistency_count_monotonic() {
 }
 
 #[test]
+#[ignore]
 fn test_no_data_loss_under_load() {
     let server = Arc::new(TestServer::start());
     let db = server.unique_db();

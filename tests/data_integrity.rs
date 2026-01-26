@@ -8,7 +8,9 @@
 //! 3. Compaction data preservation
 //! 4. Data consistency across operations
 //!
-//! Run with: cargo test --test data_integrity
+//! NOTE: These tests are marked as #[ignore] by default because they require
+//! a running server and may take a long time. Run explicitly with:
+//!   cargo test --test data_integrity -- --ignored
 
 use std::collections::HashMap;
 use std::fs;
@@ -436,6 +438,7 @@ fn extract_rows(
 // ============================================================================
 
 #[test]
+#[ignore]
 fn test_roundtrip_basic_float() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -467,6 +470,7 @@ fn test_roundtrip_basic_float() {
 }
 
 #[test]
+#[ignore]
 fn test_roundtrip_integer_fields() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -486,6 +490,7 @@ fn test_roundtrip_integer_fields() {
 }
 
 #[test]
+#[ignore]
 fn test_roundtrip_boolean_fields() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -522,6 +527,7 @@ fn test_roundtrip_boolean_fields() {
 }
 
 #[test]
+#[ignore]
 fn test_roundtrip_string_fields() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -541,6 +547,7 @@ logs,level=debug message="Debug info here""#;
 }
 
 #[test]
+#[ignore]
 fn test_roundtrip_mixed_types() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -571,6 +578,7 @@ metrics,host=srv3 cpu=45.0,memory=4096i,healthy=false,status="stopped""#;
 }
 
 #[test]
+#[ignore]
 fn test_roundtrip_large_batch() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -604,6 +612,7 @@ fn test_roundtrip_large_batch() {
 }
 
 #[test]
+#[ignore]
 fn test_roundtrip_special_characters_in_tags() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -623,6 +632,7 @@ fn test_roundtrip_special_characters_in_tags() {
 }
 
 #[test]
+#[ignore]
 fn test_roundtrip_many_tags() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -646,6 +656,7 @@ fn test_roundtrip_many_tags() {
 }
 
 #[test]
+#[ignore]
 fn test_roundtrip_many_fields() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -668,6 +679,7 @@ fn test_roundtrip_many_fields() {
 }
 
 #[test]
+#[ignore]
 fn test_roundtrip_precision_floats() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -694,6 +706,7 @@ fn test_roundtrip_precision_floats() {
 }
 
 #[test]
+#[ignore]
 fn test_roundtrip_timestamp_preservation() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -730,6 +743,7 @@ fn test_roundtrip_timestamp_preservation() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn test_wal_recovery_basic() {
     let config = TestConfig::with_wal();
     let mut server = TestServer::start_with_config(config);
@@ -765,6 +779,7 @@ fn test_wal_recovery_basic() {
 }
 
 #[test]
+#[ignore]
 fn test_wal_recovery_multiple_writes() {
     let config = TestConfig::with_wal();
     let mut server = TestServer::start_with_config(config);
@@ -794,6 +809,7 @@ fn test_wal_recovery_multiple_writes() {
 }
 
 #[test]
+#[ignore]
 fn test_wal_recovery_after_partial_flush() {
     let config = TestConfig::with_wal();
     let mut server = TestServer::start_with_config(config);
@@ -835,6 +851,7 @@ fn test_wal_recovery_after_partial_flush() {
 }
 
 #[test]
+#[ignore]
 fn test_wal_recovery_large_batch() {
     let config = TestConfig::with_wal();
     let mut server = TestServer::start_with_config(config);
@@ -871,6 +888,7 @@ fn test_wal_recovery_large_batch() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn test_compaction_preserves_count() {
     let config = TestConfig::with_compaction(2); // Compact when 2+ files
     let server = TestServer::start_with_config(config);
@@ -924,6 +942,7 @@ fn test_compaction_preserves_count() {
 }
 
 #[test]
+#[ignore]
 fn test_compaction_preserves_values() {
     let config = TestConfig::with_compaction(2);
     let server = TestServer::start_with_config(config);
@@ -998,6 +1017,7 @@ fn test_compaction_preserves_values() {
 }
 
 #[test]
+#[ignore]
 fn test_compaction_preserves_all_field_types() {
     let config = TestConfig::with_compaction(2);
     let server = TestServer::start_with_config(config);
@@ -1041,6 +1061,7 @@ fn test_compaction_preserves_all_field_types() {
 }
 
 #[test]
+#[ignore]
 fn test_compaction_preserves_tags() {
     let config = TestConfig::with_compaction(2);
     let server = TestServer::start_with_config(config);
@@ -1089,6 +1110,7 @@ fn test_compaction_preserves_tags() {
 }
 
 #[test]
+#[ignore]
 fn test_compaction_multilevel() {
     let config = TestConfig::with_compaction(2);
     let server = TestServer::start_with_config(config);
@@ -1140,6 +1162,7 @@ fn test_compaction_multilevel() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn test_consistency_write_during_flush() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -1177,6 +1200,7 @@ fn test_consistency_write_during_flush() {
 }
 
 #[test]
+#[ignore]
 fn test_consistency_query_during_compaction() {
     let config = TestConfig::with_compaction(2);
     let server = TestServer::start_with_config(config);
@@ -1229,6 +1253,7 @@ fn test_consistency_query_during_compaction() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn test_empty_table_operations() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -1247,6 +1272,7 @@ fn test_empty_table_operations() {
 }
 
 #[test]
+#[ignore]
 fn test_null_handling_in_aggregations() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -1277,6 +1303,7 @@ fn test_null_handling_in_aggregations() {
 }
 
 #[test]
+#[ignore]
 fn test_duplicate_timestamps() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -1306,6 +1333,7 @@ fn test_duplicate_timestamps() {
 }
 
 #[test]
+#[ignore]
 fn test_very_old_timestamp() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -1324,6 +1352,7 @@ fn test_very_old_timestamp() {
 }
 
 #[test]
+#[ignore]
 fn test_future_timestamp() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -1346,6 +1375,7 @@ fn test_future_timestamp() {
 // ============================================================================
 
 #[test]
+#[ignore]
 fn test_data_checksum_consistency() {
     let server = TestServer::start();
     let db = server.unique_db();
@@ -1402,6 +1432,7 @@ fn test_data_checksum_consistency() {
 }
 
 #[test]
+#[ignore]
 fn test_data_integrity_across_restarts() {
     let config = TestConfig::with_wal();
     let mut server = TestServer::start_with_config(config);

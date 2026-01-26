@@ -62,7 +62,7 @@ fn main() {
 }
 
 fn compile_protos() {
-    let proto_files = ["proto/meta.proto", "proto/datanode.proto"];
+    let proto_files = ["proto/meta.proto"];
 
     // Rerun if proto files change
     for proto in &proto_files {
