@@ -29,8 +29,6 @@ pub struct Config {
     pub wal: WalConfig,
     #[serde(default)]
     pub auth: AuthConfig,
-    #[serde(default)]
-    pub cluster: ClusterConfig,
     /// Meta node configuration (for --role meta)
     #[serde(default)]
     pub meta: Option<crate::meta::config::MetaConfig>,
@@ -41,10 +39,6 @@ pub struct Config {
     #[serde(default)]
     pub data: Option<crate::data::config::DataNodeConfig>,
 }
-
-/// Cluster configuration
-/// Re-exported from the cluster module for convenience
-pub use crate::cluster::config::ClusterConfig;
 
 /// Server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -804,7 +798,6 @@ impl Default for Config {
             retention: RetentionConfig::default(),
             wal: WalConfig::default(),
             auth: AuthConfig::default(),
-            cluster: ClusterConfig::default(),
             meta: None,
             router: None,
             data: None,

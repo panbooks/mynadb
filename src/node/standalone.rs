@@ -5,7 +5,6 @@
 //! in a single process with no cluster coordination.
 
 use super::common;
-use crate::cluster::api as cluster_api;
 use crate::config::Config;
 use crate::jobs::{compactor, database_manager, retention_manager};
 use crate::query::catalog;
@@ -148,10 +147,8 @@ pub async fn run(config_path: &str) {
         config.auth.username
     );
 
-    // Build router (standalone mode - no cluster routes needed for now)
-    // We still create a disabled cluster state for API compatibility
-    let cluster_state = cluster_api::status::ClusterState::disabled();
-    let app = build_router(state.clone(), auth_middleware, cluster_state);
+    // Build router (standalone mode)
+    let app = build_router(state.clone(), auth_middleware);
 
     print_server_info(&config);
 
@@ -377,11 +374,8 @@ fn start_wal_cleanup_task(wal: &Arc<crate::storage::wal::Wal>, config: &Config) 
 fn build_router(
     state: api::AppState,
     auth_middleware: Arc<auth::AuthMiddleware>,
-    cluster_state: cluster_api::status::ClusterState,
 ) -> Router {
-    use crate::cluster::metrics::cluster_metrics;
-
-    let app_router = Router::new()
+    Router::new()
         .route("/", get(api::home))
         .route("/health", get(api::health))
         .route("/version", get(api::version_handler))
@@ -467,42 +461,11 @@ fn build_router(
         .fallback(api::log_request)
         .with_state(state)
         .layer(axum::middleware::from_fn(auth::auth_middleware_fn))
-        .layer(axum::Extension(auth_middleware));
-
-    // Create cluster routes on a separate router with Extension-based state
-    let cluster_router: Router<()> = Router::new()
-        .route(
-            "/cluster/status",
-            get(cluster_api::status::cluster_status_handler),
-        )
-        .route(
-            "/cluster/nodes",
-            get(cluster_api::status::cluster_nodes_handler),
-        )
-        .route(
-            "/cluster/leader",
-            get(cluster_api::status::cluster_leader_handler),
-        )
-        .route(
-            "/cluster/health",
-            get(cluster_api::status::cluster_health_handler),
-        )
-        .route(
-            "/cluster/drain",
-            post(cluster_api::management::drain_node_handler),
-        )
-        .route(
-            "/cluster/remove",
-            delete(cluster_api::management::remove_node_handler),
-        )
-        .layer(axum::Extension(cluster_state));
-
-    // Merge the routers
-    app_router.merge(cluster_router)
+        .layer(axum::Extension(auth_middleware))
 }
 
 /// GET /metrics - Prometheus metrics endpoint
 async fn metrics_handler() -> String {
-    use crate::cluster::metrics::cluster_metrics;
-    cluster_metrics().gather()
+    // TODO: Add metrics for the new architecture
+    String::new()
 }
