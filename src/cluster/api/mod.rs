@@ -2,18 +2,12 @@
 //!
 //! HTTP endpoints for cluster status, node management, and operations.
 
-pub mod status;
 pub mod management;
+pub mod status;
 
 pub use status::{
+    cluster_health_handler, cluster_leader_handler, cluster_nodes_handler, cluster_status_handler,
     ClusterState,
-    cluster_status_handler,
-    cluster_nodes_handler,
-    cluster_leader_handler,
-    cluster_health_handler,
 };
 
-pub use management::{
-    drain_node_handler,
-    remove_node_handler,
-};
+pub use management::{drain_node_handler, remove_node_handler};

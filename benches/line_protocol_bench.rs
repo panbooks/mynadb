@@ -241,7 +241,8 @@ fn bench_edge_case_field_values(c: &mut Criterion) {
     });
 
     // Mixed field types
-    let mixed = "cpu,host=server01 f1=1.5,f2=100i,f3=\"hello\",f4=true,f5=-99.9,f6=0i 1700000000000000000";
+    let mixed =
+        "cpu,host=server01 f1=1.5,f2=100i,f3=\"hello\",f4=true,f5=-99.9,f6=0i 1700000000000000000";
     group.bench_function("mixed_field_types", |b| {
         b.iter(|| parse_line_protocol(black_box(mixed), &config))
     });
@@ -454,11 +455,7 @@ fn bench_schema_configs(c: &mut Criterion) {
     // Multiple tag keys (fallback chain)
     let config_multi = SchemaConfig {
         strategy: SchemaTableStrategy::ServiceAsSchema,
-        tag_keys: vec![
-            "app".to_string(),
-            "service".to_string(),
-            "svc".to_string(),
-        ],
+        tag_keys: vec!["app".to_string(), "service".to_string(), "svc".to_string()],
         default_name: "default".to_string(),
         prefix_numeric: true,
     };

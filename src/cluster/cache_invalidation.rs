@@ -118,7 +118,13 @@ impl CacheInvalidation {
     }
 
     /// Create a full table invalidation
-    pub fn for_table(source_node: String, catalog: &str, schema: &str, table: &str, reason: InvalidationReason) -> Self {
+    pub fn for_table(
+        source_node: String,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        reason: InvalidationReason,
+    ) -> Self {
         Self::new(source_node, reason)
             .with_catalog(catalog)
             .with_schema(schema)
@@ -145,8 +151,7 @@ impl CacheInvalidation {
 
     /// Create a file invalidation
     pub fn for_file(source_node: String, file_path: &str, reason: InvalidationReason) -> Self {
-        Self::new(source_node, reason)
-            .with_path(file_path)
+        Self::new(source_node, reason).with_path(file_path)
     }
 
     /// Serialize to JSON bytes
@@ -206,7 +211,11 @@ impl CacheInvalidation {
 
         if let Some(ref date) = self.partition_date {
             let date_prefix = format!("date={}", date);
-            if !parts.get(3).map(|p| p.starts_with(&date_prefix)).unwrap_or(false) {
+            if !parts
+                .get(3)
+                .map(|p| p.starts_with(&date_prefix))
+                .unwrap_or(false)
+            {
                 return false;
             }
         }
@@ -233,11 +242,7 @@ pub struct CacheInvalidationHandler {
 
 impl CacheInvalidationHandler {
     /// Create a new cache invalidation handler
-    pub fn new(
-        coordinator: Arc<dyn Coordinator>,
-        node_id: String,
-        channel: String,
-    ) -> Self {
+    pub fn new(coordinator: Arc<dyn Coordinator>, node_id: String, channel: String) -> Self {
         let (sender, _) = broadcast::channel(1000);
 
         Self {
@@ -269,11 +274,8 @@ impl CacheInvalidationHandler {
 
     /// Invalidate for a new file
     pub async fn invalidate_new_file(&self, path: &str) -> Result<(), String> {
-        let invalidation = CacheInvalidation::for_file(
-            self.node_id.clone(),
-            path,
-            InvalidationReason::NewFile,
-        );
+        let invalidation =
+            CacheInvalidation::for_file(self.node_id.clone(), path, InvalidationReason::NewFile);
         self.invalidate(invalidation).await
     }
 
@@ -317,10 +319,9 @@ impl CacheInvalidationHandler {
 
     /// Invalidate entire cache
     pub async fn invalidate_all(&self) -> Result<(), String> {
-        let invalidation = CacheInvalidation::new(
-            self.node_id.clone(),
-            InvalidationReason::CacheClear,
-        ).with_path("*");
+        let invalidation =
+            CacheInvalidation::new(self.node_id.clone(), InvalidationReason::CacheClear)
+                .with_path("*");
         self.invalidate(invalidation).await
     }
 
@@ -345,9 +346,7 @@ impl CacheInvalidationHandler {
 
                             debug!(
                                 "Received cache invalidation from {}: reason={}, paths={:?}",
-                                invalidation.source_node,
-                                invalidation.reason,
-                                invalidation.paths
+                                invalidation.source_node, invalidation.reason, invalidation.paths
                             );
 
                             // Broadcast to local subscribers

@@ -2,14 +2,11 @@
 //!
 //! Provides distributed coordination using etcd as the backend.
 
-use super::interface::{
-    Coordinator, CoordinatorType, Subscription, WatchEvent, WatchEventType,
-};
 use super::super::config::CoordinatorConfig;
+use super::interface::{Coordinator, CoordinatorType, Subscription, WatchEvent, WatchEventType};
 use async_trait::async_trait;
 use etcd_client::{
-    Client, ConnectOptions, GetOptions, PutOptions, DeleteOptions,
-    WatchOptions, EventType,
+    Client, ConnectOptions, DeleteOptions, EventType, GetOptions, PutOptions, WatchOptions,
 };
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -41,10 +38,7 @@ impl EtcdCoordinator {
             connect_options = connect_options.with_user(username, password);
         }
 
-        info!(
-            "Connecting to etcd at {:?}",
-            config.endpoints
-        );
+        info!("Connecting to etcd at {:?}", config.endpoints);
 
         let client = Client::connect(&config.endpoints, Some(connect_options))
             .await
@@ -67,7 +61,9 @@ impl EtcdCoordinator {
 
     /// Create a lease with the given TTL
     async fn create_lease(&self, ttl_secs: i64) -> Result<i64, String> {
-        let lease_response = self.client.lease_client()
+        let lease_response = self
+            .client
+            .lease_client()
             .grant(ttl_secs, None)
             .await
             .map_err(|e| format!("Failed to create lease: {}", e))?;
@@ -113,7 +109,9 @@ impl Coordinator for EtcdCoordinator {
     // ==================== Key-Value Operations ====================
 
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
-        let response = self.client.kv_client()
+        let response = self
+            .client
+            .kv_client()
             .get(key.as_bytes().to_vec(), None)
             .await
             .map_err(|e| format!("etcd get failed: {}", e))?;
@@ -123,18 +121,28 @@ impl Coordinator for EtcdCoordinator {
 
     async fn get_prefix(&self, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, String> {
         let options = GetOptions::new().with_prefix();
-        let response = self.client.kv_client()
+        let response = self
+            .client
+            .kv_client()
             .get(prefix.as_bytes().to_vec(), Some(options))
             .await
             .map_err(|e| format!("etcd get_prefix failed: {}", e))?;
 
-        Ok(response.kvs().iter().map(|kv| {
-            (kv.key_str().unwrap_or_default().to_string(), kv.value().to_vec())
-        }).collect())
+        Ok(response
+            .kvs()
+            .iter()
+            .map(|kv| {
+                (
+                    kv.key_str().unwrap_or_default().to_string(),
+                    kv.value().to_vec(),
+                )
+            })
+            .collect())
     }
 
     async fn put(&self, key: &str, value: &[u8]) -> Result<(), String> {
-        self.client.kv_client()
+        self.client
+            .kv_client()
             .put(key.as_bytes().to_vec(), value.to_vec(), None)
             .await
             .map_err(|e| format!("etcd put failed: {}", e))?;
@@ -144,7 +152,8 @@ impl Coordinator for EtcdCoordinator {
     async fn put_with_ttl(&self, key: &str, value: &[u8], ttl: Duration) -> Result<i64, String> {
         let lease_id = self.create_lease(ttl.as_secs() as i64).await?;
         let options = PutOptions::new().with_lease(lease_id);
-        self.client.kv_client()
+        self.client
+            .kv_client()
             .put(key.as_bytes().to_vec(), value.to_vec(), Some(options))
             .await
             .map_err(|e| format!("etcd put_with_ttl failed: {}", e))?;
@@ -152,7 +161,9 @@ impl Coordinator for EtcdCoordinator {
     }
 
     async fn delete(&self, key: &str) -> Result<bool, String> {
-        let response = self.client.kv_client()
+        let response = self
+            .client
+            .kv_client()
             .delete(key.as_bytes().to_vec(), None)
             .await
             .map_err(|e| format!("etcd delete failed: {}", e))?;
@@ -161,7 +172,9 @@ impl Coordinator for EtcdCoordinator {
 
     async fn delete_prefix(&self, prefix: &str) -> Result<i64, String> {
         let options = DeleteOptions::new().with_prefix();
-        let response = self.client.kv_client()
+        let response = self
+            .client
+            .kv_client()
             .delete(prefix.as_bytes().to_vec(), Some(options))
             .await
             .map_err(|e| format!("etcd delete_prefix failed: {}", e))?;
@@ -181,21 +194,26 @@ impl Coordinator for EtcdCoordinator {
         let put_options = PutOptions::new().with_lease(lease_id);
 
         // Check if key doesn't exist, then put
-        let response = self.client.kv_client()
+        let response = self
+            .client
+            .kv_client()
             .get(lock_key.as_bytes().to_vec(), None)
             .await
             .map_err(|e| format!("Failed to check lock: {}", e))?;
 
         if response.kvs().is_empty() {
             // Lock is not held, try to acquire
-            self.client.kv_client()
+            self.client
+                .kv_client()
                 .put(lock_key.as_bytes().to_vec(), lock_value, Some(put_options))
                 .await
                 .map_err(|e| format!("Failed to acquire lock: {}", e))?;
 
             // Store the lease for renewal
             self.leases.write().insert(lock_key.clone(), lease_id);
-            self.lock_holders.write().insert(lock_key, holder.to_string());
+            self.lock_holders
+                .write()
+                .insert(lock_key, holder.to_string());
 
             debug!("Lock acquired: key={}, holder={}", key, holder);
             Ok(true)
@@ -208,7 +226,13 @@ impl Coordinator for EtcdCoordinator {
         }
     }
 
-    async fn lock(&self, key: &str, holder: &str, ttl: Duration, timeout: Duration) -> Result<bool, String> {
+    async fn lock(
+        &self,
+        key: &str,
+        holder: &str,
+        ttl: Duration,
+        timeout: Duration,
+    ) -> Result<bool, String> {
         let start = std::time::Instant::now();
         let retry_interval = Duration::from_millis(100);
 
@@ -301,7 +325,10 @@ impl Coordinator for EtcdCoordinator {
                                     EventType::Put => WatchEventType::Put,
                                     EventType::Delete => WatchEventType::Delete,
                                 },
-                                key: event.kv().map(|kv| kv.key_str().unwrap_or_default().to_string()).unwrap_or_default(),
+                                key: event
+                                    .kv()
+                                    .map(|kv| kv.key_str().unwrap_or_default().to_string())
+                                    .unwrap_or_default(),
                                 value: event.kv().map(|kv| kv.value().to_vec()),
                                 prev_value: event.prev_kv().map(|kv| kv.value().to_vec()),
                                 mod_revision: event.kv().map(|kv| kv.mod_revision()).unwrap_or(0),
@@ -329,7 +356,10 @@ impl Coordinator for EtcdCoordinator {
 
         let handle = tokio::spawn(async move {
             let options = WatchOptions::new().with_prefix();
-            match client.watch(prefix.as_bytes().to_vec(), Some(options)).await {
+            match client
+                .watch(prefix.as_bytes().to_vec(), Some(options))
+                .await
+            {
                 Ok((mut watcher, mut stream)) => {
                     while let Some(response) = stream.message().await.ok().flatten() {
                         for event in response.events() {
@@ -338,7 +368,10 @@ impl Coordinator for EtcdCoordinator {
                                     EventType::Put => WatchEventType::Put,
                                     EventType::Delete => WatchEventType::Delete,
                                 },
-                                key: event.kv().map(|kv| kv.key_str().unwrap_or_default().to_string()).unwrap_or_default(),
+                                key: event
+                                    .kv()
+                                    .map(|kv| kv.key_str().unwrap_or_default().to_string())
+                                    .unwrap_or_default(),
                                 value: event.kv().map(|kv| kv.value().to_vec()),
                                 prev_value: event.prev_kv().map(|kv| kv.value().to_vec()),
                                 mod_revision: event.kv().map(|kv| kv.mod_revision()).unwrap_or(0),
@@ -364,8 +397,14 @@ impl Coordinator for EtcdCoordinator {
     async fn publish(&self, channel: &str, message: &[u8]) -> Result<(), String> {
         // etcd doesn't have native pub/sub, so we use a key with TTL
         // Subscribers watch the key
-        let key = format!("{}{}/{}", self.config.cache_prefix, channel, chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
-        self.put_with_ttl(&key, message, Duration::from_secs(60)).await?;
+        let key = format!(
+            "{}{}/{}",
+            self.config.cache_prefix,
+            channel,
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        self.put_with_ttl(&key, message, Duration::from_secs(60))
+            .await?;
         Ok(())
     }
 
@@ -376,7 +415,12 @@ impl Coordinator for EtcdCoordinator {
 
     // ==================== Leader Election ====================
 
-    async fn campaign(&self, election_key: &str, node_id: &str, ttl: Duration) -> Result<i64, String> {
+    async fn campaign(
+        &self,
+        election_key: &str,
+        node_id: &str,
+        ttl: Duration,
+    ) -> Result<i64, String> {
         let key = format!("{}{}", self.config.lock_prefix, election_key);
 
         // Create a lease
@@ -391,20 +435,29 @@ impl Coordinator for EtcdCoordinator {
 
         loop {
             // Check if there's a current leader
-            let response = self.client.kv_client()
+            let response = self
+                .client
+                .kv_client()
                 .get(key.as_bytes().to_vec(), None)
                 .await
                 .map_err(|e| format!("Failed to check leader: {}", e))?;
 
             if response.kvs().is_empty() {
                 // No leader, try to become one
-                self.client.kv_client()
-                    .put(key.as_bytes().to_vec(), node_id.as_bytes().to_vec(), Some(put_options.clone()))
+                self.client
+                    .kv_client()
+                    .put(
+                        key.as_bytes().to_vec(),
+                        node_id.as_bytes().to_vec(),
+                        Some(put_options.clone()),
+                    )
                     .await
                     .map_err(|e| format!("Failed to campaign: {}", e))?;
 
                 // Verify we became leader
-                let verify = self.client.kv_client()
+                let verify = self
+                    .client
+                    .kv_client()
                     .get(key.as_bytes().to_vec(), None)
                     .await
                     .map_err(|e| format!("Failed to verify leadership: {}", e))?;
@@ -429,7 +482,10 @@ impl Coordinator for EtcdCoordinator {
         self.delete(&key).await?;
 
         // Revoke the lease
-        self.client.lease_client().revoke(lease_id).await
+        self.client
+            .lease_client()
+            .revoke(lease_id)
+            .await
             .map_err(|e| format!("Failed to revoke lease: {}", e))?;
 
         info!("Resigned from leadership");
@@ -456,12 +512,16 @@ impl Coordinator for EtcdCoordinator {
     }
 
     async fn keep_alive(&self, lease_id: i64) -> Result<(), String> {
-        let (mut keeper, _) = self.client.lease_client()
+        let (mut keeper, _) = self
+            .client
+            .lease_client()
             .keep_alive(lease_id)
             .await
             .map_err(|e| format!("Failed to create keep-alive: {}", e))?;
 
-        keeper.keep_alive().await
+        keeper
+            .keep_alive()
+            .await
             .map_err(|e| format!("Keep-alive failed: {}", e))?;
 
         Ok(())

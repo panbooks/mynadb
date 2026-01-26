@@ -36,8 +36,8 @@ impl Default for TestConfig {
         Self {
             wal_enabled: false,
             wal_sync_on_write: false,
-            flush_interval_secs: 1, // Short interval for tests
-            compaction_min_files: 100,  // High threshold - manual compaction only
+            flush_interval_secs: 1,    // Short interval for tests
+            compaction_min_files: 100, // High threshold - manual compaction only
         }
     }
 }
@@ -172,7 +172,10 @@ impl TestServer {
             }
             thread::sleep(Duration::from_millis(500));
         }
-        panic!("Server failed to start within 30 seconds on port {}", self.port);
+        panic!(
+            "Server failed to start within 30 seconds on port {}",
+            self.port
+        );
     }
 
     fn base_url(&self) -> String {
@@ -290,7 +293,11 @@ impl TestServer {
     }
 
     /// Query and get all rows as Vec of HashMaps
-    fn query_rows(&self, db: &str, sql: &str) -> Result<Vec<HashMap<String, serde_json::Value>>, String> {
+    fn query_rows(
+        &self,
+        db: &str,
+        sql: &str,
+    ) -> Result<Vec<HashMap<String, serde_json::Value>>, String> {
         let result = self.query(db, sql)?;
         extract_rows(&result)
     }
@@ -328,7 +335,11 @@ impl TestServer {
             .into_iter()
             .filter_map(|e| e.ok())
         {
-            if entry.path().extension().map_or(false, |ext| ext == "parquet") {
+            if entry
+                .path()
+                .extension()
+                .map_or(false, |ext| ext == "parquet")
+            {
                 if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
                     if name.starts_with(&pattern) {
                         count += 1;
@@ -361,9 +372,7 @@ fn find_binary_path() -> PathBuf {
     if release.exists() {
         release
     } else {
-        std::env::current_dir()
-            .unwrap()
-            .join("target/debug/mynadb")
+        std::env::current_dir().unwrap().join("target/debug/mynadb")
     }
 }
 
@@ -403,7 +412,9 @@ fn extract_scalar(result: &serde_json::Value) -> Result<f64, String> {
     Err(format!("Could not extract scalar from: {:?}", result))
 }
 
-fn extract_rows(result: &serde_json::Value) -> Result<Vec<HashMap<String, serde_json::Value>>, String> {
+fn extract_rows(
+    result: &serde_json::Value,
+) -> Result<Vec<HashMap<String, serde_json::Value>>, String> {
     if let Some(arr) = result.as_array() {
         let mut rows = Vec::new();
         for item in arr {
@@ -438,12 +449,21 @@ fn test_roundtrip_basic_float() {
     server.flush().expect("Flush failed");
 
     // Verify data
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM temperature").expect("Count query failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM temperature")
+        .expect("Count query failed");
     assert_eq!(count, 3, "Expected 3 rows");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM temperature").expect("Sum query failed");
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM temperature")
+        .expect("Sum query failed");
     let expected_sum = 23.456 + 19.876 + 25.123;
-    assert!((sum - expected_sum).abs() < 0.001, "Sum mismatch: {} vs {}", sum, expected_sum);
+    assert!(
+        (sum - expected_sum).abs() < 0.001,
+        "Sum mismatch: {} vs {}",
+        sum,
+        expected_sum
+    );
 }
 
 #[test]
@@ -459,7 +479,9 @@ fn test_roundtrip_integer_fields() {
     server.write(&db, data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(count) FROM events").expect("Sum query failed");
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(count) FROM events")
+        .expect("Sum query failed");
     assert_eq!(sum as i64, 425, "Integer sum mismatch");
 }
 
@@ -477,17 +499,25 @@ fn test_roundtrip_boolean_fields() {
     server.flush().expect("Flush failed");
 
     // First verify count works
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM flags").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM flags")
+        .expect("Count failed");
     assert_eq!(count, 3);
 
     // Then get rows
-    let rows = server.query_rows(&db, "SELECT tag, active FROM flags ORDER BY tag").expect("Query failed");
+    let rows = server
+        .query_rows(&db, "SELECT tag, active FROM flags ORDER BY tag")
+        .expect("Query failed");
     assert_eq!(rows.len(), 3);
 
     // Verify boolean values preserved
-    let active_count = rows.iter().filter(|r| {
-        r.get("active").map_or(false, |v| v.as_bool().unwrap_or(false))
-    }).count();
+    let active_count = rows
+        .iter()
+        .filter(|r| {
+            r.get("active")
+                .map_or(false, |v| v.as_bool().unwrap_or(false))
+        })
+        .count();
     assert_eq!(active_count, 2, "Expected 2 active=true");
 }
 
@@ -504,7 +534,9 @@ logs,level=debug message="Debug info here""#;
     server.write(&db, data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM logs").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM logs")
+        .expect("Count failed");
     assert_eq!(count, 3);
 }
 
@@ -521,14 +553,20 @@ metrics,host=srv3 cpu=45.0,memory=4096i,healthy=false,status="stopped""#;
     server.write(&db, data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM metrics").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM metrics")
+        .expect("Count failed");
     assert_eq!(count, 3);
 
-    let avg_cpu = server.query_scalar(&db, "SELECT AVG(cpu) FROM metrics").expect("Avg failed");
+    let avg_cpu = server
+        .query_scalar(&db, "SELECT AVG(cpu) FROM metrics")
+        .expect("Avg failed");
     let expected_avg = (75.5 + 82.3 + 45.0) / 3.0;
     assert!((avg_cpu - expected_avg).abs() < 0.01);
 
-    let total_memory = server.query_scalar(&db, "SELECT SUM(memory) FROM metrics").expect("Sum failed");
+    let total_memory = server
+        .query_scalar(&db, "SELECT SUM(memory) FROM metrics")
+        .expect("Sum failed");
     assert_eq!(total_memory as i64, 8192 + 16384 + 4096);
 }
 
@@ -549,11 +587,20 @@ fn test_roundtrip_large_batch() {
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM batch").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM batch")
+        .expect("Count failed");
     assert_eq!(count, 1000, "Row count mismatch");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM batch").expect("Sum failed");
-    assert!((sum - expected_sum).abs() < 0.1, "Sum mismatch: {} vs {}", sum, expected_sum);
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM batch")
+        .expect("Sum failed");
+    assert!(
+        (sum - expected_sum).abs() < 0.1,
+        "Sum mismatch: {} vs {}",
+        sum,
+        expected_sum
+    );
 }
 
 #[test]
@@ -569,7 +616,9 @@ fn test_roundtrip_special_characters_in_tags() {
     server.write(&db, data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM request").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM request")
+        .expect("Count failed");
     assert_eq!(count, 3);
 }
 
@@ -585,10 +634,14 @@ fn test_roundtrip_many_tags() {
     server.write(&db, data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM telemetry").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM telemetry")
+        .expect("Count failed");
     assert_eq!(count, 2);
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM telemetry").expect("Sum failed");
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM telemetry")
+        .expect("Sum failed");
     assert_eq!(sum as i64, 300);
 }
 
@@ -603,7 +656,9 @@ fn test_roundtrip_many_fields() {
     server.write(&db, data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let rows = server.query_rows(&db, "SELECT * FROM server").expect("Query failed");
+    let rows = server
+        .query_rows(&db, "SELECT * FROM server")
+        .expect("Query failed");
     assert_eq!(rows.len(), 1);
 
     // Verify specific fields
@@ -626,11 +681,15 @@ fn test_roundtrip_precision_floats() {
     server.write(&db, data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM precision").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM precision")
+        .expect("Count failed");
     assert_eq!(count, 4);
 
     // Verify extreme values are preserved
-    let min = server.query_scalar(&db, "SELECT MIN(val) FROM precision").expect("Min failed");
+    let min = server
+        .query_scalar(&db, "SELECT MIN(val) FROM precision")
+        .expect("Min failed");
     assert!(min < 0.0, "Min should be negative");
 }
 
@@ -652,11 +711,15 @@ fn test_roundtrip_timestamp_preservation() {
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM timeseries").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM timeseries")
+        .expect("Count failed");
     assert_eq!(count, 2);
 
     // Verify time ordering
-    let rows = server.query_rows(&db, "SELECT value FROM timeseries ORDER BY time").expect("Query failed");
+    let rows = server
+        .query_rows(&db, "SELECT value FROM timeseries ORDER BY time")
+        .expect("Query failed");
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].get("value").and_then(|v| v.as_f64()), Some(100.0));
     assert_eq!(rows[1].get("value").and_then(|v| v.as_f64()), Some(200.0));
@@ -689,10 +752,14 @@ fn test_wal_recovery_basic() {
     server.restart();
 
     // Verify data recovered
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM recovery").expect("Count failed after recovery");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM recovery")
+        .expect("Count failed after recovery");
     assert_eq!(count, 3, "Data should be recovered from WAL");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM recovery").expect("Sum failed after recovery");
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM recovery")
+        .expect("Sum failed after recovery");
     let expected = 42.5 + 17.3 + 99.9;
     assert!((sum - expected).abs() < 0.01, "Sum mismatch after recovery");
 }
@@ -715,10 +782,14 @@ fn test_wal_recovery_multiple_writes() {
     server.restart();
 
     // Verify all writes recovered
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM multiwrite").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM multiwrite")
+        .expect("Count failed");
     assert_eq!(count, 5, "All writes should be recovered");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM multiwrite").expect("Sum failed");
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM multiwrite")
+        .expect("Sum failed");
     assert_eq!(sum as i64, 0 + 10 + 20 + 30 + 40);
 }
 
@@ -729,13 +800,21 @@ fn test_wal_recovery_after_partial_flush() {
     let db = server.unique_db();
 
     // Write first batch and flush
-    server.write(&db, "partial,phase=1 value=100").expect("Write 1 failed");
-    server.write(&db, "partial,phase=1 value=200").expect("Write 2 failed");
+    server
+        .write(&db, "partial,phase=1 value=100")
+        .expect("Write 1 failed");
+    server
+        .write(&db, "partial,phase=1 value=200")
+        .expect("Write 2 failed");
     server.flush().expect("Flush failed");
 
     // Write second batch (not flushed)
-    server.write(&db, "partial,phase=2 value=300").expect("Write 3 failed");
-    server.write(&db, "partial,phase=2 value=400").expect("Write 4 failed");
+    server
+        .write(&db, "partial,phase=2 value=300")
+        .expect("Write 3 failed");
+    server
+        .write(&db, "partial,phase=2 value=400")
+        .expect("Write 4 failed");
 
     thread::sleep(Duration::from_millis(500));
 
@@ -744,10 +823,14 @@ fn test_wal_recovery_after_partial_flush() {
     server.restart();
 
     // Verify both flushed and unflushed data
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM partial").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM partial")
+        .expect("Count failed");
     assert_eq!(count, 4, "All data should be present");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM partial").expect("Sum failed");
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM partial")
+        .expect("Sum failed");
     assert_eq!(sum as i64, 100 + 200 + 300 + 400);
 }
 
@@ -772,10 +855,14 @@ fn test_wal_recovery_large_batch() {
     server.stop();
     server.restart();
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM largewal").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM largewal")
+        .expect("Count failed");
     assert_eq!(count, 500, "All 500 rows should be recovered");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM largewal").expect("Sum failed");
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM largewal")
+        .expect("Sum failed");
     assert_eq!(sum as i64, expected_sum);
 }
 
@@ -793,29 +880,47 @@ fn test_compaction_preserves_count() {
     for batch in 0..4 {
         let mut data = String::new();
         for i in 0..100 {
-            data.push_str(&format!("compacttest,batch={} value={}\n", batch, batch * 100 + i));
+            data.push_str(&format!(
+                "compacttest,batch={} value={}\n",
+                batch,
+                batch * 100 + i
+            ));
         }
         server.write(&db, &data).expect("Write failed");
         server.flush().expect("Flush failed");
     }
 
     // Record count before compaction
-    let count_before = server.query_count(&db, "SELECT COUNT(*) FROM compacttest").expect("Count before failed");
+    let count_before = server
+        .query_count(&db, "SELECT COUNT(*) FROM compacttest")
+        .expect("Count before failed");
     assert_eq!(count_before, 400);
 
     // Record sum before compaction
-    let sum_before = server.query_scalar(&db, "SELECT SUM(value) FROM compacttest").expect("Sum before failed");
+    let sum_before = server
+        .query_scalar(&db, "SELECT SUM(value) FROM compacttest")
+        .expect("Sum before failed");
 
     // Trigger compaction
     server.compact(&db).expect("Compaction failed");
 
     // Verify count preserved
-    let count_after = server.query_count(&db, "SELECT COUNT(*) FROM compacttest").expect("Count after failed");
-    assert_eq!(count_after, count_before, "Row count should be preserved after compaction");
+    let count_after = server
+        .query_count(&db, "SELECT COUNT(*) FROM compacttest")
+        .expect("Count after failed");
+    assert_eq!(
+        count_after, count_before,
+        "Row count should be preserved after compaction"
+    );
 
     // Verify sum preserved
-    let sum_after = server.query_scalar(&db, "SELECT SUM(value) FROM compacttest").expect("Sum after failed");
-    assert!((sum_after - sum_before).abs() < 0.01, "Sum should be preserved after compaction");
+    let sum_after = server
+        .query_scalar(&db, "SELECT SUM(value) FROM compacttest")
+        .expect("Sum after failed");
+    assert!(
+        (sum_after - sum_before).abs() < 0.01,
+        "Sum should be preserved after compaction"
+    );
 }
 
 #[test]
@@ -834,7 +939,10 @@ fn test_compaction_preserves_values() {
     for (batch_idx, values) in batches.iter().enumerate() {
         let mut data = String::new();
         for (val_idx, value) in values.iter().enumerate() {
-            data.push_str(&format!("valtest,batch={},idx={} value={}\n", batch_idx, val_idx, value));
+            data.push_str(&format!(
+                "valtest,batch={},idx={} value={}\n",
+                batch_idx, val_idx, value
+            ));
         }
         server.write(&db, &data).expect("Write failed");
         server.flush().expect("Flush failed");
@@ -847,24 +955,46 @@ fn test_compaction_preserves_values() {
     let expected_count = 9i64;
 
     // Verify before compaction
-    let sum_before = server.query_scalar(&db, "SELECT SUM(value) FROM valtest").expect("Sum failed");
+    let sum_before = server
+        .query_scalar(&db, "SELECT SUM(value) FROM valtest")
+        .expect("Sum failed");
     assert!((sum_before - expected_sum).abs() < 0.01);
 
     // Compact
     server.compact(&db).expect("Compaction failed");
 
     // Verify after compaction
-    let sum_after = server.query_scalar(&db, "SELECT SUM(value) FROM valtest").expect("Sum failed");
-    assert!((sum_after - expected_sum).abs() < 0.01, "Sum changed after compaction");
+    let sum_after = server
+        .query_scalar(&db, "SELECT SUM(value) FROM valtest")
+        .expect("Sum failed");
+    assert!(
+        (sum_after - expected_sum).abs() < 0.01,
+        "Sum changed after compaction"
+    );
 
-    let min_after = server.query_scalar(&db, "SELECT MIN(value) FROM valtest").expect("Min failed");
-    assert!((min_after - expected_min).abs() < 0.01, "Min changed after compaction");
+    let min_after = server
+        .query_scalar(&db, "SELECT MIN(value) FROM valtest")
+        .expect("Min failed");
+    assert!(
+        (min_after - expected_min).abs() < 0.01,
+        "Min changed after compaction"
+    );
 
-    let max_after = server.query_scalar(&db, "SELECT MAX(value) FROM valtest").expect("Max failed");
-    assert!((max_after - expected_max).abs() < 0.01, "Max changed after compaction");
+    let max_after = server
+        .query_scalar(&db, "SELECT MAX(value) FROM valtest")
+        .expect("Max failed");
+    assert!(
+        (max_after - expected_max).abs() < 0.01,
+        "Max changed after compaction"
+    );
 
-    let count_after = server.query_count(&db, "SELECT COUNT(*) FROM valtest").expect("Count failed");
-    assert_eq!(count_after, expected_count, "Count changed after compaction");
+    let count_after = server
+        .query_count(&db, "SELECT COUNT(*) FROM valtest")
+        .expect("Count failed");
+    assert_eq!(
+        count_after, expected_count,
+        "Count changed after compaction"
+    );
 }
 
 #[test]
@@ -877,24 +1007,36 @@ fn test_compaction_preserves_all_field_types() {
     for batch in 0..3 {
         let data = format!(
             r#"mixedcompact,batch={} fval={}.5,ival={}i,bval={},sval="str{}""#,
-            batch, batch, batch * 10, batch % 2 == 0, batch
+            batch,
+            batch,
+            batch * 10,
+            batch % 2 == 0,
+            batch
         );
         server.write(&db, &data).expect("Write failed");
         server.flush().expect("Flush failed");
     }
 
     // Record before compaction
-    let count_before = server.query_count(&db, "SELECT COUNT(*) FROM mixedcompact").expect("Count failed");
-    let sum_ival_before = server.query_scalar(&db, "SELECT SUM(ival) FROM mixedcompact").expect("Sum ival failed");
+    let count_before = server
+        .query_count(&db, "SELECT COUNT(*) FROM mixedcompact")
+        .expect("Count failed");
+    let sum_ival_before = server
+        .query_scalar(&db, "SELECT SUM(ival) FROM mixedcompact")
+        .expect("Sum ival failed");
 
     // Compact
     server.compact(&db).expect("Compaction failed");
 
     // Verify after
-    let count_after = server.query_count(&db, "SELECT COUNT(*) FROM mixedcompact").expect("Count failed");
+    let count_after = server
+        .query_count(&db, "SELECT COUNT(*) FROM mixedcompact")
+        .expect("Count failed");
     assert_eq!(count_after, count_before);
 
-    let sum_ival_after = server.query_scalar(&db, "SELECT SUM(ival) FROM mixedcompact").expect("Sum ival failed");
+    let sum_ival_after = server
+        .query_scalar(&db, "SELECT SUM(ival) FROM mixedcompact")
+        .expect("Sum ival failed");
     assert_eq!(sum_ival_after as i64, sum_ival_before as i64);
 }
 
@@ -912,7 +1054,10 @@ fn test_compaction_preserves_tags() {
         let mut data = String::new();
         for host in &hosts {
             for region in &regions {
-                data.push_str(&format!("tagtest,host={},region={} value={}\n", host, region, batch));
+                data.push_str(&format!(
+                    "tagtest,host={},region={} value={}\n",
+                    host, region, batch
+                ));
             }
         }
         server.write(&db, &data).expect("Write failed");
@@ -920,23 +1065,26 @@ fn test_compaction_preserves_tags() {
     }
 
     // Count per tag combination before
-    let count_per_host_before = server.query_count(
-        &db,
-        "SELECT COUNT(*) FROM tagtest WHERE host = 'host1'"
-    ).expect("Count failed");
+    let count_per_host_before = server
+        .query_count(&db, "SELECT COUNT(*) FROM tagtest WHERE host = 'host1'")
+        .expect("Count failed");
 
     // Compact
     server.compact(&db).expect("Compaction failed");
 
     // Verify tag-based queries still work
-    let count_per_host_after = server.query_count(
-        &db,
-        "SELECT COUNT(*) FROM tagtest WHERE host = 'host1'"
-    ).expect("Count failed");
-    assert_eq!(count_per_host_after, count_per_host_before, "Tag-filtered count changed");
+    let count_per_host_after = server
+        .query_count(&db, "SELECT COUNT(*) FROM tagtest WHERE host = 'host1'")
+        .expect("Count failed");
+    assert_eq!(
+        count_per_host_after, count_per_host_before,
+        "Tag-filtered count changed"
+    );
 
     // Verify distinct tag values
-    let total_count = server.query_count(&db, "SELECT COUNT(*) FROM tagtest").expect("Count failed");
+    let total_count = server
+        .query_count(&db, "SELECT COUNT(*) FROM tagtest")
+        .expect("Count failed");
     assert_eq!(total_count, 9 * 3); // 9 combinations (3 hosts × 3 regions) * 3 batches = 27
 }
 
@@ -959,7 +1107,9 @@ fn test_compaction_multilevel() {
         server.flush().expect("Flush failed");
     }
 
-    let count_before = server.query_count(&db, "SELECT COUNT(*) FROM multilevel").expect("Count failed");
+    let count_before = server
+        .query_count(&db, "SELECT COUNT(*) FROM multilevel")
+        .expect("Count failed");
     assert_eq!(count_before, 500);
 
     // Multiple compaction rounds
@@ -968,11 +1118,21 @@ fn test_compaction_multilevel() {
     }
 
     // Verify data integrity
-    let count_after = server.query_count(&db, "SELECT COUNT(*) FROM multilevel").expect("Count failed");
-    assert_eq!(count_after, 500, "Row count changed after multi-level compaction");
+    let count_after = server
+        .query_count(&db, "SELECT COUNT(*) FROM multilevel")
+        .expect("Count failed");
+    assert_eq!(
+        count_after, 500,
+        "Row count changed after multi-level compaction"
+    );
 
-    let sum_after = server.query_scalar(&db, "SELECT SUM(value) FROM multilevel").expect("Sum failed");
-    assert_eq!(sum_after as i64, expected_sum, "Sum changed after multi-level compaction");
+    let sum_after = server
+        .query_scalar(&db, "SELECT SUM(value) FROM multilevel")
+        .expect("Sum failed");
+    assert_eq!(
+        sum_after as i64, expected_sum,
+        "Sum changed after multi-level compaction"
+    );
 }
 
 // ============================================================================
@@ -985,24 +1145,34 @@ fn test_consistency_write_during_flush() {
     let db = server.unique_db();
 
     // Initial write
-    server.write(&db, "concurrent,phase=1 value=100").expect("Write 1 failed");
+    server
+        .write(&db, "concurrent,phase=1 value=100")
+        .expect("Write 1 failed");
 
     // Start flush (non-blocking in server)
     let flush_url = format!("{}/flush", server.base_url());
     let _ = ureq::post(&flush_url).call();
 
     // Write during flush
-    server.write(&db, "concurrent,phase=2 value=200").expect("Write 2 failed");
-    server.write(&db, "concurrent,phase=3 value=300").expect("Write 3 failed");
+    server
+        .write(&db, "concurrent,phase=2 value=200")
+        .expect("Write 2 failed");
+    server
+        .write(&db, "concurrent,phase=3 value=300")
+        .expect("Write 3 failed");
 
     // Wait for everything to settle
     thread::sleep(Duration::from_secs(3));
 
     // All writes should be present
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM concurrent").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM concurrent")
+        .expect("Count failed");
     assert_eq!(count, 3, "All writes should be visible");
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM concurrent").expect("Sum failed");
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM concurrent")
+        .expect("Sum failed");
     assert_eq!(sum as i64, 600);
 }
 
@@ -1023,7 +1193,9 @@ fn test_consistency_query_during_compaction() {
     let expected_sum = 0 + 10 + 20 + 30;
 
     // Verify before compaction
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM querycompact").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM querycompact")
+        .expect("Count failed");
     assert_eq!(count, expected_count);
 
     // Start compaction (non-blocking)
@@ -1032,11 +1204,21 @@ fn test_consistency_query_during_compaction() {
 
     // Query during compaction - should still return correct results
     for _ in 0..5 {
-        let count = server.query_count(&db, "SELECT COUNT(*) FROM querycompact").expect("Count during compact failed");
-        assert_eq!(count, expected_count, "Query returned inconsistent count during compaction");
+        let count = server
+            .query_count(&db, "SELECT COUNT(*) FROM querycompact")
+            .expect("Count during compact failed");
+        assert_eq!(
+            count, expected_count,
+            "Query returned inconsistent count during compaction"
+        );
 
-        let sum = server.query_scalar(&db, "SELECT SUM(value) FROM querycompact").expect("Sum during compact failed");
-        assert_eq!(sum as i64, expected_sum, "Query returned inconsistent sum during compaction");
+        let sum = server
+            .query_scalar(&db, "SELECT SUM(value) FROM querycompact")
+            .expect("Sum during compact failed");
+        assert_eq!(
+            sum as i64, expected_sum,
+            "Query returned inconsistent sum during compaction"
+        );
 
         thread::sleep(Duration::from_millis(500));
     }
@@ -1052,11 +1234,15 @@ fn test_empty_table_operations() {
     let db = server.unique_db();
 
     // Write and flush to create table
-    server.write(&db, "emptytable,tag=1 value=1").expect("Write failed");
+    server
+        .write(&db, "emptytable,tag=1 value=1")
+        .expect("Write failed");
     server.flush().expect("Flush failed");
 
     // Query table that exists but filter returns nothing
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM emptytable WHERE value > 1000").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM emptytable WHERE value > 1000")
+        .expect("Count failed");
     assert_eq!(count, 0);
 }
 
@@ -1066,17 +1252,27 @@ fn test_null_handling_in_aggregations() {
     let db = server.unique_db();
 
     // Write rows where some might have null fields (via schema mismatch)
-    server.write(&db, "nulltest,id=1 a=1,b=2").expect("Write failed");
-    server.write(&db, "nulltest,id=2 a=3").expect("Write failed"); // no 'b' field
-    server.write(&db, "nulltest,id=3 a=5,b=6").expect("Write failed");
+    server
+        .write(&db, "nulltest,id=1 a=1,b=2")
+        .expect("Write failed");
+    server
+        .write(&db, "nulltest,id=2 a=3")
+        .expect("Write failed"); // no 'b' field
+    server
+        .write(&db, "nulltest,id=3 a=5,b=6")
+        .expect("Write failed");
     server.flush().expect("Flush failed");
 
     // SUM should handle nulls correctly
-    let sum_a = server.query_scalar(&db, "SELECT SUM(a) FROM nulltest").expect("Sum a failed");
+    let sum_a = server
+        .query_scalar(&db, "SELECT SUM(a) FROM nulltest")
+        .expect("Sum a failed");
     assert_eq!(sum_a as i64, 1 + 3 + 5);
 
     // COUNT should handle nulls
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM nulltest").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM nulltest")
+        .expect("Count failed");
     assert_eq!(count, 3);
 }
 
@@ -1098,10 +1294,14 @@ fn test_duplicate_timestamps() {
     server.flush().expect("Flush failed");
 
     // All rows should be present despite same timestamp
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM duptime").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM duptime")
+        .expect("Count failed");
     assert_eq!(count, 3);
 
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM duptime").expect("Sum failed");
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM duptime")
+        .expect("Sum failed");
     assert_eq!(sum as i64, 6);
 }
 
@@ -1117,7 +1317,9 @@ fn test_very_old_timestamp() {
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM olddata").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM olddata")
+        .expect("Count failed");
     assert_eq!(count, 1);
 }
 
@@ -1133,7 +1335,9 @@ fn test_future_timestamp() {
     server.write(&db, &data).expect("Write failed");
     server.flush().expect("Flush failed");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM futuredata").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM futuredata")
+        .expect("Count failed");
     assert_eq!(count, 1);
 }
 
@@ -1160,21 +1364,40 @@ fn test_data_checksum_consistency() {
 
     // Calculate expected statistics
     let expected_sum: f64 = expected_values.iter().sum();
-    let expected_min = expected_values.iter().cloned().fold(f64::INFINITY, f64::min);
-    let expected_max = expected_values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let expected_min = expected_values
+        .iter()
+        .cloned()
+        .fold(f64::INFINITY, f64::min);
+    let expected_max = expected_values
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, f64::max);
     let expected_count = expected_values.len() as i64;
 
     // Verify all statistics match (serves as checksum)
-    let sum = server.query_scalar(&db, "SELECT SUM(value) FROM checksum").expect("Sum failed");
-    assert!((sum - expected_sum).abs() < 0.01, "Sum mismatch: {} vs {}", sum, expected_sum);
+    let sum = server
+        .query_scalar(&db, "SELECT SUM(value) FROM checksum")
+        .expect("Sum failed");
+    assert!(
+        (sum - expected_sum).abs() < 0.01,
+        "Sum mismatch: {} vs {}",
+        sum,
+        expected_sum
+    );
 
-    let min = server.query_scalar(&db, "SELECT MIN(value) FROM checksum").expect("Min failed");
+    let min = server
+        .query_scalar(&db, "SELECT MIN(value) FROM checksum")
+        .expect("Min failed");
     assert!((min - expected_min).abs() < 0.0001, "Min mismatch");
 
-    let max = server.query_scalar(&db, "SELECT MAX(value) FROM checksum").expect("Max failed");
+    let max = server
+        .query_scalar(&db, "SELECT MAX(value) FROM checksum")
+        .expect("Max failed");
     assert!((max - expected_max).abs() < 0.0001, "Max mismatch");
 
-    let count = server.query_count(&db, "SELECT COUNT(*) FROM checksum").expect("Count failed");
+    let count = server
+        .query_count(&db, "SELECT COUNT(*) FROM checksum")
+        .expect("Count failed");
     assert_eq!(count, expected_count, "Count mismatch");
 }
 
@@ -1196,17 +1419,31 @@ fn test_data_integrity_across_restarts() {
     server.flush().expect("Flush failed");
 
     // Verify before restart
-    let sum_before = server.query_scalar(&db, "SELECT SUM(value) FROM restarttest").expect("Sum failed");
-    let count_before = server.query_count(&db, "SELECT COUNT(*) FROM restarttest").expect("Count failed");
+    let sum_before = server
+        .query_scalar(&db, "SELECT SUM(value) FROM restarttest")
+        .expect("Sum failed");
+    let count_before = server
+        .query_count(&db, "SELECT COUNT(*) FROM restarttest")
+        .expect("Count failed");
 
     // Restart
     server.restart();
 
     // Verify after restart
-    let sum_after = server.query_scalar(&db, "SELECT SUM(value) FROM restarttest").expect("Sum after restart failed");
-    let count_after = server.query_count(&db, "SELECT COUNT(*) FROM restarttest").expect("Count after restart failed");
+    let sum_after = server
+        .query_scalar(&db, "SELECT SUM(value) FROM restarttest")
+        .expect("Sum after restart failed");
+    let count_after = server
+        .query_count(&db, "SELECT COUNT(*) FROM restarttest")
+        .expect("Count after restart failed");
 
     assert_eq!(count_after, count_before, "Count changed after restart");
-    assert_eq!(sum_after as i64, sum_before as i64, "Sum changed after restart");
-    assert_eq!(sum_after as i64, expected_sum, "Data corrupted after restart");
+    assert_eq!(
+        sum_after as i64, sum_before as i64,
+        "Sum changed after restart"
+    );
+    assert_eq!(
+        sum_after as i64, expected_sum,
+        "Data corrupted after restart"
+    );
 }

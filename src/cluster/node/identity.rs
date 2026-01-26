@@ -178,12 +178,20 @@ impl NodeInfo {
 
     /// Get the HTTP address
     pub fn http_addr(&self) -> String {
-        format!("{}:{}", self.advertise_addr.split(':').next().unwrap_or("0.0.0.0"), self.http_port)
+        format!(
+            "{}:{}",
+            self.advertise_addr.split(':').next().unwrap_or("0.0.0.0"),
+            self.http_port
+        )
     }
 
     /// Get the Flight address
     pub fn flight_addr(&self) -> String {
-        format!("{}:{}", self.advertise_addr.split(':').next().unwrap_or("0.0.0.0"), self.flight_port)
+        format!(
+            "{}:{}",
+            self.advertise_addr.split(':').next().unwrap_or("0.0.0.0"),
+            self.flight_port
+        )
     }
 
     /// Get the etcd key for this node
@@ -220,7 +228,8 @@ pub fn parse_advertise_addr(addr: &str, default_port: u16) -> Result<SocketAddr,
 
     // Try adding the default port
     let with_port = format!("{}:{}", addr, default_port);
-    with_port.parse::<SocketAddr>()
+    with_port
+        .parse::<SocketAddr>()
         .map_err(|e| format!("Invalid address '{}': {}", addr, e))
 }
 
@@ -231,7 +240,10 @@ mod tests {
     #[test]
     fn test_node_role_parsing() {
         assert_eq!("compute".parse::<NodeRole>().unwrap(), NodeRole::Compute);
-        assert_eq!("compactor".parse::<NodeRole>().unwrap(), NodeRole::Compactor);
+        assert_eq!(
+            "compactor".parse::<NodeRole>().unwrap(),
+            NodeRole::Compactor
+        );
         assert_eq!("hybrid".parse::<NodeRole>().unwrap(), NodeRole::Hybrid);
         assert_eq!("HYBRID".parse::<NodeRole>().unwrap(), NodeRole::Hybrid);
     }

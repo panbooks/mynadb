@@ -98,7 +98,10 @@ impl ParquetWriter {
 
     /// Sort a RecordBatch by multiple columns (ascending)
     /// Columns are sorted in the order provided (first column is primary sort key)
-    fn sort_batch_by_columns(batch: &RecordBatch, sort_columns: &[String]) -> Result<RecordBatch, String> {
+    fn sort_batch_by_columns(
+        batch: &RecordBatch,
+        sort_columns: &[String],
+    ) -> Result<RecordBatch, String> {
         if sort_columns.is_empty() {
             return Err("No sort columns provided".to_string());
         }

@@ -74,12 +74,7 @@ fn line_protocol_strategy() -> impl Strategy<Value = (String, String, HashMap<St
             let now = chrono::Utc::now().timestamp_nanos_opt().unwrap();
             line.push_str(&format!(" {}", now));
 
-            (
-                line,
-                measurement,
-                tags.into_iter().collect(),
-                field_value,
-            )
+            (line, measurement, tags.into_iter().collect(), field_value)
         })
 }
 
@@ -233,11 +228,7 @@ fn parse_line_simple(line: &str) -> Result<(String, HashMap<String, f64>), Strin
 
     // Parse measurement (before any comma)
     let measurement_part = parts[0];
-    let measurement = measurement_part
-        .split(',')
-        .next()
-        .unwrap_or("")
-        .to_string();
+    let measurement = measurement_part.split(',').next().unwrap_or("").to_string();
 
     // Parse fields
     if parts.len() < 2 {
@@ -340,7 +331,9 @@ fn parse_line_boolean(line: &str) -> Result<(String, bool), String> {
     Err("No boolean field found".to_string())
 }
 
-fn parse_line_with_timestamp(line: &str) -> Result<(String, HashMap<String, f64>, Option<i64>), String> {
+fn parse_line_with_timestamp(
+    line: &str,
+) -> Result<(String, HashMap<String, f64>, Option<i64>), String> {
     let line = line.trim();
     let parts: Vec<&str> = line.split_whitespace().collect();
     if parts.is_empty() {
@@ -432,9 +425,7 @@ impl TestServer {
         let binary_path = if binary_path.exists() {
             binary_path
         } else {
-            std::env::current_dir()
-                .unwrap()
-                .join("target/debug/mynadb")
+            std::env::current_dir().unwrap().join("target/debug/mynadb")
         };
 
         let process = Command::new(&binary_path)

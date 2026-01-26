@@ -50,15 +50,18 @@ pub async fn drain_node_handler(
         ));
     }
 
-    let registration = cluster.registration
-        .as_ref()
-        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "Registration not available".to_string()))?;
+    let registration = cluster.registration.as_ref().ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Registration not available".to_string(),
+    ))?;
 
     // Check if this is our own node
     let this_node_id = registration.node_id();
     if this_node_id == node_id {
         // Drain ourselves
-        registration.drain().await
+        registration
+            .drain()
+            .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
         return Ok(Json(DrainNodeResponse {
@@ -89,19 +92,23 @@ pub async fn remove_node_handler(
         ));
     }
 
-    let registration = cluster.registration
-        .as_ref()
-        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "Registration not available".to_string()))?;
+    let registration = cluster.registration.as_ref().ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Registration not available".to_string(),
+    ))?;
 
-    let coordinator = cluster.coordinator
-        .as_ref()
-        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "Coordinator not available".to_string()))?;
+    let coordinator = cluster.coordinator.as_ref().ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Coordinator not available".to_string(),
+    ))?;
 
     // Check if this is our own node
     let this_node_id = registration.node_id();
     if this_node_id == node_id {
         // Deregister ourselves
-        registration.deregister().await
+        registration
+            .deregister()
+            .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
         return Ok(Json(RemoveNodeResponse {
@@ -113,7 +120,9 @@ pub async fn remove_node_handler(
 
     // For remote nodes, delete their key from the coordinator
     let key = format!("/mynadb/nodes/{}", node_id);
-    coordinator.delete(&key).await
+    coordinator
+        .delete(&key)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     Ok(Json(RemoveNodeResponse {

@@ -3,9 +3,7 @@
 //! This coordinator does nothing - it's used when cluster mode is disabled.
 //! All operations succeed immediately (locks are always acquired, etc.)
 
-use super::interface::{
-    Coordinator, CoordinatorType, Subscription, WatchEvent,
-};
+use super::interface::{Coordinator, CoordinatorType, Subscription, WatchEvent};
 use async_trait::async_trait;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -68,7 +66,13 @@ impl Coordinator for NoopCoordinator {
         Ok(true) // Always succeed in standalone mode
     }
 
-    async fn lock(&self, _key: &str, _holder: &str, _ttl: Duration, _timeout: Duration) -> Result<bool, String> {
+    async fn lock(
+        &self,
+        _key: &str,
+        _holder: &str,
+        _ttl: Duration,
+        _timeout: Duration,
+    ) -> Result<bool, String> {
         Ok(true) // Always succeed in standalone mode
     }
 
@@ -110,7 +114,12 @@ impl Coordinator for NoopCoordinator {
 
     // ==================== Leader Election ====================
 
-    async fn campaign(&self, _election_key: &str, _node_id: &str, _ttl: Duration) -> Result<i64, String> {
+    async fn campaign(
+        &self,
+        _election_key: &str,
+        _node_id: &str,
+        _ttl: Duration,
+    ) -> Result<i64, String> {
         Ok(0) // Always become leader immediately
     }
 

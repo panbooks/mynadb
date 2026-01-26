@@ -3,11 +3,13 @@
 //! Ensures that writes to the same partition are serialized across all nodes
 //! using distributed locks.
 
-use crate::cluster::cache_invalidation::{CacheInvalidation, CacheInvalidationHandler, InvalidationReason};
-use crate::cluster::coordinator::{Coordinator, DistributedLock, LockOptions, partition_lock_key};
+use crate::cluster::cache_invalidation::{
+    CacheInvalidation, CacheInvalidationHandler, InvalidationReason,
+};
+use crate::cluster::coordinator::{partition_lock_key, Coordinator, DistributedLock, LockOptions};
+use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
-use parking_lot::RwLock;
 use tracing::{debug, info, warn};
 
 /// Write coordination manager
@@ -68,8 +70,7 @@ impl WriteCoordinator {
         date: &str,
     ) -> DistributedLock {
         let key = partition_lock_key(catalog, schema, table, date);
-        let options = LockOptions::with_ttl(self.lock_ttl)
-            .timeout(self.lock_timeout);
+        let options = LockOptions::with_ttl(self.lock_ttl).timeout(self.lock_timeout);
 
         DistributedLock::with_options(
             Arc::clone(&self.coordinator),
@@ -176,7 +177,9 @@ impl WriteCoordinator {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<T, String>>,
     {
-        let guard = self.acquire_write_lock(catalog, schema, table, date).await?;
+        let guard = self
+            .acquire_write_lock(catalog, schema, table, date)
+            .await?;
         let result = operation().await;
 
         // Guard will be dropped here, releasing the lock and sending invalidation
@@ -350,7 +353,8 @@ impl BatchWriteCoordinator {
             }
         }
 
-        let guard = self.write_coordinator
+        let guard = self
+            .write_coordinator
             .acquire_write_lock(catalog, schema, table, date)
             .await?;
         self.guards.push(guard);

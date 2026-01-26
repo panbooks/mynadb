@@ -20,19 +20,19 @@
 //! - `metrics`: Prometheus metrics for cluster monitoring
 //! - `api`: Cluster management API endpoints
 
+pub mod api;
+pub mod cache_invalidation;
 pub mod config;
 pub mod coordinator;
-pub mod node;
-pub mod cache_invalidation;
 pub mod election;
-pub mod write_coordinator;
 pub mod metrics;
-pub mod api;
+pub mod node;
+pub mod write_coordinator;
 
+pub use cache_invalidation::{CacheInvalidation, InvalidationReason};
 pub use config::ClusterConfig;
 pub use coordinator::{Coordinator, CoordinatorType};
-pub use node::{NodeInfo, NodeRole, NodeState};
-pub use cache_invalidation::{CacheInvalidation, InvalidationReason};
 pub use election::LeaderElection;
-pub use write_coordinator::WriteCoordinator;
 pub use metrics::ClusterMetrics;
+pub use node::{NodeInfo, NodeRole, NodeState};
+pub use write_coordinator::WriteCoordinator;
