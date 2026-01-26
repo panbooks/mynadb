@@ -10,7 +10,6 @@
 //! - `mynadb data start|stop` - Data node (storage + query execution)
 //! - `mynadb version` - Show version information
 
-mod cluster;
 mod config;
 mod data;
 mod jobs;
