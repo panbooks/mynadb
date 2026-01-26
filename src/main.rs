@@ -903,8 +903,8 @@ async fn run_meta_node(_config_path: &str, config: &Config) {
     welcome!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
     welcome!("═══════════════════════════════════════════════════════");
 
-    // Load Meta-specific config (would typically come from config file)
-    let meta_config = MetaConfig::default();
+    // Load Meta-specific config from [meta] section or use defaults
+    let meta_config = config.meta.clone().unwrap_or_else(MetaConfig::default);
 
     info!("Starting Meta node {} on {}", meta_config.node_id, meta_config.advertise_addr);
 
@@ -950,8 +950,8 @@ async fn run_router_node(_config_path: &str, config: &Config) {
     welcome!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
     welcome!("═══════════════════════════════════════════════════════");
 
-    // Load Router-specific config
-    let router_config = RouterConfig::default();
+    // Load Router-specific config from [router] section or use defaults
+    let router_config = config.router.clone().unwrap_or_else(RouterConfig::default);
 
     info!("Starting Router node {}", router_config.node_id);
     info!("  HTTP port: {}", router_config.http_port);
@@ -1011,8 +1011,8 @@ async fn run_data_node(_config_path: &str, config: &Config) {
     welcome!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
     welcome!("═══════════════════════════════════════════════════════");
 
-    // Load Data-specific config
-    let data_config = DataNodeConfig::default();
+    // Load Data-specific config from [data] section or use defaults
+    let data_config = config.data.clone().unwrap_or_else(DataNodeConfig::default);
 
     info!("Starting Data node {} on {}", data_config.node_id, data_config.advertise_addr);
 

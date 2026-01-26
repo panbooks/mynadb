@@ -31,6 +31,15 @@ pub struct Config {
     pub auth: AuthConfig,
     #[serde(default)]
     pub cluster: ClusterConfig,
+    /// Meta node configuration (for --role meta)
+    #[serde(default)]
+    pub meta: Option<crate::meta::config::MetaConfig>,
+    /// Router node configuration (for --role router)
+    #[serde(default)]
+    pub router: Option<crate::router::config::RouterConfig>,
+    /// Data node configuration (for --role data)
+    #[serde(default)]
+    pub data: Option<crate::data::config::DataNodeConfig>,
 }
 
 /// Cluster configuration
@@ -825,6 +834,9 @@ impl Default for Config {
             wal: WalConfig::default(),
             auth: AuthConfig::default(),
             cluster: ClusterConfig::default(),
+            meta: None,
+            router: None,
+            data: None,
         }
     }
 }
