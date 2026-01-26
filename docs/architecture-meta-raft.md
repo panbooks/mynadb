@@ -1,6 +1,6 @@
 # MynaDB Meta Service Raft Implementation
 
-> **Status: IMPLEMENTED** - OpenRaft 0.9 traits implemented for Meta HA.
+> **Status: INTEGRATED** - OpenRaft 0.9 fully integrated into MetaNode for multi-node HA.
 
 This document describes the internal implementation of the Raft consensus layer for the Meta service, including storage formats, trait implementations, and component interactions.
 
@@ -522,23 +522,24 @@ async fn test_log_store_vote() {
 
 ---
 
-## Future Work
+## Integration Status
 
-### Pending Integration Tasks
+### Completed Tasks
 
-1. **Create Raft Instance**: Instantiate `Raft<TypeConfig>` in `MetaNode`
-2. **Wire RaftInternalService**: Forward RPCs to Raft instance
-3. **Client Write Routing**: Route writes through `raft.client_write()`
-4. **State Transitions**: Handle leader/follower transitions
-5. **Cluster Membership**: Dynamic node add/remove
+1. ✅ **Create Raft Instance**: `Raft<TypeConfig>` instantiated in `MetaNode::new()`
+2. ✅ **Wire RaftInternalService**: gRPC handlers forward RPCs to Raft instance
+3. ✅ **Client Write Routing**: All writes route through `raft.client_write()`
+4. ✅ **Leadership Queries**: `is_leader()` and `current_leader()` use Raft metrics
+5. ✅ **Cluster Membership**: `initialize_cluster()`, `add_learner()`, `change_membership()` methods
 
-### Planned Enhancements
+### Future Enhancements
 
-- [ ] Read replicas (followers serve reads)
-- [ ] Learner nodes (non-voting replicas)
-- [ ] Joint consensus for membership changes
-- [ ] Raft metrics (Prometheus)
+- [ ] Read replicas (followers serve reads with linearizable guarantee)
+- [ ] Learner nodes (non-voting replicas for read scaling)
+- [ ] Joint consensus for safe membership changes
+- [ ] Raft metrics export (Prometheus)
 - [ ] Automatic snapshot on log size threshold
+- [ ] Admin API for cluster management operations
 
 ---
 
