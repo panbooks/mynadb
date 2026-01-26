@@ -6,7 +6,7 @@ use object_store::{ObjectStore, PutPayload};
 use std::sync::Arc;
 use tracing::{debug, info};
 
-use crate::config::ObjectStoreConfig;
+use crate::config::StorageConfig;
 
 /// Storage backend types
 #[derive(Debug, Clone)]
@@ -29,7 +29,7 @@ pub struct Storage {
 
 impl Storage {
     /// Create storage from configuration
-    pub fn from_config(config: &ObjectStoreConfig) -> Result<Self, String> {
+    pub fn from_config(config: &StorageConfig) -> Result<Self, String> {
         match config.backend.as_str() {
             "local" | "file" => Self::new_local(&config.data_dir),
             "s3" | "minio" | "oss" => Self::new_s3(config),
@@ -62,7 +62,7 @@ impl Storage {
     }
 
     /// Create S3-compatible storage (AWS S3, MinIO, Aliyun OSS)
-    pub fn new_s3(config: &ObjectStoreConfig) -> Result<Self, String> {
+    pub fn new_s3(config: &StorageConfig) -> Result<Self, String> {
         let mut builder = AmazonS3Builder::new()
             .with_bucket_name(&config.bucket)
             .with_region(&config.region);
