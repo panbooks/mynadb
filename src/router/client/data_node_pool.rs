@@ -2,6 +2,7 @@
 //!
 //! Manages Arrow Flight connections to Data nodes with connection pooling.
 
+use super::circuit_breaker::CircuitBreaker;
 use arrow::array::{RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_flight::{
@@ -84,6 +85,9 @@ pub struct DataNodePool {
     /// Node ID → address mapping
     addresses: DashMap<String, String>,
 
+    /// Node ID → circuit breaker mapping
+    circuit_breakers: DashMap<String, Arc<CircuitBreaker>>,
+
     /// Pool configuration
     config: PoolConfig,
 }
@@ -93,6 +97,7 @@ impl DataNodePool {
         Self {
             channels: DashMap::new(),
             addresses: DashMap::new(),
+            circuit_breakers: DashMap::new(),
             config,
         }
     }
@@ -102,6 +107,10 @@ impl DataNodePool {
         info!("Adding data node to pool: {} at {}", node_id, flight_addr);
         self.addresses
             .insert(node_id.to_string(), flight_addr.to_string());
+        // Initialize circuit breaker for new nodes
+        self.circuit_breakers
+            .entry(node_id.to_string())
+            .or_insert_with(|| Arc::new(CircuitBreaker::new()));
     }
 
     /// Remove a Data node
@@ -109,6 +118,34 @@ impl DataNodePool {
         info!("Removing data node from pool: {}", node_id);
         self.addresses.remove(node_id);
         self.channels.remove(node_id);
+        self.circuit_breakers.remove(node_id);
+    }
+
+    /// Check if a node's circuit breaker allows requests
+    pub fn is_node_available(&self, node_id: &str) -> bool {
+        self.circuit_breakers
+            .get(node_id)
+            .map(|cb| cb.is_available())
+            .unwrap_or(true) // Allow if no circuit breaker exists
+    }
+
+    /// Get circuit breaker for a node (for external recording)
+    pub fn get_circuit_breaker(&self, node_id: &str) -> Option<Arc<CircuitBreaker>> {
+        self.circuit_breakers.get(node_id).map(|cb| cb.clone())
+    }
+
+    /// Record success for a node's circuit breaker
+    pub fn record_success(&self, node_id: &str) {
+        if let Some(cb) = self.circuit_breakers.get(node_id) {
+            cb.record_success();
+        }
+    }
+
+    /// Record failure for a node's circuit breaker
+    pub fn record_failure(&self, node_id: &str) {
+        if let Some(cb) = self.circuit_breakers.get(node_id) {
+            cb.record_failure();
+        }
     }
 
     /// Get a Flight client for a Data node
@@ -121,7 +158,17 @@ impl DataNodePool {
     }
 
     /// Get or create a channel to a Data node
+    ///
+    /// Checks circuit breaker before attempting connection.
     async fn get_or_create_channel(&self, node_id: &str) -> Result<Channel, String> {
+        // Check circuit breaker first
+        if !self.is_node_available(node_id) {
+            return Err(format!(
+                "Node {} circuit breaker is open (too many recent failures)",
+                node_id
+            ));
+        }
+
         // Check if we have a cached channel
         if let Some(channel) = self.channels.get(node_id) {
             return Ok(channel.clone());
@@ -142,10 +189,11 @@ impl DataNodePool {
 
         debug!("Connecting to data node {} at {}", node_id, addr);
 
-        let channel = endpoint
-            .connect()
-            .await
-            .map_err(|e| format!("Failed to connect to {}: {}", addr, e))?;
+        let channel = endpoint.connect().await.map_err(|e| {
+            // Record connection failure
+            self.record_failure(node_id);
+            format!("Failed to connect to {}: {}", addr, e)
+        })?;
 
         // Cache the channel
         self.channels.insert(node_id.to_string(), channel.clone());
@@ -230,6 +278,8 @@ impl DataNodePool {
     /// This is the optimized write path where the Router has already parsed
     /// line protocol and converted Points to RecordBatch. The Data node can
     /// ingest the batch directly without re-parsing.
+    ///
+    /// Records success/failure to circuit breaker for fault tolerance.
     pub async fn write_batch(
         &self,
         node_id: &str,
@@ -270,17 +320,23 @@ impl DataNodePool {
 
         // Send via DoPut
         let request = tonic::Request::new(stream::iter(flight_data.into_iter()));
-        let response = client
-            .do_put(request)
-            .await
-            .map_err(|e| format!("DoPut failed: {}", e))?;
+        let response = client.do_put(request).await.map_err(|e| {
+            // Record failure for circuit breaker
+            self.record_failure(node_id);
+            // Clear cached channel on RPC error (might be stale)
+            self.channels.remove(node_id);
+            format!("DoPut failed: {}", e)
+        })?;
 
         // Read response
         let mut result_stream = response.into_inner();
         let mut rows_written = 0u64;
 
         while let Some(result) = result_stream.next().await {
-            let put_result = result.map_err(|e| format!("PutResult error: {}", e))?;
+            let put_result = result.map_err(|e| {
+                self.record_failure(node_id);
+                format!("PutResult error: {}", e)
+            })?;
             // Parse the app_metadata JSON to get rows_written
             if let Ok(metadata) =
                 serde_json::from_slice::<serde_json::Value>(&put_result.app_metadata)
@@ -294,6 +350,9 @@ impl DataNodePool {
                 }
             }
         }
+
+        // Record success for circuit breaker
+        self.record_success(node_id);
 
         Ok(rows_written)
     }

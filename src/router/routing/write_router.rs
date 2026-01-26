@@ -12,10 +12,13 @@ use crate::router::client::DataNodePool;
 use crate::storage::batch_converter::points_to_record_batch;
 use crate::storage::line_protocol::{format_date32_as_string, parse_line_protocol, Point};
 use arrow::array::RecordBatch;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
+
+/// Maximum number of retry attempts for failed writes
+const MAX_WRITE_RETRIES: u32 = 2;
 
 /// Write routing result
 #[derive(Debug)]
@@ -25,6 +28,8 @@ pub struct WriteResult {
     pub bytes_written: u64,
     pub error: Option<String>,
     pub elapsed_ms: u64,
+    /// Number of retries that were needed
+    pub retries: u32,
 }
 
 /// Write Router for dispatching writes to Data nodes
@@ -58,7 +63,7 @@ impl WriteRouter {
     /// 1. Parses the line protocol to Points
     /// 2. Groups points by partition key
     /// 3. Converts each partition's Points to RecordBatch
-    /// 4. Dispatches RecordBatches to Data nodes via Arrow Flight
+    /// 4. Dispatches RecordBatches to Data nodes via Arrow Flight with retry
     pub async fn route_write(&self, catalog: &str, line_protocol: &str) -> WriteResult {
         let start = Instant::now();
 
@@ -71,41 +76,32 @@ impl WriteRouter {
                 bytes_written: 0,
                 error: Some("No valid points in line protocol".to_string()),
                 elapsed_ms: start.elapsed().as_millis() as u64,
+                retries: 0,
             };
         }
 
         let total_points = points.len();
         debug!("Routing {} points for catalog {}", total_points, catalog);
 
-        // Group points by partition key
+        // Group points by partition key and convert to RecordBatch
         let partitions = self.group_by_partition(catalog, points);
+        let partition_batches = self.convert_partitions_to_batches(partitions);
 
-        // Group partitions by target Data node and convert to RecordBatch
-        let node_batches = self.group_by_target_node(partitions);
-
-        if node_batches.is_empty() {
+        if partition_batches.is_empty() {
             return WriteResult {
                 success: false,
                 points_written: 0,
                 bytes_written: 0,
-                error: Some("No active data nodes available".to_string()),
+                error: Some("No valid partitions to write".to_string()),
                 elapsed_ms: start.elapsed().as_millis() as u64,
+                retries: 0,
             };
         }
 
-        // Dispatch writes to Data nodes via Arrow Flight in parallel
-        let results = self.dispatch_writes(catalog, node_batches).await;
-
-        // Aggregate results
-        let mut total_written = 0u64;
-        let mut errors = Vec::new();
-
-        for result in results {
-            match result {
-                Ok(written) => total_written += written,
-                Err(e) => errors.push(e),
-            }
-        }
+        // Dispatch writes with retry logic
+        let (total_written, total_retries, errors) = self
+            .dispatch_writes_with_retry(catalog, partition_batches)
+            .await;
 
         let success = errors.is_empty();
         let error = if errors.is_empty() {
@@ -114,12 +110,20 @@ impl WriteRouter {
             Some(errors.join("; "))
         };
 
+        if total_retries > 0 {
+            info!(
+                "Write completed with {} retries for catalog {}",
+                total_retries, catalog
+            );
+        }
+
         WriteResult {
             success,
             points_written: total_written,
             bytes_written: line_protocol.len() as u64,
             error,
             elapsed_ms: start.elapsed().as_millis() as u64,
+            retries: total_retries,
         }
     }
 
@@ -172,106 +176,211 @@ impl WriteRouter {
         partitions
     }
 
-    /// Group partitions by target Data node and convert Points to RecordBatch
-    fn group_by_target_node(
+    /// Convert partitions to RecordBatches
+    fn convert_partitions_to_batches(
         &self,
         partitions: HashMap<PartitionKey, Vec<Point>>,
-    ) -> HashMap<String, Vec<(PartitionKey, RecordBatch)>> {
-        let mut node_batches: HashMap<String, Vec<(PartitionKey, RecordBatch)>> = HashMap::new();
+    ) -> Vec<(PartitionKey, RecordBatch)> {
+        let mut batches = Vec::new();
 
         for (partition_key, points) in partitions {
-            if let Some(node) = self.shard_cache.select_node_for_partition(&partition_key) {
-                // Convert Points to RecordBatch
-                match points_to_record_batch(&points) {
-                    Ok(batch) => {
-                        node_batches
-                            .entry(node.node_id)
-                            .or_default()
-                            .push((partition_key, batch));
-                    }
-                    Err(e) => {
-                        error!(
-                            "Failed to convert points to RecordBatch for partition {}: {}",
-                            partition_key.to_path(),
-                            e
-                        );
-                    }
+            match points_to_record_batch(&points) {
+                Ok(batch) => {
+                    batches.push((partition_key, batch));
                 }
-            } else {
-                warn!(
-                    "No node available for partition: {}",
-                    partition_key.to_path()
-                );
+                Err(e) => {
+                    error!(
+                        "Failed to convert points to RecordBatch for partition {}: {}",
+                        partition_key.to_path(),
+                        e
+                    );
+                }
             }
         }
 
-        node_batches
+        batches
     }
 
-    /// Dispatch writes to Data nodes via Arrow Flight in parallel
-    async fn dispatch_writes(
+    /// Dispatch writes with retry and failover
+    ///
+    /// For each partition:
+    /// 1. Select target node
+    /// 2. Try to write
+    /// 3. On failure, mark node as suspect and retry on different node
+    /// 4. Continue until success or max retries exceeded
+    async fn dispatch_writes_with_retry(
         &self,
         catalog: &str,
-        node_batches: HashMap<String, Vec<(PartitionKey, RecordBatch)>>,
-    ) -> Vec<Result<u64, String>> {
+        partition_batches: Vec<(PartitionKey, RecordBatch)>,
+    ) -> (u64, u32, Vec<String>) {
         let mut futures = Vec::new();
 
-        for (node_id, batches) in node_batches {
+        for (partition_key, batch) in partition_batches {
             let pool = Arc::clone(&self.data_node_pool);
+            let shard_cache = Arc::clone(&self.shard_cache);
             let catalog = catalog.to_string();
 
             let future = async move {
-                let mut total_written = 0u64;
-
-                for (partition_key, batch) in batches {
-                    let row_count = batch.num_rows() as u64;
-                    let partition_path = partition_key.to_path();
-
-                    debug!(
-                        "Writing {} rows to {} for partition {}",
-                        row_count, node_id, partition_path
-                    );
-
-                    // Send RecordBatch via Arrow Flight DoPut
-                    match pool
-                        .write_batch(
-                            &node_id,
-                            &catalog,
-                            &partition_key.schema,
-                            &partition_key.table,
-                            partition_key.date_as_i32(),
-                            batch,
-                            None, // fencing_token - TODO: acquire from Meta lock
-                        )
-                        .await
-                    {
-                        Ok(written) => {
-                            debug!(
-                                "Successfully wrote {} rows to {} for partition {}",
-                                written, node_id, partition_path
-                            );
-                            total_written += written;
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to write to {} for partition {}: {}",
-                                node_id, partition_path, e
-                            );
-                            return Err(format!(
-                                "Failed to write to {} for partition {}: {}",
-                                node_id, partition_path, e
-                            ));
-                        }
-                    }
-                }
-
-                Ok(total_written)
+                Self::write_partition_with_retry(
+                    &pool,
+                    &shard_cache,
+                    &catalog,
+                    partition_key,
+                    batch,
+                    MAX_WRITE_RETRIES,
+                )
+                .await
             };
 
             futures.push(future);
         }
 
-        // Execute all writes in parallel
-        futures::future::join_all(futures).await
+        // Execute all partition writes in parallel
+        let results = futures::future::join_all(futures).await;
+
+        // Aggregate results
+        let mut total_written = 0u64;
+        let mut total_retries = 0u32;
+        let mut errors = Vec::new();
+
+        for result in results {
+            match result {
+                Ok((written, retries)) => {
+                    total_written += written;
+                    total_retries += retries;
+                }
+                Err(e) => errors.push(e),
+            }
+        }
+
+        (total_written, total_retries, errors)
+    }
+
+    /// Write a single partition with retry logic
+    ///
+    /// Returns (rows_written, retry_count) on success
+    async fn write_partition_with_retry(
+        pool: &DataNodePool,
+        shard_cache: &ShardCache,
+        catalog: &str,
+        partition_key: PartitionKey,
+        batch: RecordBatch,
+        max_retries: u32,
+    ) -> Result<(u64, u32), String> {
+        let partition_path = partition_key.to_path();
+        let row_count = batch.num_rows() as u64;
+        let mut tried_nodes: HashSet<String> = HashSet::new();
+        let mut last_error = String::new();
+        let mut retries = 0u32;
+
+        for attempt in 0..=max_retries {
+            // Select target node (excluding already-tried nodes on retry)
+            let node = if attempt == 0 {
+                shard_cache.select_node_for_partition(&partition_key)
+            } else {
+                shard_cache.select_node_for_partition_excluding(&partition_key, &tried_nodes)
+            };
+
+            let node = match node {
+                Some(n) => n,
+                None => {
+                    if attempt == 0 {
+                        return Err(format!(
+                            "No data node available for partition {}",
+                            partition_path
+                        ));
+                    } else {
+                        // No more nodes to try
+                        return Err(format!(
+                            "All {} data nodes failed for partition {}: {}",
+                            tried_nodes.len(),
+                            partition_path,
+                            last_error
+                        ));
+                    }
+                }
+            };
+
+            tried_nodes.insert(node.node_id.clone());
+
+            debug!(
+                "Writing {} rows to {} for partition {} (attempt {})",
+                row_count,
+                node.node_id,
+                partition_path,
+                attempt + 1
+            );
+
+            // Try to write
+            match pool
+                .write_batch(
+                    &node.node_id,
+                    catalog,
+                    &partition_key.schema,
+                    &partition_key.table,
+                    partition_key.date_as_i32(),
+                    batch.clone(),
+                    None, // fencing_token - TODO: acquire from Meta lock
+                )
+                .await
+            {
+                Ok(written) => {
+                    // Success!
+                    if attempt > 0 {
+                        info!(
+                            "Write succeeded on retry {} (node {}) for partition {}",
+                            attempt, node.node_id, partition_path
+                        );
+                        // Mark original failed nodes as suspect
+                        for failed_node_id in tried_nodes.iter() {
+                            if failed_node_id != &node.node_id {
+                                shard_cache.mark_node_suspect(failed_node_id);
+                            }
+                        }
+                    }
+
+                    // Record success for the working node
+                    shard_cache.record_node_success(&node.node_id);
+
+                    debug!(
+                        "Successfully wrote {} rows to {} for partition {}",
+                        written, node.node_id, partition_path
+                    );
+                    return Ok((written, retries));
+                }
+                Err(e) => {
+                    warn!(
+                        "Write attempt {} failed for node {} partition {}: {}",
+                        attempt + 1,
+                        node.node_id,
+                        partition_path,
+                        e
+                    );
+                    last_error = e;
+                    retries += 1;
+                    // Continue to next attempt
+                }
+            }
+        }
+
+        // All retries exhausted
+        error!(
+            "Write failed after {} attempts for partition {}: {}",
+            max_retries + 1,
+            partition_path,
+            last_error
+        );
+
+        // Mark all tried nodes as suspect
+        for node_id in &tried_nodes {
+            shard_cache.mark_node_suspect(node_id);
+        }
+
+        Err(format!(
+            "Write failed after {} attempts for partition {}: {}",
+            max_retries + 1,
+            partition_path,
+            last_error
+        ))
     }
 }
