@@ -1,19 +1,24 @@
 //! MetaNode - Main coordinator for the Meta service
 //!
-//! This is a simplified implementation that provides the core functionality.
-//! The full Raft integration will be refined in subsequent iterations.
+//! This module provides Raft-based coordination for the Meta service,
+//! enabling high availability through consensus-based replication.
 
 use crate::meta::config::MetaConfig;
-use crate::meta::raft::{MetaNetworkFactory, MetaStateMachine, NodeConfig, NodeId};
+use crate::meta::raft::{
+    MetaNetworkFactory, MetaRaft, MetaStateMachine, NodeId, SledLogStore, TypeConfig,
+};
 use crate::meta::types::*;
+use openraft::error::{ClientWriteError, RaftError};
+use openraft::{BasicNode, Config as RaftConfig};
+use std::collections::BTreeMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 /// MetaNode manages a Raft-based metadata service
 pub struct MetaNode {
     /// State machine (handles all metadata operations)
-    state_machine: Arc<MetaStateMachine>,
+    /// Kept for direct read operations (reads don't need consensus)
+    state_machine: MetaStateMachine,
 
     /// Node ID
     node_id: NodeId,
@@ -21,11 +26,11 @@ pub struct MetaNode {
     /// Configuration
     config: MetaConfig,
 
-    /// Network factory for peer connections
-    network: Arc<MetaNetworkFactory>,
+    /// Network factory for peer connections (kept for peer management)
+    network: MetaNetworkFactory,
 
-    /// Whether this node is the leader (simplified single-node mode for now)
-    is_leader: Arc<RwLock<bool>>,
+    /// Raft consensus instance
+    raft: MetaRaft,
 }
 
 impl MetaNode {
@@ -36,36 +41,63 @@ impl MetaNode {
         // Create directories
         std::fs::create_dir_all(&config.data_dir)?;
         std::fs::create_dir_all(config.sled_path())?;
+        std::fs::create_dir_all(config.raft_log_path())?;
 
         // Open sled database for state machine
         let state_machine_db = sled::open(config.sled_path())?;
-        let state_machine = Arc::new(MetaStateMachine::new(state_machine_db));
+        // Create two state machines that share the same sled DB
+        // One for Raft to own, one for direct reads
+        let state_machine_for_raft = MetaStateMachine::new(state_machine_db.clone());
+        let state_machine_for_reads = MetaStateMachine::new(state_machine_db);
 
-        // Create network factory
-        let network = Arc::new(MetaNetworkFactory::new());
+        // Open sled database for Raft log store
+        let log_store_db = sled::open(config.raft_log_path())?;
+        let log_store = SledLogStore::new(log_store_db);
 
-        // Add peers to network
+        // Create network factory - one for Raft, one for peer management
+        let network_for_raft = MetaNetworkFactory::new();
+        let network_for_management = MetaNetworkFactory::new();
+
+        // Add peers to both network instances
         for (i, peer_addr) in config.peers.iter().enumerate() {
             let peer_id = (i + 1) as u64;
             if peer_id != node_id {
-                network.add_peer(peer_id, peer_addr.clone());
+                network_for_raft.add_peer(peer_id, peer_addr.clone());
+                network_for_management.add_peer(peer_id, peer_addr.clone());
             }
         }
 
+        // Create Raft configuration
+        let raft_config = RaftConfig {
+            cluster_name: "mynadb-meta".to_string(),
+            heartbeat_interval: config.raft.heartbeat_interval_ms,
+            election_timeout_min: config.raft.election_timeout_min_ms,
+            election_timeout_max: config.raft.election_timeout_max_ms,
+            max_payload_entries: config.raft.max_payload_entries,
+            ..Default::default()
+        };
+
+        // Create Raft instance (takes ownership of network, log_store, state_machine)
+        let raft = openraft::Raft::<TypeConfig>::new(
+            node_id,
+            Arc::new(raft_config),
+            network_for_raft,
+            log_store,
+            state_machine_for_raft,
+        )
+        .await?;
+
         info!(
-            "MetaNode {} initialized at {}",
+            "MetaNode {} initialized at {} with Raft consensus",
             node_id, config.advertise_addr
         );
 
-        // In single-node mode, this node is always the leader
-        let is_leader = config.peers.is_empty() || config.peers.len() == 1;
-
         Ok(Self {
-            state_machine,
+            state_machine: state_machine_for_reads,
             node_id,
             config,
-            network,
-            is_leader: Arc::new(RwLock::new(is_leader)),
+            network: network_for_management,
+            raft,
         })
     }
 
@@ -75,30 +107,32 @@ impl MetaNode {
     }
 
     /// Get the state machine (for read operations)
-    pub fn state_machine(&self) -> &Arc<MetaStateMachine> {
+    pub fn state_machine(&self) -> &MetaStateMachine {
         &self.state_machine
+    }
+
+    /// Get the Raft instance (for internal use and gRPC handlers)
+    pub fn raft(&self) -> &MetaRaft {
+        &self.raft
     }
 
     /// Check if this node is the Raft leader
     pub async fn is_leader(&self) -> bool {
-        *self.is_leader.read().await
+        self.raft.current_leader().await == Some(self.node_id)
     }
 
     /// Get the current Raft leader
     pub async fn current_leader(&self) -> Option<NodeId> {
-        if *self.is_leader.read().await {
-            Some(self.node_id)
-        } else {
-            None
-        }
+        self.raft.current_leader().await
     }
 
-    /// Get basic metrics (simplified)
+    /// Get Raft metrics
     pub fn metrics(&self) -> MetaMetrics {
+        let raft_metrics = self.raft.metrics().borrow().clone();
         MetaMetrics {
             node_id: self.node_id,
-            is_leader: true, // Simplified
-            current_term: 1,
+            is_leader: raft_metrics.current_leader == Some(self.node_id),
+            current_term: raft_metrics.current_term,
         }
     }
 
@@ -170,12 +204,15 @@ impl MetaNode {
             ttl_ms,
         };
 
-        let response = self.state_machine.apply_command(cmd);
-        match response {
-            MetaResponse::LockAcquired { fencing_token } => Ok((true, fencing_token)),
-            MetaResponse::LockNotAcquired { .. } => Ok((false, 0)),
-            MetaResponse::Error { message } => Err(message),
-            _ => Err("Unexpected response".to_string()),
+        let result = self.raft.client_write(cmd).await;
+        match result {
+            Ok(response) => match response.data {
+                MetaResponse::LockAcquired { fencing_token } => Ok((true, fencing_token)),
+                MetaResponse::LockNotAcquired { .. } => Ok((false, 0)),
+                MetaResponse::Error { message } => Err(message),
+                _ => Err("Unexpected response".to_string()),
+            },
+            Err(e) => Err(format!("Raft error: {}", e)),
         }
     }
 
@@ -212,11 +249,14 @@ impl MetaNode {
             ttl_ms,
         };
 
-        let response = self.state_machine.apply_command(cmd);
-        match response {
-            MetaResponse::LockRenewed { expires_at } => Ok(expires_at),
-            MetaResponse::Error { message } => Err(message),
-            _ => Err("Unexpected response".to_string()),
+        let result = self.raft.client_write(cmd).await;
+        match result {
+            Ok(response) => match response.data {
+                MetaResponse::LockRenewed { expires_at } => Ok(expires_at),
+                MetaResponse::Error { message } => Err(message),
+                _ => Err("Unexpected response".to_string()),
+            },
+            Err(e) => Err(format!("Raft error: {}", e)),
         }
     }
 
@@ -233,12 +273,15 @@ impl MetaNode {
             ttl_ms,
         };
 
-        let response = self.state_machine.apply_command(cmd);
-        match response {
-            MetaResponse::LeaderElected { term } => Ok((true, term)),
-            MetaResponse::LeaderExists { .. } => Ok((false, 0)),
-            MetaResponse::Error { message } => Err(message),
-            _ => Err("Unexpected response".to_string()),
+        let result = self.raft.client_write(cmd).await;
+        match result {
+            Ok(response) => match response.data {
+                MetaResponse::LeaderElected { term } => Ok((true, term)),
+                MetaResponse::LeaderExists { .. } => Ok((false, 0)),
+                MetaResponse::Error { message } => Err(message),
+                _ => Err("Unexpected response".to_string()),
+            },
+            Err(e) => Err(format!("Raft error: {}", e)),
         }
     }
 
@@ -272,19 +315,45 @@ impl MetaNode {
         self.apply_command(cmd).await
     }
 
-    /// Apply a command (simplified - direct to state machine)
+    /// Apply a command through Raft consensus
     async fn apply_command(&self, cmd: MetaCommand) -> Result<u64, String> {
-        let response = self.state_machine.apply_command(cmd);
-        match response {
-            MetaResponse::Success => Ok(0),
-            MetaResponse::NodeRegistered { lease_id } => Ok(lease_id),
-            MetaResponse::EventPublished { sequence } => Ok(sequence),
-            MetaResponse::LockAcquired { fencing_token } => Ok(fencing_token),
-            MetaResponse::LockReleased => Ok(0),
-            MetaResponse::LeaderElected { term } => Ok(term),
-            MetaResponse::Error { message } => Err(message),
-            _ => Ok(0),
+        // Route through Raft for consensus
+        let result = self.raft.client_write(cmd).await;
+
+        match result {
+            Ok(response) => {
+                // Extract result from the MetaResponse
+                match response.data {
+                    MetaResponse::Success => Ok(0),
+                    MetaResponse::NodeRegistered { lease_id } => Ok(lease_id),
+                    MetaResponse::EventPublished { sequence } => Ok(sequence),
+                    MetaResponse::LockAcquired { fencing_token } => Ok(fencing_token),
+                    MetaResponse::LockReleased => Ok(0),
+                    MetaResponse::LeaderElected { term } => Ok(term),
+                    MetaResponse::Error { message } => Err(message),
+                    _ => Ok(0),
+                }
+            }
+            Err(e) => {
+                // Handle Raft errors
+                match e {
+                    RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) => {
+                        if let Some(leader_id) = forward.leader_id {
+                            Err(format!("Not leader. Forward to node {}", leader_id))
+                        } else {
+                            Err("No leader available".to_string())
+                        }
+                    }
+                    _ => Err(format!("Raft error: {}", e)),
+                }
+            }
         }
+    }
+
+    /// Apply a command directly to state machine (bypassing Raft)
+    /// Use only for read operations or internal state queries
+    fn apply_command_local(&self, cmd: MetaCommand) -> MetaResponse {
+        self.state_machine.apply_command(cmd)
     }
 
     // ========================================================================
@@ -349,6 +418,68 @@ impl MetaNode {
     }
 
     // ========================================================================
+    // Cluster Management
+    // ========================================================================
+
+    /// Initialize the Raft cluster with this node as the first member
+    ///
+    /// This should only be called on the first node in a new cluster.
+    /// For joining existing clusters, use `add_learner` and `change_membership`.
+    pub async fn initialize_cluster(&self) -> Result<(), String> {
+        let mut members = BTreeMap::new();
+        members.insert(
+            self.node_id,
+            BasicNode {
+                addr: self.config.advertise_addr.clone(),
+            },
+        );
+
+        self.raft
+            .initialize(members)
+            .await
+            .map_err(|e| format!("Failed to initialize cluster: {}", e))?;
+
+        info!("Cluster initialized with node {} as first member", self.node_id);
+        Ok(())
+    }
+
+    /// Add a learner node to the cluster
+    ///
+    /// Learner nodes receive log replication but don't vote in elections.
+    /// Use `change_membership` to promote a learner to a voting member.
+    pub async fn add_learner(&self, learner_id: NodeId, addr: String) -> Result<(), String> {
+        let node = BasicNode { addr };
+        self.raft
+            .add_learner(learner_id, node, true)
+            .await
+            .map_err(|e| format!("Failed to add learner: {}", e))?;
+
+        info!("Added learner node {} to cluster", learner_id);
+        Ok(())
+    }
+
+    /// Change cluster membership (add or remove voting members)
+    ///
+    /// The new membership must include all nodes that should be voting members.
+    pub async fn change_membership(
+        &self,
+        members: std::collections::BTreeSet<NodeId>,
+    ) -> Result<(), String> {
+        self.raft
+            .change_membership(members, false)
+            .await
+            .map_err(|e| format!("Failed to change membership: {}", e))?;
+
+        info!("Cluster membership changed");
+        Ok(())
+    }
+
+    /// Check if the cluster is initialized
+    pub async fn is_initialized(&self) -> bool {
+        self.raft.is_initialized().await.unwrap_or(false)
+    }
+
+    // ========================================================================
     // Lifecycle
     // ========================================================================
 
@@ -379,6 +510,12 @@ impl MetaNode {
     /// Graceful shutdown
     pub async fn shutdown(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Shutting down MetaNode {}", self.node_id);
+
+        // Shutdown Raft (triggers graceful shutdown of replication tasks)
+        if let Err(e) = self.raft.shutdown().await {
+            error!("Error during Raft shutdown: {}", e);
+        }
+
         Ok(())
     }
 }

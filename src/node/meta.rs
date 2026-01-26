@@ -7,7 +7,7 @@
 use super::common;
 use crate::config::Config;
 use crate::meta::config::MetaConfig;
-use crate::meta::service::grpc::{start_grpc_server, MetaGrpcService};
+use crate::meta::service::grpc::{start_grpc_server, MetaGrpcService, RaftInternalService};
 use crate::meta::service::meta_node::MetaNode;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -60,8 +60,9 @@ pub async fn start(config_path: &str) {
     // Start background tasks
     node.start_background_tasks();
 
-    // Create gRPC service
+    // Create gRPC services
     let grpc_service = MetaGrpcService::new(Arc::clone(&node));
+    let raft_service = RaftInternalService::new(Arc::clone(&node));
 
     // Start gRPC server
     let addr = meta_config
@@ -80,7 +81,7 @@ pub async fn start(config_path: &str) {
         std::process::exit(0);
     });
 
-    if let Err(e) = start_grpc_server(addr, grpc_service).await {
+    if let Err(e) = start_grpc_server(addr, grpc_service, raft_service).await {
         error!("Meta gRPC server failed: {}", e);
         common::remove_pid_file(&config.storage.data_dir, NODE_TYPE);
     }
