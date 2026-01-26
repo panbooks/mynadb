@@ -9,8 +9,12 @@ use crate::config::Config;
 use crate::data::config::DataNodeConfig;
 use crate::data::server::flight::{start_flight_server, DataNodeFlightService};
 use crate::meta::client::MetaClient;
+use crate::meta::types::{current_timestamp_ms, NodeInfo, NodeRole, NodeState};
 use crate::storage::cache;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{error, info, warn};
 
 /// Macro for welcome messages
@@ -83,8 +87,47 @@ pub async fn start(config_path: &str) {
         }
     };
 
+    // Register with Meta service and start heartbeat
+    let lease_id = Arc::new(AtomicU64::new(0));
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+
+    if let Some(ref client) = meta_client {
+        let node_info = NodeInfo {
+            node_id: data_config.node_id.clone(),
+            role: NodeRole::Data,
+            state: NodeState::Starting,
+            advertise_addr: data_config.advertise_addr.clone(),
+            http_addr: None,
+            flight_addr: Some(data_config.advertise_addr.clone()),
+            registered_at: current_timestamp_ms(),
+            last_heartbeat: current_timestamp_ms(),
+            labels: HashMap::new(),
+        };
+
+        match client.register_node(node_info, 30000).await {
+            Ok(id) => {
+                info!("Registered with Meta service, lease_id={}", id);
+                lease_id.store(id, Ordering::SeqCst);
+
+                // Start heartbeat loop
+                let client_clone = Arc::clone(client);
+                let lease_id_clone = Arc::clone(&lease_id);
+                let shutdown_clone = Arc::clone(&shutdown_flag);
+                tokio::spawn(async move {
+                    heartbeat_loop(client_clone, lease_id_clone, shutdown_clone).await;
+                });
+            }
+            Err(e) => {
+                warn!("Failed to register with Meta service: {}", e);
+            }
+        }
+    }
+
     // Initialize query engine for local query execution
     let query_engine = common::init_query_engine(&config, storage.clone(), data_cache.clone());
+
+    // Clone meta_client before moving to FlightService (needed for shutdown handler)
+    let meta_client_for_shutdown = meta_client.clone();
 
     // Create Flight service (replaces gRPC)
     let flight_service = DataNodeFlightService::new(
@@ -106,9 +149,28 @@ pub async fn start(config_path: &str) {
 
     // Set up signal handler for graceful shutdown
     let data_dir = config.storage.data_dir.clone();
+    let shutdown_meta_client = meta_client_for_shutdown;
+    let shutdown_lease_id = Arc::clone(&lease_id);
+    let shutdown_flag_clone = Arc::clone(&shutdown_flag);
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
         info!("Received shutdown signal, cleaning up...");
+
+        // Signal heartbeat loop to stop
+        shutdown_flag_clone.store(true, Ordering::SeqCst);
+
+        // Deregister from Meta service
+        if let Some(ref client) = shutdown_meta_client {
+            let id = shutdown_lease_id.load(Ordering::SeqCst);
+            if id > 0 {
+                if let Err(e) = client.deregister_node(id).await {
+                    warn!("Failed to deregister from Meta service: {}", e);
+                } else {
+                    info!("Deregistered from Meta service");
+                }
+            }
+        }
+
         common::remove_pid_file(&data_dir, NODE_TYPE);
         std::process::exit(0);
     });
@@ -123,4 +185,41 @@ pub async fn start(config_path: &str) {
 pub fn stop(config_path: &str) {
     let config = Config::load_or_default(config_path);
     common::stop_node(&config.storage.data_dir, NODE_TYPE);
+}
+
+/// Heartbeat loop to keep the lease alive with Meta service
+async fn heartbeat_loop(
+    client: Arc<MetaClient>,
+    lease_id: Arc<AtomicU64>,
+    shutdown: Arc<AtomicBool>,
+) {
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+
+    loop {
+        interval.tick().await;
+
+        // Check if shutdown was requested
+        if shutdown.load(Ordering::SeqCst) {
+            info!("Heartbeat loop stopping due to shutdown");
+            break;
+        }
+
+        let id = lease_id.load(Ordering::SeqCst);
+        if id == 0 {
+            continue; // Not registered yet
+        }
+
+        match client.heartbeat(id).await {
+            Ok(next_interval_ms) => {
+                // Adjust interval if server suggests different timing
+                if next_interval_ms > 0 && next_interval_ms != 5000 {
+                    interval = tokio::time::interval(Duration::from_millis(next_interval_ms as u64));
+                }
+            }
+            Err(e) => {
+                warn!("Heartbeat failed: {}. Will retry...", e);
+                // Could implement re-registration logic here if needed
+            }
+        }
+    }
 }
