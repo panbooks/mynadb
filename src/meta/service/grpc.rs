@@ -1,15 +1,17 @@
 //! gRPC service implementation for Meta service
 
 use crate::meta::proto;
+use crate::meta::raft::TypeConfig;
 use crate::meta::service::MetaNode;
 use crate::meta::types::*;
+use openraft::raft::{AppendEntriesRequest, InstallSnapshotRequest, VoteRequest};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// gRPC service implementation
 pub struct MetaGrpcService {
@@ -673,9 +675,8 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
     }
 }
 
-/// gRPC service for Raft internal communication (stub for single-node mode)
+/// gRPC service for Raft internal communication
 pub struct RaftInternalService {
-    #[allow(dead_code)]
     node: Arc<MetaNode>,
 }
 
@@ -689,46 +690,87 @@ impl RaftInternalService {
 impl proto::raft_internal_server::RaftInternal for RaftInternalService {
     async fn append_entries(
         &self,
-        _request: Request<proto::RaftMessage>,
+        request: Request<proto::RaftMessage>,
     ) -> Result<Response<proto::RaftMessage>, Status> {
-        // Stub - full Raft integration to be implemented
-        Err(Status::unimplemented(
-            "Raft internal communication not yet implemented",
-        ))
+        let req: AppendEntriesRequest<TypeConfig> =
+            bincode::deserialize(&request.into_inner().data)
+                .map_err(|e| Status::invalid_argument(format!("Failed to deserialize: {}", e)))?;
+
+        debug!("Received AppendEntries from leader");
+
+        let resp = self
+            .node
+            .raft()
+            .append_entries(req)
+            .await
+            .map_err(|e| Status::internal(format!("AppendEntries failed: {}", e)))?;
+
+        let data = bincode::serialize(&resp)
+            .map_err(|e| Status::internal(format!("Failed to serialize response: {}", e)))?;
+
+        Ok(Response::new(proto::RaftMessage { data }))
     }
 
     async fn install_snapshot(
         &self,
-        _request: Request<proto::RaftMessage>,
+        request: Request<proto::RaftMessage>,
     ) -> Result<Response<proto::RaftMessage>, Status> {
-        // Stub - full Raft integration to be implemented
-        Err(Status::unimplemented(
-            "Raft internal communication not yet implemented",
-        ))
+        let req: InstallSnapshotRequest<TypeConfig> =
+            bincode::deserialize(&request.into_inner().data)
+                .map_err(|e| Status::invalid_argument(format!("Failed to deserialize: {}", e)))?;
+
+        info!("Received InstallSnapshot from leader");
+
+        let resp = self
+            .node
+            .raft()
+            .install_snapshot(req)
+            .await
+            .map_err(|e| Status::internal(format!("InstallSnapshot failed: {}", e)))?;
+
+        let data = bincode::serialize(&resp)
+            .map_err(|e| Status::internal(format!("Failed to serialize response: {}", e)))?;
+
+        Ok(Response::new(proto::RaftMessage { data }))
     }
 
     async fn vote(
         &self,
-        _request: Request<proto::RaftMessage>,
+        request: Request<proto::RaftMessage>,
     ) -> Result<Response<proto::RaftMessage>, Status> {
-        // Stub - full Raft integration to be implemented
-        Err(Status::unimplemented(
-            "Raft internal communication not yet implemented",
-        ))
+        let req: VoteRequest<u64> = bincode::deserialize(&request.into_inner().data)
+            .map_err(|e| Status::invalid_argument(format!("Failed to deserialize: {}", e)))?;
+
+        debug!("Received Vote request from candidate {}", req.vote.leader_id().node_id);
+
+        let resp = self
+            .node
+            .raft()
+            .vote(req)
+            .await
+            .map_err(|e| Status::internal(format!("Vote failed: {}", e)))?;
+
+        let data = bincode::serialize(&resp)
+            .map_err(|e| Status::internal(format!("Failed to serialize response: {}", e)))?;
+
+        Ok(Response::new(proto::RaftMessage { data }))
     }
 }
 
-/// Start the Meta gRPC server
+/// Start the Meta gRPC server with both MetaService and RaftInternal services
 pub async fn start_grpc_server(
     addr: std::net::SocketAddr,
-    service: MetaGrpcService,
+    meta_service: MetaGrpcService,
+    raft_service: RaftInternalService,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use proto::meta_service_server::MetaServiceServer;
+    use proto::raft_internal_server::RaftInternalServer;
 
     tracing::info!("Starting Meta gRPC server on {}", addr);
 
     tonic::transport::Server::builder()
-        .add_service(MetaServiceServer::new(service))
+        .add_service(MetaServiceServer::new(meta_service))
+        .add_service(RaftInternalServer::new(raft_service))
         .serve(addr)
         .await?;
 
