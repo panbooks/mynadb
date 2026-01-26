@@ -51,5 +51,5 @@ if command -v goreman &> /dev/null; then
     goreman -f ./dev/Procfile.standalone start
 else
     # Run directly without goreman
-    ./target/release/mynadb --role standalone -c ./dev/configs/standalone.toml
+    ./target/release/mynadb -c ./dev/configs/standalone.toml standalone
 fi
