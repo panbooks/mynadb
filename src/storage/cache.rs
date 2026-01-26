@@ -1,4 +1,4 @@
-use crate::line_protocol::{format_date32_as_partition, FieldValue, Point};
+use crate::line_protocol::{format_date32_as_partition, format_date32_as_string, FieldValue, Point};
 use crate::parquet_writer::{FileWriteResult, ParquetWriter};
 use crate::storage::storage::Storage;
 use crate::wal::Wal;
@@ -337,8 +337,8 @@ impl DataCache {
             return schema.clone();
         }
 
-        // Build schema: time + measurement + tags + fields
-        let mut fields = Vec::with_capacity(2 + tag_keys.len() + field_keys.len());
+        // Build schema: time + measurement + date + tags + fields
+        let mut fields = Vec::with_capacity(3 + tag_keys.len() + field_keys.len());
 
         // Time column (InfluxQL compatible)
         fields.push(Field::new(
@@ -349,6 +349,9 @@ impl DataCache {
 
         // Measurement
         fields.push(Field::new("measurement", DataType::Utf8, false));
+
+        // Date partition column (YYYY-MM-DD string for Hive partitioning compatibility)
+        fields.push(Field::new("date", DataType::Utf8, false));
 
         // Tags (all strings, nullable)
         for key in tag_keys {
@@ -395,8 +398,8 @@ impl DataCache {
         // Get or create cached schema
         let schema = Self::get_or_create_schema(&tag_keys, &field_keys);
 
-        // Pre-size arrays vector
-        let total_columns = 2 + tag_keys.len() + field_keys.len();
+        // Pre-size arrays vector: time + measurement + date + tags + fields
+        let total_columns = 3 + tag_keys.len() + field_keys.len();
         let mut arrays: Vec<Arc<dyn arrow::array::Array>> = Vec::with_capacity(total_columns);
 
         // Timestamp array (pre-sized)
@@ -413,6 +416,13 @@ impl DataCache {
             measurements.push(p.measurement.as_str());
         }
         arrays.push(Arc::new(StringArray::from(measurements)));
+
+        // Date partition column (YYYY-MM-DD format)
+        let mut dates = Vec::with_capacity(num_points);
+        for p in points {
+            dates.push(format_date32_as_string(p.date));
+        }
+        arrays.push(Arc::new(StringArray::from(dates)));
 
         // Tag arrays (pre-sized)
         for key in &tag_keys {
