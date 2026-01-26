@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::query_engine::QueryEngine;
+use crate::query::query_engine::QueryEngine;
 
 /// Convert DataFusion DataType to Arrow DataType
 /// This is needed because DataFusion may use a different arrow version

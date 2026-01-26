@@ -6,8 +6,12 @@
 //! - Coordinating distributed queries across Data nodes
 //! - Caching partition→node mappings from Meta service
 
+pub mod api;
 pub mod client;
 pub mod config;
+pub mod flight;
 pub mod routing;
+pub mod state;
 
 pub use config::RouterConfig;
+pub use state::RouterAppState;

@@ -1,4 +1,4 @@
-use crate::query_engine::QueryEngine;
+use crate::query::query_engine::QueryEngine;
 use crate::storage::cache::DataCache;
 use msql_srv::{
     Column, ColumnFlags, ColumnType, ErrorKind, InitWriter, MysqlIntermediary, MysqlShim,

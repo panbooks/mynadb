@@ -2937,6 +2937,7 @@ dependencies = [
  "etcd-client",
  "futures",
  "hostname",
+ "libc",
  "msql-srv",
  "num_cpus",
  "object_store",
