@@ -1,7 +1,10 @@
 mod cluster;
 mod config;
+mod data;
 mod jobs;
+mod meta;
 mod query;
+mod router;
 mod services;
 mod storage;
 
@@ -66,9 +69,26 @@ struct Cli {
     #[arg(short = 'c', long = "config", default_value = "config.toml")]
     config: String,
 
+    /// Node role for cluster mode (standalone, meta, router, data)
+    #[arg(long = "role", default_value = "standalone")]
+    role: NodeRoleArg,
+
     /// Subcommand to execute
     #[command(subcommand)]
     command: Option<Commands>,
+}
+
+/// Node role argument for cluster mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum NodeRoleArg {
+    /// Standalone mode (default) - runs all components in a single process
+    Standalone,
+    /// Meta node - runs Raft-based metadata service
+    Meta,
+    /// Router node - handles client protocols and routes requests
+    Router,
+    /// Data node - handles storage and query execution
+    Data,
 }
 
 #[derive(Subcommand, Debug)]
@@ -547,6 +567,25 @@ async fn main() {
 
     let config = Arc::new(Config::load_or_default(&cli.config));
 
+    // Handle role-based startup for cluster mode
+    match cli.role {
+        NodeRoleArg::Meta => {
+            run_meta_node(&cli.config, &config).await;
+            return;
+        }
+        NodeRoleArg::Router => {
+            run_router_node(&cli.config, &config).await;
+            return;
+        }
+        NodeRoleArg::Data => {
+            run_data_node(&cli.config, &config).await;
+            return;
+        }
+        NodeRoleArg::Standalone => {
+            // Continue with standalone mode (default)
+        }
+    }
+
     if let Err(e) = logger::init_logging(&config.logging) {
         eprintln!("Failed to initialize logging: {}", e);
         std::process::exit(1);
@@ -841,5 +880,189 @@ async fn main() {
             error!("MySQL server stopped unexpectedly");
             welcome!("❌ MySQL server stopped");
         },
+    }
+}
+
+// ============================================================================
+// Cluster Mode Node Startup Functions
+// ============================================================================
+
+/// Run as a Meta node (Raft-based metadata service)
+async fn run_meta_node(_config_path: &str, config: &Config) {
+    use meta::config::MetaConfig;
+    use meta::service::meta_node::MetaNode;
+    use meta::service::grpc::{MetaGrpcService, start_grpc_server};
+
+    if let Err(e) = logger::init_logging(&config.logging) {
+        eprintln!("Failed to initialize logging: {}", e);
+        std::process::exit(1);
+    }
+
+    welcome!("═══════════════════════════════════════════════════════");
+    welcome!("  🐦 MynaDB Meta Node");
+    welcome!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
+    welcome!("═══════════════════════════════════════════════════════");
+
+    // Load Meta-specific config (would typically come from config file)
+    let meta_config = MetaConfig::default();
+
+    info!("Starting Meta node {} on {}", meta_config.node_id, meta_config.advertise_addr);
+
+    // Create and start the Meta node
+    let node = match MetaNode::new(meta_config.clone()).await {
+        Ok(node) => Arc::new(node),
+        Err(e) => {
+            error!("Failed to create Meta node: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Start background tasks
+    node.start_background_tasks();
+
+    // Create gRPC service
+    let grpc_service = MetaGrpcService::new(Arc::clone(&node));
+
+    // Start gRPC server
+    let addr = meta_config.advertise_addr.parse().expect("Invalid address");
+    welcome!("✅ Meta node started on {}", meta_config.advertise_addr);
+    welcome!("═══════════════════════════════════════════════════════");
+
+    if let Err(e) = start_grpc_server(addr, grpc_service).await {
+        error!("Meta gRPC server failed: {}", e);
+    }
+}
+
+/// Run as a Router node (client protocol handler and request router)
+async fn run_router_node(_config_path: &str, config: &Config) {
+    use router::config::RouterConfig;
+    use router::routing::{ShardCache, WriteRouter, QueryCoordinator, CacheInvalidationHandler};
+    use router::client::DataNodePool;
+    use meta::client::{MetaClient, SubscriberConfig};
+
+    if let Err(e) = logger::init_logging(&config.logging) {
+        eprintln!("Failed to initialize logging: {}", e);
+        std::process::exit(1);
+    }
+
+    welcome!("═══════════════════════════════════════════════════════");
+    welcome!("  🐦 MynaDB Router Node");
+    welcome!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
+    welcome!("═══════════════════════════════════════════════════════");
+
+    // Load Router-specific config
+    let router_config = RouterConfig::default();
+
+    info!("Starting Router node {}", router_config.node_id);
+    info!("  HTTP port: {}", router_config.http_port);
+    info!("  Flight port: {}", router_config.flight_port);
+
+    // Initialize components
+    let shard_cache = Arc::new(ShardCache::new());
+    let data_node_pool = Arc::new(DataNodePool::new(
+        router::client::data_node_pool::PoolConfig::default(),
+    ));
+
+    // Start cache invalidation handler
+    let subscriber_config = SubscriberConfig {
+        endpoints: router_config.meta.endpoints.clone(),
+        topics: vec!["nodes".to_string(), "files".to_string()],
+        ..Default::default()
+    };
+    let mut cache_handler = CacheInvalidationHandler::new(Arc::clone(&shard_cache));
+    cache_handler.start(subscriber_config);
+
+    // Initialize routers (would be connected to HTTP handlers)
+    let _write_router = WriteRouter::new(
+        Arc::clone(&shard_cache),
+        Arc::clone(&data_node_pool),
+        config.schema.clone(),
+    );
+    let _query_coordinator = QueryCoordinator::new(
+        Arc::clone(&shard_cache),
+        Arc::clone(&data_node_pool),
+        router_config.query.max_parallel_fanout,
+    );
+
+    welcome!("✅ Router node started");
+    welcome!("   HTTP: http://0.0.0.0:{}", router_config.http_port);
+    welcome!("   Flight: 0.0.0.0:{}", router_config.flight_port);
+    welcome!("═══════════════════════════════════════════════════════");
+
+    // TODO: Start HTTP and Flight servers (currently uses existing services/api.rs)
+    // For now, just wait indefinitely
+    info!("Router node ready (HTTP/Flight servers not yet integrated)");
+    std::future::pending::<()>().await;
+}
+
+/// Run as a Data node (storage and query execution)
+async fn run_data_node(_config_path: &str, config: &Config) {
+    use data::config::DataNodeConfig;
+    use data::server::grpc::{DataNodeGrpcService, start_grpc_server};
+    use meta::client::MetaClient;
+
+    if let Err(e) = logger::init_logging(&config.logging) {
+        eprintln!("Failed to initialize logging: {}", e);
+        std::process::exit(1);
+    }
+
+    welcome!("═══════════════════════════════════════════════════════");
+    welcome!("  🐦 MynaDB Data Node");
+    welcome!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
+    welcome!("═══════════════════════════════════════════════════════");
+
+    // Load Data-specific config
+    let data_config = DataNodeConfig::default();
+
+    info!("Starting Data node {} on {}", data_config.node_id, data_config.advertise_addr);
+
+    // Initialize storage backend
+    info!("Initializing storage backend: {}", config.storage.object_store.backend);
+    let storage = Arc::new(
+        storage_mod::Storage::from_config(&config.storage.object_store)
+            .expect("Failed to initialize storage"),
+    );
+
+    // Initialize WAL
+    let wal = initialize_wal(&config, storage.clone()).await;
+
+    // Initialize data cache
+    info!("Initializing data cache (max: {}MB)", config.cache.max_size_mb);
+    let cache = Arc::new(cache::DataCache::new(
+        storage.clone(),
+        config.cache.max_size_mb,
+        wal.as_ref().map(Arc::clone),
+    ));
+
+    // Start background flush
+    (*cache).clone().start_background_flush(config.cache.flush_interval_secs);
+
+    // Connect to Meta service (optional)
+    let meta_client = match MetaClient::connect(&data_config.meta_endpoints).await {
+        Ok(client) => {
+            info!("Connected to Meta service");
+            Some(Arc::new(client))
+        }
+        Err(e) => {
+            warn!("Failed to connect to Meta service: {}. Running without coordination.", e);
+            None
+        }
+    };
+
+    // Create gRPC service
+    let grpc_service = DataNodeGrpcService::new(
+        cache,
+        meta_client,
+        config.schema.clone(),
+        data_config.node_id.clone(),
+    );
+
+    // Start gRPC server
+    let addr = data_config.advertise_addr.parse().expect("Invalid address");
+    welcome!("✅ Data node started on {}", data_config.advertise_addr);
+    welcome!("═══════════════════════════════════════════════════════");
+
+    if let Err(e) = start_grpc_server(addr, grpc_service).await {
+        error!("Data gRPC server failed: {}", e);
     }
 }

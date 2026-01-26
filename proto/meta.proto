@@ -1,0 +1,366 @@
+syntax = "proto3";
+
+package meta;
+
+// ============================================================================
+// Meta Service - Raft-based coordination for MynaDB cluster
+// ============================================================================
+
+service MetaService {
+    // Node management
+    rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+    rpc DeregisterNode(DeregisterNodeRequest) returns (DeregisterNodeResponse);
+    rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+
+    // File registry
+    rpc RegisterFiles(RegisterFilesRequest) returns (RegisterFilesResponse);
+    rpc RemoveFiles(RemoveFilesRequest) returns (RemoveFilesResponse);
+    rpc ListFilesForPartition(ListFilesRequest) returns (ListFilesResponse);
+    rpc GetFilesForQuery(QueryFilesRequest) returns (QueryFilesResponse);
+
+    // Distributed locks (atomic CAS with fencing tokens)
+    rpc TryLock(TryLockRequest) returns (TryLockResponse);
+    rpc Unlock(UnlockRequest) returns (UnlockResponse);
+    rpc RenewLock(RenewLockRequest) returns (RenewLockResponse);
+    rpc GetLock(GetLockRequest) returns (GetLockResponse);
+
+    // Leader election
+    rpc Campaign(CampaignRequest) returns (CampaignResponse);
+    rpc Resign(ResignRequest) returns (ResignResponse);
+    rpc GetLeader(GetLeaderRequest) returns (GetLeaderResponse);
+
+    // Events (streaming with sequence numbers)
+    rpc Subscribe(SubscribeRequest) returns (stream Event);
+    rpc Publish(PublishRequest) returns (PublishResponse);
+
+    // Cluster status
+    rpc GetClusterStatus(GetClusterStatusRequest) returns (GetClusterStatusResponse);
+    rpc GetRaftStatus(GetRaftStatusRequest) returns (GetRaftStatusResponse);
+}
+
+// ============================================================================
+// Node Management
+// ============================================================================
+
+enum NodeRole {
+    NODE_ROLE_UNKNOWN = 0;
+    NODE_ROLE_META = 1;
+    NODE_ROLE_ROUTER = 2;
+    NODE_ROLE_DATA = 3;
+    NODE_ROLE_COMPACTOR = 4;
+}
+
+enum NodeState {
+    NODE_STATE_UNKNOWN = 0;
+    NODE_STATE_STARTING = 1;
+    NODE_STATE_ACTIVE = 2;
+    NODE_STATE_DRAINING = 3;
+    NODE_STATE_INACTIVE = 4;
+}
+
+message NodeInfo {
+    string node_id = 1;
+    NodeRole role = 2;
+    NodeState state = 3;
+    string advertise_addr = 4;      // gRPC address for internal communication
+    string http_addr = 5;           // HTTP address (for routers)
+    string flight_addr = 6;         // Arrow Flight address (for routers)
+    int64 registered_at = 7;
+    int64 last_heartbeat = 8;
+    map<string, string> labels = 9; // Custom metadata
+}
+
+message RegisterNodeRequest {
+    NodeInfo info = 1;
+    uint64 lease_ttl_ms = 2;        // Lease duration for auto-deregistration
+}
+
+message RegisterNodeResponse {
+    bool success = 1;
+    string error = 2;
+    uint64 lease_id = 3;            // Lease ID for heartbeat renewal
+}
+
+message HeartbeatRequest {
+    string node_id = 1;
+    uint64 lease_id = 2;
+    int64 timestamp = 3;
+    // Optional load metrics for routing decisions
+    float cpu_usage = 4;
+    float memory_usage = 5;
+    uint64 active_connections = 6;
+}
+
+message HeartbeatResponse {
+    bool success = 1;
+    string error = 2;
+    int64 next_heartbeat_ms = 3;    // Suggested next heartbeat interval
+}
+
+message DeregisterNodeRequest {
+    string node_id = 1;
+    uint64 lease_id = 2;
+}
+
+message DeregisterNodeResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+message ListNodesRequest {
+    NodeRole role_filter = 1;       // 0 = all roles
+    NodeState state_filter = 2;     // 0 = all states
+}
+
+message ListNodesResponse {
+    repeated NodeInfo nodes = 1;
+}
+
+// ============================================================================
+// File Registry
+// ============================================================================
+
+message FileInfo {
+    string path = 1;
+    string catalog = 2;
+    string schema = 3;
+    string table = 4;
+    string partition = 5;           // e.g., "date=2024-01-15"
+    uint32 level = 6;               // L0, L1, L2, etc.
+    uint64 size_bytes = 7;
+    uint64 row_count = 8;
+    int64 min_time = 9;
+    int64 max_time = 10;
+    int64 created_at = 11;
+    string created_by = 12;         // Node ID that created this file
+}
+
+message RegisterFilesRequest {
+    repeated FileInfo files = 1;
+}
+
+message RegisterFilesResponse {
+    bool success = 1;
+    string error = 2;
+    uint64 sequence = 3;            // Event sequence number for cache invalidation
+}
+
+message RemoveFilesRequest {
+    repeated string paths = 1;
+}
+
+message RemoveFilesResponse {
+    bool success = 1;
+    string error = 2;
+    uint64 sequence = 3;
+}
+
+message ListFilesRequest {
+    string catalog = 1;
+    string schema = 2;
+    string table = 3;
+    string partition = 4;           // Optional: specific partition
+    uint32 level = 5;               // Optional: specific level (0 = all)
+}
+
+message ListFilesResponse {
+    repeated FileInfo files = 1;
+}
+
+message QueryFilesRequest {
+    string catalog = 1;
+    repeated string tables = 2;     // "schema.table" format
+    int64 min_time = 3;             // Optional time range filter
+    int64 max_time = 4;
+}
+
+message QueryFilesResponse {
+    repeated FileInfo files = 1;
+    repeated string nodes = 2;      // Nodes that have relevant data
+}
+
+// ============================================================================
+// Distributed Locks
+// ============================================================================
+
+message TryLockRequest {
+    string key = 1;                 // Lock key (e.g., "/locks/partitions/mydb/default/cpu/date=2024-01-15")
+    string holder = 2;              // Node ID holding the lock
+    uint64 ttl_ms = 3;              // Lock TTL (auto-release if holder dies)
+}
+
+message TryLockResponse {
+    bool acquired = 1;
+    uint64 fencing_token = 2;       // Monotonically increasing token for preventing zombie locks
+    string current_holder = 3;      // If not acquired, who holds it
+    int64 expires_at = 4;           // When the lock expires
+    string error = 5;
+}
+
+message UnlockRequest {
+    string key = 1;
+    string holder = 2;
+    uint64 fencing_token = 3;       // Must match to release
+}
+
+message UnlockResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+message RenewLockRequest {
+    string key = 1;
+    string holder = 2;
+    uint64 fencing_token = 3;
+    uint64 ttl_ms = 4;
+}
+
+message RenewLockResponse {
+    bool success = 1;
+    int64 expires_at = 2;
+    string error = 3;
+}
+
+message GetLockRequest {
+    string key = 1;
+}
+
+message GetLockResponse {
+    bool held = 1;
+    string holder = 2;
+    uint64 fencing_token = 3;
+    int64 expires_at = 4;
+}
+
+// ============================================================================
+// Leader Election
+// ============================================================================
+
+message CampaignRequest {
+    string election = 1;            // Election name (e.g., "compaction-leader")
+    string node_id = 2;
+    uint64 lease_ttl_ms = 3;
+}
+
+message CampaignResponse {
+    bool elected = 1;
+    string current_leader = 2;
+    uint64 term = 3;                // Election term for fencing
+    string error = 4;
+}
+
+message ResignRequest {
+    string election = 1;
+    string node_id = 2;
+    uint64 term = 3;
+}
+
+message ResignResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+message GetLeaderRequest {
+    string election = 1;
+}
+
+message GetLeaderResponse {
+    bool has_leader = 1;
+    string leader = 2;
+    uint64 term = 3;
+}
+
+// ============================================================================
+// Event System
+// ============================================================================
+
+enum EventType {
+    EVENT_TYPE_UNKNOWN = 0;
+    EVENT_TYPE_NODE_JOINED = 1;
+    EVENT_TYPE_NODE_LEFT = 2;
+    EVENT_TYPE_NODE_STATE_CHANGED = 3;
+    EVENT_TYPE_FILES_REGISTERED = 4;
+    EVENT_TYPE_FILES_REMOVED = 5;
+    EVENT_TYPE_LEADER_CHANGED = 6;
+    EVENT_TYPE_CACHE_INVALIDATE = 7;
+    EVENT_TYPE_SCHEMA_CHANGED = 8;
+}
+
+message Event {
+    uint64 sequence = 1;            // Monotonically increasing
+    EventType event_type = 2;
+    string topic = 3;               // Topic for filtering (e.g., "files", "nodes", "cache")
+    bytes payload = 4;              // Event-specific data (JSON or protobuf)
+    int64 timestamp = 5;
+    string source_node = 6;         // Node that triggered the event
+}
+
+message SubscribeRequest {
+    repeated string topics = 1;     // Topics to subscribe to (empty = all)
+    uint64 start_sequence = 2;      // Start from this sequence (0 = latest)
+}
+
+message PublishRequest {
+    string topic = 1;
+    EventType event_type = 2;
+    bytes payload = 3;
+}
+
+message PublishResponse {
+    bool success = 1;
+    uint64 sequence = 2;
+    string error = 3;
+}
+
+// ============================================================================
+// Cluster Status
+// ============================================================================
+
+message GetClusterStatusRequest {}
+
+message GetClusterStatusResponse {
+    string meta_leader = 1;
+    uint32 meta_nodes = 2;
+    uint32 router_nodes = 3;
+    uint32 data_nodes = 4;
+    uint32 compactor_nodes = 5;
+    bool healthy = 6;
+    repeated NodeInfo nodes = 7;
+}
+
+message GetRaftStatusRequest {}
+
+message GetRaftStatusResponse {
+    uint64 node_id = 1;
+    string role = 2;                // "leader", "follower", "candidate"
+    uint64 term = 3;
+    uint64 last_log_index = 4;
+    uint64 commit_index = 5;
+    uint64 last_applied = 6;
+    string leader_id = 7;
+    repeated RaftPeerStatus peers = 8;
+}
+
+message RaftPeerStatus {
+    uint64 node_id = 1;
+    string address = 2;
+    bool reachable = 3;
+    uint64 match_index = 4;
+    uint64 next_index = 5;
+}
+
+// ============================================================================
+// Raft Internal Service (peer-to-peer communication)
+// ============================================================================
+
+service RaftInternal {
+    rpc AppendEntries(RaftMessage) returns (RaftMessage);
+    rpc InstallSnapshot(RaftMessage) returns (RaftMessage);
+    rpc Vote(RaftMessage) returns (RaftMessage);
+}
+
+// Generic Raft message (serialized openraft types)
+message RaftMessage {
+    bytes data = 1;
+}
