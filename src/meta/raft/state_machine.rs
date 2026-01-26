@@ -1,11 +1,26 @@
 //! State machine implementation using sled
 //!
-//! This is a simplified implementation that provides the core metadata storage
-//! functionality. Full Raft replication will be added in a later iteration.
+//! This module implements the Raft state machine for the Meta service using OpenRaft.
+//! It manages all metadata (nodes, files, locks, leaders, events) and supports
+//! snapshotting for log compaction.
 
+use super::{Entry, LogId, NodeId, SnapshotMeta, StoredMembership, TypeConfig};
 use crate::meta::types::*;
+use openraft::storage::{RaftStateMachine, Snapshot};
+use openraft::{AnyError, OptionalSend, StorageError, StorageIOError};
+use parking_lot::RwLock;
 use sled::Db;
+use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tracing::{debug, error, info};
+
+/// Storage keys for Raft state
+mod raft_keys {
+    pub const LAST_APPLIED: &[u8] = b"/raft/sm/last_applied";
+    pub const LAST_MEMBERSHIP: &[u8] = b"/raft/sm/membership";
+    pub const SNAPSHOT_META: &[u8] = b"/raft/sm/snapshot_meta";
+}
 
 /// State machine backed by sled embedded database
 pub struct MetaStateMachine {
@@ -20,6 +35,42 @@ pub struct MetaStateMachine {
 
     /// Global lease ID counter
     lease_counter: AtomicU64,
+
+    /// Last applied log ID (for Raft)
+    last_applied: RwLock<Option<LogId>>,
+
+    /// Current membership configuration (for Raft)
+    last_membership: RwLock<StoredMembership>,
+}
+
+/// Snapshot data for the Meta state machine
+///
+/// Contains a serialized representation of all state that needs
+/// to be transferred when a new node joins or a node falls behind.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MetaSnapshot {
+    /// The log ID at which this snapshot was taken
+    pub last_applied: Option<LogId>,
+
+    /// The membership configuration at snapshot time
+    pub membership: StoredMembership,
+
+    /// Serialized state data (nodes, files, locks, etc.)
+    pub data: Vec<u8>,
+
+    /// Counter values to restore
+    pub event_sequence: u64,
+    pub fencing_counter: u64,
+}
+
+/// Builder for creating state machine snapshots
+pub struct MetaSnapshotBuilder {
+    /// Reference to the state machine
+    db: Db,
+    last_applied: Option<LogId>,
+    membership: StoredMembership,
+    event_sequence: u64,
+    fencing_counter: u64,
 }
 
 impl MetaStateMachine {
@@ -40,11 +91,32 @@ impl MetaStateMachine {
             .and_then(|v| bincode::deserialize(&v).ok())
             .unwrap_or(0u64);
 
+        // Load Raft state
+        let last_applied = db
+            .get(raft_keys::LAST_APPLIED)
+            .ok()
+            .flatten()
+            .and_then(|v| bincode::deserialize(&v).ok());
+
+        let last_membership = db
+            .get(raft_keys::LAST_MEMBERSHIP)
+            .ok()
+            .flatten()
+            .and_then(|v| bincode::deserialize(&v).ok())
+            .unwrap_or_else(StoredMembership::default);
+
+        debug!(
+            "MetaStateMachine initialized: last_applied={:?}, membership={:?}",
+            last_applied, last_membership
+        );
+
         Self {
             db,
             event_sequence: AtomicU64::new(event_sequence),
             fencing_counter: AtomicU64::new(fencing_counter),
             lease_counter: AtomicU64::new(0),
+            last_applied: RwLock::new(last_applied),
+            last_membership: RwLock::new(last_membership),
         }
     }
 
@@ -663,5 +735,380 @@ impl MetaStateMachine {
     /// Get current event sequence
     pub fn current_sequence(&self) -> u64 {
         self.event_sequence.load(Ordering::SeqCst)
+    }
+
+    // ========================================================================
+    // Raft State Machine Helpers
+    // ========================================================================
+
+    /// Serialize all state data for snapshot
+    fn serialize_state(&self) -> Result<Vec<u8>, String> {
+        // Collect all data from the database that should be in the snapshot
+        // This includes everything except Raft log entries
+        let mut state_data = Vec::new();
+
+        // Iterate over all keys and collect them
+        for item in self.db.iter() {
+            if let Ok((key, value)) = item {
+                // Skip Raft log entries (they have their own persistence)
+                if key.starts_with(b"/raft/log/") {
+                    continue;
+                }
+                // Skip Raft vote/committed state
+                if key.starts_with(b"/raft/vote")
+                    || key.starts_with(b"/raft/committed")
+                    || key.starts_with(b"/raft/last_purged")
+                {
+                    continue;
+                }
+                state_data.push((key.to_vec(), value.to_vec()));
+            }
+        }
+
+        bincode::serialize(&state_data)
+            .map_err(|e| format!("Failed to serialize state: {}", e))
+    }
+
+    /// Restore state from snapshot data
+    fn restore_state(&self, data: &[u8]) -> Result<(), String> {
+        let state_data: Vec<(Vec<u8>, Vec<u8>)> = bincode::deserialize(data)
+            .map_err(|e| format!("Failed to deserialize state: {}", e))?;
+
+        // Clear existing state (except Raft log entries)
+        for item in self.db.iter() {
+            if let Ok((key, _)) = item {
+                if key.starts_with(b"/raft/log/")
+                    || key.starts_with(b"/raft/vote")
+                    || key.starts_with(b"/raft/committed")
+                    || key.starts_with(b"/raft/last_purged")
+                {
+                    continue;
+                }
+                let _ = self.db.remove(&key);
+            }
+        }
+
+        // Insert new state
+        for (key, value) in state_data {
+            self.db
+                .insert(key, value)
+                .map_err(|e| format!("Failed to insert state: {}", e))?;
+        }
+
+        self.db
+            .flush()
+            .map_err(|e| format!("Failed to flush state: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Update last applied log ID
+    fn update_last_applied(&self, log_id: LogId) {
+        *self.last_applied.write() = Some(log_id);
+        let _ = self.db.insert(
+            raft_keys::LAST_APPLIED,
+            bincode::serialize(&log_id).unwrap(),
+        );
+    }
+
+    /// Update membership configuration
+    fn update_membership(&self, membership: StoredMembership) {
+        *self.last_membership.write() = membership.clone();
+        let _ = self.db.insert(
+            raft_keys::LAST_MEMBERSHIP,
+            bincode::serialize(&membership).unwrap(),
+        );
+    }
+
+    /// Helper to create a storage error
+    fn storage_error(e: impl std::fmt::Display, context: &str) -> StorageError<NodeId> {
+        let msg = format!("{}: {}", context, e);
+        error!("{}", msg);
+        StorageError::IO {
+            source: StorageIOError::write(AnyError::error(msg)),
+        }
+    }
+}
+
+impl Clone for MetaStateMachine {
+    fn clone(&self) -> Self {
+        Self {
+            db: self.db.clone(),
+            event_sequence: AtomicU64::new(self.event_sequence.load(Ordering::SeqCst)),
+            fencing_counter: AtomicU64::new(self.fencing_counter.load(Ordering::SeqCst)),
+            lease_counter: AtomicU64::new(0),
+            last_applied: RwLock::new(self.last_applied.read().clone()),
+            last_membership: RwLock::new(self.last_membership.read().clone()),
+        }
+    }
+}
+
+// ============================================================================
+// RaftStateMachine Implementation
+// ============================================================================
+
+impl RaftStateMachine<TypeConfig> for MetaStateMachine {
+    type SnapshotBuilder = MetaSnapshotBuilder;
+
+    async fn applied_state(
+        &mut self,
+    ) -> Result<(Option<LogId>, StoredMembership), StorageError<NodeId>> {
+        let last_applied = self.last_applied.read().clone();
+        let membership = self.last_membership.read().clone();
+        debug!(
+            "applied_state: last_applied={:?}, membership={:?}",
+            last_applied, membership
+        );
+        Ok((last_applied, membership))
+    }
+
+    async fn apply<I>(
+        &mut self,
+        entries: I,
+    ) -> Result<Vec<crate::meta::types::MetaResponse>, StorageError<NodeId>>
+    where
+        I: IntoIterator<Item = Entry> + OptionalSend,
+    {
+        let mut responses = Vec::new();
+
+        for entry in entries {
+            let log_id = entry.log_id;
+            debug!("Applying log entry: {:?}", log_id);
+
+            // Handle the entry based on its type
+            match entry.payload {
+                openraft::EntryPayload::Blank => {
+                    // No-op entry
+                    responses.push(MetaResponse::Success);
+                }
+                openraft::EntryPayload::Normal(cmd) => {
+                    // Apply the command to our state
+                    let response = self.apply_command(cmd);
+                    responses.push(response);
+                }
+                openraft::EntryPayload::Membership(m) => {
+                    // Update membership configuration
+                    let membership = StoredMembership::new(Some(log_id), m);
+                    self.update_membership(membership);
+                    responses.push(MetaResponse::Success);
+                }
+            }
+
+            // Update last applied
+            self.update_last_applied(log_id);
+        }
+
+        // Flush to disk
+        self.db
+            .flush()
+            .map_err(|e| Self::storage_error(e, "flush after apply"))?;
+
+        Ok(responses)
+    }
+
+    async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
+        MetaSnapshotBuilder {
+            db: self.db.clone(),
+            last_applied: self.last_applied.read().clone(),
+            membership: self.last_membership.read().clone(),
+            event_sequence: self.event_sequence.load(Ordering::SeqCst),
+            fencing_counter: self.fencing_counter.load(Ordering::SeqCst),
+        }
+    }
+
+    async fn begin_receiving_snapshot(&mut self) -> Result<Box<Cursor<Vec<u8>>>, StorageError<NodeId>> {
+        info!("Beginning to receive snapshot");
+        Ok(Box::new(Cursor::new(Vec::new())))
+    }
+
+    async fn install_snapshot(
+        &mut self,
+        meta: &SnapshotMeta,
+        snapshot: Box<Cursor<Vec<u8>>>,
+    ) -> Result<(), StorageError<NodeId>> {
+        info!(
+            "Installing snapshot: last_log_id={:?}, last_membership={:?}",
+            meta.last_log_id, meta.last_membership
+        );
+
+        // Deserialize the snapshot
+        let data = snapshot.into_inner();
+        let snap: MetaSnapshot = bincode::deserialize(&data)
+            .map_err(|e| Self::storage_error(e, "deserialize snapshot"))?;
+
+        // Restore the state
+        self.restore_state(&snap.data)
+            .map_err(|e| {
+                let msg = format!("restore state: {}", e);
+                error!("{}", msg);
+                StorageError::IO {
+                    source: StorageIOError::write(AnyError::error(msg)),
+                }
+            })?;
+
+        // Update counters
+        self.event_sequence
+            .store(snap.event_sequence, Ordering::SeqCst);
+        self.fencing_counter
+            .store(snap.fencing_counter, Ordering::SeqCst);
+
+        // Update Raft state
+        if let Some(log_id) = meta.last_log_id {
+            self.update_last_applied(log_id);
+        }
+        self.update_membership(meta.last_membership.clone());
+
+        // Save snapshot metadata
+        let _ = self.db.insert(
+            raft_keys::SNAPSHOT_META,
+            bincode::serialize(meta).unwrap(),
+        );
+
+        self.db
+            .flush()
+            .map_err(|e| Self::storage_error(e, "flush after install snapshot"))?;
+
+        info!("Snapshot installed successfully");
+        Ok(())
+    }
+
+    async fn get_current_snapshot(
+        &mut self,
+    ) -> Result<Option<Snapshot<TypeConfig>>, StorageError<NodeId>> {
+        // Load snapshot metadata if it exists
+        let meta: Option<SnapshotMeta> = self
+            .db
+            .get(raft_keys::SNAPSHOT_META)
+            .ok()
+            .flatten()
+            .and_then(|v| bincode::deserialize(&v).ok());
+
+        match meta {
+            Some(meta) => {
+                // Build the snapshot data
+                let state_data = self
+                    .serialize_state()
+                    .map_err(|e| {
+                        let msg = format!("serialize state: {}", e);
+                        error!("{}", msg);
+                        StorageError::IO {
+                            source: StorageIOError::read(AnyError::error(msg)),
+                        }
+                    })?;
+
+                let snap = MetaSnapshot {
+                    last_applied: self.last_applied.read().clone(),
+                    membership: self.last_membership.read().clone(),
+                    data: state_data,
+                    event_sequence: self.event_sequence.load(Ordering::SeqCst),
+                    fencing_counter: self.fencing_counter.load(Ordering::SeqCst),
+                };
+
+                let snap_data = bincode::serialize(&snap)
+                    .map_err(|e| Self::storage_error(e, "serialize snapshot"))?;
+
+                debug!(
+                    "Returning current snapshot: meta={:?}, size={}",
+                    meta,
+                    snap_data.len()
+                );
+
+                Ok(Some(Snapshot {
+                    meta,
+                    snapshot: Box::new(Cursor::new(snap_data)),
+                }))
+            }
+            None => {
+                debug!("No current snapshot available");
+                Ok(None)
+            }
+        }
+    }
+}
+
+// ============================================================================
+// MetaSnapshotBuilder Implementation
+// ============================================================================
+
+impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for MetaSnapshotBuilder {
+    async fn build_snapshot(&mut self) -> Result<Snapshot<TypeConfig>, StorageError<NodeId>> {
+        info!(
+            "Building snapshot: last_applied={:?}",
+            self.last_applied
+        );
+
+        // Collect all state data
+        let mut state_data = Vec::new();
+        for item in self.db.iter() {
+            if let Ok((key, value)) = item {
+                // Skip Raft log entries
+                if key.starts_with(b"/raft/log/")
+                    || key.starts_with(b"/raft/vote")
+                    || key.starts_with(b"/raft/committed")
+                    || key.starts_with(b"/raft/last_purged")
+                {
+                    continue;
+                }
+                state_data.push((key.to_vec(), value.to_vec()));
+            }
+        }
+
+        let data = bincode::serialize(&state_data)
+            .map_err(|e| {
+                let msg = format!("serialize state: {}", e);
+                error!("{}", msg);
+                StorageError::IO {
+                    source: StorageIOError::write(AnyError::error(msg)),
+                }
+            })?;
+
+        let snap = MetaSnapshot {
+            last_applied: self.last_applied.clone(),
+            membership: self.membership.clone(),
+            data,
+            event_sequence: self.event_sequence,
+            fencing_counter: self.fencing_counter,
+        };
+
+        let snap_data = bincode::serialize(&snap)
+            .map_err(|e| {
+                let msg = format!("serialize snapshot: {}", e);
+                error!("{}", msg);
+                StorageError::IO {
+                    source: StorageIOError::write(AnyError::error(msg)),
+                }
+            })?;
+
+        // Generate snapshot ID
+        let snapshot_id = format!(
+            "{}-{}",
+            self.last_applied
+                .map(|l| l.index.to_string())
+                .unwrap_or_else(|| "0".to_string()),
+            chrono::Utc::now().timestamp_millis()
+        );
+
+        let meta = SnapshotMeta {
+            last_log_id: self.last_applied,
+            last_membership: self.membership.clone(),
+            snapshot_id,
+        };
+
+        // Save snapshot metadata to db
+        let _ = self.db.insert(
+            raft_keys::SNAPSHOT_META,
+            bincode::serialize(&meta).unwrap(),
+        );
+
+        info!(
+            "Snapshot built: id={}, size={}",
+            meta.snapshot_id,
+            snap_data.len()
+        );
+
+        Ok(Snapshot {
+            meta,
+            snapshot: Box::new(Cursor::new(snap_data)),
+        })
     }
 }
