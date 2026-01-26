@@ -216,29 +216,40 @@ impl WriteRouter {
                     // Concatenate lines into line protocol batch
                     let batch_line_protocol = lines.join("\n");
 
+                    let partition_path = partition_key.to_path();
                     debug!(
                         "Writing {} points to {} for partition {}",
-                        point_count, node_id, partition_key.to_path()
+                        point_count, node_id, partition_path
                     );
 
                     // Send write via Arrow Flight DoPut
-                    // fencing_token is None for now - will be added when Meta integration is complete
-                    match pool.write(&node_id, &catalog, &batch_line_protocol, None).await {
+                    // fencing_token is None for now - will be added when Meta lock integration is complete
+                    // partition_key is passed for future fencing token validation
+                    match pool
+                        .write(
+                            &node_id,
+                            &catalog,
+                            &batch_line_protocol,
+                            None, // fencing_token - TODO: acquire from Meta lock
+                            Some(partition_path.clone()),
+                        )
+                        .await
+                    {
                         Ok(written) => {
                             debug!(
                                 "Successfully wrote {} points to {} for partition {}",
-                                written, node_id, partition_key.to_path()
+                                written, node_id, partition_path
                             );
                             total_written += written;
                         }
                         Err(e) => {
                             error!(
                                 "Failed to write to {} for partition {}: {}",
-                                node_id, partition_key.to_path(), e
+                                node_id, partition_path, e
                             );
                             return Err(format!(
                                 "Failed to write to {} for partition {}: {}",
-                                node_id, partition_key.to_path(), e
+                                node_id, partition_path, e
                             ));
                         }
                     }

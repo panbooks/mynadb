@@ -23,6 +23,10 @@ use tracing::{debug, error, info, warn};
 pub struct WriteTicket {
     pub catalog: String,
     pub fencing_token: Option<u64>,
+    /// Optional partition key for fencing token validation
+    /// Format: catalog/schema/table/date (e.g., "mydb/default/cpu/2024-01-15")
+    #[serde(default)]
+    pub partition_key: Option<String>,
 }
 
 /// Query request metadata sent via Flight Ticket
@@ -146,6 +150,7 @@ impl DataNodePool {
         catalog: &str,
         line_protocol: &str,
         fencing_token: Option<u64>,
+        partition_key: Option<String>,
     ) -> Result<u64, String> {
         let mut client = self.get_flight_client(node_id).await?;
 
@@ -153,6 +158,7 @@ impl DataNodePool {
         let ticket = WriteTicket {
             catalog: catalog.to_string(),
             fencing_token,
+            partition_key,
         };
 
         // Create a RecordBatch with line protocol data

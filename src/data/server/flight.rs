@@ -34,6 +34,10 @@ use tracing::{debug, error, info, warn};
 pub struct WriteTicket {
     pub catalog: String,
     pub fencing_token: Option<u64>,
+    /// Optional partition key for fencing token validation
+    /// Format: catalog/schema/table/date (e.g., "mydb/default/cpu/2024-01-15")
+    #[serde(default)]
+    pub partition_key: Option<String>,
 }
 
 /// Query request metadata sent via Flight Ticket
@@ -366,9 +370,57 @@ impl FlightService for DataNodeFlightService {
         );
 
         // Validate fencing token if provided and meta client available
-        if let (Some(token), Some(ref _meta_client)) = (ticket.fencing_token, &self.meta_client) {
-            // TODO: Validate fencing token against Meta service
-            debug!("Fencing token: {}", token);
+        if let Some(token) = ticket.fencing_token {
+            if let Some(ref meta_client) = self.meta_client {
+                // Use partition_key if provided, otherwise fall back to catalog-level lock
+                let lock_key = ticket
+                    .partition_key
+                    .as_ref()
+                    .map(|pk| format!("/partitions/{}", pk))
+                    .unwrap_or_else(|| format!("/partitions/{}", ticket.catalog));
+
+                match meta_client.get_lock(&lock_key).await {
+                    Ok(Some(lock_info)) => {
+                        if lock_info.fencing_token != token {
+                            warn!(
+                                "Stale fencing token for {}: received {} but current is {}",
+                                lock_key, token, lock_info.fencing_token
+                            );
+                            return Err(Status::failed_precondition(format!(
+                                "Stale fencing token: write rejected to prevent split-brain. \
+                                 Received token {} but partition lock has token {}",
+                                token, lock_info.fencing_token
+                            )));
+                        }
+                        debug!(
+                            "Fencing token {} validated for partition {}",
+                            token, lock_key
+                        );
+                    }
+                    Ok(None) => {
+                        // No lock held - this could mean:
+                        // 1. Lock expired (stale Router)
+                        // 2. Lock key mismatch
+                        // Fail-closed: reject the write to be safe
+                        warn!("No lock held for partition {}, rejecting write with token {}", lock_key, token);
+                        return Err(Status::failed_precondition(format!(
+                            "No lock held for partition {}. The Router may have lost its lock.",
+                            lock_key
+                        )));
+                    }
+                    Err(e) => {
+                        // Meta service unavailable - fail-open with warning
+                        // In production, you might want fail-closed behavior
+                        warn!(
+                            "Failed to validate fencing token for {}: {}. Allowing write (fail-open).",
+                            lock_key, e
+                        );
+                    }
+                }
+            } else {
+                // No meta client - standalone mode, skip validation
+                debug!("Fencing token {} provided but no meta client (standalone mode)", token);
+            }
         }
 
         // Collect all flight data and decode as RecordBatches
