@@ -4,16 +4,17 @@
 
 use super::state::RouterAppState;
 use arrow_flight::{
+    encode::FlightDataEncoderBuilder,
     flight_service_server::{FlightService, FlightServiceServer},
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
 };
-use futures::stream::BoxStream;
+use futures::{stream, stream::BoxStream, StreamExt, TryStreamExt};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 /// Router Flight service that routes queries to Data nodes
 pub struct RouterFlightService {
@@ -140,10 +141,39 @@ impl FlightService for RouterFlightService {
             ));
         }
 
-        // Convert batches to FlightData stream
-        // For now, return empty stream (TODO: proper conversion)
-        let stream = futures::stream::empty();
-        Ok(Response::new(Box::pin(stream)))
+        // Convert RecordBatches to FlightData stream
+        if result.batches.is_empty() {
+            // Return empty stream if no results
+            let stream = futures::stream::empty();
+            return Ok(Response::new(Box::pin(stream)));
+        }
+
+        // Get schema from first batch for encoding
+        let schema = result.batches[0].schema();
+        debug!(
+            "Returning {} batches with {} total rows via Flight",
+            result.batches.len(),
+            result.total_rows
+        );
+
+        // Create a stream of RecordBatches
+        let batch_stream = stream::iter(
+            result
+                .batches
+                .into_iter()
+                .map(Ok::<_, arrow_flight::error::FlightError>),
+        );
+
+        // Encode as FlightData
+        let flight_data_stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(batch_stream)
+            .map_err(|e| {
+                error!("FlightData encoding error: {}", e);
+                Status::internal(format!("Failed to encode FlightData: {}", e))
+            });
+
+        Ok(Response::new(Box::pin(flight_data_stream)))
     }
 
     async fn do_put(
