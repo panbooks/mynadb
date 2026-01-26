@@ -1,7 +1,7 @@
-use crate::line_protocol::{format_date32_as_partition, format_date32_as_string, FieldValue, Point};
-use crate::parquet_writer::{FileWriteResult, ParquetWriter};
-use crate::storage::storage::Storage;
-use crate::wal::Wal;
+use super::line_protocol::{format_date32_as_partition, format_date32_as_string, FieldValue, Point};
+use super::parquet_writer::{FileWriteResult, ParquetWriter};
+use super::storage::Storage;
+use super::wal::Wal;
 use arrow::array::{
     BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
 };

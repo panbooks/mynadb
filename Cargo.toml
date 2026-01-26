@@ -48,6 +48,7 @@ parking_lot = "0.12"
 num_cpus = "1.16"
 rayon = "1.10"
 regex = "1.10"
+libc = "0.2"
 
 # Cluster support - Meta Service (Raft-based)
 openraft = { version = "0.9", features = ["serde"] }

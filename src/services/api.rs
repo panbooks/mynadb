@@ -19,14 +19,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-use crate::cache::DataCache;
-use crate::compactor;
 use crate::config;
-use crate::line_protocol::parse_multiple_lines;
-use crate::profiling;
+use crate::jobs::compactor;
+use crate::jobs::profiling;
 use crate::query::catalog::{MetadataManager, SharedMetadataManager};
-use crate::query_engine::QueryEngine;
+use crate::query::query_engine::QueryEngine;
+use crate::storage::cache::DataCache;
 use crate::storage::file_cache::{FileCache, SharedFileCache};
+use crate::storage::line_protocol::parse_multiple_lines;
 
 // ===== Types and State =====
 
@@ -34,10 +34,10 @@ use crate::storage::file_cache::{FileCache, SharedFileCache};
 pub struct AppState {
     pub cache: DataCache,
     pub query_engine: Arc<QueryEngine>,
-    pub db_manager: Arc<crate::database_manager::DatabaseManager>,
-    pub compactor: Arc<crate::compactor::Compactor>,
+    pub db_manager: Arc<crate::jobs::database_manager::DatabaseManager>,
+    pub compactor: Arc<compactor::Compactor>,
     pub config: Arc<config::Config>,
-    pub wal: Option<Arc<crate::wal::Wal>>,
+    pub wal: Option<Arc<crate::storage::wal::Wal>>,
     /// Centralized metadata manager for catalog/schema/table/file metadata
     pub metadata_manager: Option<SharedMetadataManager>,
     /// File cache for Object Store Parquet files
