@@ -529,15 +529,13 @@ pub async fn flush_handler(State(state): State<AppState>) -> impl IntoResponse {
                 }
             }
 
-            // Invalidate caches for all affected tables
+            // Refresh table registrations for all affected tables
+            // This deregisters tables from DataFusion so they get re-registered with proper providers
+            // (e.g., switching from memtable-only to parquet + memtable)
             for (catalog, schema, table) in &invalidated_tables {
                 state
                     .query_engine
-                    .invalidate_table_cache(catalog, schema, table);
-                debug!(
-                    "Invalidated cache for {}.{}.{} after flush",
-                    catalog, schema, table
-                );
+                    .refresh_table_after_flush(catalog, schema, table);
             }
 
             (StatusCode::OK, format!("Flushed {} file(s) to disk", count))
