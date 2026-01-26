@@ -123,6 +123,11 @@ impl CacheInvalidationHandler {
             if !node_id.is_empty() {
                 info!("Node left: {}", node_id);
                 shard_cache.remove_data_node(node_id);
+
+                // Clean up partition ownership to prevent memory growth
+                // Note: This is optional since lookup will fail gracefully anyway,
+                // but it keeps the cache clean
+                shard_cache.remove_partitions_for_node(node_id);
             }
         }
     }
@@ -170,17 +175,9 @@ impl CacheInvalidationHandler {
                         let key = PartitionKey::new(catalog, schema, table, date);
                         debug!("File registered for partition: {}", key.to_path());
 
-                        // Update partition owner (the node that wrote the file)
-                        // Note: In a real system, we'd get the node info from Meta
-                        shard_cache.set_partition_owner(
-                            &key,
-                            DataNodeInfo {
-                                node_id: created_by.to_string(),
-                                grpc_addr: String::new(), // Would be filled from Meta
-                                state: NodeState::Active,
-                                load_score: 0.5,
-                            },
-                        );
+                        // Update partition owner (just the node_id reference)
+                        // Full node info is looked up from data_nodes when routing
+                        shard_cache.set_partition_owner(&key, created_by.to_string());
                     }
                 }
             }

@@ -3,13 +3,17 @@
 //! The ShardCache maintains a mapping of partition keys to Data node assignments.
 //! It is updated via events from the Meta service when files are registered or
 //! nodes join/leave the cluster.
+//!
+//! Design: Stores only node_id in partition_owners, with full DataNodeInfo in
+//! data_nodes (single source of truth). This prevents stale state issues when
+//! node health changes.
 
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 /// Data node information
@@ -92,12 +96,20 @@ impl PartitionKey {
 }
 
 /// Shard cache for partition→node mapping
+///
+/// Uses a two-level lookup:
+/// 1. partition_owners: partition_path → node_id (reference only)
+/// 2. data_nodes: node_id → DataNodeInfo (single source of truth)
+///
+/// This design ensures node state is always fresh - when a node becomes
+/// unhealthy, the lookup automatically fails over to hash-based routing
+/// without needing to update partition_owners.
 pub struct ShardCache {
-    /// Partition → assigned Data node mapping
-    partition_owners: DashMap<String, DataNodeInfo>,
+    /// Partition → owner node_id (reference only, not full DataNodeInfo)
+    partition_owners: DashMap<String, String>,
 
-    /// Active Data nodes (healthy only)
-    data_nodes: RwLock<Vec<DataNodeInfo>>,
+    /// node_id → DataNodeInfo (single source of truth for node state)
+    data_nodes: RwLock<HashMap<String, DataNodeInfo>>,
 
     /// Last sequence number from Meta event stream
     last_event_seq: AtomicU64,
@@ -107,24 +119,20 @@ impl ShardCache {
     pub fn new() -> Self {
         Self {
             partition_owners: DashMap::new(),
-            data_nodes: RwLock::new(Vec::new()),
+            data_nodes: RwLock::new(HashMap::new()),
             last_event_seq: AtomicU64::new(0),
         }
     }
 
-    /// Get the assigned Data node for a partition
-    pub fn get_partition_owner(&self, key: &PartitionKey) -> Option<DataNodeInfo> {
+    /// Get the owner node_id for a partition
+    pub fn get_partition_owner(&self, key: &PartitionKey) -> Option<String> {
         self.partition_owners.get(&key.to_path()).map(|v| v.clone())
     }
 
-    /// Set the assigned Data node for a partition
-    pub fn set_partition_owner(&self, key: &PartitionKey, node: DataNodeInfo) {
-        debug!(
-            "Setting partition owner: {} -> {}",
-            key.to_path(),
-            node.node_id
-        );
-        self.partition_owners.insert(key.to_path(), node);
+    /// Set the owner node_id for a partition
+    pub fn set_partition_owner(&self, key: &PartitionKey, node_id: String) {
+        debug!("Setting partition owner: {} -> {}", key.to_path(), node_id);
+        self.partition_owners.insert(key.to_path(), node_id);
     }
 
     /// Remove a partition owner (e.g., when partition is deleted)
@@ -132,17 +140,43 @@ impl ShardCache {
         self.partition_owners.remove(&key.to_path());
     }
 
+    /// Remove all partition ownership entries for a specific node
+    /// Called when a node permanently leaves the cluster
+    pub fn remove_partitions_for_node(&self, node_id: &str) -> usize {
+        let mut removed = 0;
+        self.partition_owners.retain(|_, owner_id| {
+            if owner_id == node_id {
+                removed += 1;
+                false
+            } else {
+                true
+            }
+        });
+        if removed > 0 {
+            info!(
+                "Cleaned up {} partition entries for departed node {}",
+                removed, node_id
+            );
+        }
+        removed
+    }
+
+    /// Get a DataNodeInfo by node_id
+    pub fn get_data_node(&self, node_id: &str) -> Option<DataNodeInfo> {
+        self.data_nodes.read().get(node_id).cloned()
+    }
+
     /// Get all active Data nodes
     pub fn get_active_data_nodes(&self) -> Vec<DataNodeInfo> {
         self.data_nodes
             .read()
-            .iter()
+            .values()
             .filter(|n| n.state == NodeState::Active)
             .cloned()
             .collect()
     }
 
-    /// Update the list of Data nodes
+    /// Update the list of Data nodes (replaces all)
     pub fn update_data_nodes(&self, nodes: Vec<DataNodeInfo>) {
         let active_count = nodes.iter().filter(|n| n.state == NodeState::Active).count();
         info!(
@@ -150,34 +184,44 @@ impl ShardCache {
             nodes.len(),
             active_count
         );
-        *self.data_nodes.write() = nodes;
+
+        let mut map = self.data_nodes.write();
+        map.clear();
+        for node in nodes {
+            map.insert(node.node_id.clone(), node);
+        }
     }
 
     /// Add or update a Data node
     pub fn upsert_data_node(&self, node: DataNodeInfo) {
-        let mut nodes = self.data_nodes.write();
-        if let Some(existing) = nodes.iter_mut().find(|n| n.node_id == node.node_id) {
-            *existing = node;
-        } else {
-            nodes.push(node);
-        }
+        self.data_nodes.write().insert(node.node_id.clone(), node);
     }
 
     /// Remove a Data node
     pub fn remove_data_node(&self, node_id: &str) {
-        self.data_nodes.write().retain(|n| n.node_id != node_id);
+        self.data_nodes.write().remove(node_id);
     }
 
     /// Select a Data node for a partition using consistent hashing
     ///
     /// This provides sticky routing so the same partition usually goes to the same node,
     /// which improves cache efficiency and reduces lock contention.
+    ///
+    /// The two-level lookup ensures we always check the CURRENT node state:
+    /// 1. Look up owner node_id from partition_owners
+    /// 2. Look up DataNodeInfo from data_nodes (single source of truth)
+    /// 3. If node is Active, use it; otherwise fall back to hash-based routing
     pub fn select_node_for_partition(&self, key: &PartitionKey) -> Option<DataNodeInfo> {
         // First check if we have a cached owner
-        if let Some(owner) = self.get_partition_owner(key) {
-            if owner.state == NodeState::Active {
-                return Some(owner);
+        if let Some(owner_id) = self.get_partition_owner(key) {
+            // Lookup CURRENT state from single source of truth
+            let nodes = self.data_nodes.read();
+            if let Some(owner) = nodes.get(&owner_id) {
+                if owner.state == NodeState::Active {
+                    return Some(owner.clone());
+                }
             }
+            // Node not found or unhealthy → fall through to hash-based
         }
 
         // Fall back to hash-based selection
@@ -229,7 +273,7 @@ impl ShardCache {
         ShardCacheStats {
             partition_count: self.partition_owners.len(),
             data_node_count: nodes.len(),
-            active_node_count: nodes.iter().filter(|n| n.state == NodeState::Active).count(),
+            active_node_count: nodes.values().filter(|n| n.state == NodeState::Active).count(),
             last_event_seq: self.last_event_seq.load(Ordering::Relaxed),
         }
     }
