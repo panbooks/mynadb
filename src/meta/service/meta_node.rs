@@ -417,6 +417,14 @@ impl MetaNode {
         self.state_machine.current_sequence()
     }
 
+    /// Subscribe to real-time event notifications
+    ///
+    /// Returns a broadcast receiver that will receive events as they are published.
+    /// This provides instant push-based notification without polling.
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<Event> {
+        self.state_machine.subscribe_events()
+    }
+
     // ========================================================================
     // Cluster Management
     // ========================================================================

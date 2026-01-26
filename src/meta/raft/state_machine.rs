@@ -13,6 +13,7 @@ use sled::Db;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
 /// Storage keys for Raft state
@@ -41,6 +42,10 @@ pub struct MetaStateMachine {
 
     /// Current membership configuration (for Raft)
     last_membership: RwLock<StoredMembership>,
+
+    /// Broadcast channel for real-time event notifications
+    /// Subscribers receive events instantly without polling
+    event_broadcast: broadcast::Sender<Event>,
 }
 
 /// Snapshot data for the Meta state machine
@@ -110,6 +115,11 @@ impl MetaStateMachine {
             last_applied, last_membership
         );
 
+        // Create broadcast channel with capacity for 1000 events
+        // Slow subscribers will miss events (lagging), which is acceptable
+        // since they can catch up via get_events_from()
+        let (event_broadcast, _) = broadcast::channel(1000);
+
         Self {
             db,
             event_sequence: AtomicU64::new(event_sequence),
@@ -117,6 +127,7 @@ impl MetaStateMachine {
             lease_counter: AtomicU64::new(0),
             last_applied: RwLock::new(last_applied),
             last_membership: RwLock::new(last_membership),
+            event_broadcast,
         }
     }
 
@@ -575,12 +586,26 @@ impl MetaStateMachine {
             source_node.to_string(),
         );
 
+        // Persist to sled for durability and catch-up queries
         let _ = self.db.insert(
             event.storage_key().as_bytes(),
             bincode::serialize(&event).unwrap(),
         );
 
+        // Broadcast to subscribers for instant notification
+        // Ignore send errors (no subscribers or channel full)
+        let _ = self.event_broadcast.send(event);
+
         MetaResponse::EventPublished { sequence: seq }
+    }
+
+    /// Subscribe to real-time event notifications
+    ///
+    /// Returns a broadcast receiver that will receive events as they are published.
+    /// If the receiver falls behind (more than 1000 events), it will receive a
+    /// `RecvError::Lagged` and should use `get_events_from()` to catch up.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<Event> {
+        self.event_broadcast.subscribe()
     }
 
     // ========================================================================
@@ -832,6 +857,9 @@ impl MetaStateMachine {
 
 impl Clone for MetaStateMachine {
     fn clone(&self) -> Self {
+        // Create a new broadcast channel for the cloned state machine
+        // Clone of sender shares the same channel, allowing all clones to broadcast
+        let (event_broadcast, _) = broadcast::channel(1000);
         Self {
             db: self.db.clone(),
             event_sequence: AtomicU64::new(self.event_sequence.load(Ordering::SeqCst)),
@@ -839,6 +867,7 @@ impl Clone for MetaStateMachine {
             lease_counter: AtomicU64::new(0),
             last_applied: RwLock::new(self.last_applied.read().clone()),
             last_membership: RwLock::new(self.last_membership.read().clone()),
+            event_broadcast,
         }
     }
 }
