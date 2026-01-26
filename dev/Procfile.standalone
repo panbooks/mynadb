@@ -1,0 +1,11 @@
+# MynaDB Standalone Development Environment
+# Single-node mode with all services
+#
+# Port assignments:
+#   HTTP:   7000
+#   Flight: 7001
+#   MySQL:  7002
+#
+# Start with: goreman -f dev/Procfile.standalone start
+
+mynadb: ./target/release/mynadb --role standalone -c ./dev/configs/standalone.toml

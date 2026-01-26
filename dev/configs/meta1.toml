@@ -1,0 +1,46 @@
+# MynaDB Meta Node 1 Configuration
+# Raft-based metadata service
+
+[meta]
+# Unique node ID within the Raft cluster (1, 2, 3)
+node_id = 1
+
+# Address to bind the gRPC server
+bind_addr = "0.0.0.0:7100"
+
+# Address advertised to other nodes for Raft communication
+advertise_addr = "127.0.0.1:7100"
+
+# Directory for sled database and Raft logs
+data_dir = "./dev/data/meta1"
+
+# Initial cluster peers (other meta nodes)
+peers = ["127.0.0.1:7101", "127.0.0.1:7102"]
+
+[meta.raft]
+# Heartbeat interval in milliseconds
+heartbeat_interval_ms = 150
+
+# Election timeout range in milliseconds
+election_timeout_min_ms = 300
+election_timeout_max_ms = 500
+
+# Number of log entries before taking a snapshot
+snapshot_threshold = 10000
+
+# Maximum Raft log size before compaction (MB)
+max_log_size_mb = 256
+
+[meta.events]
+# Maximum number of events to retain
+max_events = 100000
+
+# Event retention duration in seconds
+retention_secs = 3600
+
+[logging]
+level = "info"
+log_dir = "./dev/logs/meta1"
+file_prefix = "meta1"
+rotation = "daily"
+max_files = 7

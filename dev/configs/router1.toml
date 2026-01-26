@@ -1,0 +1,53 @@
+# MynaDB Router Node Configuration
+# Client protocol handler and request router
+
+[server]
+http_host = "0.0.0.0"
+http_port = 7000
+flight_host = "0.0.0.0"
+flight_port = 7001
+mysql_host = "0.0.0.0"
+mysql_port = 7002
+mysql_enabled = true
+
+[router]
+node_id = "router-1"
+
+[router.meta]
+# Meta service endpoints
+endpoints = ["127.0.0.1:7100", "127.0.0.1:7101", "127.0.0.1:7102"]
+connect_timeout_ms = 5000
+request_timeout_ms = 30000
+
+[router.routing]
+# Shard cache refresh interval (via Meta events)
+cache_refresh_interval_ms = 1000
+# Connection pool size per Data node
+data_node_pool_size = 10
+data_node_connect_timeout_ms = 5000
+data_node_request_timeout_ms = 60000
+
+[router.query]
+cache_enabled = true
+cache_max_size_mb = 256
+cache_ttl_secs = 300
+slow_query_threshold_ms = 100
+max_parallel_fanout = 16
+
+[router.auth]
+enabled = false
+username = ""
+password = ""
+
+[schema]
+strategy = "service_as_schema"
+tag_keys = ["service", "MONITOR.service", "hierarchy_2"]
+default_name = "default"
+prefix_numeric = true
+
+[logging]
+level = "info"
+log_dir = "./dev/logs/router1"
+file_prefix = "router1"
+rotation = "daily"
+max_files = 7

@@ -1,0 +1,36 @@
+# MynaDB Meta Node 3 Configuration
+# Raft-based metadata service
+
+[meta]
+# Unique node ID within the Raft cluster (1, 2, 3)
+node_id = 3
+
+# Address to bind the gRPC server
+bind_addr = "0.0.0.0:7102"
+
+# Address advertised to other nodes for Raft communication
+advertise_addr = "127.0.0.1:7102"
+
+# Directory for sled database and Raft logs
+data_dir = "./dev/data/meta3"
+
+# Initial cluster peers (other meta nodes)
+peers = ["127.0.0.1:7100", "127.0.0.1:7101"]
+
+[meta.raft]
+heartbeat_interval_ms = 150
+election_timeout_min_ms = 300
+election_timeout_max_ms = 500
+snapshot_threshold = 10000
+max_log_size_mb = 256
+
+[meta.events]
+max_events = 100000
+retention_secs = 3600
+
+[logging]
+level = "info"
+log_dir = "./dev/logs/meta3"
+file_prefix = "meta3"
+rotation = "daily"
+max_files = 7
