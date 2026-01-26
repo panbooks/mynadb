@@ -6,7 +6,10 @@
 // Internal modules
 pub mod cluster;
 pub mod config;
+pub mod data;
+pub mod meta;
 pub mod query;
+pub mod router;
 pub mod storage;
 
 // Re-export at crate root for internal `crate::` imports to work

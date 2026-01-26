@@ -1,6 +1,9 @@
 use std::process::Command;
 
 fn main() {
+    // Compile protobuf files for Meta and DataNode services
+    compile_protos();
+
     // Get git describe (tag + commits + hash)
     let git_version = Command::new("git")
         .args(&["describe", "--tags", "--always", "--dirty"])
@@ -56,4 +59,25 @@ fn main() {
     // Rerun if git state changes
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs/");
+}
+
+fn compile_protos() {
+    let proto_files = ["proto/meta.proto", "proto/datanode.proto"];
+
+    // Rerun if proto files change
+    for proto in &proto_files {
+        println!("cargo:rerun-if-changed={}", proto);
+    }
+
+    // Check if proto directory exists (skip if not - allows building without protos)
+    if !std::path::Path::new("proto").exists() {
+        return;
+    }
+
+    // Compile with tonic-build (outputs to OUT_DIR by default)
+    tonic_build::configure()
+        .build_server(true)
+        .build_client(true)
+        .compile_protos(&proto_files, &["proto"])
+        .expect("Failed to compile protobuf files");
 }
