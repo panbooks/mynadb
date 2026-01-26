@@ -1,0 +1,9 @@
+# Dev environment runtime data
+data/
+logs/
+
+# Log files
+*.log
+
+# OS files
+.DS_Store

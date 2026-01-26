@@ -1,0 +1,63 @@
+# MynaDB Data Node 1 Configuration
+# Storage and query execution node
+
+[server]
+http_host = "0.0.0.0"
+http_port = 7010
+flight_host = "0.0.0.0"
+flight_port = 7011
+
+[data]
+node_id = "data-1"
+advertise_addr = "127.0.0.1:7200"
+grpc_port = 7200
+
+# Meta service endpoints
+meta_endpoints = ["127.0.0.1:7100", "127.0.0.1:7101", "127.0.0.1:7102"]
+meta_connect_timeout_ms = 5000
+meta_request_timeout_ms = 30000
+
+[storage]
+data_dir = "./dev/data/data1"
+system_dir = "_system"
+
+[storage.object_store]
+backend = "local"
+
+[schema]
+strategy = "service_as_schema"
+tag_keys = ["service", "MONITOR.service", "hierarchy_2"]
+default_name = "default"
+prefix_numeric = true
+
+[cache]
+flush_interval_secs = 60
+max_size_mb = 1024
+
+[wal]
+enabled = true
+sync_on_write = false
+rotate_size_mb = 128
+
+[query_cache]
+enabled = true
+max_size_mb = 128
+ttl_secs = 300
+min_query_time_ms = 10
+
+[compaction]
+min_files = 5
+max_level = 5
+interval_secs = 60
+max_concurrent_compactions = 4
+full_compaction_max_concurrent = 1
+
+[retention]
+enabled = false
+
+[logging]
+level = "info"
+log_dir = "./dev/logs/data1"
+file_prefix = "data1"
+rotation = "daily"
+max_files = 7

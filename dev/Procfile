@@ -1,0 +1,20 @@
+# MynaDB Cluster Development Environment (Default)
+# Full cluster: 3 meta nodes + 1 router + 2 data nodes
+#
+# Port assignments:
+#   meta1:   gRPC 7100
+#   meta2:   gRPC 7101
+#   meta3:   gRPC 7102
+#   router1: HTTP 7000, Flight 7001, MySQL 7002
+#   data1:   gRPC 7200
+#   data2:   gRPC 7201
+#
+# Start with: goreman start
+# Or: cd dev && goreman start
+
+meta1: ./target/release/mynadb --role meta -c ./dev/configs/meta1.toml
+meta2: ./target/release/mynadb --role meta -c ./dev/configs/meta2.toml
+meta3: ./target/release/mynadb --role meta -c ./dev/configs/meta3.toml
+router1: sleep 3 && ./target/release/mynadb --role router -c ./dev/configs/router1.toml
+data1: sleep 3 && ./target/release/mynadb --role data -c ./dev/configs/data1.toml
+data2: sleep 3 && ./target/release/mynadb --role data -c ./dev/configs/data2.toml
