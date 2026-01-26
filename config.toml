@@ -19,6 +19,9 @@ system_dir = "_system"
 # Storage backend: "local" (default), "s3", "minio", "oss"
 backend = "local"
 
+# Data directory for local storage (must match [storage].data_dir for local backend)
+data_dir = "/data0/mynadb/data"
+
 # MinIO configuration
 bucket = "mynadb"
 region = "us-east-1"

@@ -352,14 +352,24 @@ impl ParquetWriter {
     }
 
     /// Merge schemas from multiple batches, keeping all unique fields
-    fn merge_schemas(batches: &[RecordBatch]) -> Result<Schema, String> {
+    /// exclude_columns: columns to exclude from the output schema (e.g., "date" for Hive partitioning)
+    fn merge_schemas_with_exclusions(
+        batches: &[RecordBatch],
+        exclude_columns: &[&str],
+    ) -> Result<Schema, String> {
         use std::collections::HashMap;
+        use std::collections::HashSet;
 
+        let exclude_set: HashSet<&str> = exclude_columns.iter().cloned().collect();
         let mut field_map: HashMap<String, Field> = HashMap::new();
 
         for batch in batches {
             for field in batch.schema().fields() {
                 let name = field.name().clone();
+                // Skip excluded columns (e.g., "date" which is encoded in partition path)
+                if exclude_set.contains(name.as_str()) {
+                    continue;
+                }
                 if let Some(existing) = field_map.get(&name) {
                     if existing.data_type() != field.data_type() {
                         return Err(format!(
@@ -375,13 +385,11 @@ impl ParquetWriter {
             }
         }
 
-        // Maintain field order: time, date, measurement, tags (sorted), fields (sorted)
+        // Maintain field order: time, measurement, tags (sorted), fields (sorted)
+        // Note: "date" is excluded as it's encoded in the partition path
         let mut fields = Vec::new();
 
         if let Some(f) = field_map.remove("time") {
-            fields.push(f);
-        }
-        if let Some(f) = field_map.remove("date") {
             fields.push(f);
         }
         if let Some(f) = field_map.remove("measurement") {
@@ -395,6 +403,13 @@ impl ParquetWriter {
         }
 
         Ok(Schema::new(fields))
+    }
+
+    /// Merge schemas from multiple batches, keeping all unique fields
+    fn merge_schemas(batches: &[RecordBatch]) -> Result<Schema, String> {
+        // Exclude "date" column as it's encoded in the Hive partition path (date=YYYY-MM-DD/)
+        // This prevents duplicate "date" columns when DataFusion reads partitioned data
+        Self::merge_schemas_with_exclusions(batches, &["date"])
     }
 
     /// Adapt a batch to match a target schema

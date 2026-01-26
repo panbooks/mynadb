@@ -307,6 +307,53 @@ impl QueryEngine {
             .invalidate_table(catalog, schema, table);
     }
 
+    /// Deregister a table from DataFusion session
+    /// This is needed after flush so the table can be re-registered with proper providers
+    /// (e.g., switching from memtable-only to parquet + memtable)
+    pub fn deregister_table(&self, catalog: &str, schema: &str, table: &str) -> Result<(), String> {
+        if let Some(catalog_provider) = self.ctx.catalog(catalog) {
+            if let Some(schema_provider) = catalog_provider.schema(schema) {
+                match schema_provider.deregister_table(table) {
+                    Ok(Some(_)) => {
+                        debug!(
+                            "Deregistered table {}.{}.{} from DataFusion",
+                            catalog, schema, table
+                        );
+                    }
+                    Ok(None) => {
+                        debug!(
+                            "Table {}.{}.{} was not registered",
+                            catalog, schema, table
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to deregister table {}.{}.{}: {}",
+                            catalog, schema, table, e
+                        );
+                        return Err(format!("Failed to deregister table: {}", e));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Refresh table registration after flush
+    /// Deregisters the table and invalidates caches so it gets re-registered on next query
+    pub fn refresh_table_after_flush(&self, catalog: &str, schema: &str, table: &str) {
+        // First deregister the table from DataFusion
+        if let Err(e) = self.deregister_table(catalog, schema, table) {
+            warn!("Failed to deregister table during refresh: {}", e);
+        }
+        // Then invalidate all caches
+        self.invalidate_table_cache(catalog, schema, table);
+        debug!(
+            "Refreshed table registration for {}.{}.{} after flush",
+            catalog, schema, table
+        );
+    }
+
     /// Invalidate all caches for a database
     pub fn invalidate_database_cache(&self, db: &str) {
         self.metadata_cache.invalidate_catalog(db);
