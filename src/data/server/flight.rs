@@ -29,7 +29,7 @@ use tokio::sync::RwLock;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, warn};
 
-/// Write request metadata sent via Flight Ticket
+/// Write request metadata sent via Flight Ticket (legacy line protocol format)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WriteTicket {
     pub catalog: String,
@@ -38,6 +38,17 @@ pub struct WriteTicket {
     /// Format: catalog/schema/table/date (e.g., "mydb/default/cpu/2024-01-15")
     #[serde(default)]
     pub partition_key: Option<String>,
+}
+
+/// Batch write request metadata sent via Flight Descriptor
+/// Used when Router sends pre-converted RecordBatch to Data node
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchWriteTicket {
+    pub catalog: String,
+    pub schema: String,
+    pub table: String,
+    pub date: i32, // Days since Unix epoch (Date32 format)
+    pub fencing_token: Option<u64>,
 }
 
 /// Query request metadata sent via Flight Ticket
@@ -169,6 +180,192 @@ impl DataNodeFlightService {
         }
 
         Ok(point_count)
+    }
+
+    /// Handle new BatchWriteTicket format - ingest RecordBatch directly to cache
+    async fn handle_batch_write(
+        &self,
+        ticket: BatchWriteTicket,
+        batches: Vec<RecordBatch>,
+        start: Instant,
+    ) -> Result<Response<Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>>, Status> {
+        debug!(
+            "DoPut batch write: catalog={}, schema={}, table={}, date={}, fencing_token={:?}",
+            ticket.catalog, ticket.schema, ticket.table, ticket.date, ticket.fencing_token
+        );
+
+        // Validate fencing token if provided
+        if let Some(token) = ticket.fencing_token {
+            self.validate_fencing_token(token, &ticket.catalog, Some(&format!(
+                "{}/{}/{}/date={}",
+                ticket.catalog, ticket.schema, ticket.table,
+                crate::storage::line_protocol::format_date32_as_string(ticket.date)
+            ))).await?;
+        }
+
+        // Add RecordBatches directly to cache
+        let mut total_rows = 0u64;
+
+        for batch in batches {
+            let row_count = batch.num_rows() as u64;
+            if row_count == 0 {
+                continue;
+            }
+
+            match self
+                .cache
+                .add_batch(&ticket.catalog, &ticket.schema, &ticket.table, ticket.date, batch)
+                .await
+            {
+                Ok(_) => {
+                    total_rows += row_count;
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to add batch to cache for {}/{}/{}: {:?}",
+                        ticket.catalog, ticket.schema, ticket.table, e
+                    );
+                    return Err(Status::internal(format!("Cache error: {:?}", e)));
+                }
+            }
+        }
+
+        let elapsed = start.elapsed();
+        info!(
+            "DoPut batch completed: {} rows to {}/{}/{} in {:?}",
+            total_rows, ticket.catalog, ticket.schema, ticket.table, elapsed
+        );
+
+        // Return success result
+        let result = PutResult {
+            app_metadata: format!("{{\"rows_written\":{},\"points_written\":{}}}", total_rows, total_rows)
+                .into_bytes()
+                .into(),
+        };
+        let output = stream::once(async { Ok(result) });
+        Ok(Response::new(Box::pin(output)))
+    }
+
+    /// Handle legacy WriteTicket format - parse line protocol from RecordBatch column
+    async fn handle_legacy_write(
+        &self,
+        ticket: WriteTicket,
+        batches: Vec<RecordBatch>,
+        start: Instant,
+    ) -> Result<Response<Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>>, Status> {
+        debug!(
+            "DoPut legacy write: catalog={}, fencing_token={:?}",
+            ticket.catalog, ticket.fencing_token
+        );
+
+        // Validate fencing token if provided
+        if let Some(token) = ticket.fencing_token {
+            self.validate_fencing_token(token, &ticket.catalog, ticket.partition_key.as_deref())
+                .await?;
+        }
+
+        // Process batches with line_protocol column
+        let mut total_points = 0u64;
+
+        for batch in &batches {
+            // Check if this is a line protocol batch (has a single 'line_protocol' column)
+            if batch.num_columns() == 1 && batch.schema().field(0).name() == "line_protocol" {
+                // Extract line protocol strings and ingest
+                let col = batch.column(0);
+                if let Some(str_array) = col.as_any().downcast_ref::<arrow::array::StringArray>() {
+                    for i in 0..str_array.len() {
+                        if let Some(line) = str_array.value(i).into() {
+                            match self.ingest_line_protocol(&ticket.catalog, line).await {
+                                Ok(points) => total_points += points as u64,
+                                Err(e) => {
+                                    error!("Ingest error: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                warn!(
+                    "Received RecordBatch with {} columns but no schema/table metadata. \
+                     Use BatchWriteTicket for direct RecordBatch ingestion.",
+                    batch.num_columns()
+                );
+            }
+        }
+
+        let elapsed = start.elapsed();
+        info!(
+            "DoPut legacy completed: {} points in {:?}",
+            total_points, elapsed
+        );
+
+        // Return success result
+        let result = PutResult {
+            app_metadata: format!("{{\"points_written\":{}}}", total_points)
+                .into_bytes()
+                .into(),
+        };
+        let output = stream::once(async { Ok(result) });
+        Ok(Response::new(Box::pin(output)))
+    }
+
+    /// Validate fencing token against Meta service
+    async fn validate_fencing_token(
+        &self,
+        token: u64,
+        catalog: &str,
+        partition_key: Option<&str>,
+    ) -> Result<(), Status> {
+        if let Some(ref meta_client) = self.meta_client {
+            // Use partition_key if provided, otherwise fall back to catalog-level lock
+            let lock_key = partition_key
+                .map(|pk| format!("/partitions/{}", pk))
+                .unwrap_or_else(|| format!("/partitions/{}", catalog));
+
+            match meta_client.get_lock(&lock_key).await {
+                Ok(Some(lock_info)) => {
+                    if lock_info.fencing_token != token {
+                        warn!(
+                            "Stale fencing token for {}: received {} but current is {}",
+                            lock_key, token, lock_info.fencing_token
+                        );
+                        return Err(Status::failed_precondition(format!(
+                            "Stale fencing token: write rejected to prevent split-brain. \
+                             Received token {} but partition lock has token {}",
+                            token, lock_info.fencing_token
+                        )));
+                    }
+                    debug!(
+                        "Fencing token {} validated for partition {}",
+                        token, lock_key
+                    );
+                }
+                Ok(None) => {
+                    warn!(
+                        "No lock held for partition {}, rejecting write with token {}",
+                        lock_key, token
+                    );
+                    return Err(Status::failed_precondition(format!(
+                        "No lock held for partition {}. The Router may have lost its lock.",
+                        lock_key
+                    )));
+                }
+                Err(e) => {
+                    // Meta service unavailable - fail-open with warning
+                    warn!(
+                        "Failed to validate fencing token for {}: {}. Allowing write (fail-open).",
+                        lock_key, e
+                    );
+                }
+            }
+        } else {
+            // No meta client - standalone mode, skip validation
+            debug!(
+                "Fencing token {} provided but no meta client (standalone mode)",
+                token
+            );
+        }
+        Ok(())
     }
 }
 
@@ -340,6 +537,10 @@ impl FlightService for DataNodeFlightService {
     }
 
     /// DoPut - Receive writes from Router
+    ///
+    /// Supports two formats:
+    /// 1. BatchWriteTicket (new) - Pre-converted RecordBatch from Router, ingested directly
+    /// 2. WriteTicket (legacy) - Line protocol in a "line_protocol" column, parsed on Data node
     async fn do_put(
         &self,
         request: Request<Streaming<FlightData>>,
@@ -354,74 +555,13 @@ impl FlightService for DataNodeFlightService {
             .ok_or_else(|| Status::invalid_argument("Empty stream"))?
             .map_err(|e| Status::internal(format!("Stream error: {}", e)))?;
 
-        // Parse write ticket from flight descriptor
-        let ticket: WriteTicket = if let Some(ref descriptor) = first_data.flight_descriptor {
-            serde_json::from_slice(&descriptor.cmd)
-                .map_err(|e| Status::invalid_argument(format!("Invalid write ticket: {}", e)))?
-        } else {
-            return Err(Status::invalid_argument(
-                "Missing flight descriptor with write metadata",
-            ));
-        };
-
-        debug!(
-            "DoPut write: catalog={}, fencing_token={:?}",
-            ticket.catalog, ticket.fencing_token
-        );
-
-        // Validate fencing token if provided and meta client available
-        if let Some(token) = ticket.fencing_token {
-            if let Some(ref meta_client) = self.meta_client {
-                // Use partition_key if provided, otherwise fall back to catalog-level lock
-                let lock_key = ticket
-                    .partition_key
-                    .as_ref()
-                    .map(|pk| format!("/partitions/{}", pk))
-                    .unwrap_or_else(|| format!("/partitions/{}", ticket.catalog));
-
-                match meta_client.get_lock(&lock_key).await {
-                    Ok(Some(lock_info)) => {
-                        if lock_info.fencing_token != token {
-                            warn!(
-                                "Stale fencing token for {}: received {} but current is {}",
-                                lock_key, token, lock_info.fencing_token
-                            );
-                            return Err(Status::failed_precondition(format!(
-                                "Stale fencing token: write rejected to prevent split-brain. \
-                                 Received token {} but partition lock has token {}",
-                                token, lock_info.fencing_token
-                            )));
-                        }
-                        debug!(
-                            "Fencing token {} validated for partition {}",
-                            token, lock_key
-                        );
-                    }
-                    Ok(None) => {
-                        // No lock held - this could mean:
-                        // 1. Lock expired (stale Router)
-                        // 2. Lock key mismatch
-                        // Fail-closed: reject the write to be safe
-                        warn!("No lock held for partition {}, rejecting write with token {}", lock_key, token);
-                        return Err(Status::failed_precondition(format!(
-                            "No lock held for partition {}. The Router may have lost its lock.",
-                            lock_key
-                        )));
-                    }
-                    Err(e) => {
-                        // Meta service unavailable - fail-open with warning
-                        // In production, you might want fail-closed behavior
-                        warn!(
-                            "Failed to validate fencing token for {}: {}. Allowing write (fail-open).",
-                            lock_key, e
-                        );
-                    }
-                }
-            } else {
-                // No meta client - standalone mode, skip validation
-                debug!("Fencing token {} provided but no meta client (standalone mode)", token);
-            }
-        }
+        // Extract and clone the descriptor cmd before moving first_data
+        let descriptor_cmd = first_data
+            .flight_descriptor
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("Missing flight descriptor with write metadata"))?
+            .cmd
+            .clone();
 
         // Collect all flight data and decode as RecordBatches
         let mut all_data = vec![first_data];
@@ -439,51 +579,18 @@ impl FlightService for DataNodeFlightService {
             .await
             .map_err(|e| Status::internal(format!("Failed to decode batches: {}", e)))?;
 
-        // If we received RecordBatches, add them directly to cache
-        // For now, we expect line protocol in a specific column or handle raw batches
-        let mut total_points = 0u64;
-
-        for batch in &batches {
-            // Check if this is a line protocol batch (has a single 'line_protocol' column)
-            if batch.num_columns() == 1 && batch.schema().field(0).name() == "line_protocol" {
-                // Extract line protocol strings and ingest
-                let col = batch.column(0);
-                if let Some(str_array) = col.as_any().downcast_ref::<arrow::array::StringArray>() {
-                    for i in 0..str_array.len() {
-                        if let Some(line) = str_array.value(i).into() {
-                            match self.ingest_line_protocol(&ticket.catalog, line).await {
-                                Ok(points) => total_points += points as u64,
-                                Err(e) => {
-                                    error!("Ingest error: {}", e);
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                // TODO: Handle direct RecordBatch writes (schema-aware ingestion)
-                // For now, we only support line protocol format
-                warn!(
-                    "Received RecordBatch with {} columns, expected line_protocol format",
-                    batch.num_columns()
-                );
-            }
+        // Try to parse as BatchWriteTicket first (new efficient format)
+        if let Ok(batch_ticket) = serde_json::from_slice::<BatchWriteTicket>(&descriptor_cmd) {
+            return self
+                .handle_batch_write(batch_ticket, batches, start)
+                .await;
         }
 
-        let elapsed = start.elapsed();
-        info!(
-            "DoPut completed: {} points in {:?}",
-            total_points, elapsed
-        );
+        // Fall back to legacy WriteTicket format
+        let ticket: WriteTicket = serde_json::from_slice(&descriptor_cmd)
+            .map_err(|e| Status::invalid_argument(format!("Invalid write ticket: {}", e)))?;
 
-        // Return success result
-        let result = PutResult {
-            app_metadata: format!("{{\"points_written\":{}}}", total_points)
-                .into_bytes()
-                .into(),
-        };
-        let output = stream::once(async { Ok(result) });
-        Ok(Response::new(Box::pin(output)))
+        self.handle_legacy_write(ticket, batches, start).await
     }
 
     /// DoAction - Handle administrative actions

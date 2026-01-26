@@ -1,3 +1,4 @@
+pub mod batch_converter;
 pub mod cache;
 pub mod file_cache;
 pub mod line_protocol;

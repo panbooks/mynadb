@@ -1,11 +1,10 @@
-use super::line_protocol::{format_date32_as_partition, format_date32_as_string, FieldValue, Point};
+use super::batch_converter::points_to_record_batch;
+use super::line_protocol::{format_date32_as_partition, Point};
 use super::parquet_writer::{FileWriteResult, ParquetWriter};
 use super::storage::Storage;
 use super::wal::Wal;
-use arrow::array::{
-    BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
-};
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use arrow::array::RecordBatch;
+use arrow::datatypes::Schema;
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -93,37 +92,6 @@ impl TableCardinalityTracker {
 
 /// Table key: (catalog, schema, table) - ignoring date partition
 type TableKey = (String, String, String);
-
-/// Schema cache key includes tag keys and field keys with their types
-/// Format: "tags:host,region|fields:cpu:f,mem:i,active:b"
-#[derive(Hash, Eq, PartialEq, Clone)]
-struct SchemaCacheKey {
-    tag_keys: Vec<String>,
-    field_keys: Vec<(String, FieldType)>,
-}
-
-#[derive(Hash, Eq, PartialEq, Clone, Copy)]
-enum FieldType {
-    Float,
-    Integer,
-    String,
-    Boolean,
-}
-
-impl From<&FieldValue> for FieldType {
-    fn from(v: &FieldValue) -> Self {
-        match v {
-            FieldValue::Float(_) => FieldType::Float,
-            FieldValue::Integer(_) => FieldType::Integer,
-            FieldValue::String(_) => FieldType::String,
-            FieldValue::Boolean(_) => FieldType::Boolean,
-        }
-    }
-}
-
-/// Global schema cache to avoid rebuilding schemas for the same tag/field set
-static SCHEMA_CACHE: std::sync::LazyLock<RwLock<HashMap<SchemaCacheKey, Arc<Schema>>>> =
-    std::sync::LazyLock::new(|| RwLock::new(HashMap::with_capacity(1024)));
 
 /// Cache key: (catalog/database, schema/service, table/measurement, date)
 type CacheKey = (String, String, String, i32);
@@ -262,8 +230,8 @@ impl DataCache {
             }
         }
 
-        // Convert points to RecordBatch
-        let batch = Self::points_to_record_batch(&points).map_err(|e| {
+        // Convert points to RecordBatch using shared converter
+        let batch = points_to_record_batch(&points).map_err(|e| {
             error!("Failed to convert points to RecordBatch: {}", e);
             CacheFullError::ConversionError(e)
         })?;
@@ -311,182 +279,77 @@ impl DataCache {
         Ok(())
     }
 
-    /// Get or create schema from cache based on tag keys and field keys with types
-    fn get_or_create_schema(
-        tag_keys: &[String],
-        field_keys: &[(String, FieldType)],
-    ) -> Arc<Schema> {
-        let cache_key = SchemaCacheKey {
-            tag_keys: tag_keys.to_vec(),
-            field_keys: field_keys.to_vec(),
-        };
-
-        // Try read lock first (fast path)
-        {
-            let cache = SCHEMA_CACHE.read();
-            if let Some(schema) = cache.get(&cache_key) {
-                return schema.clone();
-            }
+    /// Add a pre-converted RecordBatch directly to the cache
+    ///
+    /// This is used by cluster mode where the Router has already converted
+    /// Points to RecordBatch. The batch is added directly without re-parsing.
+    ///
+    /// Parameters:
+    /// - catalog: database name
+    /// - schema: service/schema name
+    /// - table: measurement/table name
+    /// - date: date partition as i32 (days since Unix epoch)
+    /// - batch: the RecordBatch to add
+    pub async fn add_batch(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date: i32,
+        batch: RecordBatch,
+    ) -> Result<(), CacheFullError> {
+        if batch.num_rows() == 0 {
+            return Ok(());
         }
 
-        // Need to create schema - take write lock
-        let mut cache = SCHEMA_CACHE.write();
+        let key = (
+            catalog.to_string(),
+            schema.to_string(),
+            table.to_string(),
+            date,
+        );
 
-        // Double-check after acquiring write lock
-        if let Some(schema) = cache.get(&cache_key) {
-            return schema.clone();
+        let batch_size = batch.get_array_memory_size();
+        let current_size = self.total_size_bytes.load(Ordering::Relaxed);
+
+        // P0: Reject write if cache is full
+        if current_size + batch_size > self.max_size_bytes {
+            warn!(
+                "Cache full: current={}MB, batch={}KB, max={}MB",
+                current_size / 1024 / 1024,
+                batch_size / 1024,
+                self.max_size_bytes / 1024 / 1024
+            );
+            return Err(CacheFullError::CacheFull {
+                current_bytes: current_size,
+                max_bytes: self.max_size_bytes,
+                batch_bytes: batch_size,
+            });
         }
 
-        // Build schema: time + measurement + date + tags + fields
-        let mut fields = Vec::with_capacity(3 + tag_keys.len() + field_keys.len());
+        // Add to appropriate shard (minimal lock contention)
+        let shard_idx = self.shard_index(&key);
+        let added_size = self.shards[shard_idx].add(key, batch);
 
-        // Time column (InfluxQL compatible)
-        fields.push(Field::new(
-            "time",
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            false,
-        ));
+        // Update total size counter
+        let new_size = self
+            .total_size_bytes
+            .fetch_add(added_size, Ordering::Relaxed)
+            + added_size;
 
-        // Measurement
-        fields.push(Field::new("measurement", DataType::Utf8, false));
-
-        // Date partition column (YYYY-MM-DD string for Hive partitioning compatibility)
-        fields.push(Field::new("date", DataType::Utf8, false));
-
-        // Tags (all strings, nullable)
-        for key in tag_keys {
-            fields.push(Field::new(key, DataType::Utf8, true));
+        // P1: Trigger flush if threshold exceeded (80% capacity)
+        let threshold = self.max_size_bytes * FLUSH_THRESHOLD_PERCENT / 100;
+        if new_size >= threshold {
+            debug!(
+                "Cache at {}% capacity ({}MB/{}MB), triggering flush",
+                new_size * 100 / self.max_size_bytes,
+                new_size / 1024 / 1024,
+                self.max_size_bytes / 1024 / 1024
+            );
+            self.flush_notify.notify_one();
         }
 
-        // Fields (typed, nullable)
-        for (key, field_type) in field_keys {
-            let data_type = match field_type {
-                FieldType::Float => DataType::Float64,
-                FieldType::Integer => DataType::Int64,
-                FieldType::String => DataType::Utf8,
-                FieldType::Boolean => DataType::Boolean,
-            };
-            fields.push(Field::new(key, data_type, true));
-        }
-
-        let schema = Arc::new(Schema::new(fields));
-        cache.insert(cache_key, schema.clone());
-        schema
-    }
-
-    /// Convert Points to RecordBatch with schema caching and pre-sized vectors
-    fn points_to_record_batch(points: &[Point]) -> Result<RecordBatch, String> {
-        if points.is_empty() {
-            return Err("No points to convert".to_string());
-        }
-
-        let num_points = points.len();
-        let first_point = &points[0];
-
-        // Get sorted tag keys
-        let mut tag_keys: Vec<_> = first_point.tags.keys().cloned().collect();
-        tag_keys.sort();
-
-        // Get sorted field keys with their types
-        let mut field_keys: Vec<(String, FieldType)> = first_point
-            .fields
-            .iter()
-            .map(|(k, v)| (k.clone(), FieldType::from(v)))
-            .collect();
-        field_keys.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Get or create cached schema
-        let schema = Self::get_or_create_schema(&tag_keys, &field_keys);
-
-        // Pre-size arrays vector: time + measurement + date + tags + fields
-        let total_columns = 3 + tag_keys.len() + field_keys.len();
-        let mut arrays: Vec<Arc<dyn arrow::array::Array>> = Vec::with_capacity(total_columns);
-
-        // Timestamp array (pre-sized)
-        let mut timestamps = Vec::with_capacity(num_points);
-        let now = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
-        for p in points {
-            timestamps.push(p.timestamp.unwrap_or(now));
-        }
-        arrays.push(Arc::new(TimestampNanosecondArray::from(timestamps)));
-
-        // Measurement array (pre-sized)
-        let mut measurements = Vec::with_capacity(num_points);
-        for p in points {
-            measurements.push(p.measurement.as_str());
-        }
-        arrays.push(Arc::new(StringArray::from(measurements)));
-
-        // Date partition column (YYYY-MM-DD format)
-        let mut dates = Vec::with_capacity(num_points);
-        for p in points {
-            dates.push(format_date32_as_string(p.date));
-        }
-        arrays.push(Arc::new(StringArray::from(dates)));
-
-        // Tag arrays (pre-sized)
-        for key in &tag_keys {
-            let mut values = Vec::with_capacity(num_points);
-            for p in points {
-                values.push(p.tags.get(key).map(|s| s.as_str()));
-            }
-            arrays.push(Arc::new(StringArray::from(values)));
-        }
-
-        // Field arrays (typed, pre-sized)
-        for (key, field_type) in &field_keys {
-            match field_type {
-                FieldType::Float => {
-                    let mut values: Vec<Option<f64>> = Vec::with_capacity(num_points);
-                    for p in points {
-                        let v = p.fields.get(key).and_then(|fv| match fv {
-                            FieldValue::Float(f) => Some(*f),
-                            FieldValue::Integer(i) => Some(*i as f64),
-                            _ => None,
-                        });
-                        values.push(v);
-                    }
-                    arrays.push(Arc::new(Float64Array::from(values)));
-                }
-                FieldType::Integer => {
-                    let mut values: Vec<Option<i64>> = Vec::with_capacity(num_points);
-                    for p in points {
-                        let v = p.fields.get(key).and_then(|fv| match fv {
-                            FieldValue::Integer(i) => Some(*i),
-                            FieldValue::Float(f) => Some(*f as i64),
-                            _ => None,
-                        });
-                        values.push(v);
-                    }
-                    arrays.push(Arc::new(Int64Array::from(values)));
-                }
-                FieldType::String => {
-                    let mut values: Vec<Option<&str>> = Vec::with_capacity(num_points);
-                    for p in points {
-                        let v = p.fields.get(key).and_then(|fv| match fv {
-                            FieldValue::String(s) => Some(s.as_str()),
-                            _ => None,
-                        });
-                        values.push(v);
-                    }
-                    arrays.push(Arc::new(StringArray::from(values)));
-                }
-                FieldType::Boolean => {
-                    let mut values: Vec<Option<bool>> = Vec::with_capacity(num_points);
-                    for p in points {
-                        let v = p.fields.get(key).and_then(|fv| match fv {
-                            FieldValue::Boolean(b) => Some(*b),
-                            _ => None,
-                        });
-                        values.push(v);
-                    }
-                    arrays.push(Arc::new(BooleanArray::from(values)));
-                }
-            }
-        }
-
-        RecordBatch::try_new(schema, arrays)
-            .map_err(|e| format!("Failed to create RecordBatch: {}", e))
+        Ok(())
     }
 
     /// Flush all cached data to disk
