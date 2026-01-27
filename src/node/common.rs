@@ -6,6 +6,7 @@ use crate::query::cache::{hot_partition_cache, query_cache};
 use crate::query::{catalog, query_engine};
 use crate::services::{flight_service, mysql_service};
 use crate::storage::{cache, file_cache, parquet_writer, storage as storage_mod, wal};
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -189,6 +190,92 @@ pub fn start_background_flush_with_metadata(
                 }
                 if let Err(e) = manager.save().await {
                     warn!("Failed to save metadata after flush: {}", e);
+                }
+            });
+        }),
+    );
+}
+
+/// Start background flush with metadata registration AND query engine table refresh
+///
+/// This is the correct function to use for standalone mode. It ensures that after
+/// background flush writes new Parquet files, the QueryEngine's table registrations
+/// are refreshed so queries can find the new data.
+pub fn start_background_flush_with_query_engine(
+    cache: cache::DataCache,
+    interval_secs: u64,
+    metadata_manager: catalog::SharedMetadataManager,
+    query_engine: Arc<query_engine::QueryEngine>,
+) {
+    let metadata_for_flush = metadata_manager.clone();
+    let query_engine_for_flush = query_engine.clone();
+
+    cache.start_background_flush_with_callback(
+        interval_secs,
+        Some(move |files: Vec<parquet_writer::FileWriteResult>| {
+            let manager = metadata_for_flush.clone();
+            let qe = query_engine_for_flush.clone();
+
+            tokio::spawn(async move {
+                // Track unique tables that were flushed
+                let mut flushed_tables: HashSet<(String, String, String)> = HashSet::new();
+
+                for file in files {
+                    let file_name = file
+                        .path
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&file.path)
+                        .to_string();
+
+                    // Track this table for later refresh
+                    flushed_tables.insert((
+                        file.catalog.clone(),
+                        file.schema.clone(),
+                        file.table.clone(),
+                    ));
+
+                    let file_info = catalog::FileInfo {
+                        path: file.path.clone(),
+                        file_name,
+                        catalog: file.catalog.clone(),
+                        schema: file.schema.clone(),
+                        table: file.table.clone(),
+                        partition_key: file.partition_key.clone(),
+                        size_bytes: file.size_bytes,
+                        row_count: file.row_count,
+                        level: file.level,
+                        min_timestamp: None,
+                        max_timestamp: None,
+                        created_at: chrono::Utc::now().timestamp_millis(),
+                        row_group_count: 1,
+                        column_stats: None,
+                        etag: None,
+                    };
+                    if let Err(e) = manager.register_file(file_info).await {
+                        warn!("Failed to register file {}: {}", file.path, e);
+                    }
+                }
+
+                // CRITICAL: Refresh QueryEngine table registrations for all flushed tables
+                // This ensures DataFusion can find the new Parquet files
+                for (catalog, schema, table) in &flushed_tables {
+                    debug!(
+                        "Refreshing table after flush: {}.{}.{}",
+                        catalog, schema, table
+                    );
+                    qe.refresh_table_after_flush(catalog, schema, table);
+                }
+
+                if let Err(e) = manager.save().await {
+                    warn!("Failed to save metadata after flush: {}", e);
+                }
+
+                if !flushed_tables.is_empty() {
+                    info!(
+                        "Background flush complete: {} tables refreshed",
+                        flushed_tables.len()
+                    );
                 }
             });
         }),

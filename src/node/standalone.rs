@@ -48,16 +48,19 @@ pub async fn run(config_path: &str) {
     // Initialize metadata manager
     let metadata_manager = common::init_metadata_manager(&config).await;
 
-    // Start background flush with metadata registration
-    common::start_background_flush_with_metadata(
+    // Initialize query engine FIRST (needed for background flush callback)
+    let cache_arc = Arc::new(cache.clone());
+    let query_engine = common::init_query_engine(&config, storage.clone(), cache_arc.clone());
+
+    // Start background flush with metadata registration AND query engine refresh
+    // This ensures that after flush, DataFusion table registrations are updated
+    // so queries can find the new Parquet files
+    common::start_background_flush_with_query_engine(
         cache.clone(),
         config.cache.flush_interval_secs,
         metadata_manager.clone(),
+        query_engine.clone(),
     );
-
-    // Initialize query engine
-    let cache_arc = Arc::new(cache.clone());
-    let query_engine = common::init_query_engine(&config, storage.clone(), cache_arc.clone());
 
     // Initialize database manager
     info!("Initializing database manager");
