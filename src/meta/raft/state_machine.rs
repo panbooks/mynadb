@@ -224,6 +224,25 @@ impl MetaStateMachine {
             } => self.publish_event(&topic, event_type, payload, &source_node),
 
             MetaCommand::ExpireLeases => self.expire_leases(),
+
+            // Partition replica operations (warm standby)
+            MetaCommand::AssignReplica {
+                partition_key,
+                leader_node_id,
+                standby_node_ids,
+                replication_factor,
+            } => self.assign_replica(&partition_key, &leader_node_id, standby_node_ids, replication_factor),
+
+            MetaCommand::PromoteStandby { partition_key } => self.promote_standby(&partition_key),
+
+            MetaCommand::UpdateReplicaState {
+                partition_key,
+                state,
+                last_replicated_seq,
+                replication_lag_ms,
+            } => self.update_replica_state(&partition_key, state, last_replicated_seq, replication_lag_ms),
+
+            MetaCommand::RemoveReplica { partition_key } => self.remove_replica(&partition_key),
         }
     }
 
@@ -309,6 +328,18 @@ impl MetaStateMachine {
                     }
                 }
             }
+        }
+
+        // Automatic failover: Promote standbys for partitions where this node was leader
+        // This enables zero-downtime failover when combined with Router's instant standby routing
+        let replicas_to_failover = self.get_replicas_by_leader(node_id);
+        for replica in replicas_to_failover {
+            info!(
+                "Auto-failover: Node {} was leader for partition {}, promoting standby",
+                node_id, replica.partition_key
+            );
+            // Promote the first available standby
+            self.promote_standby(&replica.partition_key);
         }
 
         // Publish event
@@ -628,6 +659,193 @@ impl MetaStateMachine {
         }
 
         MetaResponse::Success
+    }
+
+    // ========================================================================
+    // Partition Replica Operations (Warm Standby)
+    // ========================================================================
+
+    /// Assign a partition replica (leader + standbys)
+    fn assign_replica(
+        &self,
+        partition_key: &str,
+        leader_node_id: &str,
+        standby_node_ids: Vec<String>,
+        replication_factor: u8,
+    ) -> MetaResponse {
+        let replica = PartitionReplica::new(
+            partition_key.to_string(),
+            leader_node_id.to_string(),
+            standby_node_ids.clone(),
+            replication_factor,
+        );
+
+        let storage_key = replica.storage_key();
+        let _ = self.db.insert(
+            storage_key.as_bytes(),
+            bincode::serialize(&replica).unwrap(),
+        );
+
+        // Publish event for Router cache invalidation
+        let payload = serde_json::json!({
+            "partition_key": partition_key,
+            "leader_node_id": leader_node_id,
+            "standby_node_ids": standby_node_ids,
+            "replication_factor": replication_factor,
+        });
+        self.publish_event(
+            "replicas",
+            EventType::ReplicaAssigned,
+            serde_json::to_vec(&payload).unwrap_or_default(),
+            leader_node_id,
+        );
+
+        MetaResponse::ReplicaAssigned {
+            partition_key: partition_key.to_string(),
+            leader_node_id: leader_node_id.to_string(),
+        }
+    }
+
+    /// Promote standby to leader (failover)
+    fn promote_standby(&self, partition_key: &str) -> MetaResponse {
+        let storage_key = format!("{}{}", keys::PREFIX_REPLICA, partition_key);
+
+        if let Ok(Some(data)) = self.db.get(storage_key.as_bytes()) {
+            if let Ok(mut replica) = bincode::deserialize::<PartitionReplica>(&data) {
+                let old_leader = replica.leader_node_id.clone();
+
+                if let Some(new_leader) = replica.promote_standby() {
+                    // Update storage
+                    let _ = self.db.insert(
+                        storage_key.as_bytes(),
+                        bincode::serialize(&replica).unwrap(),
+                    );
+
+                    // Publish event for Router cache invalidation
+                    let payload = serde_json::json!({
+                        "partition_key": partition_key,
+                        "new_leader_id": &new_leader,
+                        "old_leader_id": &old_leader,
+                    });
+                    self.publish_event(
+                        "replicas",
+                        EventType::ReplicaPromoted,
+                        serde_json::to_vec(&payload).unwrap_or_default(),
+                        &new_leader,
+                    );
+
+                    return MetaResponse::StandbyPromoted {
+                        partition_key: partition_key.to_string(),
+                        new_leader_id: new_leader,
+                        old_leader_id: old_leader,
+                    };
+                } else {
+                    return MetaResponse::NoStandbyAvailable {
+                        partition_key: partition_key.to_string(),
+                    };
+                }
+            }
+        }
+
+        MetaResponse::ReplicaNotFound {
+            partition_key: partition_key.to_string(),
+        }
+    }
+
+    /// Update replica state (replication progress)
+    fn update_replica_state(
+        &self,
+        partition_key: &str,
+        state: ReplicaState,
+        last_replicated_seq: u64,
+        replication_lag_ms: u64,
+    ) -> MetaResponse {
+        let storage_key = format!("{}{}", keys::PREFIX_REPLICA, partition_key);
+
+        if let Ok(Some(data)) = self.db.get(storage_key.as_bytes()) {
+            if let Ok(mut replica) = bincode::deserialize::<PartitionReplica>(&data) {
+                replica.state = state;
+                replica.last_replicated_seq = last_replicated_seq;
+                replica.replication_lag_ms = replication_lag_ms;
+                replica.leader_last_seen = current_timestamp_ms();
+
+                let _ = self.db.insert(
+                    storage_key.as_bytes(),
+                    bincode::serialize(&replica).unwrap(),
+                );
+
+                // Publish event
+                let payload = serde_json::json!({
+                    "partition_key": partition_key,
+                    "state": format!("{:?}", state),
+                    "last_replicated_seq": last_replicated_seq,
+                    "replication_lag_ms": replication_lag_ms,
+                });
+                self.publish_event(
+                    "replicas",
+                    EventType::ReplicaStateChanged,
+                    serde_json::to_vec(&payload).unwrap_or_default(),
+                    &replica.leader_node_id,
+                );
+
+                return MetaResponse::ReplicaUpdated {
+                    partition_key: partition_key.to_string(),
+                };
+            }
+        }
+
+        MetaResponse::ReplicaNotFound {
+            partition_key: partition_key.to_string(),
+        }
+    }
+
+    /// Remove a partition replica
+    fn remove_replica(&self, partition_key: &str) -> MetaResponse {
+        let storage_key = format!("{}{}", keys::PREFIX_REPLICA, partition_key);
+
+        if self.db.remove(storage_key.as_bytes()).is_ok() {
+            return MetaResponse::ReplicaRemoved {
+                partition_key: partition_key.to_string(),
+            };
+        }
+
+        MetaResponse::ReplicaNotFound {
+            partition_key: partition_key.to_string(),
+        }
+    }
+
+    /// Get partition replica info
+    pub fn get_replica(&self, partition_key: &str) -> Option<PartitionReplica> {
+        let storage_key = format!("{}{}", keys::PREFIX_REPLICA, partition_key);
+        self.db
+            .get(storage_key.as_bytes())
+            .ok()
+            .flatten()
+            .and_then(|data| bincode::deserialize(&data).ok())
+    }
+
+    /// List all partition replicas
+    pub fn list_replicas(&self) -> Vec<PartitionReplica> {
+        let prefix = keys::PREFIX_REPLICA;
+        let mut replicas = Vec::new();
+
+        for item in self.db.scan_prefix(prefix) {
+            if let Ok((_, v)) = item {
+                if let Ok(replica) = bincode::deserialize::<PartitionReplica>(&v) {
+                    replicas.push(replica);
+                }
+            }
+        }
+
+        replicas
+    }
+
+    /// Get replicas by leader node ID
+    pub fn get_replicas_by_leader(&self, leader_node_id: &str) -> Vec<PartitionReplica> {
+        self.list_replicas()
+            .into_iter()
+            .filter(|r| r.leader_node_id == leader_node_id)
+            .collect()
     }
 
     // ========================================================================
