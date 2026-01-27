@@ -465,7 +465,13 @@ fn build_router(
 }
 
 /// GET /metrics - Prometheus metrics endpoint
+///
+/// Currently returns empty. Future implementation would expose:
+/// - Write throughput (points/sec, bytes/sec)
+/// - Query latency histograms
+/// - Cache hit/miss rates
+/// - WAL/flush statistics
 async fn metrics_handler() -> String {
-    // TODO: Add metrics for the new architecture
+    // Metrics collection not yet implemented - returns empty for compatibility
     String::new()
 }

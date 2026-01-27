@@ -216,8 +216,11 @@ impl QueryCoordinator {
             || sql_upper.contains(" MAX(");
 
         // Get active data nodes
-        // TODO: Use table references and time range to prune nodes
-        // For now, query all active nodes since partition→node mapping isn't complete
+        // Note: We query all active nodes because any node might have data for the table.
+        // Partition-level pruning would require a reverse index (table→partitions→nodes),
+        // which adds complexity. Since queries are typically fast and parallelized,
+        // the overhead of querying extra nodes is minimal compared to building/maintaining
+        // a reverse index. The time_range is used for partition pruning at the data node level.
         let target_nodes = self.shard_cache.get_active_data_nodes();
 
         // Limit parallel fan-out

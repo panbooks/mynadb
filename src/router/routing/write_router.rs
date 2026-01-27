@@ -155,9 +155,10 @@ impl WriteRouter {
                 crate::config::SchemaTableStrategy::ServiceAsSchema => {
                     (point.service.clone(), point.measurement.clone())
                 }
-                crate::config::SchemaTableStrategy::ServiceAsTable => {
-                    (self.schema_config.default_name.clone(), point.service.clone())
-                }
+                crate::config::SchemaTableStrategy::ServiceAsTable => (
+                    self.schema_config.default_name.clone(),
+                    point.service.clone(),
+                ),
             };
 
             // Convert date i32 to YYYY-MM-DD string
@@ -284,20 +285,20 @@ impl WriteRouter {
             let node = match node {
                 Some(n) => n,
                 None => {
-                    if attempt == 0 {
-                        return Err(format!(
+                    return if attempt == 0 {
+                        Err(format!(
                             "No data node available for partition {}",
                             partition_path
-                        ));
+                        ))
                     } else {
                         // No more nodes to try
-                        return Err(format!(
+                        Err(format!(
                             "All {} data nodes failed for partition {}: {}",
                             tried_nodes.len(),
                             partition_path,
                             last_error
-                        ));
-                    }
+                        ))
+                    };
                 }
             };
 
@@ -312,6 +313,10 @@ impl WriteRouter {
             );
 
             // Try to write
+            // Note: fencing_token is None for now. In multi-Router deployments,
+            // acquiring a partition lock from Meta before write would prevent
+            // split-brain scenarios. Trade-off: adds latency. Current design
+            // relies on shard_cache routing writes to the same node per partition.
             match pool
                 .write_batch(
                     &node.node_id,
@@ -320,7 +325,7 @@ impl WriteRouter {
                     &partition_key.table,
                     partition_key.date_as_i32(),
                     batch.clone(),
-                    None, // fencing_token - TODO: acquire from Meta lock
+                    None,
                 )
                 .await
             {
