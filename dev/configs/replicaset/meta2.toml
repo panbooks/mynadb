@@ -1,0 +1,69 @@
+# MynaDB Meta Node 2 Configuration
+# Raft-based metadata service with warm standby replication support
+
+[meta]
+# Unique node ID within the Raft cluster (1, 2, 3)
+node_id = 2
+
+# Address to bind the gRPC server
+bind_addr = "0.0.0.0:7101"
+
+# Address advertised to other nodes for Raft communication
+advertise_addr = "127.0.0.1:7101"
+
+# Directory for sled database and Raft logs
+data_dir = "./dev/data/replicaset/meta2"
+
+# Initial cluster peers (other meta nodes)
+peers = ["127.0.0.1:7100", "127.0.0.1:7102"]
+
+[meta.raft]
+# Heartbeat interval in milliseconds
+heartbeat_interval_ms = 150
+
+# Election timeout range in milliseconds
+election_timeout_min_ms = 300
+election_timeout_max_ms = 500
+
+# Number of log entries before taking a snapshot
+snapshot_threshold = 10000
+
+# Maximum Raft log size before compaction (MB)
+max_log_size_mb = 256
+
+[meta.events]
+# Maximum number of events to retain
+max_events = 100000
+
+# Event retention duration in seconds
+retention_secs = 3600
+
+# Warm standby replication assignment configuration
+[meta.replication]
+# Enable automatic replica assignment for new partitions
+auto_assign_enabled = true
+
+# Default replication factor: leader + 1 standby
+default_replication_factor = 2
+
+# Prefer placing standbys in different zones
+zone_aware = true
+
+# Minimum nodes required to enable replication
+min_nodes_for_replication = 2
+
+# Node lease TTL - how long before considering node dead
+lease_ttl_secs = 10
+
+# Auto-promote standby on leader failure
+auto_promote = true
+
+# Load balancing: "least_loaded", "round_robin", "random"
+load_balance_strategy = "least_loaded"
+
+[logging]
+level = "info"
+log_dir = "./dev/logs/replicaset/meta2"
+file_prefix = "meta2"
+rotation = "daily"
+max_files = 7

@@ -1,0 +1,26 @@
+# MynaDB Replica Set Development Environment
+# Full cluster with warm standby replication:
+# - 3 meta nodes (Raft consensus)
+# - 3 data nodes (zone-a, zone-b, zone-c for zone-aware placement)
+# - 1 router
+#
+# Port assignments:
+#   meta1:   gRPC 7100
+#   meta2:   gRPC 7101
+#   meta3:   gRPC 7102
+#   router1: HTTP 7000, Flight 7001, MySQL 7002
+#   data1:   gRPC 7200 (zone-a)
+#   data2:   gRPC 7201 (zone-b)
+#   data3:   gRPC 7202 (zone-c)
+#
+# Replication factor: 2 (leader + 1 standby in different zone)
+#
+# Start with: goreman -f ./dev/Procfile.replicaset start
+
+meta1: ./target/release/mynadb -c ./dev/configs/replicaset/meta1.toml meta start
+meta2: ./target/release/mynadb -c ./dev/configs/replicaset/meta2.toml meta start
+meta3: ./target/release/mynadb -c ./dev/configs/replicaset/meta3.toml meta start
+router1: sleep 3 && ./target/release/mynadb -c ./dev/configs/replicaset/router1.toml router start
+data1: sleep 3 && MYNADB_ZONE=zone-a ./target/release/mynadb -c ./dev/configs/replicaset/data1.toml data start
+data2: sleep 3 && MYNADB_ZONE=zone-b ./target/release/mynadb -c ./dev/configs/replicaset/data2.toml data start
+data3: sleep 3 && MYNADB_ZONE=zone-c ./target/release/mynadb -c ./dev/configs/replicaset/data3.toml data start

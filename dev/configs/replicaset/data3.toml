@@ -1,0 +1,78 @@
+# MynaDB Data Node 3 - Zone C
+# Warm standby replication enabled
+
+[server]
+http_host = "0.0.0.0"
+http_port = 7030
+flight_host = "0.0.0.0"
+flight_port = 7031
+
+[data]
+node_id = "data-3"
+advertise_addr = "127.0.0.1:7202"
+grpc_port = 7202
+
+# Meta service endpoints
+meta_endpoints = ["127.0.0.1:7100", "127.0.0.1:7101", "127.0.0.1:7102"]
+meta_connect_timeout_ms = 5000
+meta_request_timeout_ms = 30000
+
+# Zone label for zone-aware placement
+# In K8s, this would come from MYNADB_ZONE env var
+[data.labels]
+"topology.kubernetes.io/zone" = "zone-c"
+"topology.kubernetes.io/region" = "us-east-1"
+
+# Warm standby replication
+[data.replication]
+enabled = true
+mode = "async"
+batch_interval_ms = 100
+max_batch_size = 1000
+ack_timeout_ms = 5000
+max_lag_alert_ms = 10000
+
+[storage]
+data_dir = "./dev/data/replicaset/data3"
+system_dir = "_system"
+
+[storage.object_store]
+backend = "local"
+
+[schema]
+strategy = "service_as_schema"
+tag_keys = ["service", "MONITOR.service", "hierarchy_2"]
+default_name = "default"
+prefix_numeric = true
+
+[cache]
+flush_interval_secs = 30
+max_size_mb = 512
+
+[wal]
+enabled = true
+sync_on_write = false
+rotate_size_mb = 64
+
+[query_cache]
+enabled = true
+max_size_mb = 64
+ttl_secs = 300
+min_query_time_ms = 10
+
+[compaction]
+min_files = 5
+max_level = 5
+interval_secs = 60
+max_concurrent_compactions = 2
+full_compaction_max_concurrent = 1
+
+[retention]
+enabled = false
+
+[logging]
+level = "info"
+log_dir = "./dev/logs/replicaset/data3"
+file_prefix = "data3"
+rotation = "daily"
+max_files = 7
