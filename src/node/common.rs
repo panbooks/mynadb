@@ -66,17 +66,32 @@ pub fn init_data_cache(
     storage: Arc<storage_mod::Storage>,
     config: &Config,
     wal: Option<Arc<wal::Wal>>,
+    node_id: &str,
 ) -> cache::DataCache {
     info!(
-        "Initializing data cache (max: {}MB, flush threshold: 80%)",
-        config.cache.max_size_mb
+        "Initializing data cache (max: {}MB, flush threshold: 80%, node_id: {})",
+        config.cache.max_size_mb,
+        node_id
     );
-    cache::DataCache::new(storage, config.cache.max_size_mb, wal)
+    cache::DataCache::new(storage, config.cache.max_size_mb, wal, node_id.to_string())
 }
 
 /// Initialize metadata manager
 pub async fn init_metadata_manager(config: &Config) -> catalog::SharedMetadataManager {
-    info!("Initializing metadata manager");
+    // Use "standalone" as default node_id for backward compatibility
+    init_metadata_manager_for_node(config, "standalone").await
+}
+
+/// Initialize metadata manager for a specific node (cluster mode)
+/// Scans: {data_dir}/{node_id}/{catalog}/{schema}/{table}/date=YYYY-MM-DD/*.parquet
+pub async fn init_metadata_manager_for_node(
+    config: &Config,
+    node_id: &str,
+) -> catalog::SharedMetadataManager {
+    info!(
+        "Initializing metadata manager for node: {}",
+        node_id
+    );
     let metadata_dir = format!("{}/_metadata", config.storage.data_dir);
     let metadata_manager: catalog::SharedMetadataManager =
         Arc::new(catalog::MemoryMetadataManager::new(&metadata_dir));
@@ -85,9 +100,12 @@ pub async fn init_metadata_manager(config: &Config) -> catalog::SharedMetadataMa
     if let Err(e) = metadata_manager.load().await {
         warn!("Failed to load metadata (starting fresh): {}", e);
     }
-    // Rescan the data directory to rebuild metadata
-    if let Err(e) = metadata_manager.rescan(&config.storage.data_dir).await {
-        warn!("Failed to rescan metadata: {}", e);
+    // Rescan the data directory for this node's files
+    if let Err(e) = metadata_manager
+        .rescan_node(&config.storage.data_dir, node_id)
+        .await
+    {
+        warn!("Failed to rescan metadata for node {}: {}", node_id, e);
     }
     // Save the metadata
     if let Err(e) = metadata_manager.save().await {
@@ -276,6 +294,73 @@ pub fn start_background_flush_with_query_engine(
                         "Background flush complete: {} tables refreshed",
                         flushed_tables.len()
                     );
+                }
+            });
+        }),
+    );
+}
+
+/// Start background flush with Meta file registration (for Data nodes in cluster mode)
+///
+/// After flush completes, registers files with Meta service including:
+/// - Full path with node_id prefix (e.g., "data-1/mydb/default/cpu/date=.../L0_xxx.parquet")
+/// - created_by field set to node_id for distributed query routing
+///
+/// This enables the QueryCoordinator to route queries to the correct Data node
+/// based on which node created each file.
+pub fn start_background_flush_with_meta_registration(
+    cache: cache::DataCache,
+    interval_secs: u64,
+    meta_client: Arc<crate::meta::client::MetaClient>,
+    node_id: String,
+) {
+    let meta_for_flush = meta_client;
+    let node_id_for_flush = node_id;
+
+    cache.start_background_flush_with_callback(
+        interval_secs,
+        Some(move |files: Vec<parquet_writer::FileWriteResult>| {
+            let client = meta_for_flush.clone();
+            let node_id = node_id_for_flush.clone();
+
+            tokio::spawn(async move {
+                if files.is_empty() {
+                    return;
+                }
+
+                // Convert FileWriteResult to Meta FileInfo with created_by
+                let meta_files: Vec<crate::meta::types::FileInfo> = files
+                    .iter()
+                    .map(|file| crate::meta::types::FileInfo {
+                        // Path already includes node_id prefix from ParquetWriter
+                        path: file.path.clone(),
+                        catalog: file.catalog.clone(),
+                        schema: file.schema.clone(),
+                        table: file.table.clone(),
+                        partition: file.partition_key.clone(),
+                        level: file.level,
+                        size_bytes: file.size_bytes,
+                        row_count: file.row_count,
+                        min_time: 0,  // TODO: Extract from file metadata
+                        max_time: 0,  // TODO: Extract from file metadata
+                        created_at: crate::meta::current_timestamp_ms(),
+                        created_by: node_id.clone(), // Critical: Set to this node's ID
+                    })
+                    .collect();
+
+                // Register files with Meta service
+                match client.register_files(meta_files).await {
+                    Ok(seq) => {
+                        info!(
+                            "Registered {} files with Meta (seq={}), created_by={}",
+                            files.len(),
+                            seq,
+                            node_id
+                        );
+                    }
+                    Err(e) => {
+                        warn!("Failed to register files with Meta: {}", e);
+                    }
                 }
             });
         }),

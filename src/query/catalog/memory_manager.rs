@@ -9,6 +9,7 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use crate::meta::current_timestamp_ms;
 use tracing::{debug, info, warn};
 
 /// File name for the metadata snapshot
@@ -588,6 +589,193 @@ impl MetadataManager for MemoryMetadataManager {
 
         self.mark_dirty();
         info!("Metadata rescan complete");
+        Ok(())
+    }
+
+    /// Rescan storage for a specific node (cluster mode)
+    /// Scans: {data_dir}/{node_id}/{catalog}/{schema}/{table}/date=YYYY-MM-DD/*.parquet
+    async fn rescan_node(&self, data_dir: &str, node_id: &str) -> MetadataResult<()> {
+        // Build the node-specific data path
+        let node_path = Path::new(data_dir).join(node_id);
+        info!(
+            "Starting metadata rescan for node {} at {:?}",
+            node_id, node_path
+        );
+
+        if !node_path.exists() {
+            info!("Node data directory does not exist yet: {:?}", node_path);
+            return Ok(());
+        }
+
+        // Clear existing data
+        *self.store.write() = InMemoryStore::new();
+
+        // Scan catalogs under the node directory
+        let mut catalogs = tokio::fs::read_dir(&node_path)
+            .await
+            .map_err(|e| MetadataError::IoError(e.to_string()))?;
+
+        while let Some(catalog_entry) = catalogs
+            .next_entry()
+            .await
+            .map_err(|e| MetadataError::IoError(e.to_string()))?
+        {
+            let catalog_name = catalog_entry.file_name().to_string_lossy().to_string();
+            if catalog_name.starts_with('.') || catalog_name.starts_with('_') {
+                continue;
+            }
+
+            if !catalog_entry.path().is_dir() {
+                continue;
+            }
+
+            self.ensure_catalog(&catalog_name);
+
+            // Scan schemas
+            let mut schemas = tokio::fs::read_dir(catalog_entry.path())
+                .await
+                .map_err(|e| MetadataError::IoError(e.to_string()))?;
+
+            while let Some(schema_entry) = schemas
+                .next_entry()
+                .await
+                .map_err(|e| MetadataError::IoError(e.to_string()))?
+            {
+                let schema_name = schema_entry.file_name().to_string_lossy().to_string();
+                if schema_name.starts_with('.') || schema_name.starts_with('_') {
+                    continue;
+                }
+
+                if !schema_entry.path().is_dir() {
+                    continue;
+                }
+
+                self.ensure_schema(&catalog_name, &schema_name);
+
+                // Scan tables
+                let mut tables = tokio::fs::read_dir(schema_entry.path())
+                    .await
+                    .map_err(|e| MetadataError::IoError(e.to_string()))?;
+
+                while let Some(table_entry) = tables
+                    .next_entry()
+                    .await
+                    .map_err(|e| MetadataError::IoError(e.to_string()))?
+                {
+                    let table_name = table_entry.file_name().to_string_lossy().to_string();
+                    if table_name.starts_with('.') || table_name.starts_with('_') {
+                        continue;
+                    }
+
+                    if !table_entry.path().is_dir() {
+                        continue;
+                    }
+
+                    self.ensure_table(&catalog_name, &schema_name, &table_name);
+
+                    // Scan partitions
+                    let mut partitions = tokio::fs::read_dir(table_entry.path())
+                        .await
+                        .map_err(|e| MetadataError::IoError(e.to_string()))?;
+
+                    while let Some(partition_entry) = partitions
+                        .next_entry()
+                        .await
+                        .map_err(|e| MetadataError::IoError(e.to_string()))?
+                    {
+                        let partition_dir =
+                            partition_entry.file_name().to_string_lossy().to_string();
+
+                        // Parse partition key (date=YYYY-MM-DD)
+                        let partition_key = if partition_dir.starts_with("date=") {
+                            partition_dir[5..].to_string()
+                        } else {
+                            continue;
+                        };
+
+                        if !partition_entry.path().is_dir() {
+                            continue;
+                        }
+
+                        self.ensure_partition(
+                            &catalog_name,
+                            &schema_name,
+                            &table_name,
+                            &partition_key,
+                        );
+
+                        // Scan Parquet files
+                        let mut files = tokio::fs::read_dir(partition_entry.path())
+                            .await
+                            .map_err(|e| MetadataError::IoError(e.to_string()))?;
+
+                        while let Some(file_entry) = files
+                            .next_entry()
+                            .await
+                            .map_err(|e| MetadataError::IoError(e.to_string()))?
+                        {
+                            let file_name = file_entry.file_name().to_string_lossy().to_string();
+
+                            if !file_name.ends_with(".parquet") {
+                                continue;
+                            }
+
+                            // Extract level from filename (L0_xxx.parquet)
+                            let level = if file_name.starts_with("L") {
+                                file_name[1..2].parse::<u8>().unwrap_or(0)
+                            } else {
+                                0
+                            };
+
+                            let metadata = tokio::fs::metadata(file_entry.path())
+                                .await
+                                .map_err(|e| MetadataError::IoError(e.to_string()))?;
+
+                            // Build the path including node_id prefix
+                            // Path format: {node_id}/{catalog}/{schema}/{table}/{partition}/{filename}
+                            let path = format!(
+                                "{}/{}/{}/{}/{}/{}",
+                                node_id, catalog_name, schema_name, table_name, partition_dir, file_name
+                            );
+
+                            let file_info = FileInfo {
+                                path,
+                                file_name,
+                                catalog: catalog_name.clone(),
+                                schema: schema_name.clone(),
+                                table: table_name.clone(),
+                                partition_key: partition_key.clone(),
+                                level,
+                                size_bytes: metadata.len(),
+                                row_count: 0, // Unknown without reading parquet metadata
+                                row_group_count: 0, // Unknown without reading parquet metadata
+                                created_at: current_timestamp_ms(),
+                                min_timestamp: None,
+                                max_timestamp: None,
+                                etag: None,
+                                column_stats: None,
+                            };
+
+                            self.register_file(file_info).await?;
+                        }
+
+                        // Update partition stats
+                        self.update_partition_stats(
+                            &catalog_name,
+                            &schema_name,
+                            &table_name,
+                            &partition_key,
+                        );
+                    }
+
+                    // Update table stats
+                    self.update_table_stats(&catalog_name, &schema_name, &table_name);
+                }
+            }
+        }
+
+        self.mark_dirty();
+        info!("Metadata rescan for node {} complete", node_id);
         Ok(())
     }
 

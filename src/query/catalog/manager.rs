@@ -77,6 +77,11 @@ pub trait MetadataManager: Send + Sync {
     /// Perform a full rescan of the storage to rebuild metadata
     async fn rescan(&self, data_dir: &str) -> MetadataResult<()>;
 
+    /// Perform a full rescan of the storage for a specific node
+    /// Scans the path: {data_dir}/{node_id}/{catalog}/{schema}/{table}/date=YYYY-MM-DD/*.parquet
+    /// This is used in cluster mode where files are prefixed with node_id
+    async fn rescan_node(&self, data_dir: &str, node_id: &str) -> MetadataResult<()>;
+
     // ==================== Catalog Operations ====================
 
     /// List all catalogs (databases)

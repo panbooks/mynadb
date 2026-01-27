@@ -161,11 +161,18 @@ pub struct DataCache {
     wal: Option<Arc<Wal>>,
     /// Tag cardinality tracker per table (for optimal sort ordering)
     cardinality_tracker: Arc<RwLock<HashMap<TableKey, TableCardinalityTracker>>>,
+    /// Node ID for path prefixing (enables distributed parallel queries)
+    node_id: String,
 }
 
 impl DataCache {
-    /// Create with storage backend
-    pub fn new(storage: Arc<Storage>, max_size_mb: u64, wal: Option<Arc<Wal>>) -> Self {
+    /// Create with storage backend and node_id
+    ///
+    /// The node_id is used as a prefix for all Parquet file paths, enabling:
+    /// - Distributed parallel queries (each node reads only its own files)
+    /// - Local cache affinity (node caches only files it wrote)
+    /// - Zero collision risk (different directories per node)
+    pub fn new(storage: Arc<Storage>, max_size_mb: u64, wal: Option<Arc<Wal>>, node_id: String) -> Self {
         let shards: Vec<CacheShard> = (0..NUM_SHARDS).map(|_| CacheShard::new()).collect();
         let writer = Arc::new(ParquetWriter::new(storage));
         let max_size_bytes = (max_size_mb as usize) * 1024 * 1024;
@@ -178,13 +185,20 @@ impl DataCache {
             flush_notify: Arc::new(Notify::new()),
             wal,
             cardinality_tracker: Arc::new(RwLock::new(HashMap::new())),
+            node_id,
         }
     }
 
-    /// Create with local storage (backward compatibility)
+    /// Create with local storage (backward compatibility for standalone mode)
+    /// Uses "standalone" as the default node_id
     pub fn with_max_size_and_wal(data_dir: &str, max_size_mb: u64, wal: Option<Arc<Wal>>) -> Self {
         let storage = Storage::new_local(data_dir).expect("Failed to create local storage");
-        Self::new(Arc::new(storage), max_size_mb, wal)
+        Self::new(Arc::new(storage), max_size_mb, wal, "standalone".to_string())
+    }
+
+    /// Get the node_id for this cache
+    pub fn node_id(&self) -> &str {
+        &self.node_id
     }
 
     /// Get shard index for a key (hash-based distribution)
@@ -494,7 +508,7 @@ impl DataCache {
             }
 
             match self.writer.write_batches_partitioned_with_sort_sync(
-                &catalog, &schema, &table, date, batches, &tag_order,
+                &self.node_id, &catalog, &schema, &table, date, batches, &tag_order,
             ) {
                 Ok(file_result) => {
                     debug!("Written to: {}", file_result.path);

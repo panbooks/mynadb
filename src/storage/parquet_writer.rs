@@ -18,8 +18,10 @@ const RAW_FILE_LEVEL: u32 = 0;
 /// Result of a file write operation, containing metadata for registration
 #[derive(Debug, Clone)]
 pub struct FileWriteResult {
-    /// Full path to the written file
+    /// Full path to the written file (includes node_id prefix)
     pub path: String,
+    /// Node ID that wrote this file
+    pub node_id: String,
     /// Catalog name
     pub catalog: String,
     /// Schema name
@@ -69,16 +71,20 @@ impl ParquetWriter {
         })
     }
 
-    /// Get table path: catalog/schema/table/
-    fn get_table_path(catalog: &str, schema: &str, table: &str) -> String {
-        format!("{}/{}/{}", catalog, schema, table)
+    /// Get table path: {node_id}/catalog/schema/table/
+    /// The node_id prefix enables:
+    /// - Distributed parallel queries (each node reads only its own files)
+    /// - Local cache affinity (node caches only files it wrote)
+    /// - Zero collision risk (different directories per node)
+    fn get_table_path(node_id: &str, catalog: &str, schema: &str, table: &str) -> String {
+        format!("{}/{}/{}/{}", node_id, catalog, schema, table)
     }
 
-    /// Get partition path: catalog/schema/table/date=YYYY-MM-DD/
-    fn get_partition_path(catalog: &str, schema: &str, table: &str, date: i32) -> String {
+    /// Get partition path: {node_id}/catalog/schema/table/date=YYYY-MM-DD/
+    fn get_partition_path(node_id: &str, catalog: &str, schema: &str, table: &str, date: i32) -> String {
         format!(
             "{}/{}",
-            Self::get_table_path(catalog, schema, table),
+            Self::get_table_path(node_id, catalog, schema, table),
             format_date32_as_partition(date)
         )
     }
@@ -205,11 +211,15 @@ impl ParquetWriter {
     }
 
     /// Write batches to a partitioned directory structure
-    /// Directory: catalog/schema/table/date=YYYY-MM-DD/
+    /// Directory: {node_id}/catalog/schema/table/date=YYYY-MM-DD/
     /// Batches are merged, sorted by timestamp, and written with optimized settings
     /// Returns detailed file write result for metadata registration
+    ///
+    /// The node_id prefix enables distributed parallel queries where each node
+    /// only reads/caches its own files for maximum performance.
     pub async fn write_batches_partitioned(
         &self,
+        node_id: &str,
         catalog: &str,
         schema: &str,
         table: &str,
@@ -217,7 +227,7 @@ impl ParquetWriter {
         batches: Vec<RecordBatch>,
     ) -> Result<FileWriteResult, String> {
         // Default: sort by time only (backward compatible)
-        self.write_batches_partitioned_with_sort(catalog, schema, table, date, batches, &[])
+        self.write_batches_partitioned_with_sort(node_id, catalog, schema, table, date, batches, &[])
             .await
     }
 
@@ -226,6 +236,7 @@ impl ParquetWriter {
     /// Sort order will be: [low_cardinality_tags...] -> time
     pub async fn write_batches_partitioned_with_sort(
         &self,
+        node_id: &str,
         catalog: &str,
         schema: &str,
         table: &str,
@@ -239,8 +250,8 @@ impl ParquetWriter {
 
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
 
-        // Create directory structure
-        let partition_path = Self::get_partition_path(catalog, schema, table, date);
+        // Create directory structure with node_id prefix
+        let partition_path = Self::get_partition_path(node_id, catalog, schema, table, date);
         let partition_key = format_date32_as_partition(date);
         self.storage.create_dir(&partition_path).await?;
 
@@ -305,6 +316,7 @@ impl ParquetWriter {
 
         Ok(FileWriteResult {
             path: full_path,
+            node_id: node_id.to_string(),
             catalog: catalog.to_string(),
             schema: schema.to_string(),
             table: table.to_string(),
@@ -319,18 +331,20 @@ impl ParquetWriter {
     /// Returns detailed file write result for metadata registration
     pub fn write_batches_partitioned_sync(
         &self,
+        node_id: &str,
         catalog: &str,
         schema: &str,
         table: &str,
         date: i32,
         batches: Vec<RecordBatch>,
     ) -> Result<FileWriteResult, String> {
-        self.write_batches_partitioned_with_sort_sync(catalog, schema, table, date, batches, &[])
+        self.write_batches_partitioned_with_sort_sync(node_id, catalog, schema, table, date, batches, &[])
     }
 
     /// Write batches synchronously with cardinality-based sort ordering
     pub fn write_batches_partitioned_with_sort_sync(
         &self,
+        node_id: &str,
         catalog: &str,
         schema: &str,
         table: &str,
@@ -341,6 +355,7 @@ impl ParquetWriter {
         // Use tokio runtime to run async code
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(self.write_batches_partitioned_with_sort(
+                node_id,
                 catalog,
                 schema,
                 table,

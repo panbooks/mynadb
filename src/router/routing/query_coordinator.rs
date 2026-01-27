@@ -5,14 +5,30 @@
 //! - Determining which Data nodes to query based on partition pruning
 //! - Fan-out queries to multiple Data nodes via Arrow Flight
 //! - Aggregating results from partial queries
+//!
+//! ## Distributed Parallel Query Mode
+//!
+//! When a MetaClient is available, the QueryCoordinator uses file-based routing:
+//! 1. Query Meta for files (get_files_for_query)
+//! 2. Group files by `created_by` (node_id that wrote the file)
+//! 3. Send each node only its own files via `query_with_files`
+//!
+//! This enables:
+//! - **Node affinity**: Each node reads only files it created
+//! - **Local cache hit**: Files are cached on the node that wrote them
+//! - **Parallel execution**: N nodes = N× query throughput
 
 use super::shard_cache::{DataNodeInfo, ShardCache};
+use crate::meta::client::MetaClient;
 use crate::query::sql_utils::{extract_table_references, extract_time_range};
 use crate::router::client::DataNodePool;
 use arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::*;
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
@@ -44,6 +60,9 @@ pub struct DistributedQueryPlan {
     pub target_nodes: Vec<DataNodeInfo>,
     /// Whether results need aggregation
     pub needs_aggregation: bool,
+    /// File-based routing: node_id → file paths
+    /// When set, each node receives only its own files for maximum cache efficiency
+    pub node_files: Option<HashMap<String, Vec<String>>>,
 }
 
 /// Table reference in a query
@@ -70,6 +89,10 @@ pub struct QueryCoordinator {
 
     /// Max parallel fan-out
     max_parallel_fanout: usize,
+
+    /// Optional Meta client for file-based routing
+    /// When available, enables distributed parallel queries with node affinity
+    meta_client: Option<Arc<MetaClient>>,
 }
 
 impl QueryCoordinator {
@@ -82,7 +105,28 @@ impl QueryCoordinator {
             shard_cache,
             data_node_pool,
             max_parallel_fanout,
+            meta_client: None,
         }
+    }
+
+    /// Create with MetaClient for file-based distributed queries
+    pub fn with_meta_client(
+        shard_cache: Arc<ShardCache>,
+        data_node_pool: Arc<DataNodePool>,
+        max_parallel_fanout: usize,
+        meta_client: Arc<MetaClient>,
+    ) -> Self {
+        Self {
+            shard_cache,
+            data_node_pool,
+            max_parallel_fanout,
+            meta_client: Some(meta_client),
+        }
+    }
+
+    /// Set the MetaClient (can be called after creation)
+    pub fn set_meta_client(&mut self, meta_client: Arc<MetaClient>) {
+        self.meta_client = Some(meta_client);
     }
 
     /// Execute a distributed query
@@ -230,6 +274,55 @@ impl QueryCoordinator {
             needs_aggregation
         );
 
+        // Try file-based routing if MetaClient is available
+        let node_files = if let Some(ref meta_client) = self.meta_client {
+            // Query Meta for files grouped by created_by (node_id)
+            let table_names: Vec<String> = tables
+                .iter()
+                .map(|t| format!("{}.{}", t.schema, t.table))
+                .collect();
+
+            let min_time = time_range.as_ref().and_then(|tr| tr.min_time);
+            let max_time = time_range.as_ref().and_then(|tr| tr.max_time);
+
+            match meta_client
+                .get_files_for_query(catalog, table_names, min_time, max_time)
+                .await
+            {
+                Ok((files, _nodes)) => {
+                    // Group files by created_by (node_id)
+                    let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+                    for file in files {
+                        grouped
+                            .entry(file.created_by.clone())
+                            .or_default()
+                            .push(file.path.clone());
+                    }
+
+                    if !grouped.is_empty() {
+                        info!(
+                            "File-based routing: {} nodes with {} total files",
+                            grouped.len(),
+                            grouped.values().map(|v| v.len()).sum::<usize>()
+                        );
+                        Some(grouped)
+                    } else {
+                        debug!("No files found in Meta, falling back to broadcast query");
+                        None
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to get files from Meta: {}, falling back to broadcast query",
+                        e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Ok(DistributedQueryPlan {
             sql: sql.to_string(),
             catalog: catalog.to_string(),
@@ -237,42 +330,94 @@ impl QueryCoordinator {
             time_range,
             target_nodes,
             needs_aggregation,
+            node_files,
         })
     }
 
     /// Fan-out query to target nodes via Arrow Flight and collect results
+    ///
+    /// When `node_files` is available, uses file-based routing for optimal cache affinity.
+    /// Otherwise, falls back to broadcast query to all nodes.
     async fn fan_out_query(&self, plan: &DistributedQueryPlan) -> (Vec<RecordBatch>, Vec<String>) {
-        let mut futures = Vec::new();
+        // Type alias for boxed futures (needed because different async blocks have different types)
+        type QueryFuture =
+            Pin<Box<dyn Future<Output = Result<Vec<RecordBatch>, String>> + Send>>;
 
-        for node in &plan.target_nodes {
-            let pool = Arc::clone(&self.data_node_pool);
-            let node_id = node.node_id.clone();
-            let sql = plan.sql.clone();
-            let catalog = plan.catalog.clone();
+        let mut futures: Vec<QueryFuture> = Vec::new();
 
-            let future = async move {
-                debug!("Querying {} with: {}", node_id, sql);
+        // Use file-based routing if available (optimal for distributed parallel queries)
+        if let Some(ref node_files) = plan.node_files {
+            for (node_id, file_paths) in node_files {
+                let pool = Arc::clone(&self.data_node_pool);
+                let node_id_clone = node_id.clone();
+                let sql = plan.sql.clone();
+                let catalog = plan.catalog.clone();
+                let files = file_paths.clone();
 
-                // Execute query via Arrow Flight DoGet
-                match pool.query(&node_id, &catalog, &sql, None).await {
-                    Ok(batches) => {
-                        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-                        debug!(
-                            "Received {} batches ({} rows) from {}",
-                            batches.len(),
-                            total_rows,
-                            node_id
-                        );
-                        Ok(batches)
+                let future: QueryFuture = Box::pin(async move {
+                    debug!(
+                        "Querying {} with {} files: {}",
+                        node_id_clone,
+                        files.len(),
+                        sql
+                    );
+
+                    // Execute query with explicit file list (node reads only its own files)
+                    match pool
+                        .query_with_files(&node_id_clone, &catalog, &sql, files)
+                        .await
+                    {
+                        Ok(batches) => {
+                            let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+                            debug!(
+                                "Received {} batches ({} rows) from {} (file-based)",
+                                batches.len(),
+                                total_rows,
+                                node_id_clone
+                            );
+                            Ok(batches)
+                        }
+                        Err(e) => {
+                            error!("Query failed on {}: {}", node_id_clone, e);
+                            Err(format!("Failed to query {}: {}", node_id_clone, e))
+                        }
                     }
-                    Err(e) => {
-                        error!("Query failed on {}: {}", node_id, e);
-                        Err(format!("Failed to query {}: {}", node_id, e))
-                    }
-                }
-            };
+                });
 
-            futures.push(future);
+                futures.push(future);
+            }
+        } else {
+            // Fallback: broadcast query to all active nodes
+            for node in &plan.target_nodes {
+                let pool = Arc::clone(&self.data_node_pool);
+                let node_id = node.node_id.clone();
+                let sql = plan.sql.clone();
+                let catalog = plan.catalog.clone();
+
+                let future: QueryFuture = Box::pin(async move {
+                    debug!("Querying {} with: {}", node_id, sql);
+
+                    // Execute query via Arrow Flight DoGet (broadcast mode)
+                    match pool.query(&node_id, &catalog, &sql, None).await {
+                        Ok(batches) => {
+                            let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+                            debug!(
+                                "Received {} batches ({} rows) from {} (broadcast)",
+                                batches.len(),
+                                total_rows,
+                                node_id
+                            );
+                            Ok(batches)
+                        }
+                        Err(e) => {
+                            error!("Query failed on {}: {}", node_id, e);
+                            Err(format!("Failed to query {}: {}", node_id, e))
+                        }
+                    }
+                });
+
+                futures.push(future);
+            }
         }
 
         // Execute all queries in parallel

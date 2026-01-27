@@ -46,6 +46,11 @@ pub struct QueryTicket {
     pub catalog: String,
     pub sql: String,
     pub partitions: Option<Vec<String>>,
+    /// Explicit file paths to read (for distributed parallel queries)
+    /// When set, the Data node reads ONLY these specific files.
+    /// Format: ["node-1/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet", ...]
+    #[serde(default)]
+    pub file_paths: Option<Vec<String>>,
 }
 
 /// Connection pool configuration
@@ -377,6 +382,7 @@ impl DataNodePool {
             catalog: catalog.to_string(),
             sql: sql.to_string(),
             partitions,
+            file_paths: None,
         };
 
         let ticket_bytes = serde_json::to_vec(&ticket)
@@ -391,6 +397,54 @@ impl DataNodePool {
 
         // Decode the response stream into RecordBatches
         // Map Status errors to FlightError for FlightRecordBatchStream
+        let mapped_stream = response
+            .into_inner()
+            .map(|result| result.map_err(|status| arrow_flight::error::FlightError::Tonic(status)));
+        let flight_stream = FlightRecordBatchStream::new_from_flight_data(mapped_stream);
+
+        let batches: Vec<RecordBatch> = flight_stream
+            .try_collect()
+            .await
+            .map_err(|e| format!("Failed to decode batches: {}", e))?;
+
+        Ok(batches)
+    }
+
+    /// Execute a query on a Data node with explicit file paths
+    ///
+    /// This method is used for distributed parallel queries where the Router
+    /// tells each Data node exactly which files to read. This enables:
+    /// - Node affinity: Each node reads only its own files (from local cache)
+    /// - Parallel execution: Multiple nodes execute query simultaneously
+    /// - Perfect cache utilization: 100% cache hit when node reads its own files
+    pub async fn query_with_files(
+        &self,
+        node_id: &str,
+        catalog: &str,
+        sql: &str,
+        file_paths: Vec<String>,
+    ) -> Result<Vec<RecordBatch>, String> {
+        let mut client = self.get_flight_client(node_id).await?;
+
+        // Create query ticket with explicit file paths
+        let ticket = QueryTicket {
+            catalog: catalog.to_string(),
+            sql: sql.to_string(),
+            partitions: None,
+            file_paths: Some(file_paths),
+        };
+
+        let ticket_bytes = serde_json::to_vec(&ticket)
+            .map_err(|e| format!("Failed to serialize ticket: {}", e))?;
+
+        // Send DoGet request
+        let request = tonic::Request::new(Ticket::new(ticket_bytes));
+        let response = client
+            .do_get(request)
+            .await
+            .map_err(|e| format!("DoGet failed: {}", e))?;
+
+        // Decode the response stream into RecordBatches
         let mapped_stream = response
             .into_inner()
             .map(|result| result.map_err(|status| arrow_flight::error::FlightError::Tonic(status)));

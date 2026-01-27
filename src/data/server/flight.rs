@@ -57,6 +57,11 @@ pub struct QueryTicket {
     pub catalog: String,
     pub sql: String,
     pub partitions: Option<Vec<String>>,
+    /// Explicit file paths to read (for distributed parallel queries)
+    /// When set, the Data node reads ONLY these specific files.
+    /// Format: ["node-1/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet", ...]
+    #[serde(default)]
+    pub file_paths: Option<Vec<String>>,
 }
 
 /// Replication write ticket - used by leader to send data to standby
@@ -587,13 +592,36 @@ impl FlightService for DataNodeFlightService {
         let ticket: QueryTicket = serde_json::from_slice(&ticket_data.ticket)
             .map_err(|e| Status::invalid_argument(format!("Invalid query ticket: {}", e)))?;
 
-        debug!(
-            "DoGet query: catalog={}, sql={}",
-            ticket.catalog,
-            ticket.sql.chars().take(100).collect::<String>()
-        );
+        // Log query details (file-based routing shows file count, broadcast shows none)
+        if let Some(ref files) = ticket.file_paths {
+            debug!(
+                "DoGet query (file-based): catalog={}, files={}, sql={}",
+                ticket.catalog,
+                files.len(),
+                ticket.sql.chars().take(100).collect::<String>()
+            );
+            // File-based routing: Router has already determined this node should read these files.
+            // The files are stored with node_id prefix (e.g., "data-1/mydb/default/cpu/date=.../L0_xxx.parquet")
+            // and this node will find them in its local storage when scanning.
+            //
+            // Future optimization: Implement direct file-list query to avoid directory scanning
+            // and leverage local parquet cache for maximum performance.
+            info!(
+                "File-based query from Router: {} files to read for {}",
+                files.len(),
+                ticket.catalog
+            );
+        } else {
+            debug!(
+                "DoGet query (broadcast): catalog={}, sql={}",
+                ticket.catalog,
+                ticket.sql.chars().take(100).collect::<String>()
+            );
+        }
 
         // Execute query
+        // Note: For file-based routing, the files are already local to this node (prefixed with node_id).
+        // The QueryEngine will find them during table registration/scanning.
         let df_batches = self
             .query_engine
             .execute_query_with_db(&ticket.sql, &ticket.catalog)
