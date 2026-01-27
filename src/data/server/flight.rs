@@ -163,9 +163,10 @@ impl DataNodeFlightService {
                 crate::config::SchemaTableStrategy::ServiceAsSchema => {
                     (point.service.clone(), point.measurement.clone())
                 }
-                crate::config::SchemaTableStrategy::ServiceAsTable => {
-                    (self.schema_config.default_name.clone(), point.service.clone())
-                }
+                crate::config::SchemaTableStrategy::ServiceAsTable => (
+                    self.schema_config.default_name.clone(),
+                    point.service.clone(),
+                ),
             };
 
             grouped.entry((schema, table)).or_default().push(point);
@@ -188,7 +189,10 @@ impl DataNodeFlightService {
         ticket: BatchWriteTicket,
         batches: Vec<RecordBatch>,
         start: Instant,
-    ) -> Result<Response<Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>>, Status> {
+    ) -> Result<
+        Response<Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>>,
+        Status,
+    > {
         debug!(
             "DoPut batch write: catalog={}, schema={}, table={}, date={}, fencing_token={:?}",
             ticket.catalog, ticket.schema, ticket.table, ticket.date, ticket.fencing_token
@@ -196,11 +200,18 @@ impl DataNodeFlightService {
 
         // Validate fencing token if provided
         if let Some(token) = ticket.fencing_token {
-            self.validate_fencing_token(token, &ticket.catalog, Some(&format!(
-                "{}/{}/{}/date={}",
-                ticket.catalog, ticket.schema, ticket.table,
-                crate::storage::line_protocol::format_date32_as_string(ticket.date)
-            ))).await?;
+            self.validate_fencing_token(
+                token,
+                &ticket.catalog,
+                Some(&format!(
+                    "{}/{}/{}/date={}",
+                    ticket.catalog,
+                    ticket.schema,
+                    ticket.table,
+                    crate::storage::line_protocol::format_date32_as_string(ticket.date)
+                )),
+            )
+            .await?;
         }
 
         // Add RecordBatches directly to cache
@@ -214,7 +225,13 @@ impl DataNodeFlightService {
 
             match self
                 .cache
-                .add_batch(&ticket.catalog, &ticket.schema, &ticket.table, ticket.date, batch)
+                .add_batch(
+                    &ticket.catalog,
+                    &ticket.schema,
+                    &ticket.table,
+                    ticket.date,
+                    batch,
+                )
                 .await
             {
                 Ok(_) => {
@@ -238,9 +255,12 @@ impl DataNodeFlightService {
 
         // Return success result
         let result = PutResult {
-            app_metadata: format!("{{\"rows_written\":{},\"points_written\":{}}}", total_rows, total_rows)
-                .into_bytes()
-                .into(),
+            app_metadata: format!(
+                "{{\"rows_written\":{},\"points_written\":{}}}",
+                total_rows, total_rows
+            )
+            .into_bytes()
+            .into(),
         };
         let output = stream::once(async { Ok(result) });
         Ok(Response::new(Box::pin(output)))
@@ -252,7 +272,10 @@ impl DataNodeFlightService {
         ticket: WriteTicket,
         batches: Vec<RecordBatch>,
         start: Instant,
-    ) -> Result<Response<Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>>, Status> {
+    ) -> Result<
+        Response<Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>>,
+        Status,
+    > {
         debug!(
             "DoPut legacy write: catalog={}, fencing_token={:?}",
             ticket.catalog, ticket.fencing_token
@@ -559,7 +582,9 @@ impl FlightService for DataNodeFlightService {
         let descriptor_cmd = first_data
             .flight_descriptor
             .as_ref()
-            .ok_or_else(|| Status::invalid_argument("Missing flight descriptor with write metadata"))?
+            .ok_or_else(|| {
+                Status::invalid_argument("Missing flight descriptor with write metadata")
+            })?
             .cmd
             .clone();
 
@@ -570,9 +595,9 @@ impl FlightService for DataNodeFlightService {
         }
 
         // Decode the flight data stream into RecordBatches
-        let flight_stream = FlightRecordBatchStream::new_from_flight_data(
-            stream::iter(all_data.into_iter().map(Ok)),
-        );
+        let flight_stream = FlightRecordBatchStream::new_from_flight_data(stream::iter(
+            all_data.into_iter().map(Ok),
+        ));
 
         let batches: Vec<RecordBatch> = flight_stream
             .try_collect()
@@ -581,9 +606,7 @@ impl FlightService for DataNodeFlightService {
 
         // Try to parse as BatchWriteTicket first (new efficient format)
         if let Ok(batch_ticket) = serde_json::from_slice::<BatchWriteTicket>(&descriptor_cmd) {
-            return self
-                .handle_batch_write(batch_ticket, batches, start)
-                .await;
+            return self.handle_batch_write(batch_ticket, batches, start).await;
         }
 
         // Fall back to legacy WriteTicket format
@@ -605,10 +628,8 @@ impl FlightService for DataNodeFlightService {
                 // Trigger cache flush
                 match self.cache.flush().await {
                     Ok(results) => {
-                        let response = format!(
-                            "{{\"files_flushed\":{},\"success\":true}}",
-                            results.len()
-                        );
+                        let response =
+                            format!("{{\"files_flushed\":{},\"success\":true}}", results.len());
                         let result = arrow_flight::Result {
                             body: response.into_bytes().into(),
                         };

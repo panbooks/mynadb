@@ -43,7 +43,14 @@ fn default_meta_request_timeout_ms() -> u64 {
 impl Default for DataNodeConfig {
     fn default() -> Self {
         Self {
-            node_id: format!("data-{}", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("unknown")),
+            node_id: format!(
+                "data-{}",
+                uuid::Uuid::new_v4()
+                    .to_string()
+                    .split('-')
+                    .next()
+                    .unwrap_or("unknown")
+            ),
             advertise_addr: "127.0.0.1:7200".to_string(),
             grpc_port: default_grpc_port(),
             meta_endpoints: vec!["127.0.0.1:7100".to_string()],

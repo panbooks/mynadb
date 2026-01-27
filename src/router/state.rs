@@ -40,8 +40,9 @@ pub struct RouterAppState {
 
 impl RouterAppState {
     /// Create a new RouterAppState from configuration
-    pub async fn new(config: Arc<Config>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>>
-    {
+    pub async fn new(
+        config: Arc<Config>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let router_config = config.router.clone().unwrap_or_default();
 
         // Initialize shard cache

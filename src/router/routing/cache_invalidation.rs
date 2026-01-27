@@ -47,10 +47,7 @@ impl CacheInvalidationHandler {
     }
 
     /// Process events from the Meta service
-    async fn process_events(
-        mut event_rx: mpsc::Receiver<MetaEvent>,
-        shard_cache: Arc<ShardCache>,
-    ) {
+    async fn process_events(mut event_rx: mpsc::Receiver<MetaEvent>, shard_cache: Arc<ShardCache>) {
         info!("Starting cache invalidation event processor");
 
         while let Some(event) = event_rx.recv().await {

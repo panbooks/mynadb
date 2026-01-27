@@ -92,7 +92,10 @@ pub async fn start(config_path: &str) {
             .await
             .expect("Router Flight server failed");
     });
-    welcome!("  Flight server started on 0.0.0.0:{}", router_config.flight_port);
+    welcome!(
+        "  Flight server started on 0.0.0.0:{}",
+        router_config.flight_port
+    );
 
     // Start MySQL server (if enabled)
     // Note: Router MySQL would need to route through QueryCoordinator

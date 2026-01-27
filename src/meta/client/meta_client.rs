@@ -70,7 +70,11 @@ impl MetaClient {
         };
         let node_id = format!(
             "client-{}",
-            uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("unknown")
+            uuid::Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("unknown")
         );
         let client = Self::new(config, node_id);
 
@@ -523,7 +527,12 @@ impl MetaClient {
     }
 
     /// Renew a lock
-    pub async fn renew_lock(&self, key: &str, fencing_token: u64, ttl_ms: u64) -> Result<i64, String> {
+    pub async fn renew_lock(
+        &self,
+        key: &str,
+        fencing_token: u64,
+        ttl_ms: u64,
+    ) -> Result<i64, String> {
         let request = proto::RenewLockRequest {
             key: key.to_string(),
             holder: self.node_id.clone(),

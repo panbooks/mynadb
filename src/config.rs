@@ -506,7 +506,6 @@ fn default_data_dir() -> String {
     "./data".to_string()
 }
 
-
 fn default_storage_backend() -> String {
     "local".to_string()
 }

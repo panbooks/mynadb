@@ -62,7 +62,9 @@ impl CircuitBreaker {
     /// Record a success - resets the circuit breaker
     pub fn record_success(&self) {
         self.failures.store(0, Ordering::SeqCst);
-        let old_state = self.state.swap(CircuitState::Closed as u8, Ordering::SeqCst);
+        let old_state = self
+            .state
+            .swap(CircuitState::Closed as u8, Ordering::SeqCst);
         if old_state != CircuitState::Closed as u8 {
             info!("Circuit breaker closed after successful request");
         }

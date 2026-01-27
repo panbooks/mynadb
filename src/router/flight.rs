@@ -64,7 +64,9 @@ impl FlightService for RouterFlightService {
         &self,
         _request: Request<Criteria>,
     ) -> Result<Response<Self::ListFlightsStream>, Status> {
-        Err(Status::unimplemented("list_flights not supported on router"))
+        Err(Status::unimplemented(
+            "list_flights not supported on router",
+        ))
     }
 
     async fn get_flight_info(
@@ -104,14 +106,18 @@ impl FlightService for RouterFlightService {
         &self,
         _request: Request<FlightDescriptor>,
     ) -> Result<Response<PollInfo>, Status> {
-        Err(Status::unimplemented("poll_flight_info not supported on router"))
+        Err(Status::unimplemented(
+            "poll_flight_info not supported on router",
+        ))
     }
 
     async fn get_schema(
         &self,
         _request: Request<FlightDescriptor>,
     ) -> Result<Response<SchemaResult>, Status> {
-        Err(Status::unimplemented("get_schema not yet implemented on router"))
+        Err(Status::unimplemented(
+            "get_schema not yet implemented on router",
+        ))
     }
 
     async fn do_get(
@@ -180,7 +186,9 @@ impl FlightService for RouterFlightService {
         &self,
         _request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
-        Err(Status::unimplemented("do_put not supported on router - use /write endpoint"))
+        Err(Status::unimplemented(
+            "do_put not supported on router - use /write endpoint",
+        ))
     }
 
     async fn do_action(

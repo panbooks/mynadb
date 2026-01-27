@@ -7,4 +7,4 @@
 
 pub mod flight;
 
-pub use flight::{DataNodeFlightService, start_flight_server};
+pub use flight::{start_flight_server, DataNodeFlightService};

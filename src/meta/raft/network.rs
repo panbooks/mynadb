@@ -146,10 +146,7 @@ impl RaftNetwork<TypeConfig> for MetaNetworkConnection {
         &mut self,
         rpc: AppendEntriesRequest<TypeConfig>,
         _option: RPCOption,
-    ) -> Result<
-        AppendEntriesResponse<NodeId>,
-        RPCError<NodeId, BasicNode, RaftError<NodeId>>,
-    > {
+    ) -> Result<AppendEntriesResponse<NodeId>, RPCError<NodeId, BasicNode, RaftError<NodeId>>> {
         let mut client = self.get_client().await?;
 
         // Serialize the request
@@ -161,17 +158,14 @@ impl RaftNetwork<TypeConfig> for MetaNetworkConnection {
         let request = tonic::Request::new(proto::RaftMessage { data });
 
         // Send the RPC
-        let response = client
-            .append_entries(request)
-            .await
-            .map_err(|e| {
-                warn!("AppendEntries RPC to {} failed: {}", self.target, e);
-                Unreachable::from(AnyError::error(e.to_string()))
-            })?;
+        let response = client.append_entries(request).await.map_err(|e| {
+            warn!("AppendEntries RPC to {} failed: {}", self.target, e);
+            Unreachable::from(AnyError::error(e.to_string()))
+        })?;
 
         // Deserialize the response
-        let resp: AppendEntriesResponse<NodeId> =
-            bincode::deserialize(&response.into_inner().data).map_err(|e| {
+        let resp: AppendEntriesResponse<NodeId> = bincode::deserialize(&response.into_inner().data)
+            .map_err(|e| {
                 error!("Failed to deserialize AppendEntries response: {}", e);
                 Unreachable::from(AnyError::error(e.to_string()))
             })?;
@@ -198,13 +192,10 @@ impl RaftNetwork<TypeConfig> for MetaNetworkConnection {
         let request = tonic::Request::new(proto::RaftMessage { data });
 
         // Send the RPC
-        let response = client
-            .install_snapshot(request)
-            .await
-            .map_err(|e| {
-                warn!("InstallSnapshot RPC to {} failed: {}", self.target, e);
-                Unreachable::from(AnyError::error(e.to_string()))
-            })?;
+        let response = client.install_snapshot(request).await.map_err(|e| {
+            warn!("InstallSnapshot RPC to {} failed: {}", self.target, e);
+            Unreachable::from(AnyError::error(e.to_string()))
+        })?;
 
         // Deserialize the response
         let resp: InstallSnapshotResponse<NodeId> =
@@ -232,17 +223,14 @@ impl RaftNetwork<TypeConfig> for MetaNetworkConnection {
         let request = tonic::Request::new(proto::RaftMessage { data });
 
         // Send the RPC
-        let response = client
-            .vote(request)
-            .await
-            .map_err(|e| {
-                warn!("Vote RPC to {} failed: {}", self.target, e);
-                Unreachable::from(AnyError::error(e.to_string()))
-            })?;
+        let response = client.vote(request).await.map_err(|e| {
+            warn!("Vote RPC to {} failed: {}", self.target, e);
+            Unreachable::from(AnyError::error(e.to_string()))
+        })?;
 
         // Deserialize the response
-        let resp: VoteResponse<NodeId> =
-            bincode::deserialize(&response.into_inner().data).map_err(|e| {
+        let resp: VoteResponse<NodeId> = bincode::deserialize(&response.into_inner().data)
+            .map_err(|e| {
                 error!("Failed to deserialize Vote response: {}", e);
                 Unreachable::from(AnyError::error(e.to_string()))
             })?;

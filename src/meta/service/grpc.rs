@@ -35,7 +35,9 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
         request: Request<proto::RegisterNodeRequest>,
     ) -> Result<Response<proto::RegisterNodeResponse>, Status> {
         let req = request.into_inner();
-        let info = req.info.ok_or_else(|| Status::invalid_argument("Missing node info"))?;
+        let info = req
+            .info
+            .ok_or_else(|| Status::invalid_argument("Missing node info"))?;
 
         let node_info = NodeInfo {
             node_id: info.node_id.clone(),
@@ -148,7 +150,9 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
             })
             .collect();
 
-        Ok(Response::new(proto::ListNodesResponse { nodes: proto_nodes }))
+        Ok(Response::new(proto::ListNodesResponse {
+            nodes: proto_nodes,
+        }))
     }
 
     // ========================================================================
@@ -243,7 +247,9 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
             })
             .collect();
 
-        Ok(Response::new(proto::ListFilesResponse { files: proto_files }))
+        Ok(Response::new(proto::ListFilesResponse {
+            files: proto_files,
+        }))
     }
 
     async fn get_files_for_query(
@@ -441,9 +447,8 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
                     }))
                 } else {
                     let leader_info = self.node.get_leader(&req.election).await;
-                    let (leader, term) = leader_info
-                        .map(|l| (l.leader, l.term))
-                        .unwrap_or_default();
+                    let (leader, term) =
+                        leader_info.map(|l| (l.leader, l.term)).unwrap_or_default();
                     Ok(Response::new(proto::CampaignResponse {
                         elected: false,
                         current_leader: leader,
@@ -780,7 +785,10 @@ impl proto::raft_internal_server::RaftInternal for RaftInternalService {
         let req: VoteRequest<u64> = bincode::deserialize(&request.into_inner().data)
             .map_err(|e| Status::invalid_argument(format!("Failed to deserialize: {}", e)))?;
 
-        debug!("Received Vote request from candidate {}", req.vote.leader_id().node_id);
+        debug!(
+            "Received Vote request from candidate {}",
+            req.vote.leader_id().node_id
+        );
 
         let resp = self
             .node

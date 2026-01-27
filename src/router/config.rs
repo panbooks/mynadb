@@ -182,7 +182,14 @@ fn default_max_parallel_fanout() -> usize {
 impl Default for RouterConfig {
     fn default() -> Self {
         Self {
-            node_id: format!("router-{}", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("unknown")),
+            node_id: format!(
+                "router-{}",
+                uuid::Uuid::new_v4()
+                    .to_string()
+                    .split('-')
+                    .next()
+                    .unwrap_or("unknown")
+            ),
             http_port: default_http_port(),
             flight_port: default_flight_port(),
             mysql_port: default_mysql_port(),

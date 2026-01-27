@@ -185,9 +185,11 @@ impl MetaStateMachine {
 
             MetaCommand::RemoveFiles { paths } => self.remove_files(paths),
 
-            MetaCommand::AcquireLock { key, holder, ttl_ms } => {
-                self.acquire_lock(&key, &holder, ttl_ms)
-            }
+            MetaCommand::AcquireLock {
+                key,
+                holder,
+                ttl_ms,
+            } => self.acquire_lock(&key, &holder, ttl_ms),
 
             MetaCommand::ReleaseLock {
                 key,
@@ -247,12 +249,7 @@ impl MetaStateMachine {
 
         // Publish event
         let event_payload = serde_json::to_vec(&info).unwrap_or_default();
-        self.publish_event(
-            "nodes",
-            EventType::NodeJoined,
-            event_payload,
-            &info.node_id,
-        );
+        self.publish_event("nodes", EventType::NodeJoined, event_payload, &info.node_id);
 
         MetaResponse::NodeRegistered { lease_id }
     }
@@ -264,10 +261,9 @@ impl MetaStateMachine {
             if let Ok(mut lease) = bincode::deserialize::<LeaseInfo>(&data) {
                 if lease.node_id == node_id {
                     lease.renew();
-                    let _ = self.db.insert(
-                        lease_key.as_bytes(),
-                        bincode::serialize(&lease).unwrap(),
-                    );
+                    let _ = self
+                        .db
+                        .insert(lease_key.as_bytes(), bincode::serialize(&lease).unwrap());
                 }
             }
         }
@@ -442,10 +438,9 @@ impl MetaStateMachine {
         // Acquire the lock
         let fencing_token = self.next_fencing_token();
         let lock = LockInfo::new(key.to_string(), holder.to_string(), fencing_token, ttl_ms);
-        let _ = self.db.insert(
-            storage_key.as_bytes(),
-            bincode::serialize(&lock).unwrap(),
-        );
+        let _ = self
+            .db
+            .insert(storage_key.as_bytes(), bincode::serialize(&lock).unwrap());
 
         MetaResponse::LockAcquired { fencing_token }
     }
@@ -514,10 +509,9 @@ impl MetaStateMachine {
         // Become leader
         let term = self.next_fencing_token();
         let leader = LeaderInfo::new(election.to_string(), node_id.to_string(), term, ttl_ms);
-        let _ = self.db.insert(
-            storage_key.as_bytes(),
-            bincode::serialize(&leader).unwrap(),
-        );
+        let _ = self
+            .db
+            .insert(storage_key.as_bytes(), bincode::serialize(&leader).unwrap());
 
         // Publish event
         let payload = serde_json::json!({
@@ -693,12 +687,7 @@ impl MetaStateMachine {
     }
 
     /// List files for a table
-    pub fn list_files_for_table(
-        &self,
-        catalog: &str,
-        schema: &str,
-        table: &str,
-    ) -> Vec<FileInfo> {
+    pub fn list_files_for_table(&self, catalog: &str, schema: &str, table: &str) -> Vec<FileInfo> {
         let prefix = FileInfo::table_prefix(catalog, schema, table);
         let mut files = Vec::new();
 
@@ -790,8 +779,7 @@ impl MetaStateMachine {
             }
         }
 
-        bincode::serialize(&state_data)
-            .map_err(|e| format!("Failed to serialize state: {}", e))
+        bincode::serialize(&state_data).map_err(|e| format!("Failed to serialize state: {}", e))
     }
 
     /// Restore state from snapshot data
@@ -945,7 +933,9 @@ impl RaftStateMachine<TypeConfig> for MetaStateMachine {
         }
     }
 
-    async fn begin_receiving_snapshot(&mut self) -> Result<Box<Cursor<Vec<u8>>>, StorageError<NodeId>> {
+    async fn begin_receiving_snapshot(
+        &mut self,
+    ) -> Result<Box<Cursor<Vec<u8>>>, StorageError<NodeId>> {
         info!("Beginning to receive snapshot");
         Ok(Box::new(Cursor::new(Vec::new())))
     }
@@ -966,14 +956,13 @@ impl RaftStateMachine<TypeConfig> for MetaStateMachine {
             .map_err(|e| Self::storage_error(e, "deserialize snapshot"))?;
 
         // Restore the state
-        self.restore_state(&snap.data)
-            .map_err(|e| {
-                let msg = format!("restore state: {}", e);
-                error!("{}", msg);
-                StorageError::IO {
-                    source: StorageIOError::write(AnyError::error(msg)),
-                }
-            })?;
+        self.restore_state(&snap.data).map_err(|e| {
+            let msg = format!("restore state: {}", e);
+            error!("{}", msg);
+            StorageError::IO {
+                source: StorageIOError::write(AnyError::error(msg)),
+            }
+        })?;
 
         // Update counters
         self.event_sequence
@@ -988,10 +977,9 @@ impl RaftStateMachine<TypeConfig> for MetaStateMachine {
         self.update_membership(meta.last_membership.clone());
 
         // Save snapshot metadata
-        let _ = self.db.insert(
-            raft_keys::SNAPSHOT_META,
-            bincode::serialize(meta).unwrap(),
-        );
+        let _ = self
+            .db
+            .insert(raft_keys::SNAPSHOT_META, bincode::serialize(meta).unwrap());
 
         self.db
             .flush()
@@ -1015,15 +1003,13 @@ impl RaftStateMachine<TypeConfig> for MetaStateMachine {
         match meta {
             Some(meta) => {
                 // Build the snapshot data
-                let state_data = self
-                    .serialize_state()
-                    .map_err(|e| {
-                        let msg = format!("serialize state: {}", e);
-                        error!("{}", msg);
-                        StorageError::IO {
-                            source: StorageIOError::read(AnyError::error(msg)),
-                        }
-                    })?;
+                let state_data = self.serialize_state().map_err(|e| {
+                    let msg = format!("serialize state: {}", e);
+                    error!("{}", msg);
+                    StorageError::IO {
+                        source: StorageIOError::read(AnyError::error(msg)),
+                    }
+                })?;
 
                 let snap = MetaSnapshot {
                     last_applied: self.last_applied.read().clone(),
@@ -1061,10 +1047,7 @@ impl RaftStateMachine<TypeConfig> for MetaStateMachine {
 
 impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for MetaSnapshotBuilder {
     async fn build_snapshot(&mut self) -> Result<Snapshot<TypeConfig>, StorageError<NodeId>> {
-        info!(
-            "Building snapshot: last_applied={:?}",
-            self.last_applied
-        );
+        info!("Building snapshot: last_applied={:?}", self.last_applied);
 
         // Collect all state data
         let mut state_data = Vec::new();
@@ -1082,14 +1065,13 @@ impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for MetaSnapshotBuilder 
             }
         }
 
-        let data = bincode::serialize(&state_data)
-            .map_err(|e| {
-                let msg = format!("serialize state: {}", e);
-                error!("{}", msg);
-                StorageError::IO {
-                    source: StorageIOError::write(AnyError::error(msg)),
-                }
-            })?;
+        let data = bincode::serialize(&state_data).map_err(|e| {
+            let msg = format!("serialize state: {}", e);
+            error!("{}", msg);
+            StorageError::IO {
+                source: StorageIOError::write(AnyError::error(msg)),
+            }
+        })?;
 
         let snap = MetaSnapshot {
             last_applied: self.last_applied.clone(),
@@ -1099,14 +1081,13 @@ impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for MetaSnapshotBuilder 
             fencing_counter: self.fencing_counter,
         };
 
-        let snap_data = bincode::serialize(&snap)
-            .map_err(|e| {
-                let msg = format!("serialize snapshot: {}", e);
-                error!("{}", msg);
-                StorageError::IO {
-                    source: StorageIOError::write(AnyError::error(msg)),
-                }
-            })?;
+        let snap_data = bincode::serialize(&snap).map_err(|e| {
+            let msg = format!("serialize snapshot: {}", e);
+            error!("{}", msg);
+            StorageError::IO {
+                source: StorageIOError::write(AnyError::error(msg)),
+            }
+        })?;
 
         // Generate snapshot ID
         let snapshot_id = format!(
@@ -1124,10 +1105,9 @@ impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for MetaSnapshotBuilder 
         };
 
         // Save snapshot metadata to db
-        let _ = self.db.insert(
-            raft_keys::SNAPSHOT_META,
-            bincode::serialize(&meta).unwrap(),
-        );
+        let _ = self
+            .db
+            .insert(raft_keys::SNAPSHOT_META, bincode::serialize(&meta).unwrap());
 
         info!(
             "Snapshot built: id={}, size={}",

@@ -16,7 +16,7 @@ pub mod state_machine;
 
 pub use log_store::SledLogStore;
 pub use network::{MetaNetworkConnection, MetaNetworkFactory};
-pub use state_machine::{MetaStateMachine, MetaSnapshot, MetaSnapshotBuilder};
+pub use state_machine::{MetaSnapshot, MetaSnapshotBuilder, MetaStateMachine};
 
 use crate::meta::types::{MetaCommand, MetaResponse};
 use openraft::raft::responder::OneshotResponder;
@@ -52,7 +52,18 @@ impl std::fmt::Display for NodeConfig {
 /// - `Entry`: Log entry type (openraft::Entry)
 /// - `SnapshotData`: Snapshot data type (Cursor<Vec<u8>>)
 /// - `AsyncRuntime`: Async runtime (Tokio)
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct TypeConfig;
 
 impl openraft::RaftTypeConfig for TypeConfig {

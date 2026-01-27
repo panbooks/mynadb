@@ -65,10 +65,7 @@ pub async fn start(config_path: &str) {
     let raft_service = RaftInternalService::new(Arc::clone(&node));
 
     // Start gRPC server
-    let addr = meta_config
-        .advertise_addr
-        .parse()
-        .expect("Invalid address");
+    let addr = meta_config.advertise_addr.parse().expect("Invalid address");
     welcome!("  Meta node started on {}", meta_config.advertise_addr);
     welcome!("===============================================");
 

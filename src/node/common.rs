@@ -48,7 +48,9 @@ pub async fn init_wal(
 
     match wal::Wal::new(storage, &config.wal).await {
         Ok(w) => {
-            info!("WAL initialized successfully - recovery will happen after components initialize");
+            info!(
+                "WAL initialized successfully - recovery will happen after components initialize"
+            );
             Some(Arc::new(w))
         }
         Err(e) => {
@@ -235,10 +237,7 @@ pub fn start_mysql_server(
 }
 
 /// Start HTTP server with Axum router
-pub async fn start_http_server(
-    addr: &str,
-    app: axum::Router,
-) -> tokio::task::JoinHandle<()> {
+pub async fn start_http_server(addr: &str, app: axum::Router) -> tokio::task::JoinHandle<()> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("Failed to bind HTTP address");
@@ -246,7 +245,9 @@ pub async fn start_http_server(
 
     tokio::spawn(async move {
         info!("HTTP server starting on {}", addr_display);
-        axum::serve(listener, app).await.expect("HTTP server failed");
+        axum::serve(listener, app)
+            .await
+            .expect("HTTP server failed");
     })
 }
 
@@ -288,7 +289,11 @@ pub fn stop_node(data_dir: &str, node_type: &str) {
     let pid_file = pid_file_path(data_dir, node_type);
 
     if !pid_file.exists() {
-        eprintln!("{} node is not running (no PID file at {})", node_type, pid_file.display());
+        eprintln!(
+            "{} node is not running (no PID file at {})",
+            node_type,
+            pid_file.display()
+        );
         std::process::exit(1);
     }
 

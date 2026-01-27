@@ -290,10 +290,7 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
 
         *self.last_purged.write() = Some(log_id);
 
-        debug!(
-            "Purged {} entries up to index {}",
-            count, log_id.index
-        );
+        debug!("Purged {} entries up to index {}", count, log_id.index);
         Ok(())
     }
 }
@@ -342,11 +339,7 @@ impl RaftLogReader<TypeConfig> for SledLogStore {
             }
         }
 
-        debug!(
-            "Read {} log entries for range {:?}",
-            entries.len(),
-            range
-        );
+        debug!("Read {} log entries for range {:?}", entries.len(), range);
         Ok(entries)
     }
 }
