@@ -57,6 +57,75 @@ pub async fn start(config_path: &str) {
         }
     };
 
+    // Auto-bootstrap cluster if not initialized and this is node 1
+    if !node.is_initialized().await {
+        if meta_config.node_id == 1 {
+            info!("Cluster not initialized, bootstrapping from node 1");
+            if let Err(e) = node.initialize_cluster().await {
+                error!("Failed to initialize cluster: {}", e);
+                common::remove_pid_file(&config.storage.data_dir, NODE_TYPE);
+                std::process::exit(1);
+            }
+
+            // Wait a moment for the leader election to complete
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            // Add configured peers as learners, then promote to voters
+            // This handles the case where all peers are specified in config
+            if !meta_config.peers.is_empty() {
+                info!(
+                    "Adding {} peer(s) to cluster: {:?}",
+                    meta_config.peers.len(),
+                    meta_config.peers
+                );
+
+                let mut peer_ids = std::collections::BTreeSet::new();
+                peer_ids.insert(1u64); // Node 1 is already a voter
+
+                for (i, peer_addr) in meta_config.peers.iter().enumerate() {
+                    let peer_id = (i + 2) as u64; // Peers are nodes 2, 3, ...
+                    peer_ids.insert(peer_id);
+
+                    // Add peer as learner with retry
+                    for attempt in 0..5 {
+                        match node.add_learner(peer_id, peer_addr.clone()).await {
+                            Ok(_) => {
+                                info!("Added node {} ({}) as learner", peer_id, peer_addr);
+                                break;
+                            }
+                            Err(e) => {
+                                if attempt < 4 {
+                                    info!(
+                                        "Failed to add learner {} ({}), retrying...",
+                                        peer_id, e
+                                    );
+                                    tokio::time::sleep(std::time::Duration::from_millis(500))
+                                        .await;
+                                } else {
+                                    error!("Failed to add learner {}: {}", peer_id, e);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Promote all learners to voters
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                match node.change_membership(peer_ids).await {
+                    Ok(_) => info!("Promoted all learners to voters"),
+                    Err(e) => error!("Failed to change membership: {}", e),
+                }
+            }
+        } else {
+            info!(
+                "Cluster not initialized, waiting for node 1 to bootstrap (this is node {})",
+                meta_config.node_id
+            );
+        }
+    } else {
+        info!("Cluster already initialized, joining existing cluster");
+    }
+
     // Start background tasks
     node.start_background_tasks();
 

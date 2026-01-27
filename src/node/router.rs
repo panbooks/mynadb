@@ -63,13 +63,28 @@ pub async fn start(config_path: &str) {
         }
     };
 
-    // Start cache invalidation handler
+    // Initialize shard cache from Meta (fetch current data nodes with retry)
+    // This must happen BEFORE subscribing to events to avoid race conditions
+    // when router and data nodes start simultaneously.
+    let mut cache_handler = CacheInvalidationHandler::new(
+        Arc::clone(&state.shard_cache),
+        Arc::clone(&state.data_node_pool),
+    );
+    if let Some(ref meta_client) = state.meta_client {
+        if let Err(e) = cache_handler.init_from_meta(meta_client).await {
+            error!(
+                "Failed to initialize cache from Meta: {}. Will rely on events.",
+                e
+            );
+        }
+    }
+
+    // Start cache invalidation handler (subscribe to events for updates)
     let subscriber_config = SubscriberConfig {
         endpoints: router_config.meta.endpoints.clone(),
         topics: vec!["nodes".to_string(), "files".to_string()],
         ..Default::default()
     };
-    let mut cache_handler = CacheInvalidationHandler::new(Arc::clone(&state.shard_cache));
     cache_handler.start(subscriber_config);
 
     // Build HTTP API

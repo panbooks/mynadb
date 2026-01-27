@@ -94,34 +94,61 @@ pub async fn start(config_path: &str) {
     let shutdown_flag = Arc::new(AtomicBool::new(false));
 
     if let Some(ref client) = meta_client {
-        let node_info = NodeInfo {
-            node_id: data_config.node_id.clone(),
-            role: NodeRole::Data,
-            state: NodeState::Starting,
-            advertise_addr: data_config.advertise_addr.clone(),
-            http_addr: None,
-            flight_addr: Some(data_config.advertise_addr.clone()),
-            registered_at: current_timestamp_ms(),
-            last_heartbeat: current_timestamp_ms(),
-            labels: HashMap::new(),
-        };
+        // Register with Meta service (retry with exponential backoff)
+        // This handles the case where data nodes start before Raft leader is elected
+        const MAX_RETRIES: u32 = 15;
+        const INITIAL_DELAY_MS: u64 = 500;
 
-        // Register with 10 second lease TTL (faster failure detection)
-        match client.register_node(node_info, 10000).await {
-            Ok(id) => {
-                info!("Registered with Meta service, lease_id={}", id);
-                lease_id.store(id, Ordering::SeqCst);
+        for attempt in 0..MAX_RETRIES {
+            let node_info = NodeInfo {
+                node_id: data_config.node_id.clone(),
+                role: NodeRole::Data,
+                state: NodeState::Active, // Register as Active so router can find us immediately
+                advertise_addr: data_config.advertise_addr.clone(),
+                http_addr: None,
+                flight_addr: Some(data_config.advertise_addr.clone()),
+                registered_at: current_timestamp_ms(),
+                last_heartbeat: current_timestamp_ms(),
+                labels: HashMap::new(),
+            };
 
-                // Start heartbeat loop
-                let client_clone = Arc::clone(client);
-                let lease_id_clone = Arc::clone(&lease_id);
-                let shutdown_clone = Arc::clone(&shutdown_flag);
-                tokio::spawn(async move {
-                    heartbeat_loop(client_clone, lease_id_clone, shutdown_clone).await;
-                });
-            }
-            Err(e) => {
-                warn!("Failed to register with Meta service: {}", e);
+            // Register with 10 second lease TTL (faster failure detection)
+            match client.register_node(node_info, 10000).await {
+                Ok(id) => {
+                    info!(
+                        "Registered with Meta service, lease_id={} (attempt {})",
+                        id,
+                        attempt + 1
+                    );
+                    lease_id.store(id, Ordering::SeqCst);
+
+                    // Start heartbeat loop
+                    let client_clone = Arc::clone(client);
+                    let lease_id_clone = Arc::clone(&lease_id);
+                    let shutdown_clone = Arc::clone(&shutdown_flag);
+                    tokio::spawn(async move {
+                        heartbeat_loop(client_clone, lease_id_clone, shutdown_clone).await;
+                    });
+                    break;
+                }
+                Err(e) => {
+                    if attempt < MAX_RETRIES - 1 {
+                        let delay = INITIAL_DELAY_MS * (1 << attempt.min(5)); // Cap at 16 seconds
+                        info!(
+                            "Failed to register with Meta ({}), retrying in {}ms (attempt {}/{})",
+                            e,
+                            delay,
+                            attempt + 1,
+                            MAX_RETRIES
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    } else {
+                        warn!(
+                            "Failed to register with Meta service after {} attempts: {}",
+                            MAX_RETRIES, e
+                        );
+                    }
+                }
             }
         }
     }
