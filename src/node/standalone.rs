@@ -43,11 +43,7 @@ pub async fn run(config_path: &str) {
     let wal = common::init_wal(&config, storage.clone()).await;
 
     // Initialize cache
-    let cache = common::init_data_cache(
-        storage.clone(),
-        &config,
-        wal.as_ref().map(Arc::clone),
-    );
+    let cache = common::init_data_cache(storage.clone(), &config, wal.as_ref().map(Arc::clone));
 
     // Initialize metadata manager
     let metadata_manager = common::init_metadata_manager(&config).await;
@@ -143,7 +139,11 @@ pub async fn run(config_path: &str) {
     let auth_middleware = Arc::new(auth::AuthMiddleware::new(Arc::new(config.auth.clone())));
     info!(
         "Authentication: {} (username: {})",
-        if config.auth.enabled { "ENABLED" } else { "DISABLED" },
+        if config.auth.enabled {
+            "ENABLED"
+        } else {
+            "DISABLED"
+        },
         config.auth.username
     );
 
@@ -153,10 +153,8 @@ pub async fn run(config_path: &str) {
     print_server_info(&config);
 
     // Start Arrow Flight server
-    let flight_handle = common::start_flight_server(
-        &config.flight_addr(),
-        query_engine.clone(),
-    ).await;
+    let flight_handle =
+        common::start_flight_server(&config.flight_addr(), query_engine.clone()).await;
     welcome!("  Arrow Flight server started successfully!");
 
     // Start MySQL server (if enabled)
@@ -371,10 +369,7 @@ fn start_wal_cleanup_task(wal: &Arc<crate::storage::wal::Wal>, config: &Config) 
 }
 
 /// Build the Axum router with all routes (standalone mode)
-fn build_router(
-    state: api::AppState,
-    auth_middleware: Arc<auth::AuthMiddleware>,
-) -> Router {
+fn build_router(state: api::AppState, auth_middleware: Arc<auth::AuthMiddleware>) -> Router {
     Router::new()
         .route("/", get(api::home))
         .route("/health", get(api::health))

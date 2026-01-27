@@ -416,15 +416,33 @@ pub enum MetaCommand {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MetaResponse {
     Success,
-    NodeRegistered { lease_id: u64 },
-    LockAcquired { fencing_token: u64 },
-    LockNotAcquired { current_holder: String, expires_at: i64 },
+    NodeRegistered {
+        lease_id: u64,
+    },
+    LockAcquired {
+        fencing_token: u64,
+    },
+    LockNotAcquired {
+        current_holder: String,
+        expires_at: i64,
+    },
     LockReleased,
-    LockRenewed { expires_at: i64 },
-    LeaderElected { term: u64 },
-    LeaderExists { current_leader: String, term: u64 },
-    EventPublished { sequence: u64 },
-    Error { message: String },
+    LockRenewed {
+        expires_at: i64,
+    },
+    LeaderElected {
+        term: u64,
+    },
+    LeaderExists {
+        current_leader: String,
+        term: u64,
+    },
+    EventPublished {
+        sequence: u64,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// Get current timestamp in milliseconds

@@ -180,7 +180,10 @@ impl ShardCache {
 
     /// Update the list of Data nodes (replaces all)
     pub fn update_data_nodes(&self, nodes: Vec<DataNodeInfo>) {
-        let active_count = nodes.iter().filter(|n| n.state == NodeState::Active).count();
+        let active_count = nodes
+            .iter()
+            .filter(|n| n.state == NodeState::Active)
+            .count();
         info!(
             "Updating data nodes: {} total, {} active",
             nodes.len(),
@@ -281,7 +284,10 @@ impl ShardCache {
             .collect();
 
         if nodes.is_empty() {
-            warn!("No active data nodes available after excluding {:?}", exclude);
+            warn!(
+                "No active data nodes available after excluding {:?}",
+                exclude
+            );
             return None;
         }
 
@@ -352,7 +358,10 @@ impl ShardCache {
         ShardCacheStats {
             partition_count: self.partition_owners.len(),
             data_node_count: nodes.len(),
-            active_node_count: nodes.values().filter(|n| n.state == NodeState::Active).count(),
+            active_node_count: nodes
+                .values()
+                .filter(|n| n.state == NodeState::Active)
+                .count(),
             last_event_seq: self.last_event_seq.load(Ordering::Relaxed),
         }
     }

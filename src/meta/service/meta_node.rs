@@ -240,8 +240,8 @@ impl MetaNode {
 
         let mut client = proto::raft_internal_client::RaftInternalClient::new(channel);
 
-        let command_data = bincode::serialize(&cmd)
-            .map_err(|e| format!("Failed to serialize command: {}", e))?;
+        let command_data =
+            bincode::serialize(&cmd).map_err(|e| format!("Failed to serialize command: {}", e))?;
 
         let request = tonic::Request::new(proto::ForwardCommandRequest { command_data });
 
@@ -272,12 +272,7 @@ impl MetaNode {
     }
 
     /// Release a lock
-    pub async fn unlock(
-        &self,
-        key: &str,
-        holder: &str,
-        fencing_token: u64,
-    ) -> Result<(), String> {
+    pub async fn unlock(&self, key: &str, holder: &str, fencing_token: u64) -> Result<(), String> {
         let cmd = MetaCommand::ReleaseLock {
             key: key.to_string(),
             holder: holder.to_string(),
@@ -338,8 +333,8 @@ impl MetaNode {
 
         let mut client = proto::raft_internal_client::RaftInternalClient::new(channel);
 
-        let command_data = bincode::serialize(&cmd)
-            .map_err(|e| format!("Failed to serialize command: {}", e))?;
+        let command_data =
+            bincode::serialize(&cmd).map_err(|e| format!("Failed to serialize command: {}", e))?;
 
         let request = tonic::Request::new(proto::ForwardCommandRequest { command_data });
 
@@ -415,8 +410,8 @@ impl MetaNode {
 
         let mut client = proto::raft_internal_client::RaftInternalClient::new(channel);
 
-        let command_data = bincode::serialize(&cmd)
-            .map_err(|e| format!("Failed to serialize command: {}", e))?;
+        let command_data =
+            bincode::serialize(&cmd).map_err(|e| format!("Failed to serialize command: {}", e))?;
 
         let request = tonic::Request::new(proto::ForwardCommandRequest { command_data });
 
@@ -529,8 +524,8 @@ impl MetaNode {
         let mut client = proto::raft_internal_client::RaftInternalClient::new(channel);
 
         // Serialize the command
-        let command_data = bincode::serialize(&cmd)
-            .map_err(|e| format!("Failed to serialize command: {}", e))?;
+        let command_data =
+            bincode::serialize(&cmd).map_err(|e| format!("Failed to serialize command: {}", e))?;
 
         let request = tonic::Request::new(proto::ForwardCommandRequest { command_data });
 
@@ -579,9 +574,7 @@ impl MetaNode {
                     MetaResponse::LockRenewed { expires_at } => {
                         (*expires_at as u64, Some(response.data.clone()))
                     }
-                    MetaResponse::LeaderElected { term } => {
-                        (*term, Some(response.data.clone()))
-                    }
+                    MetaResponse::LeaderElected { term } => (*term, Some(response.data.clone())),
                     MetaResponse::LeaderExists { .. } => {
                         // Return full response so client can see leader exists
                         (0, Some(response.data.clone()))
@@ -693,7 +686,10 @@ impl MetaNode {
             .await
             .map_err(|e| format!("Failed to initialize cluster: {}", e))?;
 
-        info!("Cluster initialized with node {} as first member", self.node_id);
+        info!(
+            "Cluster initialized with node {} as first member",
+            self.node_id
+        );
         Ok(())
     }
 

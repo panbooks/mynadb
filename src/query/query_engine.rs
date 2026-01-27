@@ -321,10 +321,7 @@ impl QueryEngine {
                         );
                     }
                     Ok(None) => {
-                        debug!(
-                            "Table {}.{}.{} was not registered",
-                            catalog, schema, table
-                        );
+                        debug!("Table {}.{}.{} was not registered", catalog, schema, table);
                     }
                     Err(e) => {
                         warn!(

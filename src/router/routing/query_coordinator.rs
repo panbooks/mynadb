@@ -86,11 +86,7 @@ impl QueryCoordinator {
     }
 
     /// Execute a distributed query
-    pub async fn execute_query(
-        &self,
-        catalog: &str,
-        sql: &str,
-    ) -> QueryResult {
+    pub async fn execute_query(&self, catalog: &str, sql: &str) -> QueryResult {
         let start = Instant::now();
 
         // Plan the distributed query
@@ -153,10 +149,7 @@ impl QueryCoordinator {
             }
         };
 
-        let total_rows: u64 = final_batches
-            .iter()
-            .map(|b| b.num_rows() as u64)
-            .sum();
+        let total_rows: u64 = final_batches.iter().map(|b| b.num_rows() as u64).sum();
 
         QueryResult {
             success: true,
@@ -248,10 +241,7 @@ impl QueryCoordinator {
     }
 
     /// Fan-out query to target nodes via Arrow Flight and collect results
-    async fn fan_out_query(
-        &self,
-        plan: &DistributedQueryPlan,
-    ) -> (Vec<RecordBatch>, Vec<String>) {
+    async fn fan_out_query(&self, plan: &DistributedQueryPlan) -> (Vec<RecordBatch>, Vec<String>) {
         let mut futures = Vec::new();
 
         for node in &plan.target_nodes {

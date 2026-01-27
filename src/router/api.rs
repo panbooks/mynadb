@@ -146,7 +146,10 @@ pub async fn write_handler_query_param(
     State(state): State<RouterAppState>,
     body: String,
 ) -> impl IntoResponse {
-    let db = params.get("db").cloned().unwrap_or_else(|| "default".to_string());
+    let db = params
+        .get("db")
+        .cloned()
+        .unwrap_or_else(|| "default".to_string());
     let result = state.write_router.route_write(&db, &body).await;
 
     let response = WriteResponse {
@@ -241,9 +244,7 @@ async fn execute_query(
 // ============================================================================
 
 /// Router status handler
-pub async fn router_status_handler(
-    State(state): State<RouterAppState>,
-) -> impl IntoResponse {
+pub async fn router_status_handler(State(state): State<RouterAppState>) -> impl IntoResponse {
     let status = RouterStatus {
         node_type: "router",
         node_id: state.router_config.node_id.clone(),
@@ -258,9 +259,7 @@ pub async fn router_status_handler(
 }
 
 /// List active Data nodes
-pub async fn list_data_nodes_handler(
-    State(state): State<RouterAppState>,
-) -> impl IntoResponse {
+pub async fn list_data_nodes_handler(State(state): State<RouterAppState>) -> impl IntoResponse {
     use super::routing::shard_cache::NodeState;
 
     let nodes = state.shard_cache.get_active_data_nodes();

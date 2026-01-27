@@ -1,5 +1,5 @@
-use crate::config::RetentionConfig;
 use super::database_manager::DatabaseManager;
+use crate::config::RetentionConfig;
 use crate::storage::storage::Storage;
 use std::sync::Arc;
 use std::time::Duration;

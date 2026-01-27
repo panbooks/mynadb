@@ -145,11 +145,7 @@ impl HealthChecker {
     /// Check health of a single node
     async fn check_node_health(pool: &DataNodePool, node_id: &str, timeout: Duration) -> bool {
         // Use DoAction with HEALTH action type
-        let result = tokio::time::timeout(
-            timeout,
-            pool.do_action(node_id, "HEALTH", b"{}"),
-        )
-        .await;
+        let result = tokio::time::timeout(timeout, pool.do_action(node_id, "HEALTH", b"{}")).await;
 
         match result {
             Ok(Ok(_)) => {

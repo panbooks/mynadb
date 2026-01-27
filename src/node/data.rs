@@ -70,7 +70,9 @@ pub async fn start(config_path: &str) {
     ));
 
     // Start background flush
-    (*data_cache).clone().start_background_flush(config.cache.flush_interval_secs);
+    (*data_cache)
+        .clone()
+        .start_background_flush(config.cache.flush_interval_secs);
 
     // Connect to Meta service (optional)
     let meta_client = match MetaClient::connect(&data_config.meta_endpoints).await {
@@ -140,10 +142,7 @@ pub async fn start(config_path: &str) {
     );
 
     // Start Flight server
-    let addr = data_config
-        .advertise_addr
-        .parse()
-        .expect("Invalid address");
+    let addr = data_config.advertise_addr.parse().expect("Invalid address");
     welcome!("  Data node started on {}", data_config.advertise_addr);
     welcome!("  Protocol: Arrow Flight");
     welcome!("===============================================");
@@ -219,7 +218,8 @@ async fn heartbeat_loop(
             Ok(next_interval_ms) => {
                 // Adjust interval if server suggests different timing
                 if next_interval_ms > 0 && next_interval_ms != 2000 {
-                    interval = tokio::time::interval(Duration::from_millis(next_interval_ms as u64));
+                    interval =
+                        tokio::time::interval(Duration::from_millis(next_interval_ms as u64));
                 }
             }
             Err(e) => {

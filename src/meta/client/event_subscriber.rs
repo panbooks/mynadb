@@ -147,10 +147,8 @@ impl EventSubscriber {
                     warn!("Subscription error: {}", e);
                     // Try next endpoint
                     current_endpoint_idx = (current_endpoint_idx + 1) % config.endpoints.len();
-                    tokio::time::sleep(std::time::Duration::from_millis(
-                        config.reconnect_delay_ms,
-                    ))
-                    .await;
+                    tokio::time::sleep(std::time::Duration::from_millis(config.reconnect_delay_ms))
+                        .await;
                 }
             }
         }
@@ -183,8 +181,7 @@ impl EventSubscriber {
 
         info!(
             "Subscribing to topics {:?} from sequence {}",
-            topics,
-            request.start_sequence
+            topics, request.start_sequence
         );
 
         // Start streaming

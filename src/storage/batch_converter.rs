@@ -218,8 +218,7 @@ pub fn points_to_record_batch(points: &[Point]) -> Result<RecordBatch, String> {
         }
     }
 
-    RecordBatch::try_new(schema, arrays)
-        .map_err(|e| format!("Failed to create RecordBatch: {}", e))
+    RecordBatch::try_new(schema, arrays).map_err(|e| format!("Failed to create RecordBatch: {}", e))
 }
 
 #[cfg(test)]

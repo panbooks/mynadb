@@ -54,7 +54,12 @@ pub mod version {
 #[command(about = "MynaDB - The Voice of Your Machines", long_about = None)]
 struct Cli {
     /// Path to configuration file
-    #[arg(short = 'c', long = "config", default_value = "config.toml", global = true)]
+    #[arg(
+        short = 'c',
+        long = "config",
+        default_value = "config.toml",
+        global = true
+    )]
     config: String,
 
     /// Subcommand to execute

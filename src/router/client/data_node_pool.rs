@@ -6,10 +6,9 @@ use super::circuit_breaker::CircuitBreaker;
 use arrow::array::{RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_flight::{
-    decode::FlightRecordBatchStream,
-    encode::FlightDataEncoderBuilder,
-    flight_service_client::FlightServiceClient,
-    Action, FlightData, FlightDescriptor, PutResult, Ticket,
+    decode::FlightRecordBatchStream, encode::FlightDataEncoderBuilder,
+    flight_service_client::FlightServiceClient, Action, FlightData, FlightDescriptor, PutResult,
+    Ticket,
 };
 use dashmap::DashMap;
 use futures::{stream, StreamExt, TryStreamExt};
@@ -234,8 +233,11 @@ impl DataNodePool {
         let descriptor = FlightDescriptor::new_cmd(serde_json::to_vec(&ticket).unwrap());
 
         // Encode the batch as FlightData with descriptor
-        let batch_stream =
-            stream::iter(vec![batch].into_iter().map(Ok::<_, arrow_flight::error::FlightError>));
+        let batch_stream = stream::iter(
+            vec![batch]
+                .into_iter()
+                .map(Ok::<_, arrow_flight::error::FlightError>),
+        );
 
         let flight_data_stream = FlightDataEncoderBuilder::new()
             .with_flight_descriptor(Some(descriptor))
@@ -305,8 +307,11 @@ impl DataNodePool {
         let descriptor = FlightDescriptor::new_cmd(serde_json::to_vec(&ticket).unwrap());
 
         // Encode the RecordBatch as FlightData with descriptor
-        let batch_stream =
-            stream::iter(vec![batch].into_iter().map(Ok::<_, arrow_flight::error::FlightError>));
+        let batch_stream = stream::iter(
+            vec![batch]
+                .into_iter()
+                .map(Ok::<_, arrow_flight::error::FlightError>),
+        );
 
         let flight_data_stream = FlightDataEncoderBuilder::new()
             .with_flight_descriptor(Some(descriptor))
@@ -386,11 +391,9 @@ impl DataNodePool {
 
         // Decode the response stream into RecordBatches
         // Map Status errors to FlightError for FlightRecordBatchStream
-        let mapped_stream = response.into_inner().map(|result| {
-            result.map_err(|status| {
-                arrow_flight::error::FlightError::Tonic(status)
-            })
-        });
+        let mapped_stream = response
+            .into_inner()
+            .map(|result| result.map_err(|status| arrow_flight::error::FlightError::Tonic(status)));
         let flight_stream = FlightRecordBatchStream::new_from_flight_data(mapped_stream);
 
         let batches: Vec<RecordBatch> = flight_stream
