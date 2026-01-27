@@ -33,6 +33,10 @@ pub struct MetaConfig {
     /// Event log configuration
     #[serde(default)]
     pub events: EventConfig,
+
+    /// Replication assignment configuration for warm standby
+    #[serde(default)]
+    pub replication: ReplicationAssignmentConfig,
 }
 
 /// Raft consensus configuration
@@ -73,6 +77,124 @@ pub struct EventConfig {
     /// Event retention duration in seconds
     #[serde(default = "default_event_retention_secs")]
     pub retention_secs: u64,
+}
+
+/// Configuration for automatic replica assignment
+///
+/// Controls how Meta service assigns leaders and standbys to partitions
+/// for warm standby replication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplicationAssignmentConfig {
+    /// Enable automatic replica assignment for new partitions
+    ///
+    /// When enabled, Meta will automatically assign a leader and standbys
+    /// when a new partition is created (first write to partition).
+    /// When disabled, replica assignments must be made via API.
+    #[serde(default = "default_auto_assign_enabled")]
+    pub auto_assign_enabled: bool,
+
+    /// Default replication factor for new partitions
+    ///
+    /// - 1: No replication (leader only)
+    /// - 2: 1 standby (leader + 1 standby)
+    /// - 3: 2 standbys (leader + 2 standbys)
+    #[serde(default = "default_replication_factor")]
+    pub default_replication_factor: u8,
+
+    /// Enable zone-aware placement
+    ///
+    /// When enabled, Meta will prefer placing standbys in different
+    /// availability zones than the leader for better fault tolerance.
+    #[serde(default = "default_zone_aware")]
+    pub zone_aware: bool,
+
+    /// Minimum number of Data nodes required to enable replication
+    ///
+    /// If fewer nodes are available, partitions will be created with RF=1.
+    #[serde(default = "default_min_nodes_for_replication")]
+    pub min_nodes_for_replication: usize,
+
+    /// Node lease TTL in seconds
+    ///
+    /// How long before a node is considered dead after missing heartbeats.
+    /// Shorter = faster detection, more false positives.
+    /// Longer = slower detection, fewer false positives.
+    #[serde(default = "default_lease_ttl_secs")]
+    pub lease_ttl_secs: u64,
+
+    /// Enable automatic standby promotion on leader failure
+    ///
+    /// When enabled, Meta will automatically promote a standby to leader
+    /// when the current leader's lease expires.
+    #[serde(default = "default_auto_promote")]
+    pub auto_promote: bool,
+
+    /// Load balancing strategy for leader assignment
+    ///
+    /// - "least_loaded": Assign to node with fewest partitions (default)
+    /// - "round_robin": Rotate through nodes
+    /// - "random": Random assignment
+    #[serde(default = "default_load_balance_strategy")]
+    pub load_balance_strategy: String,
+}
+
+fn default_auto_assign_enabled() -> bool {
+    true
+}
+
+fn default_replication_factor() -> u8 {
+    2 // Leader + 1 standby
+}
+
+fn default_zone_aware() -> bool {
+    true
+}
+
+fn default_min_nodes_for_replication() -> usize {
+    2
+}
+
+fn default_lease_ttl_secs() -> u64 {
+    10
+}
+
+fn default_auto_promote() -> bool {
+    true
+}
+
+fn default_load_balance_strategy() -> String {
+    "least_loaded".to_string()
+}
+
+impl Default for ReplicationAssignmentConfig {
+    fn default() -> Self {
+        Self {
+            auto_assign_enabled: default_auto_assign_enabled(),
+            default_replication_factor: default_replication_factor(),
+            zone_aware: default_zone_aware(),
+            min_nodes_for_replication: default_min_nodes_for_replication(),
+            lease_ttl_secs: default_lease_ttl_secs(),
+            auto_promote: default_auto_promote(),
+            load_balance_strategy: default_load_balance_strategy(),
+        }
+    }
+}
+
+impl ReplicationAssignmentConfig {
+    /// Get the effective replication factor based on available nodes
+    pub fn effective_replication_factor(&self, available_nodes: usize) -> u8 {
+        if available_nodes < self.min_nodes_for_replication {
+            1 // Not enough nodes for replication
+        } else {
+            // Cap at available nodes
+            std::cmp::min(self.default_replication_factor, available_nodes as u8)
+        }
+    }
+
+    /// Get lease TTL as Duration
+    pub fn lease_ttl(&self) -> Duration {
+        Duration::from_secs(self.lease_ttl_secs)
+    }
 }
 
 // Default value functions
@@ -134,6 +256,7 @@ impl Default for MetaConfig {
             peers: vec![],
             raft: RaftConfig::default(),
             events: EventConfig::default(),
+            replication: ReplicationAssignmentConfig::default(),
         }
     }
 }

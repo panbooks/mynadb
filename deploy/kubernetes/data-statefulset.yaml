@@ -1,0 +1,225 @@
+# MynaDB Data Node StatefulSet
+#
+# Data nodes handle writes and store data in object storage.
+# Uses headless service for stable DNS names and zone-aware placement.
+#
+# Pod naming: mynadb-data-{0,1,2,...}
+# DNS: mynadb-data-0.mynadb-data-headless.{namespace}.svc.cluster.local
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mynadb-data-headless
+  labels:
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: data
+spec:
+  clusterIP: None  # Headless service
+  selector:
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: data
+  ports:
+    - name: grpc
+      port: 7200
+      targetPort: 7200
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mynadb-data
+  labels:
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: data
+spec:
+  selector:
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: data
+  ports:
+    - name: grpc
+      port: 7200
+      targetPort: 7200
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mynadb-data
+  labels:
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: data
+spec:
+  serviceName: mynadb-data-headless
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mynadb
+      app.kubernetes.io/component: data
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mynadb
+        app.kubernetes.io/component: data
+    spec:
+      terminationGracePeriodSeconds: 60  # Allow time to drain writes
+      
+      # Spread across zones for warm standby HA
+      # This ensures leader and standby are in different zones
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: mynadb
+              app.kubernetes.io/component: data
+      
+      # Prefer different nodes
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: mynadb
+                    app.kubernetes.io/component: data
+                topologyKey: kubernetes.io/hostname
+
+      containers:
+        - name: data
+          image: mynadb/mynadb:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--role"
+            - "data"
+            - "-c"
+            - "/etc/mynadb/data.toml"
+          ports:
+            - name: grpc
+              containerPort: 7200
+          env:
+            # Stable node ID from pod name (mynadb-data-0, mynadb-data-1, etc.)
+            - name: MYNADB_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # Advertise address using headless service DNS
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: MYNADB_ADVERTISE_ADDR
+              value: "$(POD_NAME).mynadb-data-headless.$(POD_NAMESPACE).svc.cluster.local:7200"
+            - name: MYNADB_HEADLESS_SERVICE
+              value: "mynadb-data-headless"
+            - name: MYNADB_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # Zone label for anti-affinity placement
+            - name: MYNADB_ZONE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['topology.kubernetes.io/zone']
+            # Meta endpoints
+            - name: MYNADB_META_ENDPOINTS
+              valueFrom:
+                configMapKeyRef:
+                  name: mynadb-config
+                  key: MYNADB_META_ENDPOINTS
+            # Replication settings
+            - name: MYNADB_REPLICATION_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: mynadb-config
+                  key: MYNADB_REPLICATION_ENABLED
+            # Object storage configuration (from Secret)
+            - name: MYNADB_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: mynadb-s3-credentials
+                  key: bucket
+            - name: MYNADB_S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: mynadb-s3-credentials
+                  key: endpoint
+                  optional: true
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mynadb-s3-credentials
+                  key: access_key_id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mynadb-s3-credentials
+                  key: secret_access_key
+            - name: AWS_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: mynadb-s3-credentials
+                  key: region
+                  optional: true
+            # Log level
+            - name: MYNADB_LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: mynadb-config
+                  key: MYNADB_LOG_LEVEL
+          volumeMounts:
+            - name: config
+              mountPath: /etc/mynadb
+            - name: cache
+              mountPath: /data/cache
+          resources:
+            requests:
+              cpu: "1"
+              memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          livenessProbe:
+            tcpSocket:
+              port: 7200
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 7200
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          # Graceful shutdown: drain writes before terminating
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    # Signal node to drain (stop accepting new writes)
+                    curl -X POST http://localhost:7200/api/v1/drain || true
+                    # Wait for in-flight writes to complete
+                    sleep 30
+
+      volumes:
+        - name: config
+          configMap:
+            name: mynadb-config
+            items:
+              - key: data.toml
+                path: data.toml
+
+  volumeClaimTemplates:
+    - metadata:
+        name: cache
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: standard  # Adjust for your cluster
+        resources:
+          requests:
+            storage: 50Gi  # Local cache for object store

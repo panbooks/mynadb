@@ -1,0 +1,175 @@
+# MynaDB Meta Service StatefulSet
+#
+# Meta nodes form a Raft cluster for metadata coordination.
+# Uses headless service for stable DNS names.
+#
+# Pod naming: mynadb-meta-{0,1,2}
+# DNS: mynadb-meta-0.mynadb-meta-headless.{namespace}.svc.cluster.local
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mynadb-meta-headless
+  labels:
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: meta
+spec:
+  clusterIP: None  # Headless service
+  selector:
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: meta
+  ports:
+    - name: grpc
+      port: 7100
+      targetPort: 7100
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mynadb-meta
+  labels:
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: meta
+spec:
+  selector:
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: meta
+  ports:
+    - name: grpc
+      port: 7100
+      targetPort: 7100
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mynadb-meta
+  labels:
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: meta
+spec:
+  serviceName: mynadb-meta-headless
+  replicas: 3
+  podManagementPolicy: Parallel  # Start all pods simultaneously
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mynadb
+      app.kubernetes.io/component: meta
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mynadb
+        app.kubernetes.io/component: meta
+    spec:
+      terminationGracePeriodSeconds: 30
+      
+      # Spread across zones for HA
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: mynadb
+              app.kubernetes.io/component: meta
+      
+      # Prefer different nodes
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: mynadb
+                    app.kubernetes.io/component: meta
+                topologyKey: kubernetes.io/hostname
+
+      containers:
+        - name: meta
+          image: mynadb/mynadb:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--role"
+            - "meta"
+            - "-c"
+            - "/etc/mynadb/meta.toml"
+          ports:
+            - name: grpc
+              containerPort: 7100
+          env:
+            # Node ID from pod name (mynadb-meta-0 -> meta node_id 1)
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: MYNADB_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # Derive Raft node_id (1, 2, 3) from pod ordinal
+            - name: MYNADB_META_NODE_ID
+              value: "1"  # Will be computed by init script
+            # Advertise address using headless service DNS
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: MYNADB_ADVERTISE_ADDR
+              value: "$(POD_NAME).mynadb-meta-headless.$(POD_NAMESPACE).svc.cluster.local:7100"
+            # Zone label for anti-affinity
+            - name: MYNADB_ZONE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['topology.kubernetes.io/zone']
+            # Meta peers (all other meta nodes)
+            - name: MYNADB_META_PEERS
+              valueFrom:
+                configMapKeyRef:
+                  name: mynadb-config
+                  key: MYNADB_META_ENDPOINTS
+            # Log level
+            - name: MYNADB_LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: mynadb-config
+                  key: MYNADB_LOG_LEVEL
+          volumeMounts:
+            - name: config
+              mountPath: /etc/mynadb
+            - name: data
+              mountPath: /data/meta
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          livenessProbe:
+            tcpSocket:
+              port: 7100
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 7100
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+      volumes:
+        - name: config
+          configMap:
+            name: mynadb-config
+            items:
+              - key: meta.toml
+                path: meta.toml
+
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: standard  # Adjust for your cluster
+        resources:
+          requests:
+            storage: 10Gi

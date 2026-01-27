@@ -1,0 +1,49 @@
+# Kustomize configuration for MynaDB
+#
+# Usage:
+#   kubectl apply -k deploy/kubernetes/
+#
+# Customize for your environment:
+#   kubectl kustomize deploy/kubernetes/ > mynadb.yaml
+#   # Edit mynadb.yaml as needed
+#   kubectl apply -f mynadb.yaml
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mynadb
+
+resources:
+  - configmap.yaml
+  - meta-statefulset.yaml
+  - data-statefulset.yaml
+  - router-deployment.yaml
+
+# Common labels for all resources
+commonLabels:
+  app.kubernetes.io/part-of: mynadb
+
+# You can override images for your registry
+images:
+  - name: mynadb/mynadb
+    newTag: latest
+
+# Example patches for customization:
+# patches:
+#   # Increase data node replicas
+#   - patch: |-
+#       - op: replace
+#         path: /spec/replicas
+#         value: 5
+#     target:
+#       kind: StatefulSet
+#       name: mynadb-data
+#
+#   # Use different storage class
+#   - patch: |-
+#       - op: replace
+#         path: /spec/volumeClaimTemplates/0/spec/storageClassName
+#         value: fast-ssd
+#     target:
+#       kind: StatefulSet
+#       name: mynadb-data

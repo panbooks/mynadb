@@ -1,0 +1,161 @@
+# MynaDB Router Deployment
+#
+# Routers are stateless and can be scaled horizontally.
+# They route writes to the correct Data node and forward queries.
+#
+# Uses a regular Deployment (not StatefulSet) since routers are stateless.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mynadb-router
+  labels:
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: router
+spec:
+  type: ClusterIP  # Use LoadBalancer for external access
+  selector:
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: router
+  ports:
+    - name: http
+      port: 7000
+      targetPort: 7000
+    - name: flight
+      port: 7001
+      targetPort: 7001
+    - name: mysql
+      port: 7002
+      targetPort: 7002
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mynadb-router
+  labels:
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: router
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mynadb
+      app.kubernetes.io/component: router
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mynadb
+        app.kubernetes.io/component: router
+    spec:
+      terminationGracePeriodSeconds: 15
+      
+      # Spread across zones
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: mynadb
+              app.kubernetes.io/component: router
+      
+      # Prefer different nodes
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: mynadb
+                    app.kubernetes.io/component: router
+                topologyKey: kubernetes.io/hostname
+
+      containers:
+        - name: router
+          image: mynadb/mynadb:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--role"
+            - "router"
+            - "-c"
+            - "/etc/mynadb/router.toml"
+          ports:
+            - name: http
+              containerPort: 7000
+            - name: flight
+              containerPort: 7001
+            - name: mysql
+              containerPort: 7002
+          env:
+            # Node ID (can be random for stateless router)
+            - name: MYNADB_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # Meta endpoints
+            - name: MYNADB_META_ENDPOINTS
+              valueFrom:
+                configMapKeyRef:
+                  name: mynadb-config
+                  key: MYNADB_META_ENDPOINTS
+            # Log level
+            - name: MYNADB_LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: mynadb-config
+                  key: MYNADB_LOG_LEVEL
+          volumeMounts:
+            - name: config
+              mountPath: /etc/mynadb
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 7000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 7000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+      volumes:
+        - name: config
+          configMap:
+            name: mynadb-config
+            items:
+              - key: router.toml
+                path: router.toml
+---
+# Horizontal Pod Autoscaler for Router
+# Scales based on CPU utilization
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mynadb-router
+  labels:
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: router
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mynadb-router
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
