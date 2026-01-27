@@ -58,6 +58,19 @@ impl MetaNetworkFactory {
             .collect()
     }
 
+    /// Get a peer's address by node ID
+    pub fn get_peer_addr(&self, node_id: NodeId) -> Option<String> {
+        self.peers.read().get(&node_id).cloned()
+    }
+
+    /// Get or create a channel to a specific node (public for forwarding)
+    pub async fn get_channel_to(&self, node_id: NodeId) -> Result<Channel, String> {
+        let addr = self
+            .get_peer_addr(node_id)
+            .ok_or_else(|| format!("Unknown peer node {}", node_id))?;
+        self.get_channel(node_id, &addr).await
+    }
+
     /// Get or create a channel to a peer
     async fn get_channel(&self, node_id: NodeId, addr: &str) -> Result<Channel, String> {
         // Check if we have a cached channel

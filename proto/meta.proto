@@ -358,9 +358,23 @@ service RaftInternal {
     rpc AppendEntries(RaftMessage) returns (RaftMessage);
     rpc InstallSnapshot(RaftMessage) returns (RaftMessage);
     rpc Vote(RaftMessage) returns (RaftMessage);
+    // Forward a command to leader (for server-side proxy)
+    rpc ForwardCommand(ForwardCommandRequest) returns (ForwardCommandResponse);
 }
 
 // Generic Raft message (serialized openraft types)
 message RaftMessage {
     bytes data = 1;
+}
+
+// Forward command request (for server-side proxy forwarding)
+message ForwardCommandRequest {
+    bytes command_data = 1;     // bincode-serialized MetaCommand
+}
+
+message ForwardCommandResponse {
+    bool success = 1;
+    string error = 2;
+    uint64 result = 3;          // Result value (lease_id, sequence, fencing_token, etc.)
+    bytes response_data = 4;    // bincode-serialized MetaResponse for complex responses
 }
