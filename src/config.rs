@@ -177,6 +177,16 @@ pub struct CacheConfig {
     /// Maximum cache size in MB before forcing flush
     #[serde(default = "default_cache_max_size_mb")]
     pub max_size_mb: u64,
+
+    /// Local disk cache size for Parquet files in MB (cluster mode only)
+    ///
+    /// When set, Data nodes cache Parquet files on local disk for fast repeated access.
+    /// Only files owned by this node (prefixed with node_id) are cached.
+    /// Uses LRU eviction when cache is full.
+    ///
+    /// Recommended: 2-4x the size of the write cache for optimal query performance.
+    #[serde(default)]
+    pub parquet_cache_mb: Option<usize>,
 }
 
 /// Query result cache configuration
@@ -709,6 +719,7 @@ impl Default for CacheConfig {
         Self {
             flush_interval_secs: default_cache_flush_interval(),
             max_size_mb: default_cache_max_size_mb(),
+            parquet_cache_mb: None, // Disabled by default, enable in cluster mode
         }
     }
 }

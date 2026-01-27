@@ -58,23 +58,7 @@ pub async fn start(config_path: &str) {
     // Initialize WAL
     let wal = common::init_wal(&config, storage.clone()).await;
 
-    // Initialize data cache
-    info!(
-        "Initializing data cache (max: {}MB)",
-        config.cache.max_size_mb
-    );
-    let data_cache = Arc::new(cache::DataCache::new(
-        storage.clone(),
-        config.cache.max_size_mb,
-        wal.as_ref().map(Arc::clone),
-    ));
-
-    // Start background flush
-    (*data_cache)
-        .clone()
-        .start_background_flush(config.cache.flush_interval_secs);
-
-    // Connect to Meta service (optional)
+    // Connect to Meta service first (needed for file registration during flush)
     let meta_client = match MetaClient::connect(&data_config.meta_endpoints).await {
         Ok(client) => {
             info!("Connected to Meta service");
@@ -88,6 +72,35 @@ pub async fn start(config_path: &str) {
             None
         }
     };
+
+    // Initialize data cache with node_id for distributed parallel queries
+    info!(
+        "Initializing data cache (max: {}MB, node_id: {})",
+        config.cache.max_size_mb,
+        data_config.node_id
+    );
+    let data_cache = Arc::new(cache::DataCache::new(
+        storage.clone(),
+        config.cache.max_size_mb,
+        wal.as_ref().map(Arc::clone),
+        data_config.node_id.clone(),
+    ));
+
+    // Start background flush with appropriate registration
+    if let Some(ref client) = meta_client {
+        // With Meta: Register files including created_by for distributed queries
+        common::start_background_flush_with_meta_registration(
+            (*data_cache).clone(),
+            config.cache.flush_interval_secs,
+            Arc::clone(client),
+            data_config.node_id.clone(),
+        );
+    } else {
+        // Without Meta: Simple flush without registration
+        (*data_cache)
+            .clone()
+            .start_background_flush(config.cache.flush_interval_secs);
+    }
 
     // Register with Meta service and start heartbeat
     let lease_id = Arc::new(AtomicU64::new(0));

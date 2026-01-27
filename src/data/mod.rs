@@ -7,11 +7,14 @@
 //! - Executing queries locally with DataFusion
 //! - Registering files with Meta service
 //! - Warm standby replication for zero-downtime failover
+//! - Local Parquet file caching for query performance
 
+pub mod cache;
 pub mod config;
 pub mod replication;
 pub mod server;
 
+pub use cache::ParquetLocalCache;
 pub use config::{DataNodeConfig, ReplicationConfig as DataReplicationConfig};
 pub use replication::{
     ReplicateRequest, ReplicateResponse, ReplicationConfig, ReplicationManager, ReplicationMode,

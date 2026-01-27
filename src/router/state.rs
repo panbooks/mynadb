@@ -59,13 +59,6 @@ impl RouterAppState {
             config.schema.clone(),
         ));
 
-        // Initialize query coordinator
-        let query_coordinator = Arc::new(QueryCoordinator::new(
-            Arc::clone(&shard_cache),
-            Arc::clone(&data_node_pool),
-            router_config.query.max_parallel_fanout,
-        ));
-
         // Connect to Meta service (optional)
         let meta_client = match MetaClient::connect(&router_config.meta.endpoints).await {
             Ok(client) => {
@@ -79,6 +72,22 @@ impl RouterAppState {
                 );
                 None
             }
+        };
+
+        // Initialize query coordinator (with MetaClient for file-based routing if available)
+        let query_coordinator = if let Some(ref client) = meta_client {
+            Arc::new(QueryCoordinator::with_meta_client(
+                Arc::clone(&shard_cache),
+                Arc::clone(&data_node_pool),
+                router_config.query.max_parallel_fanout,
+                Arc::clone(client),
+            ))
+        } else {
+            Arc::new(QueryCoordinator::new(
+                Arc::clone(&shard_cache),
+                Arc::clone(&data_node_pool),
+                router_config.query.max_parallel_fanout,
+            ))
         };
 
         Ok(Self {
