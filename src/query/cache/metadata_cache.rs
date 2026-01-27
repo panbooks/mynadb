@@ -221,6 +221,13 @@ impl TableMetadataCache {
         let key = (catalog.to_string(), schema.to_string(), table.to_string());
         self.tables.write().remove(&key);
 
+        // Also invalidate file listings for this table's directory
+        // This ensures new partitions/files are discovered after flush
+        let table_path_suffix = format!("{}/{}/{}", catalog, schema, table);
+        self.file_listings
+            .write()
+            .retain(|path, _| !path.to_string_lossy().contains(&table_path_suffix));
+
         // Increment global version
         self.global_version.fetch_add(1, Ordering::Relaxed);
 
@@ -234,6 +241,12 @@ impl TableMetadataCache {
     pub fn invalidate_catalog(&self, catalog: &str) {
         let mut tables = self.tables.write();
         tables.retain(|(c, _, _), _| c != catalog);
+
+        // Also invalidate file listings for this catalog's directories
+        let catalog_path_component = format!("/{}/", catalog);
+        self.file_listings
+            .write()
+            .retain(|path, _| !path.to_string_lossy().contains(&catalog_path_component));
 
         self.global_version.fetch_add(1, Ordering::Relaxed);
         debug!("Invalidated cache for catalog: {}", catalog);
