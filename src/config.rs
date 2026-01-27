@@ -1,3 +1,4 @@
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -804,6 +805,92 @@ impl Default for Config {
     }
 }
 
+/// Resolve environment variables in a string
+///
+/// Supports patterns:
+/// - `${VAR}` - replaced with env var value, error if not set
+/// - `${VAR:-default}` - replaced with env var value, or default if not set
+///
+/// The default value itself can contain env vars for nested resolution:
+/// - `${VAR:-${OTHER_VAR}}` - use OTHER_VAR if VAR is not set
+pub fn resolve_env_vars(content: &str) -> Result<String, String> {
+    // Pattern matches ${VAR} or ${VAR:-default}
+    // Captures: VAR name and optional default value
+    let re = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+        .map_err(|e| format!("Invalid regex: {}", e))?;
+
+    let mut result = content.to_string();
+    let mut iterations = 0;
+    const MAX_ITERATIONS: usize = 10; // Prevent infinite loops in nested resolution
+
+    // Keep resolving until no more patterns or max iterations
+    while re.is_match(&result) && iterations < MAX_ITERATIONS {
+        let mut new_result = result.clone();
+
+        for cap in re.captures_iter(&result) {
+            let full_match = cap.get(0).unwrap().as_str();
+            let var_name = cap.get(1).unwrap().as_str();
+            let default_value = cap.get(2).map(|m| m.as_str());
+
+            let replacement = match std::env::var(var_name) {
+                Ok(val) => val,
+                Err(_) => match default_value {
+                    Some(default) => default.to_string(),
+                    None => {
+                        return Err(format!(
+                            "Environment variable '{}' is not set and no default provided",
+                            var_name
+                        ));
+                    }
+                },
+            };
+
+            new_result = new_result.replacen(full_match, &replacement, 1);
+        }
+
+        result = new_result;
+        iterations += 1;
+    }
+
+    Ok(result)
+}
+
+/// Resolve a single environment variable with optional default
+///
+/// Returns the value of the environment variable, or the default if not set.
+/// If no default is provided and the variable is not set, returns an error.
+pub fn resolve_env_var(var_name: &str, default: Option<&str>) -> Result<String, String> {
+    match std::env::var(var_name) {
+        Ok(val) => Ok(val),
+        Err(_) => match default {
+            Some(d) => Ok(d.to_string()),
+            None => Err(format!(
+                "Environment variable '{}' is not set",
+                var_name
+            )),
+        },
+    }
+}
+
+/// Get stable node ID from environment
+///
+/// Priority: MYNADB_NODE_ID > HOSTNAME > generated UUID
+pub fn get_stable_node_id(prefix: &str) -> String {
+    std::env::var("MYNADB_NODE_ID")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| {
+            format!(
+                "{}-{}",
+                prefix,
+                uuid::Uuid::new_v4()
+                    .to_string()
+                    .split('-')
+                    .next()
+                    .unwrap_or("unknown")
+            )
+        })
+}
+
 impl Config {
     /// Load configuration from TOML file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
@@ -814,6 +901,58 @@ impl Config {
             toml::from_str(&content).map_err(|e| format!("Failed to parse config file: {}", e))?;
 
         Ok(config)
+    }
+
+    /// Load configuration from TOML file with environment variable resolution
+    ///
+    /// Supports patterns:
+    /// - `${VAR}` - replaced with env var value, error if not set
+    /// - `${VAR:-default}` - replaced with env var value, or default if not set
+    ///
+    /// Example TOML:
+    /// ```toml
+    /// [data_node]
+    /// node_id = "${MYNADB_NODE_ID:-${HOSTNAME}}"
+    /// advertise_addr = "${MYNADB_ADVERTISE_ADDR}"
+    /// ```
+    pub fn from_file_with_env<P: AsRef<Path>>(path: P) -> Result<Self, String> {
+        let content =
+            fs::read_to_string(&path).map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        // Resolve environment variables in the TOML content
+        let resolved = resolve_env_vars(&content)?;
+
+        let config: Config = toml::from_str(&resolved)
+            .map_err(|e| format!("Failed to parse config file: {}", e))?;
+
+        Ok(config)
+    }
+
+    /// Load configuration with environment variable support and fallback to default
+    ///
+    /// Priority for configuration values:
+    /// 1. TOML file values (with env var resolution)
+    /// 2. Direct environment variable overrides (MYNADB_*)
+    /// 3. Default values
+    pub fn load_with_env(path: &str) -> Self {
+        let mut config = match Self::from_file_with_env(path) {
+            Ok(config) => {
+                eprintln!("[config] Loaded configuration from: {}", path);
+                config
+            }
+            Err(e) => {
+                eprintln!(
+                    "[config] Could not load config file '{}': {}",
+                    path, e
+                );
+                eprintln!("[config] Using default configuration");
+                Config::default()
+            }
+        };
+
+        // Apply direct environment variable overrides
+        config.apply_env_overrides();
+        config
     }
 
     /// Load configuration with fallback to default
@@ -834,6 +973,40 @@ impl Config {
                 eprintln!("[config] Using default configuration");
                 Config::default()
             }
+        }
+    }
+
+    /// Apply direct environment variable overrides
+    ///
+    /// Supported variables:
+    /// - MYNADB_HTTP_PORT
+    /// - MYNADB_FLIGHT_PORT
+    /// - MYNADB_DATA_DIR
+    /// - MYNADB_LOG_LEVEL
+    fn apply_env_overrides(&mut self) {
+        if let Ok(val) = std::env::var("MYNADB_HTTP_PORT") {
+            if let Ok(port) = val.parse() {
+                self.server.http_port = port;
+            }
+        }
+        if let Ok(val) = std::env::var("MYNADB_FLIGHT_PORT") {
+            if let Ok(port) = val.parse() {
+                self.server.flight_port = port;
+            }
+        }
+        if let Ok(val) = std::env::var("MYNADB_MYSQL_PORT") {
+            if let Ok(port) = val.parse() {
+                self.server.mysql_port = port;
+            }
+        }
+        if let Ok(val) = std::env::var("MYNADB_DATA_DIR") {
+            self.storage.data_dir = val;
+        }
+        if let Ok(val) = std::env::var("MYNADB_LOG_LEVEL") {
+            self.logging.level = val;
+        }
+        if let Ok(val) = std::env::var("MYNADB_LOG_DIR") {
+            self.logging.log_dir = val;
         }
     }
 
@@ -871,5 +1044,97 @@ mod tests {
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let parsed: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(config.server.http_port, parsed.server.http_port);
+    }
+
+    #[test]
+    fn test_resolve_env_vars_simple() {
+        std::env::set_var("TEST_VAR_1", "hello");
+        let result = resolve_env_vars("value is ${TEST_VAR_1}").unwrap();
+        assert_eq!(result, "value is hello");
+        std::env::remove_var("TEST_VAR_1");
+    }
+
+    #[test]
+    fn test_resolve_env_vars_with_default() {
+        std::env::remove_var("TEST_VAR_UNSET");
+        let result = resolve_env_vars("value is ${TEST_VAR_UNSET:-default_value}").unwrap();
+        assert_eq!(result, "value is default_value");
+    }
+
+    #[test]
+    fn test_resolve_env_vars_override_default() {
+        std::env::set_var("TEST_VAR_2", "actual");
+        let result = resolve_env_vars("value is ${TEST_VAR_2:-default}").unwrap();
+        assert_eq!(result, "value is actual");
+        std::env::remove_var("TEST_VAR_2");
+    }
+
+    #[test]
+    fn test_resolve_env_vars_missing_no_default() {
+        std::env::remove_var("TEST_VAR_MISSING");
+        let result = resolve_env_vars("value is ${TEST_VAR_MISSING}");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("TEST_VAR_MISSING"));
+    }
+
+    #[test]
+    fn test_resolve_env_vars_nested() {
+        std::env::set_var("TEST_OUTER", "from_outer");
+        std::env::remove_var("TEST_INNER");
+        // When INNER is not set, it uses the default which references OUTER
+        let result = resolve_env_vars("${TEST_INNER:-${TEST_OUTER}}").unwrap();
+        assert_eq!(result, "from_outer");
+        std::env::remove_var("TEST_OUTER");
+    }
+
+    #[test]
+    fn test_resolve_env_vars_multiple() {
+        std::env::set_var("TEST_A", "aaa");
+        std::env::set_var("TEST_B", "bbb");
+        let result = resolve_env_vars("${TEST_A}-${TEST_B}").unwrap();
+        assert_eq!(result, "aaa-bbb");
+        std::env::remove_var("TEST_A");
+        std::env::remove_var("TEST_B");
+    }
+
+    #[test]
+    fn test_resolve_env_vars_toml() {
+        std::env::set_var("TEST_NODE_ID", "data-1");
+        std::env::set_var("TEST_PORT", "7200");
+        let toml_content = r#"
+[data_node]
+node_id = "${TEST_NODE_ID}"
+grpc_port = ${TEST_PORT}
+"#;
+        let result = resolve_env_vars(toml_content).unwrap();
+        assert!(result.contains("node_id = \"data-1\""));
+        assert!(result.contains("grpc_port = 7200"));
+        std::env::remove_var("TEST_NODE_ID");
+        std::env::remove_var("TEST_PORT");
+    }
+
+    #[test]
+    fn test_get_stable_node_id_from_env() {
+        std::env::set_var("MYNADB_NODE_ID", "my-custom-id");
+        let id = get_stable_node_id("data");
+        assert_eq!(id, "my-custom-id");
+        std::env::remove_var("MYNADB_NODE_ID");
+    }
+
+    #[test]
+    fn test_get_stable_node_id_from_hostname() {
+        std::env::remove_var("MYNADB_NODE_ID");
+        std::env::set_var("HOSTNAME", "mynadb-data-0");
+        let id = get_stable_node_id("data");
+        assert_eq!(id, "mynadb-data-0");
+        std::env::remove_var("HOSTNAME");
+    }
+
+    #[test]
+    fn test_get_stable_node_id_fallback() {
+        std::env::remove_var("MYNADB_NODE_ID");
+        std::env::remove_var("HOSTNAME");
+        let id = get_stable_node_id("data");
+        assert!(id.starts_with("data-"));
     }
 }

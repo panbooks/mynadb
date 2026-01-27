@@ -18,6 +18,28 @@ pub mod keys {
     pub const META_FENCING: &str = "/meta/fencing";
 }
 
+/// Standard Kubernetes topology labels for node placement
+///
+/// These labels are used for zone-aware replica placement to ensure
+/// leader and standby nodes are in different failure domains.
+pub mod node_labels {
+    /// Kubernetes availability zone label
+    /// Example values: "us-east-1a", "eu-west-1b"
+    pub const ZONE: &str = "topology.kubernetes.io/zone";
+
+    /// Kubernetes region label
+    /// Example values: "us-east-1", "eu-west-1"
+    pub const REGION: &str = "topology.kubernetes.io/region";
+
+    /// Custom rack/shelf label for physical server placement
+    /// Example values: "rack-1", "shelf-a"
+    pub const RACK: &str = "mynadb.io/rack";
+
+    /// Node pool or instance type label
+    /// Example values: "high-memory", "standard"
+    pub const POOL: &str = "mynadb.io/pool";
+}
+
 /// Node role in the cluster
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
@@ -119,6 +141,61 @@ impl NodeInfo {
     pub fn with_labels(mut self, labels: HashMap<String, String>) -> Self {
         self.labels = labels;
         self
+    }
+
+    /// Get the availability zone label if present
+    pub fn zone(&self) -> Option<&str> {
+        self.labels.get(node_labels::ZONE).map(|s| s.as_str())
+    }
+
+    /// Get the region label if present
+    pub fn region(&self) -> Option<&str> {
+        self.labels.get(node_labels::REGION).map(|s| s.as_str())
+    }
+
+    /// Get the rack label if present
+    pub fn rack(&self) -> Option<&str> {
+        self.labels.get(node_labels::RACK).map(|s| s.as_str())
+    }
+
+    /// Get the pool label if present
+    pub fn pool(&self) -> Option<&str> {
+        self.labels.get(node_labels::POOL).map(|s| s.as_str())
+    }
+
+    /// Check if this node is in a different zone than another node
+    ///
+    /// Returns true if both nodes have zone labels and they differ.
+    /// Returns false if either node lacks a zone label (can't determine).
+    pub fn is_different_zone(&self, other: &NodeInfo) -> bool {
+        match (self.zone(), other.zone()) {
+            (Some(z1), Some(z2)) => z1 != z2,
+            _ => false,
+        }
+    }
+
+    /// Check if this node is in a different rack than another node
+    pub fn is_different_rack(&self, other: &NodeInfo) -> bool {
+        match (self.rack(), other.rack()) {
+            (Some(r1), Some(r2)) => r1 != r2,
+            _ => false,
+        }
+    }
+
+    /// Check if this node is in a different region than another node
+    pub fn is_different_region(&self, other: &NodeInfo) -> bool {
+        match (self.region(), other.region()) {
+            (Some(r1), Some(r2)) => r1 != r2,
+            _ => false,
+        }
+    }
+
+    /// Check if this node is in any different failure domain than another node
+    ///
+    /// Checks (in priority order): zone, rack
+    /// Returns true if any difference is found.
+    pub fn is_different_failure_domain(&self, other: &NodeInfo) -> bool {
+        self.is_different_zone(other) || self.is_different_rack(other)
     }
 }
 
@@ -551,6 +628,24 @@ pub enum MetaCommand {
     RemoveReplica {
         partition_key: String,
     },
+
+    /// Auto-assign replica for a partition using ReplicaAssigner
+    ///
+    /// Called when a new partition is first written to.
+    /// Meta will automatically select leader and standbys based on:
+    /// - Load balancing (least-loaded node as leader)
+    /// - Zone-awareness (standbys in different zones)
+    /// - Replication factor from config
+    AutoAssignReplica {
+        partition_key: String,
+    },
+
+    /// Rebalance replicas after a node joins
+    ///
+    /// Adds missing standbys to under-replicated partitions.
+    RebalanceOnNodeJoin {
+        node_id: String,
+    },
 }
 
 /// Response from applying a MetaCommand
@@ -601,6 +696,19 @@ pub enum MetaResponse {
     },
     NoStandbyAvailable {
         partition_key: String,
+    },
+    ReplicaAutoAssigned {
+        partition_key: String,
+        leader_node_id: String,
+        standby_node_ids: Vec<String>,
+        replication_factor: u8,
+    },
+    ReplicaAlreadyExists {
+        partition_key: String,
+    },
+    NoDataNodesAvailable,
+    RebalanceCompleted {
+        updated_count: usize,
     },
     Error {
         message: String,

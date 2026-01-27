@@ -243,6 +243,10 @@ impl MetaStateMachine {
             } => self.update_replica_state(&partition_key, state, last_replicated_seq, replication_lag_ms),
 
             MetaCommand::RemoveReplica { partition_key } => self.remove_replica(&partition_key),
+
+            MetaCommand::AutoAssignReplica { partition_key } => self.auto_assign_replica(&partition_key),
+
+            MetaCommand::RebalanceOnNodeJoin { node_id } => self.rebalance_on_node_join(&node_id),
         }
     }
 
@@ -812,6 +816,148 @@ impl MetaStateMachine {
         MetaResponse::ReplicaNotFound {
             partition_key: partition_key.to_string(),
         }
+    }
+
+    /// Auto-assign a replica for a new partition using ReplicaAssigner
+    ///
+    /// Uses the configured load balancing strategy and zone-awareness
+    /// to select leader and standbys.
+    fn auto_assign_replica(&self, partition_key: &str) -> MetaResponse {
+        // Check if replica already exists
+        if self.get_replica(partition_key).is_some() {
+            return MetaResponse::ReplicaAlreadyExists {
+                partition_key: partition_key.to_string(),
+            };
+        }
+
+        // Get active Data nodes
+        let nodes = self.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
+        if nodes.is_empty() {
+            return MetaResponse::NoDataNodesAvailable;
+        }
+
+        // Build partition counts for load balancing
+        let partition_counts = self.get_partition_counts_per_node();
+
+        // Use default config for auto-assignment
+        // In production, this would come from MetaConfig
+        let config = crate::meta::config::ReplicationAssignmentConfig::default();
+        let assigner = crate::meta::replica_assigner::ReplicaAssigner::new(config);
+
+        match assigner.assign_new_partition(partition_key, &nodes, &partition_counts) {
+            Some(replica) => {
+                let leader_node_id = replica.leader_node_id.clone();
+                let standby_node_ids = replica.standby_node_ids.clone();
+                let replication_factor = replica.replication_factor;
+
+                // Store the replica
+                let storage_key = replica.storage_key();
+                let _ = self.db.insert(
+                    storage_key.as_bytes(),
+                    bincode::serialize(&replica).unwrap(),
+                );
+
+                // Publish event
+                let payload = serde_json::json!({
+                    "partition_key": partition_key,
+                    "leader_node_id": &leader_node_id,
+                    "standby_node_ids": &standby_node_ids,
+                    "replication_factor": replication_factor,
+                    "auto_assigned": true,
+                });
+                self.publish_event(
+                    "replicas",
+                    EventType::ReplicaAssigned,
+                    serde_json::to_vec(&payload).unwrap_or_default(),
+                    "meta",
+                );
+
+                info!(
+                    "Auto-assigned replica for partition {}: leader={}, standbys={:?}, rf={}",
+                    partition_key, leader_node_id, standby_node_ids, replication_factor
+                );
+
+                MetaResponse::ReplicaAutoAssigned {
+                    partition_key: partition_key.to_string(),
+                    leader_node_id,
+                    standby_node_ids,
+                    replication_factor,
+                }
+            }
+            None => MetaResponse::NoDataNodesAvailable,
+        }
+    }
+
+    /// Rebalance replicas when a new node joins
+    ///
+    /// Adds missing standbys to under-replicated partitions.
+    fn rebalance_on_node_join(&self, node_id: &str) -> MetaResponse {
+        let node = match self.get_node(node_id) {
+            Some(n) => n,
+            None => return MetaResponse::Error {
+                message: format!("Node {} not found", node_id),
+            },
+        };
+
+        if node.role != NodeRole::Data || node.state != NodeState::Active {
+            return MetaResponse::RebalanceCompleted { updated_count: 0 };
+        }
+
+        let nodes = self.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
+        let replicas = self.list_replicas();
+
+        let config = crate::meta::config::ReplicationAssignmentConfig::default();
+        let assigner = crate::meta::replica_assigner::ReplicaAssigner::new(config);
+
+        let updates = assigner.rebalance_on_node_join(&node, &replicas, &nodes);
+        let updated_count = updates.len();
+
+        for updated in updates {
+            let storage_key = updated.storage_key();
+            let _ = self.db.insert(
+                storage_key.as_bytes(),
+                bincode::serialize(&updated).unwrap(),
+            );
+
+            // Publish event
+            let payload = serde_json::json!({
+                "partition_key": &updated.partition_key,
+                "leader_node_id": &updated.leader_node_id,
+                "standby_node_ids": &updated.standby_node_ids,
+                "rebalance_reason": "node_join",
+                "new_node": node_id,
+            });
+            self.publish_event(
+                "replicas",
+                EventType::ReplicaAssigned,
+                serde_json::to_vec(&payload).unwrap_or_default(),
+                "meta",
+            );
+
+            info!(
+                "Rebalanced replica {} after node {} join: added standby",
+                updated.partition_key, node_id
+            );
+        }
+
+        MetaResponse::RebalanceCompleted { updated_count }
+    }
+
+    /// Get partition count per node for load balancing
+    fn get_partition_counts_per_node(&self) -> std::collections::HashMap<String, usize> {
+        let replicas = self.list_replicas();
+        let mut counts = std::collections::HashMap::new();
+
+        for replica in replicas {
+            // Count leader
+            *counts.entry(replica.leader_node_id.clone()).or_insert(0) += 1;
+            // Count standbys
+            for standby_id in &replica.standby_node_ids {
+                *counts.entry(standby_id.clone()).or_insert(0) += 1;
+            }
+        }
+
+        counts
     }
 
     /// Get partition replica info

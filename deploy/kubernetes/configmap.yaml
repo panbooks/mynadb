@@ -1,91 +1,92 @@
+# MynaDB ConfigMap for Kubernetes
+#
+# Contains shared configuration for all node types.
+# Environment variables can be used in TOML config files.
+
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: mynadb-config
   labels:
-    app: mynadb
+    app.kubernetes.io/name: mynadb
+    app.kubernetes.io/component: config
 data:
-  config.toml: |
-    [server]
-    http_port = 7000
-    flight_port = 7001
-    mysql_enabled = true
-    mysql_port = 7002
+  # Replication configuration
+  MYNADB_REPLICATION_FACTOR: "2"
+  MYNADB_REPLICATION_ENABLED: "true"
+
+  # Meta endpoints (must match meta StatefulSet replicas)
+  # Format: pod-0.headless-service:port,pod-1.headless-service:port,...
+  MYNADB_META_ENDPOINTS: "mynadb-meta-0.mynadb-meta-headless:7100,mynadb-meta-1.mynadb-meta-headless:7100,mynadb-meta-2.mynadb-meta-headless:7100"
+
+  # Log level
+  MYNADB_LOG_LEVEL: "info"
+
+  # Meta node TOML config template
+  meta.toml: |
+    [meta]
+    node_id = 1  # Will be overridden by MYNADB_META_NODE_ID
+    bind_addr = "0.0.0.0:7100"
+    advertise_addr = "${MYNADB_ADVERTISE_ADDR}"
+    data_dir = "/data/meta"
+    peers = []  # Will be set via MYNADB_META_PEERS
+
+    [meta.raft]
+    heartbeat_interval_ms = 150
+    election_timeout_min_ms = 300
+    election_timeout_max_ms = 500
+    snapshot_threshold = 10000
+
+    [meta.replication]
+    auto_assign_enabled = true
+    default_replication_factor = 2
+    zone_aware = true
+    min_nodes_for_replication = 2
+    lease_ttl_secs = 10
+    auto_promote = true
+
+    [logging]
+    level = "${MYNADB_LOG_LEVEL:-info}"
+
+  # Data node TOML config template
+  data.toml: |
+    [data_node]
+    node_id = "${MYNADB_NODE_ID}"
+    advertise_addr = "${MYNADB_ADVERTISE_ADDR}"
+    grpc_port = 7200
+    meta_endpoints = []  # Will be set via MYNADB_META_ENDPOINTS
+    meta_connect_timeout_ms = 5000
+    meta_request_timeout_ms = 30000
+
+    [data_node.replication]
+    enabled = true
+    mode = "async"
+    batch_interval_ms = 100
+    max_batch_size = 1000
+    ack_timeout_ms = 5000
+    max_lag_alert_ms = 10000
 
     [storage]
-    data_dir = "/data/mynadb"
-
-    [storage.object_store]
     backend = "s3"
-    bucket = "${S3_BUCKET}"
-    endpoint = "${S3_ENDPOINT}"
-    region = "${AWS_REGION}"
-
-    [schema]
-    strategy = "service_as_schema"
-    tag_keys = ["service", "MONITOR.service", "hierarchy_2"]
-    default_name = "default"
-    prefix_numeric = true
+    bucket = "${MYNADB_S3_BUCKET}"
+    region = "${AWS_REGION:-us-east-1}"
+    endpoint = "${MYNADB_S3_ENDPOINT:-}"
 
     [cache]
     flush_interval_secs = 60
     max_size_mb = 4096
 
-    [wal]
-    enabled = true
-    sync_on_write = false
-    rotate_size_mb = 128
+    [logging]
+    level = "${MYNADB_LOG_LEVEL:-info}"
 
-    [query_cache]
-    enabled = true
-    max_size_mb = 256
-    ttl_secs = 300
-    min_query_time_ms = 10
-
-    [compaction]
-    min_files = 5
-    max_level = 5
-    max_concurrent_compactions = 8
-    full_compaction_max_concurrent = 2
-
-    [retention]
-    enabled = true
-    default_days = 7
-    interval_secs = 3600
-
-    [auth]
-    enabled = false
+  # Router node TOML config template
+  router.toml: |
+    [router]
+    node_id = "${MYNADB_NODE_ID}"
+    http_port = 7000
+    flight_port = 7001
+    meta_endpoints = []  # Will be set via MYNADB_META_ENDPOINTS
+    cache_refresh_interval_secs = 5
 
     [logging]
-    level = "info"
-    log_dir = "/data/mynadb/logs"
-
-    [cluster]
-    enabled = true
-    node_id = ""
-    advertise_addr = "0.0.0.0:7000"
-    role = "hybrid"
-
-    [cluster.coordinator]
-    type = "etcd"
-    endpoints = ["etcd-0.etcd-headless:2379", "etcd-1.etcd-headless:2379", "etcd-2.etcd-headless:2379"]
-    lock_prefix = "/mynadb/locks/"
-    cache_prefix = "/mynadb/cache/"
-    lock_ttl_secs = 30
-    heartbeat_interval_secs = 5
-
-    [cluster.cache]
-    invalidation_channel = "/mynadb/cache/invalidate"
-    invalidation_method = "pubsub"
-
-    [cluster.write]
-    acquire_lock_timeout_secs = 10
-    flush_notify = true
-
-    [cluster.compaction]
-    leader_only = true
-    election_key = "/mynadb/leader/compactor"
-
-    [cluster.health]
-    check_interval_secs = 10
-    unhealthy_threshold = 3
+    level = "${MYNADB_LOG_LEVEL:-info}"
