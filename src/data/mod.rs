@@ -6,11 +6,17 @@
 //! - Flushing data to object storage
 //! - Executing queries locally with DataFusion
 //! - Registering files with Meta service
+//! - Warm standby replication for zero-downtime failover
 
 pub mod config;
+pub mod replication;
 pub mod server;
 
-pub use config::DataNodeConfig;
+pub use config::{DataNodeConfig, ReplicationConfig as DataReplicationConfig};
+pub use replication::{
+    ReplicateRequest, ReplicateResponse, ReplicationConfig, ReplicationManager, ReplicationMode,
+    StandbyReceiver,
+};
 
 // Re-export existing storage components
 pub use crate::storage::cache::DataCache;

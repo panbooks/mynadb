@@ -13,6 +13,7 @@ pub mod keys {
     pub const PREFIX_LEADER: &str = "/leaders/";
     pub const PREFIX_EVENT: &str = "/events/";
     pub const PREFIX_LEASE: &str = "/leases/";
+    pub const PREFIX_REPLICA: &str = "/replicas/";
     pub const META_SEQUENCE: &str = "/meta/sequence";
     pub const META_FENCING: &str = "/meta/fencing";
 }
@@ -268,6 +269,117 @@ impl LeaseInfo {
     }
 }
 
+/// Replica state for warm standby replication
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum ReplicaState {
+    /// Standby is fully caught up with leader
+    InSync = 0,
+    /// Standby is behind, receiving data
+    CatchingUp = 1,
+    /// Standby is unreachable
+    Offline = 2,
+}
+
+impl From<i32> for ReplicaState {
+    fn from(v: i32) -> Self {
+        match v {
+            0 => ReplicaState::InSync,
+            1 => ReplicaState::CatchingUp,
+            2 => ReplicaState::Offline,
+            _ => ReplicaState::Offline,
+        }
+    }
+}
+
+impl From<ReplicaState> for i32 {
+    fn from(state: ReplicaState) -> Self {
+        state as i32
+    }
+}
+
+/// Partition replica information for warm standby replication
+///
+/// Each partition has a leader node that handles writes and flushes to Parquet,
+/// and one or more standby nodes that maintain in-memory copies for instant failover.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartitionReplica {
+    /// Partition key: "catalog/schema/table/date=YYYY-MM-DD"
+    pub partition_key: String,
+    /// Current leader node ID (handles writes, flushes to Parquet)
+    pub leader_node_id: String,
+    /// Standby node IDs (maintain memtable copies, no flush)
+    pub standby_node_ids: Vec<String>,
+    /// Replication factor (1 = no standby, 2 = 1 standby, 3 = 2 standbys)
+    pub replication_factor: u8,
+    /// Last sequence number replicated to standbys
+    pub last_replicated_seq: u64,
+    /// Replication lag in milliseconds
+    pub replication_lag_ms: u64,
+    /// Current replica state
+    pub state: ReplicaState,
+    /// When this replica assignment was created
+    pub created_at: i64,
+    /// When leader was last confirmed healthy
+    pub leader_last_seen: i64,
+}
+
+impl PartitionReplica {
+    pub fn new(
+        partition_key: String,
+        leader_node_id: String,
+        standby_node_ids: Vec<String>,
+        replication_factor: u8,
+    ) -> Self {
+        let now = current_timestamp_ms();
+        Self {
+            partition_key,
+            leader_node_id,
+            standby_node_ids,
+            replication_factor,
+            last_replicated_seq: 0,
+            replication_lag_ms: 0,
+            state: ReplicaState::CatchingUp,
+            created_at: now,
+            leader_last_seen: now,
+        }
+    }
+
+    /// Generate storage key for this partition replica
+    pub fn storage_key(&self) -> String {
+        format!("{}{}", keys::PREFIX_REPLICA, self.partition_key)
+    }
+
+    /// Generate prefix for listing all replicas
+    pub fn prefix() -> String {
+        keys::PREFIX_REPLICA.to_string()
+    }
+
+    /// Check if this partition has a healthy standby for failover
+    pub fn has_healthy_standby(&self) -> bool {
+        !self.standby_node_ids.is_empty() && self.state == ReplicaState::InSync
+    }
+
+    /// Get the first standby for failover (if any)
+    pub fn first_standby(&self) -> Option<&String> {
+        self.standby_node_ids.first()
+    }
+
+    /// Promote first standby to leader, returning the new leader ID
+    pub fn promote_standby(&mut self) -> Option<String> {
+        if let Some(new_leader) = self.standby_node_ids.first().cloned() {
+            let old_leader = std::mem::replace(&mut self.leader_node_id, new_leader.clone());
+            self.standby_node_ids.remove(0);
+            // Old leader could become standby if it recovers
+            self.standby_node_ids.push(old_leader);
+            self.leader_last_seen = current_timestamp_ms();
+            Some(new_leader)
+        } else {
+            None
+        }
+    }
+}
+
 /// Event types for the event log
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
@@ -281,6 +393,12 @@ pub enum EventType {
     LeaderChanged = 6,
     CacheInvalidate = 7,
     SchemaChanged = 8,
+    /// Partition replica assigned (leader + standbys)
+    ReplicaAssigned = 9,
+    /// Standby promoted to leader (failover)
+    ReplicaPromoted = 10,
+    /// Replica state changed (InSync/CatchingUp/Offline)
+    ReplicaStateChanged = 11,
 }
 
 impl From<i32> for EventType {
@@ -294,6 +412,9 @@ impl From<i32> for EventType {
             6 => EventType::LeaderChanged,
             7 => EventType::CacheInvalidate,
             8 => EventType::SchemaChanged,
+            9 => EventType::ReplicaAssigned,
+            10 => EventType::ReplicaPromoted,
+            11 => EventType::ReplicaStateChanged,
             _ => EventType::Unknown,
         }
     }
@@ -410,6 +531,26 @@ pub enum MetaCommand {
 
     // Lease management
     ExpireLeases,
+
+    // Partition replica operations (warm standby)
+    AssignReplica {
+        partition_key: String,
+        leader_node_id: String,
+        standby_node_ids: Vec<String>,
+        replication_factor: u8,
+    },
+    PromoteStandby {
+        partition_key: String,
+    },
+    UpdateReplicaState {
+        partition_key: String,
+        state: ReplicaState,
+        last_replicated_seq: u64,
+        replication_lag_ms: u64,
+    },
+    RemoveReplica {
+        partition_key: String,
+    },
 }
 
 /// Response from applying a MetaCommand
@@ -439,6 +580,27 @@ pub enum MetaResponse {
     },
     EventPublished {
         sequence: u64,
+    },
+    ReplicaAssigned {
+        partition_key: String,
+        leader_node_id: String,
+    },
+    StandbyPromoted {
+        partition_key: String,
+        new_leader_id: String,
+        old_leader_id: String,
+    },
+    ReplicaUpdated {
+        partition_key: String,
+    },
+    ReplicaRemoved {
+        partition_key: String,
+    },
+    ReplicaNotFound {
+        partition_key: String,
+    },
+    NoStandbyAvailable {
+        partition_key: String,
     },
     Error {
         message: String,

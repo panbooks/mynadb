@@ -59,6 +59,20 @@ pub struct QueryTicket {
     pub partitions: Option<Vec<String>>,
 }
 
+/// Replication write ticket - used by leader to send data to standby
+/// This uses add_batch_standby which doesn't trigger flush
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReplicationTicket {
+    pub catalog: String,
+    pub schema: String,
+    pub table: String,
+    pub date: i32,
+    pub seq: u64,
+    pub source_node_id: String,
+    /// Marker to identify this as replication data
+    pub is_replication: bool,
+}
+
 /// Convert DataFusion DataType to Arrow DataType
 fn convert_data_type(dt: &arrow::datatypes::DataType) -> arrow::datatypes::DataType {
     use arrow::datatypes::DataType;
@@ -390,6 +404,82 @@ impl DataNodeFlightService {
         }
         Ok(())
     }
+
+    /// Handle replication write from leader to standby
+    ///
+    /// This uses add_batch_standby which:
+    /// - Adds data to memtable (for fast failover)
+    /// - Does NOT trigger flush (only leader writes Parquet)
+    /// - Does NOT write to local WAL (leader has authoritative WAL)
+    async fn handle_replication_write(
+        &self,
+        ticket: ReplicationTicket,
+        batches: Vec<RecordBatch>,
+        start: Instant,
+    ) -> Result<
+        Response<Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>>,
+        Status,
+    > {
+        debug!(
+            "Replication write from {}: {}/{}/{} date={} seq={}",
+            ticket.source_node_id, ticket.catalog, ticket.schema, ticket.table, ticket.date, ticket.seq
+        );
+
+        let mut total_rows = 0u64;
+
+        for batch in batches {
+            let row_count = batch.num_rows() as u64;
+            if row_count == 0 {
+                continue;
+            }
+
+            // Use add_batch_standby which doesn't trigger flush
+            match self
+                .cache
+                .add_batch_standby(
+                    &ticket.catalog,
+                    &ticket.schema,
+                    &ticket.table,
+                    ticket.date,
+                    batch,
+                )
+                .await
+            {
+                Ok(_) => {
+                    total_rows += row_count;
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to apply replication for {}/{}/{}: {:?}",
+                        ticket.catalog, ticket.schema, ticket.table, e
+                    );
+                    return Err(Status::internal(format!("Replication error: {:?}", e)));
+                }
+            }
+        }
+
+        let elapsed = start.elapsed();
+        debug!(
+            "Replication write completed: {} rows from {} in {:?}",
+            total_rows, ticket.source_node_id, elapsed
+        );
+
+        // Return response with applied seq for ACK tracking
+        let response = serde_json::json!({
+            "standby_node_id": self.node_id,
+            "last_applied_seq": ticket.seq,
+            "rows_applied": total_rows,
+            "error": null
+        });
+
+        let result = PutResult {
+            app_metadata: serde_json::to_vec(&response)
+                .unwrap_or_default()
+                .into(),
+        };
+        let output = stream::once(async { Ok(result) });
+        Ok(Response::new(Box::pin(output)))
+    }
 }
 
 #[tonic::async_trait]
@@ -604,7 +694,14 @@ impl FlightService for DataNodeFlightService {
             .await
             .map_err(|e| Status::internal(format!("Failed to decode batches: {}", e)))?;
 
-        // Try to parse as BatchWriteTicket first (new efficient format)
+        // Try to parse as ReplicationTicket first (standby receiving from leader)
+        if let Ok(repl_ticket) = serde_json::from_slice::<ReplicationTicket>(&descriptor_cmd) {
+            if repl_ticket.is_replication {
+                return self.handle_replication_write(repl_ticket, batches, start).await;
+            }
+        }
+
+        // Try to parse as BatchWriteTicket (new efficient format from Router)
         if let Ok(batch_ticket) = serde_json::from_slice::<BatchWriteTicket>(&descriptor_cmd) {
             return self.handle_batch_write(batch_ticket, batches, start).await;
         }

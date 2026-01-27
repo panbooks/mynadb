@@ -97,11 +97,23 @@ impl PartitionKey {
     }
 }
 
+/// Partition replica info stored in shard cache (local copy of Meta state)
+#[derive(Debug, Clone)]
+pub struct PartitionReplicaInfo {
+    /// Partition key (catalog/schema/table/date=YYYY-MM-DD)
+    pub partition_key: String,
+    /// Current leader node ID
+    pub leader_node_id: String,
+    /// Standby node IDs for failover
+    pub standby_node_ids: Vec<String>,
+}
+
 /// Shard cache for partition→node mapping
 ///
 /// Uses a two-level lookup:
 /// 1. partition_owners: partition_path → node_id (reference only)
 /// 2. data_nodes: node_id → DataNodeInfo (single source of truth)
+/// 3. partition_replicas: partition_key → PartitionReplicaInfo (for warm standby failover)
 ///
 /// This design ensures node state is always fresh - when a node becomes
 /// unhealthy, the lookup automatically fails over to hash-based routing
@@ -113,6 +125,9 @@ pub struct ShardCache {
     /// node_id → DataNodeInfo (single source of truth for node state)
     data_nodes: RwLock<HashMap<String, DataNodeInfo>>,
 
+    /// Partition replicas for warm standby failover (partition_key → replica info)
+    partition_replicas: DashMap<String, PartitionReplicaInfo>,
+
     /// Last sequence number from Meta event stream
     last_event_seq: AtomicU64,
 }
@@ -122,6 +137,7 @@ impl ShardCache {
         Self {
             partition_owners: DashMap::new(),
             data_nodes: RwLock::new(HashMap::new()),
+            partition_replicas: DashMap::new(),
             last_event_seq: AtomicU64::new(0),
         }
     }
@@ -161,6 +177,59 @@ impl ShardCache {
             );
         }
         removed
+    }
+
+    // ========================================================================
+    // Partition Replica Operations (Warm Standby)
+    // ========================================================================
+
+    /// Set partition replica info (leader + standbys)
+    ///
+    /// Called when Meta publishes ReplicaAssigned event.
+    pub fn set_partition_replica(
+        &self,
+        partition_key: &str,
+        leader_node_id: String,
+        standby_node_ids: Vec<String>,
+    ) {
+        debug!(
+            "Setting partition replica: {} -> leader={}, standbys={:?}",
+            partition_key, leader_node_id, standby_node_ids
+        );
+        self.partition_replicas.insert(
+            partition_key.to_string(),
+            PartitionReplicaInfo {
+                partition_key: partition_key.to_string(),
+                leader_node_id,
+                standby_node_ids,
+            },
+        );
+    }
+
+    /// Get partition replica info
+    pub fn get_partition_replica(&self, partition_key: &str) -> Option<PartitionReplicaInfo> {
+        self.partition_replicas.get(partition_key).map(|r| r.clone())
+    }
+
+    /// Promote standby to leader (called on ReplicaPromoted event)
+    ///
+    /// Updates the local cache so that subsequent routing uses the new leader.
+    pub fn promote_partition_leader(&self, partition_key: &str, new_leader_id: String) {
+        if let Some(mut replica) = self.partition_replicas.get_mut(partition_key) {
+            let old_leader = std::mem::replace(&mut replica.leader_node_id, new_leader_id.clone());
+            // Move old leader to end of standby list (it may recover)
+            replica.standby_node_ids.retain(|id| id != &new_leader_id);
+            replica.standby_node_ids.push(old_leader);
+            info!(
+                "Promoted partition leader: {} -> new_leader={}",
+                partition_key, new_leader_id
+            );
+        }
+    }
+
+    /// Remove partition replica
+    pub fn remove_partition_replica(&self, partition_key: &str) {
+        self.partition_replicas.remove(partition_key);
     }
 
     /// Get a DataNodeInfo by node_id
@@ -207,34 +276,60 @@ impl ShardCache {
         self.data_nodes.write().remove(node_id);
     }
 
-    /// Select a Data node for a partition using consistent hashing
+    /// Select a Data node for a partition using replica-aware routing
     ///
-    /// This provides sticky routing so the same partition usually goes to the same node,
-    /// which improves cache efficiency and reduces lock contention.
+    /// **Zero-Downtime Failover**: If the partition has replica info (leader + standbys),
+    /// we check leader health first. If leader is unhealthy, we IMMEDIATELY route to
+    /// standby - no waiting for Meta to detect failure!
     ///
-    /// The two-level lookup ensures we always check the CURRENT node state:
-    /// 1. Look up owner node_id from partition_owners
-    /// 2. Look up DataNodeInfo from data_nodes (single source of truth)
-    /// 3. If node is Active, use it; otherwise fall back to hash-based routing
-    ///
-    /// Node selection priority:
-    /// 1. Cached owner if Active
-    /// 2. Any Active node (hash-based)
-    /// 3. Any Suspect node (last resort, may have recovered)
+    /// Selection priority:
+    /// 1. Partition replica leader (if Active)
+    /// 2. Partition replica standby (if leader is Suspect/Unhealthy) - INSTANT FAILOVER!
+    /// 3. Cached owner (legacy, for partitions without replica info)
+    /// 4. Hash-based selection among Active nodes
+    /// 5. Suspect nodes (last resort)
     pub fn select_node_for_partition(&self, key: &PartitionKey) -> Option<DataNodeInfo> {
-        // First check if we have a cached owner
+        let partition_key = key.to_path();
+
+        // === PRIORITY 1 & 2: Check partition replica for zero-downtime failover ===
+        if let Some(replica) = self.partition_replicas.get(&partition_key) {
+            let nodes = self.data_nodes.read();
+
+            // Check leader health
+            if let Some(leader) = nodes.get(&replica.leader_node_id) {
+                if leader.state == NodeState::Active {
+                    // Leader healthy - use it
+                    return Some(leader.clone());
+                }
+            }
+
+            // Leader unhealthy or not found - IMMEDIATELY use standby (zero-downtime!)
+            for standby_id in &replica.standby_node_ids {
+                if let Some(standby) = nodes.get(standby_id) {
+                    if standby.state == NodeState::Active {
+                        info!(
+                            "Leader {} unhealthy, instant failover to standby {} for partition {}",
+                            replica.leader_node_id, standby_id, partition_key
+                        );
+                        return Some(standby.clone());
+                    }
+                }
+            }
+            // All replicas unhealthy - fall through to hash-based
+        }
+
+        // === PRIORITY 3: Check cached owner (legacy partitions without replica info) ===
         if let Some(owner_id) = self.get_partition_owner(key) {
-            // Lookup CURRENT state from single source of truth
             let nodes = self.data_nodes.read();
             if let Some(owner) = nodes.get(&owner_id) {
                 if owner.state == NodeState::Active {
                     return Some(owner.clone());
                 }
             }
-            // Node not found or unhealthy → fall through to hash-based
+            // Owner unhealthy → fall through to hash-based
         }
 
-        // Fall back to hash-based selection among Active nodes
+        // === PRIORITY 4: Hash-based selection among Active nodes ===
         let active_nodes = self.get_active_data_nodes();
         if !active_nodes.is_empty() {
             let hash = self.hash_partition_key(key);
@@ -242,7 +337,7 @@ impl ShardCache {
             return Some(active_nodes[idx].clone());
         }
 
-        // Last resort: try Suspect nodes (they may have recovered)
+        // === PRIORITY 5: Suspect nodes (last resort) ===
         let suspect_nodes: Vec<_> = self
             .data_nodes
             .read()
@@ -254,7 +349,7 @@ impl ShardCache {
         if !suspect_nodes.is_empty() {
             warn!(
                 "No active nodes, using suspect node as last resort for partition {}",
-                key.to_path()
+                partition_key
             );
             let hash = self.hash_partition_key(key);
             let idx = (hash as usize) % suspect_nodes.len();

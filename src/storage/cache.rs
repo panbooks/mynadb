@@ -352,6 +352,66 @@ impl DataCache {
         Ok(())
     }
 
+    /// Add a pre-converted RecordBatch for standby replication (no flush trigger)
+    ///
+    /// This is used by standby nodes receiving replicated data from the leader.
+    /// Key differences from add_batch:
+    /// - Does NOT trigger automatic flush (standby doesn't write Parquet)
+    /// - Does NOT write to WAL (leader has the authoritative WAL)
+    /// - Only stores in memtable for fast failover
+    ///
+    /// When promoted to leader, the standby will start normal flush operations.
+    pub async fn add_batch_standby(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date: i32,
+        batch: RecordBatch,
+    ) -> Result<(), CacheFullError> {
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+
+        let key = (
+            catalog.to_string(),
+            schema.to_string(),
+            table.to_string(),
+            date,
+        );
+
+        let batch_size = batch.get_array_memory_size();
+        let current_size = self.total_size_bytes.load(Ordering::Relaxed);
+
+        // Reject write if cache is full (standby also has memory limits)
+        if current_size + batch_size > self.max_size_bytes {
+            warn!(
+                "Standby cache full: current={}MB, batch={}KB, max={}MB",
+                current_size / 1024 / 1024,
+                batch_size / 1024,
+                self.max_size_bytes / 1024 / 1024
+            );
+            return Err(CacheFullError::CacheFull {
+                current_bytes: current_size,
+                max_bytes: self.max_size_bytes,
+                batch_bytes: batch_size,
+            });
+        }
+
+        // Add to appropriate shard (minimal lock contention)
+        let shard_idx = self.shard_index(&key);
+        let added_size = self.shards[shard_idx].add(key, batch);
+
+        // Update total size counter
+        self.total_size_bytes
+            .fetch_add(added_size, Ordering::Relaxed);
+
+        // NOTE: Standby does NOT trigger flush - only leader flushes to Parquet
+        // When standby is promoted, it will start flushing normally
+
+        Ok(())
+    }
+
     /// Flush all cached data to disk
     /// Uses swap-and-flush pattern: takes data from shards instantly, then writes without blocking
     /// Returns list of written files with metadata for registration
