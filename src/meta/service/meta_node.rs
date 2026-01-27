@@ -4,6 +4,7 @@
 //! enabling high availability through consensus-based replication.
 
 use crate::meta::config::MetaConfig;
+use crate::meta::proto;
 use crate::meta::raft::{
     MetaNetworkFactory, MetaRaft, MetaStateMachine, NodeId, SledLogStore, TypeConfig,
 };
@@ -12,7 +13,7 @@ use openraft::error::{ClientWriteError, RaftError};
 use openraft::{BasicNode, Config as RaftConfig};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// MetaNode manages a Raft-based metadata service
 pub struct MetaNode {
@@ -204,7 +205,7 @@ impl MetaNode {
             ttl_ms,
         };
 
-        let result = self.raft.client_write(cmd).await;
+        let result = self.raft.client_write(cmd.clone()).await;
         match result {
             Ok(response) => match response.data {
                 MetaResponse::LockAcquired { fencing_token } => Ok((true, fencing_token)),
@@ -212,7 +213,61 @@ impl MetaNode {
                 MetaResponse::Error { message } => Err(message),
                 _ => Err("Unexpected response".to_string()),
             },
-            Err(e) => Err(format!("Raft error: {}", e)),
+            Err(e) => {
+                // Handle ForwardToLeader
+                if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
+                    if let Some(leader_id) = forward.leader_id {
+                        debug!("Forwarding try_lock to leader node {}", leader_id);
+                        return self.forward_try_lock_to_leader(leader_id, cmd).await;
+                    }
+                }
+                Err(format!("Raft error: {}", e))
+            }
+        }
+    }
+
+    /// Forward try_lock to leader (returns complex response)
+    async fn forward_try_lock_to_leader(
+        &self,
+        leader_id: NodeId,
+        cmd: MetaCommand,
+    ) -> Result<(bool, u64), String> {
+        let channel = self
+            .network
+            .get_channel_to(leader_id)
+            .await
+            .map_err(|e| format!("Failed to connect to leader {}: {}", leader_id, e))?;
+
+        let mut client = proto::raft_internal_client::RaftInternalClient::new(channel);
+
+        let command_data = bincode::serialize(&cmd)
+            .map_err(|e| format!("Failed to serialize command: {}", e))?;
+
+        let request = tonic::Request::new(proto::ForwardCommandRequest { command_data });
+
+        let response = client
+            .forward_command(request)
+            .await
+            .map_err(|e| format!("Forward to leader failed: {}", e))?
+            .into_inner();
+
+        if response.success {
+            // Check if we have response_data for the full MetaResponse
+            if !response.response_data.is_empty() {
+                let meta_resp: MetaResponse = bincode::deserialize(&response.response_data)
+                    .map_err(|e| format!("Failed to deserialize response: {}", e))?;
+                match meta_resp {
+                    MetaResponse::LockAcquired { fencing_token } => Ok((true, fencing_token)),
+                    MetaResponse::LockNotAcquired { .. } => Ok((false, 0)),
+                    MetaResponse::Error { message } => Err(message),
+                    _ => Err("Unexpected response".to_string()),
+                }
+            } else {
+                // Simple result - fencing_token in result field
+                Ok((true, response.result))
+            }
+        } else {
+            Err(response.error)
         }
     }
 
@@ -249,14 +304,66 @@ impl MetaNode {
             ttl_ms,
         };
 
-        let result = self.raft.client_write(cmd).await;
+        let result = self.raft.client_write(cmd.clone()).await;
         match result {
             Ok(response) => match response.data {
                 MetaResponse::LockRenewed { expires_at } => Ok(expires_at),
                 MetaResponse::Error { message } => Err(message),
                 _ => Err("Unexpected response".to_string()),
             },
-            Err(e) => Err(format!("Raft error: {}", e)),
+            Err(e) => {
+                // Handle ForwardToLeader
+                if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
+                    if let Some(leader_id) = forward.leader_id {
+                        debug!("Forwarding renew_lock to leader node {}", leader_id);
+                        return self.forward_renew_lock_to_leader(leader_id, cmd).await;
+                    }
+                }
+                Err(format!("Raft error: {}", e))
+            }
+        }
+    }
+
+    /// Forward renew_lock to leader
+    async fn forward_renew_lock_to_leader(
+        &self,
+        leader_id: NodeId,
+        cmd: MetaCommand,
+    ) -> Result<i64, String> {
+        let channel = self
+            .network
+            .get_channel_to(leader_id)
+            .await
+            .map_err(|e| format!("Failed to connect to leader {}: {}", leader_id, e))?;
+
+        let mut client = proto::raft_internal_client::RaftInternalClient::new(channel);
+
+        let command_data = bincode::serialize(&cmd)
+            .map_err(|e| format!("Failed to serialize command: {}", e))?;
+
+        let request = tonic::Request::new(proto::ForwardCommandRequest { command_data });
+
+        let response = client
+            .forward_command(request)
+            .await
+            .map_err(|e| format!("Forward to leader failed: {}", e))?
+            .into_inner();
+
+        if response.success {
+            if !response.response_data.is_empty() {
+                let meta_resp: MetaResponse = bincode::deserialize(&response.response_data)
+                    .map_err(|e| format!("Failed to deserialize response: {}", e))?;
+                match meta_resp {
+                    MetaResponse::LockRenewed { expires_at } => Ok(expires_at),
+                    MetaResponse::Error { message } => Err(message),
+                    _ => Err("Unexpected response".to_string()),
+                }
+            } else {
+                // result contains expires_at as u64, convert to i64
+                Ok(response.result as i64)
+            }
+        } else {
+            Err(response.error)
         }
     }
 
@@ -273,7 +380,7 @@ impl MetaNode {
             ttl_ms,
         };
 
-        let result = self.raft.client_write(cmd).await;
+        let result = self.raft.client_write(cmd.clone()).await;
         match result {
             Ok(response) => match response.data {
                 MetaResponse::LeaderElected { term } => Ok((true, term)),
@@ -281,7 +388,60 @@ impl MetaNode {
                 MetaResponse::Error { message } => Err(message),
                 _ => Err("Unexpected response".to_string()),
             },
-            Err(e) => Err(format!("Raft error: {}", e)),
+            Err(e) => {
+                // Handle ForwardToLeader
+                if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
+                    if let Some(leader_id) = forward.leader_id {
+                        debug!("Forwarding campaign to leader node {}", leader_id);
+                        return self.forward_campaign_to_leader(leader_id, cmd).await;
+                    }
+                }
+                Err(format!("Raft error: {}", e))
+            }
+        }
+    }
+
+    /// Forward campaign to leader
+    async fn forward_campaign_to_leader(
+        &self,
+        leader_id: NodeId,
+        cmd: MetaCommand,
+    ) -> Result<(bool, u64), String> {
+        let channel = self
+            .network
+            .get_channel_to(leader_id)
+            .await
+            .map_err(|e| format!("Failed to connect to leader {}: {}", leader_id, e))?;
+
+        let mut client = proto::raft_internal_client::RaftInternalClient::new(channel);
+
+        let command_data = bincode::serialize(&cmd)
+            .map_err(|e| format!("Failed to serialize command: {}", e))?;
+
+        let request = tonic::Request::new(proto::ForwardCommandRequest { command_data });
+
+        let response = client
+            .forward_command(request)
+            .await
+            .map_err(|e| format!("Forward to leader failed: {}", e))?
+            .into_inner();
+
+        if response.success {
+            if !response.response_data.is_empty() {
+                let meta_resp: MetaResponse = bincode::deserialize(&response.response_data)
+                    .map_err(|e| format!("Failed to deserialize response: {}", e))?;
+                match meta_resp {
+                    MetaResponse::LeaderElected { term } => Ok((true, term)),
+                    MetaResponse::LeaderExists { .. } => Ok((false, 0)),
+                    MetaResponse::Error { message } => Err(message),
+                    _ => Err("Unexpected response".to_string()),
+                }
+            } else {
+                // result contains term
+                Ok((true, response.result))
+            }
+        } else {
+            Err(response.error)
         }
     }
 
@@ -316,9 +476,10 @@ impl MetaNode {
     }
 
     /// Apply a command through Raft consensus
+    /// If this node is not the leader, transparently forwards to the leader
     async fn apply_command(&self, cmd: MetaCommand) -> Result<u64, String> {
         // Route through Raft for consensus
-        let result = self.raft.client_write(cmd).await;
+        let result = self.raft.client_write(cmd.clone()).await;
 
         match result {
             Ok(response) => {
@@ -339,7 +500,12 @@ impl MetaNode {
                 match e {
                     RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) => {
                         if let Some(leader_id) = forward.leader_id {
-                            Err(format!("Not leader. Forward to node {}", leader_id))
+                            // Forward the command to the leader transparently
+                            debug!(
+                                "Forwarding command to leader node {} (this node: {})",
+                                leader_id, self.node_id
+                            );
+                            self.forward_to_leader(leader_id, cmd).await
                         } else {
                             Err("No leader available".to_string())
                         }
@@ -347,6 +513,86 @@ impl MetaNode {
                     _ => Err(format!("Raft error: {}", e)),
                 }
             }
+        }
+    }
+
+    /// Forward a command to the leader node
+    async fn forward_to_leader(&self, leader_id: NodeId, cmd: MetaCommand) -> Result<u64, String> {
+        // Get a gRPC channel to the leader
+        let channel = self
+            .network
+            .get_channel_to(leader_id)
+            .await
+            .map_err(|e| format!("Failed to connect to leader {}: {}", leader_id, e))?;
+
+        // Create the RaftInternal client (we use the internal service for forwarding)
+        let mut client = proto::raft_internal_client::RaftInternalClient::new(channel);
+
+        // Serialize the command
+        let command_data = bincode::serialize(&cmd)
+            .map_err(|e| format!("Failed to serialize command: {}", e))?;
+
+        let request = tonic::Request::new(proto::ForwardCommandRequest { command_data });
+
+        // Forward to leader
+        let response = client
+            .forward_command(request)
+            .await
+            .map_err(|e| format!("Forward to leader failed: {}", e))?
+            .into_inner();
+
+        if response.success {
+            Ok(response.result)
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Execute a forwarded command (called on the leader)
+    /// This is used by the gRPC handler when receiving ForwardCommand requests
+    pub async fn execute_forwarded_command(
+        &self,
+        command_data: Vec<u8>,
+    ) -> Result<(u64, Option<MetaResponse>), String> {
+        // Deserialize the command
+        let cmd: MetaCommand = bincode::deserialize(&command_data)
+            .map_err(|e| format!("Failed to deserialize command: {}", e))?;
+
+        // Apply through Raft (we're the leader, so this should succeed)
+        let result = self.raft.client_write(cmd).await;
+
+        match result {
+            Ok(response) => {
+                let (result_value, meta_response) = match &response.data {
+                    MetaResponse::Success => (0, None),
+                    MetaResponse::NodeRegistered { lease_id } => (*lease_id, None),
+                    MetaResponse::EventPublished { sequence } => (*sequence, None),
+                    MetaResponse::LockAcquired { fencing_token } => {
+                        // Return full response for lock operations
+                        (*fencing_token, Some(response.data.clone()))
+                    }
+                    MetaResponse::LockNotAcquired { .. } => {
+                        // Return full response so client can see it wasn't acquired
+                        (0, Some(response.data.clone()))
+                    }
+                    MetaResponse::LockReleased => (0, None),
+                    MetaResponse::LockRenewed { expires_at } => {
+                        (*expires_at as u64, Some(response.data.clone()))
+                    }
+                    MetaResponse::LeaderElected { term } => {
+                        (*term, Some(response.data.clone()))
+                    }
+                    MetaResponse::LeaderExists { .. } => {
+                        // Return full response so client can see leader exists
+                        (0, Some(response.data.clone()))
+                    }
+                    MetaResponse::Error { message } => return Err(message.clone()),
+                    // For any other responses, return the full response
+                    other => (0, Some(other.clone())),
+                };
+                Ok((result_value, meta_response))
+            }
+            Err(e) => Err(format!("Raft error on leader: {}", e)),
         }
     }
 

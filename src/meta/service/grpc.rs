@@ -794,6 +794,36 @@ impl proto::raft_internal_server::RaftInternal for RaftInternalService {
 
         Ok(Response::new(proto::RaftMessage { data }))
     }
+
+    async fn forward_command(
+        &self,
+        request: Request<proto::ForwardCommandRequest>,
+    ) -> Result<Response<proto::ForwardCommandResponse>, Status> {
+        let req = request.into_inner();
+
+        debug!("Received forwarded command from follower");
+
+        match self.node.execute_forwarded_command(req.command_data).await {
+            Ok((result, meta_response)) => {
+                let response_data = meta_response
+                    .map(|r| bincode::serialize(&r).unwrap_or_default())
+                    .unwrap_or_default();
+
+                Ok(Response::new(proto::ForwardCommandResponse {
+                    success: true,
+                    error: String::new(),
+                    result,
+                    response_data,
+                }))
+            }
+            Err(e) => Ok(Response::new(proto::ForwardCommandResponse {
+                success: false,
+                error: e,
+                result: 0,
+                response_data: vec![],
+            })),
+        }
+    }
 }
 
 /// Start the Meta gRPC server with both MetaService and RaftInternal services
