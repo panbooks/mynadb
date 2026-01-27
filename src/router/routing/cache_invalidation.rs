@@ -3,16 +3,20 @@
 //! Subscribes to Meta service events and updates the Router's ShardCache accordingly.
 
 use super::shard_cache::{DataNodeInfo, NodeState, PartitionKey, ShardCache};
-use crate::meta::client::{EventSubscriber, MetaEvent, SubscriberConfig};
-use crate::meta::types::EventType;
+use crate::meta::client::{EventSubscriber, MetaClient, MetaEvent, SubscriberConfig};
+use crate::meta::types::{EventType, NodeRole, NodeState as MetaNodeState};
+use crate::router::client::DataNodePool;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 /// Cache invalidation handler
 pub struct CacheInvalidationHandler {
-    /// Shard cache to update
+    /// Shard cache to update (for routing decisions)
     shard_cache: Arc<ShardCache>,
+    /// Data node pool to update (for connection addresses)
+    data_node_pool: Arc<DataNodePool>,
     /// Event receiver
     event_rx: Option<mpsc::Receiver<MetaEvent>>,
     /// Event subscriber
@@ -20,12 +24,87 @@ pub struct CacheInvalidationHandler {
 }
 
 impl CacheInvalidationHandler {
-    pub fn new(shard_cache: Arc<ShardCache>) -> Self {
+    pub fn new(shard_cache: Arc<ShardCache>, data_node_pool: Arc<DataNodePool>) -> Self {
         Self {
             shard_cache,
+            data_node_pool,
             event_rx: None,
             subscriber: None,
         }
+    }
+
+    /// Initialize cache from Meta's current state with retry
+    ///
+    /// Fetches all registered data nodes from Meta to populate:
+    /// 1. ShardCache - for routing decisions
+    /// 2. DataNodePool - for connection addresses
+    ///
+    /// Retries with exponential backoff if no nodes are found (race condition
+    /// when router and data nodes start simultaneously).
+    ///
+    /// Must be called BEFORE start() to avoid a window where the cache is empty.
+    pub async fn init_from_meta(&self, meta_client: &MetaClient) -> Result<(), String> {
+        const MAX_RETRIES: u32 = 10;
+        const INITIAL_DELAY_MS: u64 = 500;
+
+        for attempt in 0..MAX_RETRIES {
+            // Fetch all active data nodes
+            let nodes = meta_client
+                .list_nodes(Some(NodeRole::Data), Some(MetaNodeState::Active))
+                .await?;
+
+            if !nodes.is_empty() {
+                // Convert to DataNodeInfo and populate shard cache
+                let data_nodes: Vec<DataNodeInfo> = nodes
+                    .iter()
+                    .map(|n| DataNodeInfo {
+                        node_id: n.node_id.clone(),
+                        grpc_addr: n.advertise_addr.clone(),
+                        state: NodeState::Active,
+                        load_score: 0.5,
+                    })
+                    .collect();
+
+                let count = data_nodes.len();
+
+                // Update shard cache for routing
+                self.shard_cache.update_data_nodes(data_nodes);
+
+                // Also add nodes to connection pool
+                for node in &nodes {
+                    self.data_node_pool
+                        .add_node(&node.node_id, &node.advertise_addr);
+                }
+
+                // Skip historical events by setting a high sequence number.
+                // We've just gotten the current state from Meta, so we only need
+                // to process NEW events going forward. This prevents replaying
+                // old NodeLeft events that would incorrectly remove current nodes.
+                self.shard_cache.set_last_event_seq(u64::MAX / 2);
+
+                info!(
+                    "Initialized shard cache and connection pool with {} data nodes from Meta (attempt {})",
+                    count,
+                    attempt + 1
+                );
+                return Ok(());
+            }
+
+            // No nodes found, wait and retry
+            if attempt < MAX_RETRIES - 1 {
+                let delay = INITIAL_DELAY_MS * (1 << attempt.min(4)); // Cap at 8 seconds
+                info!(
+                    "No data nodes found, retrying in {}ms (attempt {}/{})",
+                    delay,
+                    attempt + 1,
+                    MAX_RETRIES
+                );
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+        }
+
+        warn!("No data nodes found after {} attempts, will rely on events", MAX_RETRIES);
+        Ok(())
     }
 
     /// Start the cache invalidation handler
@@ -39,15 +118,20 @@ impl CacheInvalidationHandler {
 
         // Spawn the event processing loop
         let shard_cache = Arc::clone(&self.shard_cache);
+        let data_node_pool = Arc::clone(&self.data_node_pool);
         if let Some(rx) = self.event_rx.take() {
             tokio::spawn(async move {
-                Self::process_events(rx, shard_cache).await;
+                Self::process_events(rx, shard_cache, data_node_pool).await;
             });
         }
     }
 
     /// Process events from the Meta service
-    async fn process_events(mut event_rx: mpsc::Receiver<MetaEvent>, shard_cache: Arc<ShardCache>) {
+    async fn process_events(
+        mut event_rx: mpsc::Receiver<MetaEvent>,
+        shard_cache: Arc<ShardCache>,
+        data_node_pool: Arc<DataNodePool>,
+    ) {
         info!("Starting cache invalidation event processor");
 
         while let Some(event) = event_rx.recv().await {
@@ -62,13 +146,13 @@ impl CacheInvalidationHandler {
             // Handle event based on type
             match event.event_type {
                 EventType::NodeJoined => {
-                    Self::handle_node_joined(&shard_cache, &event);
+                    Self::handle_node_joined(&shard_cache, &data_node_pool, &event);
                 }
                 EventType::NodeLeft => {
-                    Self::handle_node_left(&shard_cache, &event);
+                    Self::handle_node_left(&shard_cache, &data_node_pool, &event);
                 }
                 EventType::NodeStateChanged => {
-                    Self::handle_node_updated(&shard_cache, &event);
+                    Self::handle_node_updated(&shard_cache, &data_node_pool, &event);
                 }
                 EventType::FilesRegistered => {
                     Self::handle_files_registered(&shard_cache, &event);
@@ -104,35 +188,51 @@ impl CacheInvalidationHandler {
     }
 
     /// Handle node joined event
-    fn handle_node_joined(shard_cache: &ShardCache, event: &MetaEvent) {
+    fn handle_node_joined(
+        shard_cache: &ShardCache,
+        data_node_pool: &DataNodePool,
+        event: &MetaEvent,
+    ) {
         if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
             let node_id = payload["node_id"].as_str().unwrap_or_default();
             let grpc_addr = payload["grpc_addr"].as_str().unwrap_or_default();
 
             if !node_id.is_empty() && !grpc_addr.is_empty() {
                 info!("Node joined: {} at {}", node_id, grpc_addr);
+
+                // Update shard cache for routing
                 shard_cache.upsert_data_node(DataNodeInfo {
                     node_id: node_id.to_string(),
                     grpc_addr: grpc_addr.to_string(),
                     state: NodeState::Active,
                     load_score: 0.5,
                 });
+
+                // Also add to connection pool
+                data_node_pool.add_node(node_id, grpc_addr);
             }
         }
     }
 
     /// Handle node left event
-    fn handle_node_left(shard_cache: &ShardCache, event: &MetaEvent) {
+    fn handle_node_left(
+        shard_cache: &ShardCache,
+        data_node_pool: &DataNodePool,
+        event: &MetaEvent,
+    ) {
         if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
             let node_id = payload["node_id"].as_str().unwrap_or_default();
 
             if !node_id.is_empty() {
                 info!("Node left: {}", node_id);
+
+                // Remove from shard cache
                 shard_cache.remove_data_node(node_id);
 
+                // Remove from connection pool
+                data_node_pool.remove_node(node_id);
+
                 // Clean up partition ownership to prevent memory growth
-                // Note: This is optional since lookup will fail gracefully anyway,
-                // but it keeps the cache clean
                 shard_cache.remove_partitions_for_node(node_id);
             }
         }
@@ -142,7 +242,11 @@ impl CacheInvalidationHandler {
     ///
     /// Note: When Meta sends a state update, it overrides local state (including Suspect).
     /// This allows nodes to recover from local Suspect state when Meta confirms they're healthy.
-    fn handle_node_updated(shard_cache: &ShardCache, event: &MetaEvent) {
+    fn handle_node_updated(
+        shard_cache: &ShardCache,
+        data_node_pool: &DataNodePool,
+        event: &MetaEvent,
+    ) {
         if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
             let node_id = payload["node_id"].as_str().unwrap_or_default();
             let state_str = payload["state"].as_str().unwrap_or("active");
@@ -157,12 +261,19 @@ impl CacheInvalidationHandler {
                 };
 
                 debug!("Node updated: {} -> {:?}", node_id, state);
+
+                // Update shard cache
                 shard_cache.upsert_data_node(DataNodeInfo {
                     node_id: node_id.to_string(),
                     grpc_addr: grpc_addr.to_string(),
                     state,
                     load_score: 0.5,
                 });
+
+                // Also update in connection pool (address may have changed)
+                if !grpc_addr.is_empty() {
+                    data_node_pool.add_node(node_id, grpc_addr);
+                }
             }
         }
     }
