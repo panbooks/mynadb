@@ -133,7 +133,7 @@ impl MetaNetworkConnection {
             .get_channel(self.target, &self.target_addr)
             .await
             .map_err(|e| {
-                warn!("Failed to get channel to {}: {}", self.target, e);
+                debug!("Failed to get channel to {}: {}", self.target, e);
                 Unreachable::from(AnyError::error(e))
             })?;
 
@@ -159,7 +159,7 @@ impl RaftNetwork<TypeConfig> for MetaNetworkConnection {
 
         // Send the RPC
         let response = client.append_entries(request).await.map_err(|e| {
-            warn!("AppendEntries RPC to {} failed: {}", self.target, e);
+            debug!("AppendEntries RPC to {} failed: {}", self.target, e);
             Unreachable::from(AnyError::error(e.to_string()))
         })?;
 
@@ -193,7 +193,7 @@ impl RaftNetwork<TypeConfig> for MetaNetworkConnection {
 
         // Send the RPC
         let response = client.install_snapshot(request).await.map_err(|e| {
-            warn!("InstallSnapshot RPC to {} failed: {}", self.target, e);
+            debug!("InstallSnapshot RPC to {} failed: {}", self.target, e);
             Unreachable::from(AnyError::error(e.to_string()))
         })?;
 
@@ -224,7 +224,7 @@ impl RaftNetwork<TypeConfig> for MetaNetworkConnection {
 
         // Send the RPC
         let response = client.vote(request).await.map_err(|e| {
-            warn!("Vote RPC to {} failed: {}", self.target, e);
+            debug!("Vote RPC to {} failed: {}", self.target, e);
             Unreachable::from(AnyError::error(e.to_string()))
         })?;
 
