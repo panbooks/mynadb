@@ -1,0 +1,41 @@
+# Single Meta Node for Cold Standby testing
+[meta]
+node_id = 1
+bind_addr = "0.0.0.0:7100"
+advertise_addr = "127.0.0.1:7100"
+data_dir = "./dev/data/coldstandby-simple/meta1"
+http_port = 9100
+peers = []
+
+[meta.raft]
+heartbeat_interval_ms = 150
+election_timeout_min_ms = 300
+election_timeout_max_ms = 500
+
+[meta.events]
+max_events = 100000
+retention_secs = 3600
+
+[meta.replication]
+auto_assign_enabled = true
+default_replication_factor = 2
+zone_aware = true
+min_nodes_for_replication = 2
+lease_ttl_secs = 10
+auto_promote = true
+load_balance_strategy = "least_loaded"
+
+# Cold Standby: 3 Primary + 1 Standby (3:1 ratio)
+[meta.standby]
+enabled = true
+primary_standby_ratio = 3
+auto_assign_mode = true
+auto_promote = true
+min_primary_nodes = 2
+
+[logging]
+level = "info"
+log_dir = "./dev/logs/coldstandby-simple/meta1"
+file_prefix = "meta1"
+rotation = "daily"
+max_files = 7

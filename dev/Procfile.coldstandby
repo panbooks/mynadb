@@ -1,0 +1,36 @@
+# MynaDB Cold Standby Development Environment
+# Full cluster with Cold Standby architecture:
+# - 3 Meta nodes (Raft consensus, HTTP API on 9100-9102)
+# - 6 Data nodes (4 Primary + 2 Standby with 2:1 ratio)
+# - 1 Router
+#
+# Port assignments:
+#   meta1:   gRPC 7100, HTTP 9100
+#   meta2:   gRPC 7101, HTTP 9101
+#   meta3:   gRPC 7102, HTTP 9102
+#   router1: HTTP 7000, Flight 7001, MySQL 7002
+#   data1:   gRPC 7200, HTTP 7010 (zone-a, Primary)
+#   data2:   gRPC 7201, HTTP 7020 (zone-b, Primary)
+#   data3:   gRPC 7202, HTTP 7030 (zone-c, Primary)
+#   data4:   gRPC 7203, HTTP 7040 (zone-a, Primary)
+#   data5:   gRPC 7204, HTTP 7050 (zone-b, Standby)
+#   data6:   gRPC 7205, HTTP 7060 (zone-c, Standby)
+#
+# Cold Standby: 4 Primaries serve traffic, 2 Standbys are cold backups
+# On Primary failure, a Standby is promoted (no avalanche effect)
+#
+# Start with: goreman -f ./dev/Procfile.coldstandby start
+
+# Meta nodes: stagger starts to allow Raft cluster to form properly
+# meta1 bootstraps cluster, adds meta2/3 as learners, promotes to voters (~5s total)
+meta1: ./target/debug/mynadb -c ./dev/configs/coldstandby/meta1.toml meta start
+meta2: sleep 5 && ./target/debug/mynadb -c ./dev/configs/coldstandby/meta2.toml meta start
+meta3: sleep 5 && ./target/debug/mynadb -c ./dev/configs/coldstandby/meta3.toml meta start
+# Router and data nodes: wait for Raft cluster to stabilize fully
+router1: sleep 15 && ./target/debug/mynadb -c ./dev/configs/coldstandby/router1.toml router start
+data1: sleep 15 && MYNADB_ZONE=zone-a ./target/debug/mynadb -c ./dev/configs/coldstandby/data1.toml data start
+data2: sleep 15 && MYNADB_ZONE=zone-b ./target/debug/mynadb -c ./dev/configs/coldstandby/data2.toml data start
+data3: sleep 15 && MYNADB_ZONE=zone-c ./target/debug/mynadb -c ./dev/configs/coldstandby/data3.toml data start
+data4: sleep 15 && MYNADB_ZONE=zone-a ./target/debug/mynadb -c ./dev/configs/coldstandby/data4.toml data start
+data5: sleep 16 && MYNADB_ZONE=zone-b ./target/debug/mynadb -c ./dev/configs/coldstandby/data5.toml data start
+data6: sleep 16 && MYNADB_ZONE=zone-c ./target/debug/mynadb -c ./dev/configs/coldstandby/data6.toml data start
