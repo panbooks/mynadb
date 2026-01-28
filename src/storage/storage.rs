@@ -268,6 +268,12 @@ impl Storage {
     pub fn table_url(&self, catalog: &str, schema: &str, table: &str) -> String {
         format!("{}/{}/{}/{}/", self.url_prefix, catalog, schema, table)
     }
+
+    /// Build table URL for DataFusion registration with node_id prefix
+    /// Used in cluster mode where files are stored under {node_id}/{catalog}/{schema}/{table}/
+    pub fn table_url_with_node(&self, node_id: &str, catalog: &str, schema: &str, table: &str) -> String {
+        format!("{}/{}/{}/{}/{}/", self.url_prefix, node_id, catalog, schema, table)
+    }
 }
 
 impl std::fmt::Debug for Storage {

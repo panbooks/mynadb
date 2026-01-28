@@ -11,11 +11,14 @@ mysql_port = 7002
 mysql_enabled = true
 
 [storage]
+backend = "minio"
 data_dir = "./dev/data/standalone"
-system_dir = "_system"
-
-[storage.object_store]
-backend = "local"
+bucket = "mynadb"
+region = "us-east-1"
+access_key = "minioadmin"
+secret_key = "minioadmin"
+endpoint = "http://127.0.0.1:9000"
+allow_http = true
 
 [schema]
 strategy = "service_as_schema"
