@@ -126,6 +126,7 @@ pub async fn start(config_path: &str) {
                 registered_at: current_timestamp_ms(),
                 last_heartbeat: current_timestamp_ms(),
                 labels: HashMap::new(),
+                mode: None, // Mode auto-assigned by Meta based on standby ratio
             };
 
             // Register with 10 second lease TTL (faster failure detection)

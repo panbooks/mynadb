@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use crate::meta::config::ReplicationAssignmentConfig;
-use crate::meta::types::{NodeInfo, NodeRole, NodeState, PartitionReplica};
+use crate::meta::types::{DataNodeMode, NodeInfo, NodeRole, NodeState, PartitionReplica};
 
 /// Handles automatic replica assignment for partitions
 pub struct ReplicaAssigner {
@@ -23,9 +23,12 @@ impl ReplicaAssigner {
 
     /// Assign leader and standbys for a new partition
     ///
-    /// Selection strategy:
-    /// 1. Leader: Least-loaded active Data node
-    /// 2. Standbys: Prefer nodes in different zones, then least-loaded
+    /// With Cold Standby Architecture enabled:
+    /// 1. Leader: Selected ONLY from PRIMARY Data nodes (least-loaded)
+    /// 2. Standbys: Selected ONLY from STANDBY Data nodes (zone-aware)
+    ///
+    /// This prevents avalanche failures by ensuring standbys don't serve traffic.
+    /// When Cold Standby is disabled, falls back to ISR-like behavior.
     ///
     /// Returns None if no suitable nodes are available.
     pub fn assign_new_partition(
@@ -44,20 +47,100 @@ impl ReplicaAssigner {
             return None;
         }
 
+        // Check if Cold Standby Architecture is in use
+        // (detected by presence of Standby mode nodes)
+        let has_standby_nodes = active_data_nodes
+            .iter()
+            .any(|n| n.mode == Some(DataNodeMode::Standby));
+
+        if has_standby_nodes {
+            // Cold Standby Mode: Use separate Primary/Standby pools
+            self.assign_with_cold_standby(partition_key, &active_data_nodes, partition_counts)
+        } else {
+            // Legacy ISR Mode: Any node can be leader or standby
+            self.assign_with_isr_mode(partition_key, &active_data_nodes, partition_counts)
+        }
+    }
+
+    /// Assign using Cold Standby Architecture (separate Primary/Standby pools)
+    ///
+    /// - Leaders are selected from PRIMARY nodes only
+    /// - Standbys are selected from STANDBY nodes only
+    fn assign_with_cold_standby(
+        &self,
+        partition_key: &str,
+        nodes: &[&NodeInfo],
+        partition_counts: &HashMap<String, usize>,
+    ) -> Option<PartitionReplica> {
+        // Separate Primary and Standby pools
+        let primary_nodes: Vec<&NodeInfo> = nodes
+            .iter()
+            .filter(|n| n.mode == Some(DataNodeMode::Primary))
+            .copied()
+            .collect();
+
+        let standby_nodes: Vec<&NodeInfo> = nodes
+            .iter()
+            .filter(|n| n.mode == Some(DataNodeMode::Standby))
+            .copied()
+            .collect();
+
+        if primary_nodes.is_empty() {
+            return None; // No Primary nodes available
+        }
+
+        // Calculate effective replication factor based on available standbys
+        // In Cold Standby, we can only replicate to as many standbys as we have
+        let max_standbys = standby_nodes.len();
+        let desired_standbys = (self.config.default_replication_factor as usize).saturating_sub(1);
+        let actual_standbys = std::cmp::min(max_standbys, desired_standbys);
+        let rf = (actual_standbys + 1) as u8;
+
+        // Select leader from PRIMARY pool (least-loaded)
+        let leader = self.select_least_loaded(&primary_nodes, partition_counts)?;
+
+        // Select standbys from STANDBY pool
+        let standbys = if actual_standbys > 0 {
+            self.select_standbys_from_pool(
+                &leader.node_id,
+                leader,
+                &standby_nodes,
+                partition_counts,
+                actual_standbys,
+            )
+        } else {
+            vec![]
+        };
+
+        Some(PartitionReplica::new(
+            partition_key.to_string(),
+            leader.node_id.clone(),
+            standbys,
+            rf,
+        ))
+    }
+
+    /// Assign using legacy ISR mode (any node can be leader or standby)
+    fn assign_with_isr_mode(
+        &self,
+        partition_key: &str,
+        nodes: &[&NodeInfo],
+        partition_counts: &HashMap<String, usize>,
+    ) -> Option<PartitionReplica> {
         // Calculate effective replication factor
         let rf = self
             .config
-            .effective_replication_factor(active_data_nodes.len());
+            .effective_replication_factor(nodes.len());
 
         // Select leader (least-loaded)
-        let leader = self.select_least_loaded(&active_data_nodes, partition_counts)?;
+        let leader = self.select_least_loaded(nodes, partition_counts)?;
 
-        // Select standbys
+        // Select standbys from remaining nodes
         let standbys = if rf > 1 {
             self.select_standbys(
                 &leader.node_id,
                 leader,
-                &active_data_nodes,
+                nodes,
                 partition_counts,
                 (rf - 1) as usize,
             )
@@ -71,6 +154,54 @@ impl ReplicaAssigner {
             standbys,
             rf,
         ))
+    }
+
+    /// Select standbys from a dedicated standby pool (Cold Standby mode)
+    fn select_standbys_from_pool(
+        &self,
+        leader_id: &str,
+        leader: &NodeInfo,
+        standby_pool: &[&NodeInfo],
+        partition_counts: &HashMap<String, usize>,
+        count: usize,
+    ) -> Vec<String> {
+        if standby_pool.is_empty() || count == 0 {
+            return vec![];
+        }
+
+        // Score candidates: lower is better
+        let mut scored: Vec<(&NodeInfo, i64)> = standby_pool
+            .iter()
+            .map(|node| {
+                let mut score: i64 = 0;
+
+                // Zone awareness: prefer different zone
+                if self.config.zone_aware {
+                    if !leader.is_different_zone(node) {
+                        score += 1000; // Same zone penalty
+                    }
+                    if !leader.is_different_rack(node) {
+                        score += 500; // Same rack penalty
+                    }
+                }
+
+                // Load balancing: prefer nodes with fewer partitions
+                let load = *partition_counts.get(&node.node_id).unwrap_or(&0) as i64;
+                score += load * 10;
+
+                (*node, score)
+            })
+            .collect();
+
+        // Sort by score (ascending)
+        scored.sort_by_key(|(_, score)| *score);
+
+        // Take top N
+        scored
+            .into_iter()
+            .take(count)
+            .map(|(node, _)| node.node_id.clone())
+            .collect()
     }
 
     /// Select standbys for a partition
@@ -360,9 +491,23 @@ mod tests {
     fn make_node(id: &str, zone: Option<&str>) -> NodeInfo {
         let mut node = NodeInfo::new(id.to_string(), NodeRole::Data, format!("{}:7200", id));
         node.state = NodeState::Active;
+        // Default to Primary mode for backward compatibility
+        node.mode = Some(DataNodeMode::Primary);
         if let Some(z) = zone {
             node.labels.insert("topology.kubernetes.io/zone".to_string(), z.to_string());
         }
+        node
+    }
+
+    fn make_primary_node(id: &str, zone: Option<&str>) -> NodeInfo {
+        let mut node = make_node(id, zone);
+        node.mode = Some(DataNodeMode::Primary);
+        node
+    }
+
+    fn make_standby_node(id: &str, zone: Option<&str>) -> NodeInfo {
+        let mut node = make_node(id, zone);
+        node.mode = Some(DataNodeMode::Standby);
         node
     }
 
@@ -484,5 +629,73 @@ mod tests {
 
         assert_eq!(updates.len(), 1);
         assert!(updates[0].standby_node_ids.contains(&"data-2".to_string()));
+    }
+
+    #[test]
+    fn test_cold_standby_separate_pools() {
+        // Test that with Cold Standby architecture:
+        // - Leaders are selected from PRIMARY nodes only
+        // - Standbys are selected from STANDBY nodes only
+        let config = ReplicationAssignmentConfig {
+            zone_aware: true,
+            default_replication_factor: 2,
+            ..Default::default()
+        };
+        let assigner = ReplicaAssigner::new(config);
+
+        // Create 2 Primary nodes and 1 Standby node
+        let nodes = vec![
+            make_primary_node("primary-1", Some("zone-a")),
+            make_primary_node("primary-2", Some("zone-b")),
+            make_standby_node("standby-1", Some("zone-c")),
+        ];
+
+        let counts: HashMap<String, usize> = HashMap::new();
+
+        let replica = assigner.assign_new_partition("mydb/default/cpu/date=2024-01-15", &nodes, &counts);
+        assert!(replica.is_some());
+
+        let replica = replica.unwrap();
+
+        // Leader must be a Primary node
+        assert!(
+            replica.leader_node_id == "primary-1" || replica.leader_node_id == "primary-2",
+            "Leader {} must be a Primary node",
+            replica.leader_node_id
+        );
+
+        // Standby must be a Standby node
+        assert_eq!(replica.standby_node_ids.len(), 1);
+        assert_eq!(
+            replica.standby_node_ids[0], "standby-1",
+            "Standby must be a dedicated Standby node"
+        );
+    }
+
+    #[test]
+    fn test_cold_standby_no_standbys_available() {
+        // Test behavior when no Standby nodes exist
+        let config = ReplicationAssignmentConfig {
+            default_replication_factor: 2,
+            ..Default::default()
+        };
+        let assigner = ReplicaAssigner::new(config);
+
+        // Create only Primary nodes (no Standbys)
+        let nodes = vec![
+            make_primary_node("primary-1", Some("zone-a")),
+            make_primary_node("primary-2", Some("zone-b")),
+        ];
+
+        let counts: HashMap<String, usize> = HashMap::new();
+
+        let replica = assigner.assign_new_partition("mydb/default/cpu/date=2024-01-15", &nodes, &counts);
+        assert!(replica.is_some());
+
+        let replica = replica.unwrap();
+
+        // Without any Standby nodes, we fall back to ISR mode
+        // where Primaries can be used as standbys
+        assert!(!replica.leader_node_id.is_empty());
     }
 }

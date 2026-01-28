@@ -247,6 +247,16 @@ impl MetaStateMachine {
             MetaCommand::AutoAssignReplica { partition_key } => self.auto_assign_replica(&partition_key),
 
             MetaCommand::RebalanceOnNodeJoin { node_id } => self.rebalance_on_node_join(&node_id),
+
+            // Cold Standby Architecture: Data node mode management
+            MetaCommand::PromoteDataNode {
+                standby_node_id,
+                failed_primary_id,
+            } => self.promote_data_node(&standby_node_id, failed_primary_id.as_deref()),
+
+            MetaCommand::UpdateDataNodeMode { node_id, mode } => {
+                self.update_data_node_mode(&node_id, mode)
+            }
         }
     }
 
@@ -254,9 +264,30 @@ impl MetaStateMachine {
     // Node Operations
     // ========================================================================
 
-    fn register_node(&self, info: NodeInfo, lease_ttl_ms: u64) -> MetaResponse {
+    fn register_node(&self, mut info: NodeInfo, lease_ttl_ms: u64) -> MetaResponse {
         let key = format!("{}{}", keys::PREFIX_NODE, info.node_id);
         let lease_id = self.next_lease_id();
+
+        // Cold Standby Architecture: Auto-assign mode for Data nodes
+        if info.role == NodeRole::Data && info.mode.is_none() {
+            let standby_config = crate::meta::config::StandbyConfig::default();
+            if standby_config.enabled && standby_config.auto_assign_mode {
+                // Count current Primary and Standby nodes
+                let (primary_count, standby_count) = self.count_data_nodes_by_mode();
+
+                // Determine mode based on ratio
+                let assigned_mode = standby_config.mode_for_new_node(primary_count, standby_count);
+                info.mode = Some(assigned_mode);
+
+                info!(
+                    "Auto-assigned mode {} to Data node {} (primaries={}, standbys={})",
+                    assigned_mode, info.node_id, primary_count, standby_count
+                );
+            } else {
+                // Default to Primary if standby architecture is disabled
+                info.mode = Some(DataNodeMode::Primary);
+            }
+        }
 
         // Create lease
         let lease = LeaseInfo::new(lease_id, info.node_id.clone(), lease_ttl_ms);
@@ -329,6 +360,28 @@ impl MetaStateMachine {
                 if let Ok(lease) = bincode::deserialize::<LeaseInfo>(&v) {
                     if lease.node_id == node_id {
                         let _ = self.db.remove(k);
+                    }
+                }
+            }
+        }
+
+        // Cold Standby Architecture: If a PRIMARY Data node left, promote a STANDBY node
+        let standby_config = crate::meta::config::StandbyConfig::default();
+        if standby_config.enabled && standby_config.auto_promote {
+            if let Some(ref node_info) = info {
+                if node_info.role == NodeRole::Data && node_info.mode == Some(DataNodeMode::Primary) {
+                    // Find an available Standby node to promote
+                    if let Some(standby) = self.select_standby_to_promote(node_id) {
+                        info!(
+                            "Cold Standby: Primary node {} left, promoting Standby {} to Primary",
+                            node_id, standby.node_id
+                        );
+                        self.promote_data_node(&standby.node_id, Some(node_id));
+                    } else {
+                        info!(
+                            "Cold Standby: Primary node {} left, no Standby available to promote",
+                            node_id
+                        );
                     }
                 }
             }
@@ -941,6 +994,240 @@ impl MetaStateMachine {
         }
 
         MetaResponse::RebalanceCompleted { updated_count }
+    }
+
+    // ========================================================================
+    // Cold Standby Architecture Operations
+    // ========================================================================
+
+    /// Count Data nodes by mode (Primary vs Standby)
+    fn count_data_nodes_by_mode(&self) -> (usize, usize) {
+        let nodes = self.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
+        let primary_count = nodes
+            .iter()
+            .filter(|n| n.mode == Some(DataNodeMode::Primary))
+            .count();
+        let standby_count = nodes
+            .iter()
+            .filter(|n| n.mode == Some(DataNodeMode::Standby))
+            .count();
+        (primary_count, standby_count)
+    }
+
+    /// Select a Standby node to promote when a Primary fails
+    ///
+    /// Selection criteria:
+    /// 1. Must be in Active state
+    /// 2. Must be in Standby mode
+    /// 3. Prefer nodes in different zones for fault tolerance
+    fn select_standby_to_promote(&self, failed_primary_id: &str) -> Option<NodeInfo> {
+        // Get the failed primary's info for zone comparison
+        let failed_primary = self.get_node(failed_primary_id);
+
+        // Get all active Standby nodes
+        let standbys: Vec<NodeInfo> = self
+            .list_nodes(Some(NodeRole::Data), Some(NodeState::Active))
+            .into_iter()
+            .filter(|n| n.mode == Some(DataNodeMode::Standby))
+            .collect();
+
+        if standbys.is_empty() {
+            return None;
+        }
+
+        // If we have zone info for the failed primary, prefer standbys in different zones
+        if let Some(ref failed) = failed_primary {
+            // First, try to find a standby in a different zone
+            let different_zone = standbys
+                .iter()
+                .find(|s| s.is_different_zone(failed));
+            if let Some(standby) = different_zone {
+                return Some(standby.clone());
+            }
+        }
+
+        // Fall back to the first available standby
+        standbys.into_iter().next()
+    }
+
+    /// Promote a Standby data node to Primary
+    ///
+    /// Called when a Primary node fails and we need a replacement.
+    /// The promoted Standby:
+    /// 1. Changes mode from Standby to Primary
+    /// 2. Takes over partition leadership from the failed Primary
+    /// 3. Starts serving queries and flushing to Parquet
+    fn promote_data_node(
+        &self,
+        standby_node_id: &str,
+        failed_primary_id: Option<&str>,
+    ) -> MetaResponse {
+        let node_key = format!("{}{}", keys::PREFIX_NODE, standby_node_id);
+
+        // Get the current node info
+        let node_data = match self.db.get(node_key.as_bytes()) {
+            Ok(Some(data)) => data,
+            Ok(None) => {
+                return MetaResponse::DataNodeNotFound {
+                    node_id: standby_node_id.to_string(),
+                }
+            }
+            Err(e) => {
+                return MetaResponse::Error {
+                    message: format!("Database error: {}", e),
+                }
+            }
+        };
+
+        let mut node: NodeInfo = match bincode::deserialize(&node_data) {
+            Ok(n) => n,
+            Err(e) => {
+                return MetaResponse::Error {
+                    message: format!("Deserialize error: {}", e),
+                }
+            }
+        };
+
+        // Verify it's a Standby data node
+        if node.role != NodeRole::Data {
+            return MetaResponse::Error {
+                message: format!("Node {} is not a Data node (role={:?})", standby_node_id, node.role),
+            };
+        }
+
+        let old_mode = node.mode.unwrap_or(DataNodeMode::Primary);
+        if old_mode != DataNodeMode::Standby {
+            return MetaResponse::Error {
+                message: format!(
+                    "Node {} is not a Standby (mode={:?})",
+                    standby_node_id, old_mode
+                ),
+            };
+        }
+
+        // Promote to Primary
+        node.mode = Some(DataNodeMode::Primary);
+        let _ = self
+            .db
+            .insert(node_key.as_bytes(), bincode::serialize(&node).unwrap());
+
+        info!(
+            "Promoted Data node {} from Standby to Primary (failed_primary={:?})",
+            standby_node_id, failed_primary_id
+        );
+
+        // If a failed Primary was specified, transfer its partition leadership
+        if let Some(failed_id) = failed_primary_id {
+            let replicas_to_transfer = self.get_replicas_by_leader(failed_id);
+            for replica in replicas_to_transfer {
+                // Re-assign leader to the promoted node
+                let mut updated = replica.clone();
+                updated.leader_node_id = standby_node_id.to_string();
+                // Remove the promoted node from standbys if it was there
+                updated.standby_node_ids.retain(|id| id != standby_node_id);
+                // Add the old leader to standbys (it may recover)
+                if !updated.standby_node_ids.contains(&failed_id.to_string()) {
+                    updated.standby_node_ids.push(failed_id.to_string());
+                }
+                updated.leader_last_seen = current_timestamp_ms();
+
+                let storage_key = updated.storage_key();
+                let _ = self.db.insert(
+                    storage_key.as_bytes(),
+                    bincode::serialize(&updated).unwrap(),
+                );
+
+                info!(
+                    "Transferred partition {} leadership from {} to {}",
+                    updated.partition_key, failed_id, standby_node_id
+                );
+            }
+        }
+
+        // Publish mode change event
+        let payload = serde_json::json!({
+            "node_id": standby_node_id,
+            "old_mode": format!("{:?}", old_mode),
+            "new_mode": "Primary",
+            "failed_primary_id": failed_primary_id,
+        });
+        self.publish_event(
+            "nodes",
+            EventType::DataNodeModeChanged,
+            serde_json::to_vec(&payload).unwrap_or_default(),
+            standby_node_id,
+        );
+
+        MetaResponse::DataNodePromoted {
+            node_id: standby_node_id.to_string(),
+            old_mode,
+            new_mode: DataNodeMode::Primary,
+        }
+    }
+
+    /// Update a data node's mode (Primary/Standby)
+    fn update_data_node_mode(&self, node_id: &str, mode: DataNodeMode) -> MetaResponse {
+        let node_key = format!("{}{}", keys::PREFIX_NODE, node_id);
+
+        // Get the current node info
+        let node_data = match self.db.get(node_key.as_bytes()) {
+            Ok(Some(data)) => data,
+            Ok(None) => {
+                return MetaResponse::DataNodeNotFound {
+                    node_id: node_id.to_string(),
+                }
+            }
+            Err(e) => {
+                return MetaResponse::Error {
+                    message: format!("Database error: {}", e),
+                }
+            }
+        };
+
+        let mut node: NodeInfo = match bincode::deserialize(&node_data) {
+            Ok(n) => n,
+            Err(e) => {
+                return MetaResponse::Error {
+                    message: format!("Deserialize error: {}", e),
+                }
+            }
+        };
+
+        // Verify it's a Data node
+        if node.role != NodeRole::Data {
+            return MetaResponse::Error {
+                message: format!("Node {} is not a Data node", node_id),
+            };
+        }
+
+        let old_mode = node.mode;
+        node.mode = Some(mode);
+        let _ = self
+            .db
+            .insert(node_key.as_bytes(), bincode::serialize(&node).unwrap());
+
+        info!(
+            "Updated Data node {} mode: {:?} -> {:?}",
+            node_id, old_mode, mode
+        );
+
+        // Publish mode change event
+        let payload = serde_json::json!({
+            "node_id": node_id,
+            "old_mode": old_mode.map(|m| format!("{:?}", m)),
+            "new_mode": format!("{:?}", mode),
+        });
+        self.publish_event(
+            "nodes",
+            EventType::DataNodeModeChanged,
+            serde_json::to_vec(&payload).unwrap_or_default(),
+            node_id,
+        );
+
+        MetaResponse::DataNodeModeUpdated {
+            node_id: node_id.to_string(),
+            mode,
+        }
     }
 
     /// Get partition count per node for load balancing

@@ -44,6 +44,10 @@ service MetaService {
     rpc AutoAssignReplica(AutoAssignReplicaRequest) returns (AutoAssignReplicaResponse);
     rpc PromoteStandby(PromoteStandbyRequest) returns (PromoteStandbyResponse);
     rpc UpdateReplicaState(UpdateReplicaStateRequest) returns (UpdateReplicaStateResponse);
+
+    // Data Node Mode Management (Cold Standby Architecture)
+    rpc PromoteDataNode(PromoteDataNodeRequest) returns (PromoteDataNodeResponse);
+    rpc GetDataNodeMode(GetDataNodeModeRequest) returns (GetDataNodeModeResponse);
 }
 
 // ============================================================================
@@ -66,6 +70,17 @@ enum NodeState {
     NODE_STATE_INACTIVE = 4;
 }
 
+// Data node operational mode (Cold Standby Architecture)
+//
+// Primary nodes actively serve writes and queries.
+// Standby nodes only receive replication and are promoted on Primary failure.
+// This prevents avalanche failures by having dedicated takeover nodes.
+enum DataNodeMode {
+    DATA_NODE_MODE_UNSPECIFIED = 0;  // Not a Data node or mode not set
+    DATA_NODE_MODE_PRIMARY = 1;       // Active: serves writes and queries
+    DATA_NODE_MODE_STANDBY = 2;       // Cold backup: only receives replication
+}
+
 message NodeInfo {
     string node_id = 1;
     NodeRole role = 2;
@@ -76,6 +91,9 @@ message NodeInfo {
     int64 registered_at = 7;
     int64 last_heartbeat = 8;
     map<string, string> labels = 9; // Custom metadata
+    // Data node mode (only relevant for Data nodes)
+    // Auto-assigned by Meta based on primary_standby_ratio config
+    DataNodeMode mode = 10;
 }
 
 message RegisterNodeRequest {
@@ -295,6 +313,8 @@ enum EventType {
     EVENT_TYPE_REPLICA_ASSIGNED = 9;
     EVENT_TYPE_REPLICA_PROMOTED = 10;
     EVENT_TYPE_REPLICA_STATE_CHANGED = 11;
+    // Cold Standby Architecture: Standby node promoted to Primary
+    EVENT_TYPE_DATA_NODE_MODE_CHANGED = 12;
 }
 
 // Replica state for partition replication
@@ -462,4 +482,36 @@ message ForwardCommandResponse {
     string error = 2;
     uint64 result = 3;          // Result value (lease_id, sequence, fencing_token, etc.)
     bytes response_data = 4;    // bincode-serialized MetaResponse for complex responses
+}
+
+// ============================================================================
+// Data Node Mode Management (Cold Standby Architecture)
+// ============================================================================
+
+// Promote a Standby data node to Primary
+// Called when a Primary fails and we need to promote its standby
+message PromoteDataNodeRequest {
+    string standby_node_id = 1;     // Standby node to promote
+    string failed_primary_id = 2;   // Primary that failed (optional, for logging)
+}
+
+message PromoteDataNodeResponse {
+    bool success = 1;
+    string error = 2;
+    // Details about the promotion
+    string promoted_node_id = 3;    // Node that was promoted
+    DataNodeMode old_mode = 4;      // Previous mode (should be Standby)
+    DataNodeMode new_mode = 5;      // New mode (should be Primary)
+}
+
+// Get the current mode of a data node
+message GetDataNodeModeRequest {
+    string node_id = 1;
+}
+
+message GetDataNodeModeResponse {
+    bool found = 1;
+    string node_id = 2;
+    DataNodeMode mode = 3;
+    string error = 4;
 }

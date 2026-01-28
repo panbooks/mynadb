@@ -37,6 +37,13 @@ pub struct MetaConfig {
     /// Replication assignment configuration for warm standby
     #[serde(default)]
     pub replication: ReplicationAssignmentConfig,
+
+    /// Cold Standby Architecture configuration
+    ///
+    /// Controls Primary/Standby mode assignment for Data nodes.
+    /// Standbys are cold backup nodes that don't serve queries.
+    #[serde(default)]
+    pub standby: StandbyConfig,
 }
 
 /// Raft consensus configuration
@@ -197,6 +204,169 @@ impl ReplicationAssignmentConfig {
     }
 }
 
+/// Cold Standby Architecture Configuration
+///
+/// Controls how Data nodes are assigned as Primary (active) or Standby (cold backup).
+/// This architecture prevents avalanche failures: when a Primary fails, a dedicated
+/// Standby takes over completely instead of adding load to other Primaries.
+///
+/// # Architecture
+///
+/// ```text
+/// ┌───────────────────────────────────────────────────────────────┐
+/// │  data-0 (Primary) ──┐                                         │
+/// │  data-1 (Primary) ──┼──> data-3 (Standby) - Cold, no queries  │
+/// │  data-2 (Primary) ──┘    Replicates from data-0,1,2           │
+/// │                                                               │
+/// │  Ratio: 3:1 (3 Primaries : 1 Standby)                        │
+/// └───────────────────────────────────────────────────────────────┘
+///
+/// On data-1 failure:
+///   1. data-3 promoted to Primary
+///   2. No other Primary sees increased load!
+/// ```
+///
+/// # Configuration Example
+///
+/// ```toml
+/// [meta.standby]
+/// enabled = true
+/// primary_standby_ratio = 2    # 2 Primaries per 1 Standby
+/// auto_assign_mode = true
+/// auto_promote = true
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StandbyConfig {
+    /// Enable cold standby architecture
+    ///
+    /// When enabled:
+    /// - Data nodes are assigned as Primary or Standby on registration
+    /// - Standby nodes only receive replication, never serve queries
+    /// - On Primary failure, a Standby is promoted to Primary
+    ///
+    /// When disabled:
+    /// - All Data nodes are Primary (legacy ISR-like behavior)
+    /// - Partitions can have any node as leader or standby
+    #[serde(default = "default_standby_enabled")]
+    pub enabled: bool,
+
+    /// Ratio of Primary nodes to Standby nodes
+    ///
+    /// Examples:
+    /// - 2 means 2:1 ratio (6 nodes → 4 Primary, 2 Standby)
+    /// - 3 means 3:1 ratio (8 nodes → 6 Primary, 2 Standby)
+    /// - 1 means 1:1 ratio (equal Primary and Standby)
+    ///
+    /// Higher ratio = more compute capacity, less redundancy
+    /// Lower ratio = more redundancy, less compute capacity
+    #[serde(default = "default_primary_standby_ratio")]
+    pub primary_standby_ratio: u32,
+
+    /// Auto-assign mode when Data nodes register
+    ///
+    /// When enabled, Meta automatically assigns Primary or Standby mode
+    /// to new Data nodes based on the current ratio.
+    /// When disabled, all new nodes default to Primary.
+    #[serde(default = "default_standby_auto_assign_mode")]
+    pub auto_assign_mode: bool,
+
+    /// Auto-promote Standby to Primary on failure
+    ///
+    /// When enabled, Meta automatically promotes a Standby to Primary
+    /// when a Primary node's lease expires (node failure).
+    /// When disabled, promotion must be triggered manually via API.
+    #[serde(default = "default_standby_auto_promote")]
+    pub auto_promote: bool,
+
+    /// Minimum Primary nodes before assigning Standbys
+    ///
+    /// Ensures cluster has minimum compute capacity before allocating
+    /// cold standby nodes. If fewer nodes available, all become Primary.
+    #[serde(default = "default_min_primary_nodes")]
+    pub min_primary_nodes: usize,
+}
+
+fn default_standby_enabled() -> bool {
+    false // Disabled by default for backward compatibility
+}
+
+fn default_primary_standby_ratio() -> u32 {
+    2 // 2:1 ratio (2 Primaries per 1 Standby)
+}
+
+fn default_standby_auto_assign_mode() -> bool {
+    true
+}
+
+fn default_standby_auto_promote() -> bool {
+    true
+}
+
+fn default_min_primary_nodes() -> usize {
+    2 // At least 2 Primary nodes before assigning Standbys
+}
+
+impl Default for StandbyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_standby_enabled(),
+            primary_standby_ratio: default_primary_standby_ratio(),
+            auto_assign_mode: default_standby_auto_assign_mode(),
+            auto_promote: default_standby_auto_promote(),
+            min_primary_nodes: default_min_primary_nodes(),
+        }
+    }
+}
+
+impl StandbyConfig {
+    /// Calculate how many Standby nodes should exist for given Primary count
+    ///
+    /// Returns the target number of Standby nodes based on the ratio.
+    /// Example: with ratio=2 and 4 Primaries, target is 2 Standbys.
+    pub fn target_standby_count(&self, primary_count: usize) -> usize {
+        if !self.enabled || primary_count < self.min_primary_nodes {
+            return 0;
+        }
+        // Round down: 5 Primaries with ratio=2 → 2 Standbys
+        primary_count / self.primary_standby_ratio as usize
+    }
+
+    /// Determine mode for a new node based on current cluster state
+    ///
+    /// Returns Primary if:
+    /// - Standby architecture is disabled
+    /// - Not enough Primaries yet
+    /// - Already have enough Standbys for the ratio
+    ///
+    /// Returns Standby if:
+    /// - Have enough Primaries and need more Standbys for ratio
+    pub fn mode_for_new_node(
+        &self,
+        current_primary_count: usize,
+        current_standby_count: usize,
+    ) -> super::types::DataNodeMode {
+        use super::types::DataNodeMode;
+
+        if !self.enabled || !self.auto_assign_mode {
+            return DataNodeMode::Primary;
+        }
+
+        // Need minimum Primaries first
+        if current_primary_count < self.min_primary_nodes {
+            return DataNodeMode::Primary;
+        }
+
+        // Calculate target Standby count for current Primary count
+        let target_standbys = self.target_standby_count(current_primary_count);
+
+        if current_standby_count < target_standbys {
+            DataNodeMode::Standby
+        } else {
+            DataNodeMode::Primary
+        }
+    }
+}
+
 // Default value functions
 fn default_node_id() -> u64 {
     1
@@ -257,6 +427,7 @@ impl Default for MetaConfig {
             raft: RaftConfig::default(),
             events: EventConfig::default(),
             replication: ReplicationAssignmentConfig::default(),
+            standby: StandbyConfig::default(),
         }
     }
 }

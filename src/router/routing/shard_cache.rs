@@ -16,6 +16,16 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
 
+/// Data node operational mode (Cold Standby Architecture)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DataNodeMode {
+    /// Active: serves writes and queries
+    #[default]
+    Primary,
+    /// Cold backup: only receives replication, never serves queries
+    Standby,
+}
+
 /// Data node information
 #[derive(Debug, Clone)]
 pub struct DataNodeInfo {
@@ -27,6 +37,12 @@ pub struct DataNodeInfo {
     pub state: NodeState,
     /// Load score for weighted routing (0.0-1.0, lower is better)
     pub load_score: f32,
+    /// Data node mode (Primary or Standby)
+    ///
+    /// In Cold Standby architecture:
+    /// - Primary nodes serve writes and queries
+    /// - Standby nodes only receive replication (never serve queries)
+    pub mode: DataNodeMode,
 }
 
 /// Node state
@@ -247,6 +263,31 @@ impl ShardCache {
             .collect()
     }
 
+    /// Get all active PRIMARY Data nodes (for query routing)
+    ///
+    /// In Cold Standby architecture, only Primary nodes should serve queries.
+    /// Standby nodes are cold backups that only receive replication.
+    pub fn get_active_primary_nodes(&self) -> Vec<DataNodeInfo> {
+        self.data_nodes
+            .read()
+            .values()
+            .filter(|n| n.state == NodeState::Active && n.mode == DataNodeMode::Primary)
+            .cloned()
+            .collect()
+    }
+
+    /// Get all active STANDBY Data nodes
+    ///
+    /// Standby nodes only receive replication and are promoted on Primary failure.
+    pub fn get_active_standby_nodes(&self) -> Vec<DataNodeInfo> {
+        self.data_nodes
+            .read()
+            .values()
+            .filter(|n| n.state == NodeState::Active && n.mode == DataNodeMode::Standby)
+            .cloned()
+            .collect()
+    }
+
     /// Update the list of Data nodes (replaces all)
     pub fn update_data_nodes(&self, nodes: Vec<DataNodeInfo>) {
         let active_count = nodes
@@ -329,7 +370,17 @@ impl ShardCache {
             // Owner unhealthy → fall through to hash-based
         }
 
-        // === PRIORITY 4: Hash-based selection among Active nodes ===
+        // === PRIORITY 4: Hash-based selection among Active PRIMARY nodes ===
+        // In Cold Standby architecture, only route to Primary nodes
+        let primary_nodes = self.get_active_primary_nodes();
+        if !primary_nodes.is_empty() {
+            let hash = self.hash_partition_key(key);
+            let idx = (hash as usize) % primary_nodes.len();
+            return Some(primary_nodes[idx].clone());
+        }
+
+        // Fall back to all active nodes if no Primary nodes
+        // (legacy mode without Cold Standby architecture)
         let active_nodes = self.get_active_data_nodes();
         if !active_nodes.is_empty() {
             let hash = self.hash_partition_key(key);
@@ -342,13 +393,13 @@ impl ShardCache {
             .data_nodes
             .read()
             .values()
-            .filter(|n| n.state == NodeState::Suspect)
+            .filter(|n| n.state == NodeState::Suspect && n.mode == DataNodeMode::Primary)
             .cloned()
             .collect();
 
         if !suspect_nodes.is_empty() {
             warn!(
-                "No active nodes, using suspect node as last resort for partition {}",
+                "No active nodes, using suspect Primary node as last resort for partition {}",
                 partition_key
             );
             let hash = self.hash_partition_key(key);
@@ -356,7 +407,7 @@ impl ShardCache {
             return Some(suspect_nodes[idx].clone());
         }
 
-        warn!("No active or suspect data nodes available");
+        warn!("No active or suspect Primary data nodes available");
         None
     }
 
@@ -364,12 +415,33 @@ impl ShardCache {
     ///
     /// When a write fails, we retry on a different node. This method selects
     /// the next candidate using consistent hashing, skipping nodes we've already tried.
+    ///
+    /// In Cold Standby architecture, prefers Primary nodes over Standby nodes.
     pub fn select_node_for_partition_excluding(
         &self,
         key: &PartitionKey,
         exclude: &std::collections::HashSet<String>,
     ) -> Option<DataNodeInfo> {
-        // Get all active nodes that aren't excluded
+        // First try: Active Primary nodes that aren't excluded
+        let primary_nodes: Vec<_> = self
+            .data_nodes
+            .read()
+            .values()
+            .filter(|n| {
+                n.state == NodeState::Active
+                    && n.mode == DataNodeMode::Primary
+                    && !exclude.contains(&n.node_id)
+            })
+            .cloned()
+            .collect();
+
+        if !primary_nodes.is_empty() {
+            let hash = self.hash_partition_key(key);
+            let idx = (hash as usize) % primary_nodes.len();
+            return Some(primary_nodes[idx].clone());
+        }
+
+        // Fall back to all active nodes if no Primary nodes available
         let nodes: Vec<_> = self
             .data_nodes
             .read()
@@ -417,8 +489,32 @@ impl ShardCache {
         }
     }
 
+    /// Update a node's operational mode (Cold Standby Architecture)
+    ///
+    /// Called when a Standby is promoted to Primary or vice versa.
+    pub fn update_node_mode(&self, node_id: &str, mode: DataNodeMode) {
+        let mut nodes = self.data_nodes.write();
+        if let Some(node) = nodes.get_mut(node_id) {
+            info!("Updating node {} mode from {:?} to {:?}", node_id, node.mode, mode);
+            node.mode = mode;
+        }
+    }
+
     /// Select node with load balancing (for reads)
+    ///
+    /// In Cold Standby architecture, only Primary nodes serve queries.
+    /// Standby nodes are cold backups that never serve traffic.
     pub fn select_node_for_read(&self) -> Option<DataNodeInfo> {
+        // Prefer Primary nodes for reads (Cold Standby)
+        let primary_nodes = self.get_active_primary_nodes();
+        if !primary_nodes.is_empty() {
+            let seq = self.last_event_seq.load(Ordering::Relaxed);
+            let idx = (seq as usize) % primary_nodes.len();
+            return Some(primary_nodes[idx].clone());
+        }
+
+        // Fall back to all active nodes if no Primary nodes
+        // (legacy mode without Cold Standby architecture)
         let nodes = self.get_active_data_nodes();
         if nodes.is_empty() {
             return None;
