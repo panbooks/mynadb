@@ -6,8 +6,9 @@
 //! - Does NOT flush to Parquet (only leader does that)
 //! - Tracks replication sequence for ordering
 //! - Reports sync status to Meta for failover decisions
+//! - Verifies CRC32 checksums to detect data corruption
 
-use super::types::{ReplicateRequest, ReplicateResponse, ReplicationEntry};
+use super::types::{compute_checksum, verify_checksum, ReplicateResponse};
 use crate::storage::cache::DataCache;
 use arrow::array::RecordBatch;
 use parking_lot::RwLock;
@@ -125,7 +126,86 @@ impl StandbyReceiver {
         }
     }
 
-    /// Receive and apply a replicated batch
+    /// Verify checksum of raw batch data
+    ///
+    /// This should be called before deserializing the batch to detect corruption.
+    /// Returns Ok(()) if checksum matches or no checksum provided.
+    /// Returns Err with details if checksum mismatch detected.
+    pub fn verify_batch_checksum(
+        &self,
+        raw_data: &[u8],
+        expected_checksum: Option<u32>,
+        partition_key: &str,
+        seq: u64,
+    ) -> Result<(), String> {
+        if let Some(expected) = expected_checksum {
+            let actual = compute_checksum(raw_data);
+            if actual != expected {
+                let err_msg = format!(
+                    "Checksum mismatch for seq {} partition {}: expected {:#x}, got {:#x}",
+                    seq, partition_key, expected, actual
+                );
+                warn!("{}", err_msg);
+                return Err(err_msg);
+            }
+            debug!(
+                "Checksum verified for seq {} partition {} (checksum: {:#x})",
+                seq, partition_key, actual
+            );
+        }
+        Ok(())
+    }
+
+    /// Receive and apply a replicated batch with optional checksum verification
+    ///
+    /// This is the core method called when a leader sends data to this standby.
+    /// The data is applied directly to the memtable without writing to WAL or Parquet.
+    /// If raw_data and expected_checksum are provided, verifies integrity before applying.
+    pub async fn receive_batch_with_checksum(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date: i32,
+        seq: u64,
+        batch: RecordBatch,
+        source_node_id: &str,
+        raw_data: Option<&[u8]>,
+        expected_checksum: Option<u32>,
+    ) -> Result<ReplicateResponse, String> {
+        let partition_key = format!(
+            "{}/{}/{}/date={}",
+            catalog,
+            schema,
+            table,
+            crate::storage::line_protocol::format_date32_as_string(date)
+        );
+
+        // Verify checksum if provided
+        let checksum_verified = if let (Some(data), Some(checksum)) = (raw_data, expected_checksum) {
+            match self.verify_batch_checksum(data, Some(checksum), &partition_key, seq) {
+                Ok(()) => true,
+                Err(e) => {
+                    return Ok(ReplicateResponse {
+                        standby_node_id: self.node_id.clone(),
+                        last_applied_seq: self.get_last_applied_seq(&partition_key).unwrap_or(0),
+                        rows_applied: 0,
+                        error: Some(e),
+                        checksum_verified: false,
+                    });
+                }
+            }
+        } else {
+            // No checksum provided or no raw data - skip verification
+            expected_checksum.is_none()
+        };
+
+        // Call the original receive_batch logic
+        self.receive_batch_internal(catalog, schema, table, date, seq, batch, source_node_id, checksum_verified)
+            .await
+    }
+
+    /// Receive and apply a replicated batch (legacy method without checksum)
     ///
     /// This is the core method called when a leader sends data to this standby.
     /// The data is applied directly to the memtable without writing to WAL or Parquet.
@@ -138,6 +218,23 @@ impl StandbyReceiver {
         seq: u64,
         batch: RecordBatch,
         source_node_id: &str,
+    ) -> Result<ReplicateResponse, String> {
+        // Call without checksum verification
+        self.receive_batch_internal(catalog, schema, table, date, seq, batch, source_node_id, false)
+            .await
+    }
+
+    /// Internal method to receive and apply a replicated batch
+    async fn receive_batch_internal(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date: i32,
+        seq: u64,
+        batch: RecordBatch,
+        source_node_id: &str,
+        checksum_verified: bool,
     ) -> Result<ReplicateResponse, String> {
         let partition_key = format!(
             "{}/{}/{}/date={}",
@@ -188,6 +285,7 @@ impl StandbyReceiver {
                     last_applied_seq: seq,
                     rows_applied: row_count,
                     error: None,
+                    checksum_verified,
                 })
             }
             Err(e) => {
@@ -200,6 +298,7 @@ impl StandbyReceiver {
                     last_applied_seq: state.last_applied_seq.load(Ordering::Relaxed),
                     rows_applied: 0,
                     error: Some(format!("Apply failed: {}", e)),
+                    checksum_verified: false,
                 })
             }
         }

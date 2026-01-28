@@ -9,11 +9,10 @@
 //! - Reports replication lag to Meta for monitoring
 //! - Handles reconnection on failure
 
-use super::types::{ReplicateRequest, ReplicateResponse, ReplicationConfig, ReplicationEntry};
+use super::types::{compute_checksum, ReplicateResponse, ReplicationConfig, ReplicationEntry};
 use arrow::array::RecordBatch;
-use arrow::ipc::writer::StreamWriter;
 use arrow_flight::{
-    encode::FlightDataEncoderBuilder, flight_service_client::FlightServiceClient, Action,
+    encode::FlightDataEncoderBuilder, flight_service_client::FlightServiceClient,
     FlightData, FlightDescriptor,
 };
 use futures::{stream, StreamExt};
@@ -22,7 +21,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::Notify;
 use tonic::transport::Channel;
 use tracing::{debug, error, info, warn};
 
@@ -192,23 +191,29 @@ impl ReplicationStream {
         for entry in entries {
             total_rows += entry.batch.num_rows() as u64;
 
-            // Create the replicate request
-            let request = ReplicateRequest {
-                source_node_id: "leader".to_string(), // Will be set by caller
-                partition_key: entry.partition_key(),
-                seq_range: (entry.seq, entry.seq),
-                batch_count: 1,
-            };
+            // Encode the batch as FlightData (without descriptor first, we'll add it after computing checksum)
+            let batch_stream =
+                stream::iter(vec![Ok::<_, arrow_flight::error::FlightError>(entry.batch)]);
+            let flight_data_stream = FlightDataEncoderBuilder::new()
+                .build(batch_stream);
 
-            // Send via DoAction with REPLICATE type
-            let action = Action {
-                r#type: "REPLICATE".to_string(),
-                body: serde_json::to_vec(&request)
-                    .map_err(|e| format!("Serialize error: {}", e))?
-                    .into(),
-            };
+            let mut flight_data: Vec<FlightData> = flight_data_stream
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("Encode error: {}", e))?;
 
-            // For the actual batch data, we'll use DoPut
+            // Compute checksum from serialized batch data
+            let mut batch_bytes: Vec<u8> = Vec::new();
+            for fd in &flight_data {
+                batch_bytes.extend_from_slice(&fd.data_header);
+                batch_bytes.extend_from_slice(&fd.data_body);
+            }
+            let checksum = compute_checksum(&batch_bytes);
+            let total_bytes = batch_bytes.len() as u64;
+
+            // Update ticket with checksum
             let ticket_json = serde_json::json!({
                 "catalog": entry.catalog,
                 "schema": entry.schema,
@@ -216,25 +221,18 @@ impl ReplicationStream {
                 "date": entry.date,
                 "seq": entry.seq,
                 "is_replication": true,
+                "checksum": checksum,
+                "total_bytes": total_bytes,
             });
 
             let descriptor = FlightDescriptor::new_cmd(
                 serde_json::to_vec(&ticket_json).map_err(|e| format!("Serialize error: {}", e))?,
             );
 
-            // Encode the batch as FlightData
-            let batch_stream =
-                stream::iter(vec![Ok::<_, arrow_flight::error::FlightError>(entry.batch)]);
-            let flight_data_stream = FlightDataEncoderBuilder::new()
-                .with_flight_descriptor(Some(descriptor))
-                .build(batch_stream);
-
-            let flight_data: Vec<FlightData> = flight_data_stream
-                .collect::<Vec<_>>()
-                .await
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("Encode error: {}", e))?;
+            // Add descriptor to first flight data
+            if let Some(first) = flight_data.first_mut() {
+                first.flight_descriptor = Some(descriptor);
+            }
 
             // Send via DoPut
             let request_stream = stream::iter(flight_data.into_iter());

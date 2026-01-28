@@ -1,8 +1,14 @@
 //! Replication types for warm standby
 //!
 //! These types are shared between leader and standby for data replication.
+//!
+//! ## Data Integrity
+//!
+//! Replication entries include CRC32 checksums to detect data corruption
+//! during network transfer. The checksum covers the serialized batch data.
 
 use arrow::array::RecordBatch;
+use crc32fast::Hasher;
 use serde::{Deserialize, Serialize};
 
 /// A replication entry containing data to be replicated to standby
@@ -22,6 +28,9 @@ pub struct ReplicationEntry {
     pub batch: RecordBatch,
     /// Timestamp when this entry was created (ms since epoch)
     pub created_at: i64,
+    /// CRC32 checksum of the serialized batch data for integrity verification
+    /// Computed on the leader, verified on the standby
+    pub checksum: Option<u32>,
 }
 
 impl ReplicationEntry {
@@ -41,6 +50,30 @@ impl ReplicationEntry {
             date,
             batch,
             created_at: chrono::Utc::now().timestamp_millis(),
+            checksum: None,
+        }
+    }
+
+    /// Create a new entry with checksum computed from the batch
+    pub fn new_with_checksum(
+        seq: u64,
+        catalog: String,
+        schema: String,
+        table: String,
+        date: i32,
+        batch: RecordBatch,
+        batch_bytes: &[u8],
+    ) -> Self {
+        let checksum = compute_checksum(batch_bytes);
+        Self {
+            seq,
+            catalog,
+            schema,
+            table,
+            date,
+            batch,
+            created_at: chrono::Utc::now().timestamp_millis(),
+            checksum: Some(checksum),
         }
     }
 
@@ -54,6 +87,79 @@ impl ReplicationEntry {
             crate::storage::line_protocol::format_date32_as_string(self.date)
         )
     }
+
+    /// Verify the checksum matches the provided data
+    ///
+    /// Returns Ok(()) if checksum matches or if no checksum is set,
+    /// Returns Err with details if checksum mismatch detected.
+    pub fn verify_checksum(&self, batch_bytes: &[u8]) -> Result<(), ChecksumError> {
+        match self.checksum {
+            Some(expected) => {
+                let actual = compute_checksum(batch_bytes);
+                if actual == expected {
+                    Ok(())
+                } else {
+                    Err(ChecksumError::Mismatch {
+                        expected,
+                        actual,
+                        seq: self.seq,
+                        partition_key: self.partition_key(),
+                    })
+                }
+            }
+            None => Ok(()), // No checksum to verify
+        }
+    }
+
+    /// Check if this entry has a checksum
+    pub fn has_checksum(&self) -> bool {
+        self.checksum.is_some()
+    }
+}
+
+/// Checksum computation error
+#[derive(Debug, Clone)]
+pub enum ChecksumError {
+    /// Checksum mismatch - data corruption detected
+    Mismatch {
+        expected: u32,
+        actual: u32,
+        seq: u64,
+        partition_key: String,
+    },
+}
+
+impl std::fmt::Display for ChecksumError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChecksumError::Mismatch {
+                expected,
+                actual,
+                seq,
+                partition_key,
+            } => {
+                write!(
+                    f,
+                    "Checksum mismatch for seq {} partition {}: expected {:#x}, got {:#x}",
+                    seq, partition_key, expected, actual
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ChecksumError {}
+
+/// Compute CRC32 checksum for data
+pub fn compute_checksum(data: &[u8]) -> u32 {
+    let mut hasher = Hasher::new();
+    hasher.update(data);
+    hasher.finalize()
+}
+
+/// Verify a checksum matches the data
+pub fn verify_checksum(data: &[u8], expected: u32) -> bool {
+    compute_checksum(data) == expected
 }
 
 /// Request to replicate entries to a standby
@@ -67,6 +173,10 @@ pub struct ReplicateRequest {
     pub seq_range: (u64, u64),
     /// Number of batches in this request
     pub batch_count: usize,
+    /// Total bytes being sent (for progress tracking)
+    pub total_bytes: u64,
+    /// CRC32 checksum of all batch data combined
+    pub checksum: Option<u32>,
 }
 
 /// Response from standby after receiving replicated data
@@ -80,6 +190,8 @@ pub struct ReplicateResponse {
     pub rows_applied: u64,
     /// Any error message (empty if success)
     pub error: Option<String>,
+    /// Whether checksum verification passed (if checksum was provided)
+    pub checksum_verified: bool,
 }
 
 /// Replication state for a partition on the leader
@@ -179,5 +291,59 @@ impl From<&crate::data::config::ReplicationConfig> for ReplicationConfig {
             ack_timeout_ms: config.ack_timeout_ms,
             max_lag_alert_ms: config.max_lag_alert_ms,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compute_checksum() {
+        let data = b"hello world";
+        let checksum = compute_checksum(data);
+
+        // CRC32 should be deterministic
+        assert_eq!(checksum, compute_checksum(data));
+
+        // Different data should have different checksum
+        let other_data = b"hello world!";
+        assert_ne!(checksum, compute_checksum(other_data));
+    }
+
+    #[test]
+    fn test_verify_checksum() {
+        let data = b"test data for checksum";
+        let checksum = compute_checksum(data);
+
+        assert!(verify_checksum(data, checksum));
+        assert!(!verify_checksum(data, checksum + 1));
+    }
+
+    #[test]
+    fn test_checksum_error_display() {
+        let err = ChecksumError::Mismatch {
+            expected: 0x12345678,
+            actual: 0xdeadbeef,
+            seq: 42,
+            partition_key: "db/schema/table/date=2024-01-01".to_string(),
+        };
+
+        let msg = format!("{}", err);
+        assert!(msg.contains("Checksum mismatch"));
+        assert!(msg.contains("seq 42"));
+        assert!(msg.contains("0x12345678"));
+        assert!(msg.contains("0xdeadbeef"));
+    }
+
+    #[test]
+    fn test_replication_config_default() {
+        let config = ReplicationConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.mode, ReplicationMode::Async);
+        assert_eq!(config.batch_interval_ms, 100);
+        assert_eq!(config.max_batch_size, 1000);
+        assert_eq!(config.ack_timeout_ms, 5000);
+        assert_eq!(config.max_lag_alert_ms, 10000);
     }
 }
