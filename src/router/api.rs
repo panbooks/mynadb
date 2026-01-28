@@ -4,6 +4,7 @@
 //! through WriteRouter and QueryCoordinator to Data nodes.
 
 use super::state::RouterAppState;
+use crate::utils::json::batches_to_json;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -212,16 +213,25 @@ async fn execute_query(
 ) -> (StatusCode, Json<QueryResponse>) {
     let result = state.query_coordinator.execute_query(db, sql).await;
 
-    // Convert batches to JSON (simplified)
+    // Convert batches to JSON
     let data = if result.batches.is_empty() {
         Some(serde_json::json!([]))
     } else {
-        // Convert Arrow batches to JSON
-        // In a real implementation, use arrow-json crate
-        Some(serde_json::json!({
-            "batches": result.batches.len(),
-            "note": "Full JSON conversion not yet implemented"
-        }))
+        match batches_to_json(&result.batches) {
+            Ok(rows) => Some(serde_json::Value::Array(rows)),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(QueryResponse {
+                        success: false,
+                        data: None,
+                        rows: 0,
+                        elapsed_ms: result.elapsed_ms,
+                        error: Some(format!("JSON conversion error: {}", e)),
+                    }),
+                );
+            }
+        }
     };
 
     let response = QueryResponse {

@@ -13,6 +13,7 @@ pub mod query;
 pub mod router;
 pub mod services;
 pub mod storage;
+pub mod utils;
 
 // Re-export at crate root for internal `crate::` imports to work
 pub use storage::cache;

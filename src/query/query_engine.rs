@@ -1512,114 +1512,11 @@ impl QueryEngine {
             return Ok("[]".to_string());
         }
 
-        // Convert to JSON
-        let mut results = Vec::new();
-        for batch in batches {
-            let json_rows = Self::batch_to_json(&batch)?;
-            results.extend(json_rows);
-        }
+        // Convert to JSON using shared utility
+        let results = crate::utils::json::batches_to_json(&batches)?;
 
         serde_json::to_string_pretty(&results)
             .map_err(|e| format!("JSON serialization error: {}", e))
-    }
-
-    /// Convert RecordBatch to JSON objects
-    fn batch_to_json(batch: &RecordBatch) -> Result<Vec<serde_json::Value>, String> {
-        let mut rows = Vec::new();
-        let schema = batch.schema();
-        let num_rows = batch.num_rows();
-
-        for row_idx in 0..num_rows {
-            let mut row_obj = serde_json::Map::new();
-
-            for (col_idx, field) in schema.fields().iter().enumerate() {
-                let column = batch.column(col_idx);
-                let value = Self::array_value_to_json(column, row_idx)?;
-                row_obj.insert(field.name().clone(), value);
-            }
-
-            rows.push(serde_json::Value::Object(row_obj));
-        }
-
-        Ok(rows)
-    }
-
-    /// Convert Arrow array value to JSON
-    fn array_value_to_json(
-        array: &Arc<dyn datafusion::arrow::array::Array>,
-        index: usize,
-    ) -> Result<serde_json::Value, String> {
-        use datafusion::arrow::array::*;
-        use datafusion::arrow::datatypes::{DataType, UInt16Type};
-
-        if array.is_null(index) {
-            return Ok(serde_json::Value::Null);
-        }
-
-        match array.data_type() {
-            DataType::Int64 => {
-                let arr = array.as_any().downcast_ref::<Int64Array>().unwrap();
-                Ok(serde_json::json!(arr.value(index)))
-            }
-            DataType::UInt64 => {
-                let arr = array.as_any().downcast_ref::<UInt64Array>().unwrap();
-                Ok(serde_json::json!(arr.value(index)))
-            }
-            DataType::Float64 => {
-                let arr = array.as_any().downcast_ref::<Float64Array>().unwrap();
-                Ok(serde_json::json!(arr.value(index)))
-            }
-            DataType::Utf8 => {
-                let arr = array.as_any().downcast_ref::<StringArray>().unwrap();
-                Ok(serde_json::json!(arr.value(index)))
-            }
-            DataType::Utf8View => {
-                let arr = array.as_any().downcast_ref::<StringViewArray>().unwrap();
-                Ok(serde_json::json!(arr.value(index)))
-            }
-            DataType::LargeUtf8 => {
-                let arr = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
-                Ok(serde_json::json!(arr.value(index)))
-            }
-            DataType::Boolean => {
-                let arr = array.as_any().downcast_ref::<BooleanArray>().unwrap();
-                Ok(serde_json::json!(arr.value(index)))
-            }
-            DataType::Timestamp(_, _) => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<TimestampNanosecondArray>()
-                    .unwrap();
-                Ok(serde_json::json!(arr.value(index)))
-            }
-            DataType::Dictionary(_, value_type) => {
-                // Handle dictionary-encoded strings (used for partition columns)
-                match value_type.as_ref() {
-                    DataType::Utf8 => {
-                        let dict_array = array
-                            .as_any()
-                            .downcast_ref::<DictionaryArray<UInt16Type>>()
-                            .unwrap();
-                        let keys = dict_array.keys();
-                        let key = keys.value(index);
-                        let values = dict_array
-                            .values()
-                            .as_any()
-                            .downcast_ref::<StringArray>()
-                            .unwrap();
-                        Ok(serde_json::json!(values.value(key as usize)))
-                    }
-                    _ => Ok(serde_json::json!(format!(
-                        "Unsupported dictionary value type: {:?}",
-                        value_type
-                    ))),
-                }
-            }
-            _ => Ok(serde_json::json!(format!(
-                "Unsupported type: {:?}",
-                array.data_type()
-            ))),
-        }
     }
 
     // ========================================================================
