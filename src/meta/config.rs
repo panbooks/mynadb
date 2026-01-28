@@ -22,6 +22,10 @@ pub struct MetaConfig {
     #[serde(default = "default_data_dir")]
     pub data_dir: String,
 
+    /// HTTP API port for scale-in and management operations
+    #[serde(default = "default_http_port")]
+    pub http_port: u16,
+
     /// Initial cluster peers (address:port)
     #[serde(default)]
     pub peers: Vec<String>,
@@ -384,6 +388,10 @@ fn default_data_dir() -> String {
     "/data/meta".to_string()
 }
 
+fn default_http_port() -> u16 {
+    9000 // Meta HTTP API for scale-in and management
+}
+
 fn default_heartbeat_interval() -> u64 {
     150
 }
@@ -423,6 +431,7 @@ impl Default for MetaConfig {
             bind_addr: default_bind_addr(),
             advertise_addr: default_advertise_addr(),
             data_dir: default_data_dir(),
+            http_port: default_http_port(),
             peers: vec![],
             raft: RaftConfig::default(),
             events: EventConfig::default(),

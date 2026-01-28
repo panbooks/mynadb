@@ -53,6 +53,11 @@ pub enum NodeState {
     Unhealthy,
     /// Suspect - recent write failure, may recover
     Suspect,
+    /// Retiring - node is being scaled in, no new writes allowed
+    /// Old data is still queryable until the node is fully drained
+    Retiring,
+    /// Drained - scale-in complete, safe to stop the node
+    Drained,
 }
 
 /// Partition key for routing
@@ -259,6 +264,35 @@ impl ShardCache {
             .read()
             .values()
             .filter(|n| n.state == NodeState::Active)
+            .cloned()
+            .collect()
+    }
+
+    /// Get all data nodes that can serve reads (Active or Retiring)
+    ///
+    /// Retiring nodes still have data in memtable and should serve queries
+    /// until the memtable is flushed and they transition to Drained.
+    pub fn get_queryable_data_nodes(&self) -> Vec<DataNodeInfo> {
+        self.data_nodes
+            .read()
+            .values()
+            .filter(|n| n.state == NodeState::Active || n.state == NodeState::Retiring)
+            .cloned()
+            .collect()
+    }
+
+    /// Get all queryable PRIMARY Data nodes (for query routing)
+    ///
+    /// Includes Active and Retiring Primary nodes. Retiring nodes
+    /// may have unflushed memtable data that should still be queryable.
+    pub fn get_queryable_primary_nodes(&self) -> Vec<DataNodeInfo> {
+        self.data_nodes
+            .read()
+            .values()
+            .filter(|n| {
+                (n.state == NodeState::Active || n.state == NodeState::Retiring)
+                    && n.mode == DataNodeMode::Primary
+            })
             .cloned()
             .collect()
     }
@@ -504,18 +538,19 @@ impl ShardCache {
     ///
     /// In Cold Standby architecture, only Primary nodes serve queries.
     /// Standby nodes are cold backups that never serve traffic.
+    /// Retiring nodes can still serve reads (they may have unflushed memtable data).
     pub fn select_node_for_read(&self) -> Option<DataNodeInfo> {
-        // Prefer Primary nodes for reads (Cold Standby)
-        let primary_nodes = self.get_active_primary_nodes();
+        // Prefer queryable Primary nodes for reads (Active or Retiring)
+        let primary_nodes = self.get_queryable_primary_nodes();
         if !primary_nodes.is_empty() {
             let seq = self.last_event_seq.load(Ordering::Relaxed);
             let idx = (seq as usize) % primary_nodes.len();
             return Some(primary_nodes[idx].clone());
         }
 
-        // Fall back to all active nodes if no Primary nodes
+        // Fall back to all queryable nodes if no Primary nodes
         // (legacy mode without Cold Standby architecture)
-        let nodes = self.get_active_data_nodes();
+        let nodes = self.get_queryable_data_nodes();
         if nodes.is_empty() {
             return None;
         }

@@ -48,6 +48,15 @@ service MetaService {
     // Data Node Mode Management (Cold Standby Architecture)
     rpc PromoteDataNode(PromoteDataNodeRequest) returns (PromoteDataNodeResponse);
     rpc GetDataNodeMode(GetDataNodeModeRequest) returns (GetDataNodeModeResponse);
+
+    // Scale-In (Retirement) Operations
+    rpc StartRetire(StartRetireRequest) returns (StartRetireResponse);
+    rpc CompleteRetire(CompleteRetireRequest) returns (CompleteRetireResponse);
+    rpc CancelRetire(CancelRetireRequest) returns (CancelRetireResponse);
+    rpc GetRetireStatus(GetRetireStatusRequest) returns (GetRetireStatusResponse);
+    rpc ReassignPartitionForRetire(ReassignPartitionForRetireRequest) returns (ReassignPartitionForRetireResponse);
+    rpc RemoveStandbyFromReplicas(RemoveStandbyFromReplicasRequest) returns (RemoveStandbyFromReplicasResponse);
+    rpc RecommendScaleIn(RecommendScaleInRequest) returns (RecommendScaleInResponse);
 }
 
 // ============================================================================
@@ -66,8 +75,10 @@ enum NodeState {
     NODE_STATE_UNKNOWN = 0;
     NODE_STATE_STARTING = 1;
     NODE_STATE_ACTIVE = 2;
-    NODE_STATE_DRAINING = 3;
+    NODE_STATE_DRAINING = 3;      // Legacy: graceful shutdown for maintenance
     NODE_STATE_INACTIVE = 4;
+    NODE_STATE_RETIRING = 5;      // Scale-in: no new writes, flushing memtable
+    NODE_STATE_DRAINED = 6;       // Scale-in complete: safe to stop
 }
 
 // Data node operational mode (Cold Standby Architecture)
@@ -514,4 +525,95 @@ message GetDataNodeModeResponse {
     string node_id = 2;
     DataNodeMode mode = 3;
     string error = 4;
+}
+
+// ============================================================================
+// Scale-In (Retirement) Operations
+// ============================================================================
+
+// Start retiring a node (scale-in)
+// Marks the node as Retiring: no new writes, begins partition reassignment
+message StartRetireRequest {
+    string node_id = 1;
+}
+
+message StartRetireResponse {
+    bool success = 1;
+    string error = 2;
+    uint32 partitions_to_reassign = 3;  // Number of partitions to transfer
+}
+
+// Mark a node as fully drained (scale-in complete)
+message CompleteRetireRequest {
+    string node_id = 1;
+}
+
+message CompleteRetireResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+// Cancel a node retirement (restore to Active)
+message CancelRetireRequest {
+    string node_id = 1;
+}
+
+message CancelRetireResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+// Get retirement status/progress for a node
+message GetRetireStatusRequest {
+    string node_id = 1;
+}
+
+message GetRetireStatusResponse {
+    bool found = 1;
+    string node_id = 2;
+    NodeState state = 3;
+    int64 started_at = 4;
+    uint32 partitions_total = 5;
+    uint32 partitions_reassigned = 6;
+    uint64 memtable_rows_remaining = 7;
+    uint32 progress_percent = 8;
+    string error = 9;
+}
+
+// Reassign a partition from a retiring node to another Primary
+message ReassignPartitionForRetireRequest {
+    string partition_key = 1;
+    string from_node_id = 2;
+    string to_node_id = 3;
+}
+
+message ReassignPartitionForRetireResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+// Remove a standby from all partition replicas (for Standby scale-in)
+message RemoveStandbyFromReplicasRequest {
+    string standby_node_id = 1;
+}
+
+message RemoveStandbyFromReplicasResponse {
+    bool success = 1;
+    string error = 2;
+    uint32 partitions_affected = 3;
+}
+
+// Get recommendations for which nodes to scale in
+message RecommendScaleInRequest {
+    uint32 reduce_primaries = 1;  // How many Primaries to reduce
+    uint32 reduce_standbys = 2;   // How many Standbys to reduce
+}
+
+message RecommendScaleInResponse {
+    bool success = 1;
+    string error = 2;
+    repeated string recommended_primaries = 3;
+    repeated string recommended_standbys = 4;
+    map<string, string> reasons = 5;  // node_id -> reason
+    repeated string warnings = 6;
 }

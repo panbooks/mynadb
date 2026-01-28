@@ -210,9 +210,10 @@ pub async fn start(config_path: &str) {
         parquet_cache.clone(),
     );
 
-    // Clone meta_client before moving to FlightService (needed for shutdown and event subscription)
+    // Clone meta_client before moving to FlightService (needed for shutdown, event subscription, and HTTP API)
     let meta_client_for_shutdown = meta_client.clone();
     let meta_client_for_events = meta_client.clone();
+    let meta_client_for_http = meta_client.clone();
 
     // Create Flight service (replaces gRPC)
     let data_cache_for_http = data_cache.clone();
@@ -395,6 +396,9 @@ pub async fn start(config_path: &str) {
             node_id: data_config.node_id.clone(),
             start_time: Instant::now(),
             cache: data_cache_for_http,
+            meta_client: meta_client_for_http,
+            is_retiring: Arc::new(AtomicBool::new(false)),
+            retire_status: Arc::new(parking_lot::RwLock::new(None)),
         };
         tokio::spawn(async move {
             if let Err(e) = start_http_server("0.0.0.0", http_port, http_state).await {
