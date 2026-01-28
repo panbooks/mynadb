@@ -426,8 +426,18 @@ impl QueryEngine {
         }
 
         // Build table URL based on storage backend
+        // In cluster mode (object storage + write_cache), files are stored with node_id prefix
         let table_url = if let Some(ref storage) = self.storage {
-            storage.table_url(catalog_name, schema_name, table_name)
+            if !storage.is_local() {
+                // Object storage in cluster mode: use node_id prefix
+                if let Some(ref cache) = self.write_cache {
+                    storage.table_url_with_node(cache.node_id(), catalog_name, schema_name, table_name)
+                } else {
+                    storage.table_url(catalog_name, schema_name, table_name)
+                }
+            } else {
+                storage.table_url(catalog_name, schema_name, table_name)
+            }
         } else {
             format!(
                 "file://{}/{}/{}/{}",
