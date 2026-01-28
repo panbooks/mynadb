@@ -1,0 +1,44 @@
+# Data Node 4 - Cold Standby testing
+[data]
+node_id = "data-4"
+advertise_addr = "127.0.0.1:7203"
+grpc_port = 7203
+http_port = 7213
+meta_endpoints = ["127.0.0.1:7100"]
+meta_connect_timeout_ms = 5000
+meta_request_timeout_ms = 30000
+
+[data.labels]
+"topology.kubernetes.io/zone" = "zone-b"
+
+[data.replication]
+enabled = true
+mode = "async"
+batch_interval_ms = 100
+max_batch_size = 1000
+
+[storage]
+backend = "minio"
+bucket = "mynadb-coldstandby"
+endpoint = "http://127.0.0.1:9000"
+access_key = "minioadmin"
+secret_key = "minioadmin"
+region = "us-east-1"
+data_dir = "./dev/data/coldstandby-simple/data4"
+
+[cache]
+flush_interval_secs = 30
+max_size_mb = 256
+
+[wal]
+enabled = true
+sync_on_write = false
+rotate_size_mb = 64
+buffer_entries = 1000000
+
+[logging]
+level = "info"
+log_dir = "./dev/logs/coldstandby-simple/data4"
+file_prefix = "data4"
+rotation = "daily"
+max_files = 7

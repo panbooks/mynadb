@@ -1,0 +1,44 @@
+# MynaDB Meta Node 3 Configuration
+# Cold Standby Architecture enabled
+
+[meta]
+node_id = 3
+bind_addr = "0.0.0.0:7102"
+advertise_addr = "127.0.0.1:7102"
+data_dir = "./dev/data/coldstandby/meta3"
+http_port = 9102
+peers = ["127.0.0.1:7100", "127.0.0.1:7101"]
+
+[meta.raft]
+heartbeat_interval_ms = 150
+election_timeout_min_ms = 300
+election_timeout_max_ms = 500
+snapshot_threshold = 10000
+max_log_size_mb = 256
+
+[meta.events]
+max_events = 100000
+retention_secs = 3600
+
+[meta.replication]
+auto_assign_enabled = true
+default_replication_factor = 2
+zone_aware = true
+min_nodes_for_replication = 2
+lease_ttl_secs = 10
+auto_promote = true
+load_balance_strategy = "least_loaded"
+
+[meta.standby]
+enabled = true
+primary_standby_ratio = 2
+auto_assign_mode = true
+auto_promote = true
+min_primary_nodes = 2
+
+[logging]
+level = "info"
+log_dir = "./dev/logs/coldstandby/meta3"
+file_prefix = "meta3"
+rotation = "daily"
+max_files = 7

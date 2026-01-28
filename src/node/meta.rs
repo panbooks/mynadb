@@ -43,8 +43,8 @@ pub async fn start(config_path: &str) {
         meta_config.node_id, meta_config.advertise_addr
     );
 
-    // Write PID file for stop command
-    if let Err(e) = common::write_pid_file(&config.storage.data_dir, NODE_TYPE) {
+    // Write PID file for stop command (use meta-specific data_dir)
+    if let Err(e) = common::write_pid_file(&meta_config.data_dir, NODE_TYPE) {
         error!("Failed to write PID file: {}", e);
         std::process::exit(1);
     }
@@ -54,7 +54,7 @@ pub async fn start(config_path: &str) {
         Ok(node) => Arc::new(node),
         Err(e) => {
             error!("Failed to create Meta node: {}", e);
-            common::remove_pid_file(&config.storage.data_dir, NODE_TYPE);
+            common::remove_pid_file(&meta_config.data_dir, NODE_TYPE);
             std::process::exit(1);
         }
     };
@@ -65,7 +65,7 @@ pub async fn start(config_path: &str) {
             info!("Cluster not initialized, bootstrapping from node 1");
             if let Err(e) = node.initialize_cluster().await {
                 error!("Failed to initialize cluster: {}", e);
-                common::remove_pid_file(&config.storage.data_dir, NODE_TYPE);
+                common::remove_pid_file(&meta_config.data_dir, NODE_TYPE);
                 std::process::exit(1);
             }
 
@@ -142,7 +142,7 @@ pub async fn start(config_path: &str) {
     welcome!("===============================================");
 
     // Set up signal handler for graceful shutdown
-    let data_dir = config.storage.data_dir.clone();
+    let data_dir = meta_config.data_dir.clone();
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
         info!("Received shutdown signal, cleaning up...");
@@ -168,12 +168,13 @@ pub async fn start(config_path: &str) {
 
     if let Err(e) = start_grpc_server(addr, grpc_service, raft_service).await {
         error!("Meta gRPC server failed: {}", e);
-        common::remove_pid_file(&config.storage.data_dir, NODE_TYPE);
+        common::remove_pid_file(&meta_config.data_dir, NODE_TYPE);
     }
 }
 
 /// Stop a running Meta node
 pub fn stop(config_path: &str) {
     let config = Config::load_or_default(config_path);
-    common::stop_node(&config.storage.data_dir, NODE_TYPE);
+    let meta_config = config.meta.unwrap_or_else(MetaConfig::default);
+    common::stop_node(&meta_config.data_dir, NODE_TYPE);
 }

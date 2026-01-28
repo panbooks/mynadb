@@ -1,0 +1,9 @@
+# MynaDB Cold Standby - Simplified (1 meta, 4 data, 1 router)
+# For testing Cold Standby architecture without multi-meta complexity
+
+meta1: ./target/debug/mynadb -c ./dev/configs/coldstandby-simple/meta1.toml meta start
+router1: sleep 8 && ./target/debug/mynadb -c ./dev/configs/coldstandby-simple/router1.toml router start
+data1: sleep 8 && MYNADB_ZONE=zone-a ./target/debug/mynadb -c ./dev/configs/coldstandby-simple/data1.toml data start
+data2: sleep 9 && MYNADB_ZONE=zone-b ./target/debug/mynadb -c ./dev/configs/coldstandby-simple/data2.toml data start
+data3: sleep 10 && MYNADB_ZONE=zone-a ./target/debug/mynadb -c ./dev/configs/coldstandby-simple/data3.toml data start
+data4: sleep 11 && MYNADB_ZONE=zone-b ./target/debug/mynadb -c ./dev/configs/coldstandby-simple/data4.toml data start

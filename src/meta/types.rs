@@ -171,7 +171,10 @@ pub struct NodeInfo {
     ///
     /// None for non-Data nodes (Meta, Router, Compactor).
     /// Auto-assigned by Meta based on `primary_standby_ratio` config.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Note: Do NOT use skip_serializing_if here - it breaks bincode which
+    /// expects a fixed structure. JSON handles it fine but bincode doesn't.
+    #[serde(default)]
     pub mode: Option<DataNodeMode>,
 }
 
@@ -181,7 +184,8 @@ impl NodeInfo {
         Self {
             node_id,
             role,
-            state: NodeState::Starting,
+            // Nodes are ready to serve traffic immediately after registration
+            state: NodeState::Active,
             advertise_addr,
             http_addr: None,
             flight_addr: None,

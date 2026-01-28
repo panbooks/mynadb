@@ -291,6 +291,11 @@ impl MetaStateMachine {
         let key = format!("{}{}", keys::PREFIX_NODE, info.node_id);
         let lease_id = self.next_lease_id();
 
+        tracing::info!(
+            "register_node: registering node_id={}, key={}, role={:?}, state={:?}",
+            info.node_id, key, info.role, info.state
+        );
+
         // Cold Standby Architecture: Auto-assign mode for Data nodes
         if info.role == NodeRole::Data && info.mode.is_none() {
             let standby_config = crate::meta::config::StandbyConfig::default();
@@ -320,9 +325,35 @@ impl MetaStateMachine {
         );
 
         // Store node info
-        let _ = self
-            .db
-            .insert(key.as_bytes(), bincode::serialize(&info).unwrap());
+        let serialized = bincode::serialize(&info).unwrap();
+        let insert_result = self.db.insert(key.as_bytes(), serialized.clone());
+
+        // Verify the insert worked
+        match insert_result {
+            Ok(_) => {
+                // Flush to ensure durability and visibility across clones
+                let _ = self.db.flush();
+
+                // Try to read it back immediately
+                match self.db.get(key.as_bytes()) {
+                    Ok(Some(data)) => {
+                        tracing::info!(
+                            "register_node: INSERT OK - key={}, wrote {} bytes, read back {} bytes",
+                            key, serialized.len(), data.len()
+                        );
+                    }
+                    Ok(None) => {
+                        tracing::error!("register_node: INSERT FAILED - key={} not found after insert!", key);
+                    }
+                    Err(e) => {
+                        tracing::error!("register_node: GET FAILED after insert - key={}, error={:?}", key, e);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("register_node: INSERT FAILED - key={}, error={:?}", key, e);
+            }
+        }
 
         // Publish event
         let event_payload = serde_json::to_vec(&info).unwrap_or_default();
@@ -1807,18 +1838,41 @@ impl MetaStateMachine {
     pub fn list_nodes(&self, role: Option<NodeRole>, state: Option<NodeState>) -> Vec<NodeInfo> {
         let prefix = keys::PREFIX_NODE;
         let mut nodes = Vec::new();
+        let mut scanned = 0;
+        let mut deserialized = 0;
+        let mut matched = 0;
+
+        // Force sync to see latest writes from other handles
+        let _ = self.db.flush();
 
         for item in self.db.scan_prefix(prefix) {
-            if let Ok((_, v)) = item {
-                if let Ok(info) = bincode::deserialize::<NodeInfo>(&v) {
-                    let role_match = role.map_or(true, |r| info.role == r);
-                    let state_match = state.map_or(true, |s| info.state == s);
-                    if role_match && state_match {
-                        nodes.push(info);
+            scanned += 1;
+            if let Ok((k, v)) = item {
+                match bincode::deserialize::<NodeInfo>(&v) {
+                    Ok(info) => {
+                        deserialized += 1;
+                        let role_match = role.map_or(true, |r| info.role == r);
+                        let state_match = state.map_or(true, |s| info.state == s);
+                        if role_match && state_match {
+                            matched += 1;
+                            nodes.push(info);
+                        }
+                    }
+                    Err(e) => {
+                        let key_str = String::from_utf8_lossy(&k);
+                        tracing::warn!(
+                            "list_nodes: failed to deserialize node key={}, len={}, error={:?}",
+                            key_str, v.len(), e
+                        );
                     }
                 }
             }
         }
+
+        tracing::info!(
+            "list_nodes: role={:?}, state={:?}, scanned={}, deserialized={}, matched={}",
+            role, state, scanned, deserialized, matched
+        );
 
         nodes
     }

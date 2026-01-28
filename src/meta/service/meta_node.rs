@@ -46,10 +46,10 @@ impl MetaNode {
 
         // Open sled database for state machine
         let state_machine_db = sled::open(config.sled_path())?;
-        // Create two state machines that share the same sled DB
-        // One for Raft to own, one for direct reads
-        let state_machine_for_raft = MetaStateMachine::new(state_machine_db.clone());
-        let state_machine_for_reads = MetaStateMachine::new(state_machine_db);
+        // Create one state machine and clone it - ensures both share the same Db handle
+        let state_machine = MetaStateMachine::new(state_machine_db);
+        let state_machine_for_raft = state_machine.clone();
+        let state_machine_for_reads = state_machine;
 
         // Open sled database for Raft log store
         let log_store_db = sled::open(config.raft_log_path())?;
