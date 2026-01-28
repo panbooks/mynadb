@@ -6,6 +6,7 @@
 
 use super::common;
 use crate::config::Config;
+use crate::data::cache::ParquetLocalCache;
 use crate::data::config::DataNodeConfig;
 use crate::data::server::api::{start_http_server, DataNodeState};
 use crate::data::server::flight::{start_flight_server, DataNodeFlightService};
@@ -13,6 +14,7 @@ use crate::meta::client::MetaClient;
 use crate::meta::types::{current_timestamp_ms, NodeInfo, NodeRole, NodeState};
 use crate::storage::cache;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -167,21 +169,63 @@ pub async fn start(config_path: &str) {
         }
     }
 
-    // Initialize query engine for local query execution
-    let query_engine = common::init_query_engine(&config, storage.clone(), data_cache.clone());
+    // Initialize parquet local cache for cluster mode (if configured)
+    // This must be done before query engine initialization
+    let parquet_cache: Option<Arc<ParquetLocalCache>> =
+        if let Some(cache_size_mb) = config.cache.parquet_cache_mb {
+            info!(
+                "Initializing parquet local cache (max: {}MB, node_id: {})",
+                cache_size_mb, data_config.node_id
+            );
+            let cache_dir = PathBuf::from(&config.storage.data_dir).join("_parquet_cache");
+            let cache = ParquetLocalCache::new(
+                cache_dir,
+                cache_size_mb,
+                data_config.node_id.clone(),
+            )
+            .with_storage(storage.clone());
+
+            // Scan existing cache directory to rebuild tracking
+            let cache = Arc::new(cache);
+            let cache_for_scan = cache.clone();
+            tokio::spawn(async move {
+                if let Ok(count) = cache_for_scan.scan_existing().await {
+                    if count > 0 {
+                        info!("Parquet cache warmed up: {} files from previous session", count);
+                    }
+                }
+            });
+
+            Some(cache)
+        } else {
+            None
+        };
+
+    // Initialize query engine for local query execution (with parquet cache if available)
+    let query_engine = common::init_query_engine_with_parquet_cache(
+        &config,
+        storage.clone(),
+        data_cache.clone(),
+        parquet_cache.clone(),
+    );
 
     // Clone meta_client before moving to FlightService (needed for shutdown handler)
     let meta_client_for_shutdown = meta_client.clone();
 
     // Create Flight service (replaces gRPC)
     let data_cache_for_http = data_cache.clone();
-    let flight_service = DataNodeFlightService::new(
+    let mut flight_service = DataNodeFlightService::new(
         data_cache,
         query_engine,
         meta_client,
         config.schema.clone(),
         data_config.node_id.clone(),
     );
+
+    // Add parquet cache if available
+    if let Some(ref cache) = parquet_cache {
+        flight_service = flight_service.with_parquet_cache(cache.clone());
+    }
 
     // Start Flight server
     let addr = data_config.advertise_addr.parse().expect("Invalid address");

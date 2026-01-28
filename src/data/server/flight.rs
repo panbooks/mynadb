@@ -5,6 +5,7 @@
 //! - DoGet: Executes queries and returns results as RecordBatches
 
 use crate::config::SchemaConfig;
+use crate::data::cache::ParquetLocalCache;
 use crate::meta::client::MetaClient;
 use crate::query::query_engine::QueryEngine;
 use crate::storage::cache::DataCache;
@@ -132,6 +133,10 @@ pub struct DataNodeFlightService {
 
     /// Health status
     status: Arc<RwLock<String>>,
+
+    /// Local parquet file cache for cluster mode
+    /// Caches files owned by this node for fast repeated access
+    parquet_cache: Option<Arc<ParquetLocalCache>>,
 }
 
 impl DataNodeFlightService {
@@ -150,7 +155,14 @@ impl DataNodeFlightService {
             node_id,
             start_time: Instant::now(),
             status: Arc::new(RwLock::new("ready".to_string())),
+            parquet_cache: None,
         }
+    }
+
+    /// Set the parquet local cache for cluster mode
+    pub fn with_parquet_cache(mut self, cache: Arc<ParquetLocalCache>) -> Self {
+        self.parquet_cache = Some(cache);
+        self
     }
 
     /// Create a FlightServiceServer from this service
@@ -783,13 +795,30 @@ impl FlightService for DataNodeFlightService {
                 Ok(Response::new(Box::pin(output)))
             }
             "STATS" => {
-                let stats = self.cache.stats().await;
-                let response = format!(
-                    "{{\"cache_size_bytes\":{},\"cache_entries\":{},\"total_rows\":{}}}",
-                    stats.size_bytes, stats.num_measurements, stats.total_rows
-                );
+                let write_stats = self.cache.stats().await;
+                let mut response_json = serde_json::json!({
+                    "write_cache": {
+                        "size_bytes": write_stats.size_bytes,
+                        "entries": write_stats.num_measurements,
+                        "total_rows": write_stats.total_rows,
+                    }
+                });
+
+                // Add parquet cache stats if available
+                if let Some(ref parquet_cache) = self.parquet_cache {
+                    let parquet_stats = parquet_cache.stats();
+                    response_json["parquet_cache"] = serde_json::json!({
+                        "current_size_bytes": parquet_stats.current_size_bytes,
+                        "max_size_bytes": parquet_stats.max_size_bytes,
+                        "file_count": parquet_stats.file_count,
+                        "utilization_percent": parquet_stats.utilization_percent(),
+                    });
+                }
+
                 let result = arrow_flight::Result {
-                    body: response.into_bytes().into(),
+                    body: serde_json::to_vec(&response_json)
+                        .unwrap_or_default()
+                        .into(),
                 };
                 let output = stream::once(async { Ok(result) });
                 Ok(Response::new(Box::pin(output)))

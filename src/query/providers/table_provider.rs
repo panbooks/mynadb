@@ -117,6 +117,8 @@ pub struct ParquetTableProvider {
     base_path: PathBuf,
     /// Object store for remote storage (optional)
     object_store: Option<Arc<dyn ObjectStore>>,
+    /// Local parquet cache for cluster mode (optional)
+    parquet_cache: Option<Arc<crate::data::cache::ParquetLocalCache>>,
 }
 
 impl fmt::Debug for ParquetTableProvider {
@@ -144,6 +146,7 @@ impl ParquetTableProvider {
             config,
             base_path,
             object_store: None,
+            parquet_cache: None,
         })
     }
 
@@ -162,12 +165,19 @@ impl ParquetTableProvider {
             config,
             base_path,
             object_store: None,
+            parquet_cache: None,
         })
     }
 
     /// Create provider with object store for remote storage
     pub fn with_object_store(mut self, store: Arc<dyn ObjectStore>) -> Self {
         self.object_store = Some(store);
+        self
+    }
+
+    /// Set local parquet cache for cluster mode
+    pub fn with_parquet_cache(mut self, cache: Arc<crate::data::cache::ParquetLocalCache>) -> Self {
+        self.parquet_cache = Some(cache);
         self
     }
 
@@ -712,6 +722,7 @@ impl TableProvider for ParquetTableProvider {
             filters.to_vec(),
             limit,
             self.config.clone(),
+            self.parquet_cache.clone(),
         );
 
         Ok(Arc::new(exec))
@@ -719,7 +730,6 @@ impl TableProvider for ParquetTableProvider {
 }
 
 /// Custom execution plan for reading Parquet files
-#[derive(Debug)]
 pub struct ParquetExecPlan {
     /// Schema after projection
     schema: SchemaRef,
@@ -737,6 +747,22 @@ pub struct ParquetExecPlan {
     metrics: ExecutionPlanMetricsSet,
     /// Plan properties
     properties: PlanProperties,
+    /// Local parquet cache for cluster mode (optional)
+    parquet_cache: Option<Arc<crate::data::cache::ParquetLocalCache>>,
+}
+
+impl fmt::Debug for ParquetExecPlan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParquetExecPlan")
+            .field("schema", &self.schema)
+            .field("files", &self.files.len())
+            .field("projection", &self.projection)
+            .field("filters", &self.filters.len())
+            .field("limit", &self.limit)
+            .field("config", &self.config)
+            .field("parquet_cache", &self.parquet_cache.is_some())
+            .finish()
+    }
 }
 
 impl ParquetExecPlan {
@@ -747,6 +773,7 @@ impl ParquetExecPlan {
         filters: Vec<Expr>,
         limit: Option<usize>,
         config: ParquetTableConfig,
+        parquet_cache: Option<Arc<crate::data::cache::ParquetLocalCache>>,
     ) -> Self {
         // Determine partitioning based on number of files
         let num_partitions = files.len().max(1);
@@ -766,6 +793,7 @@ impl ParquetExecPlan {
             config,
             metrics: ExecutionPlanMetricsSet::new(),
             properties,
+            parquet_cache,
         }
     }
 
@@ -839,6 +867,7 @@ impl ExecutionPlan for ParquetExecPlan {
         let partition_column = self.config.partition_column.clone();
         let partitioned = self.config.partitioned;
         let filters = self.filters.clone();
+        let parquet_cache = self.parquet_cache.clone();
 
         // Create async stream that reads files
         let stream = stream::iter(files_to_read)
@@ -847,6 +876,7 @@ impl ExecutionPlan for ParquetExecPlan {
                 let projection = projection.clone();
                 let partition_column = partition_column.clone();
                 let filters = filters.clone();
+                let parquet_cache = parquet_cache.clone();
 
                 async move {
                     read_parquet_file(
@@ -858,6 +888,7 @@ impl ExecutionPlan for ParquetExecPlan {
                         &partition_column,
                         partitioned,
                         &filters,
+                        parquet_cache.as_ref(),
                     )
                     .await
                 }
@@ -885,6 +916,7 @@ impl ExecutionPlan for ParquetExecPlan {
 /// - `partition_column`: Name of the partition column
 /// - `partitioned`: Whether this is a partitioned table
 /// - `filters`: Pushed-down filter expressions for bloom filter and predicate pushdown
+/// - `parquet_cache`: Optional local cache for remote files (cluster mode)
 async fn read_parquet_file(
     file_info: &ParquetFileInfo,
     target_schema: SchemaRef,
@@ -894,8 +926,24 @@ async fn read_parquet_file(
     partition_column: &str,
     partitioned: bool,
     filters: &[Expr],
+    parquet_cache: Option<&Arc<crate::data::cache::ParquetLocalCache>>,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>> {
-    let file = File::open(&file_info.path).map_err(|e| DataFusionError::External(Box::new(e)))?;
+    // Get local file path - either from cache (if remote) or use original path (if local)
+    let local_path = if let Some(cache) = parquet_cache {
+        let path_str = file_info.path.to_string_lossy();
+        match cache.get_or_fetch(&path_str).await {
+            Ok(cached_path) => cached_path,
+            Err(e) => {
+                // Cache fetch failed - fall back to original path
+                debug!("Parquet cache fetch failed for {}: {}, using original path", path_str, e);
+                file_info.path.clone()
+            }
+        }
+    } else {
+        file_info.path.clone()
+    };
+
+    let file = File::open(&local_path).map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)
         .map_err(|e| DataFusionError::External(Box::new(e)))?
