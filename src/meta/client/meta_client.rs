@@ -9,6 +9,24 @@ use tokio::sync::mpsc;
 use tonic::transport::{Channel, Endpoint};
 use tracing::{debug, error, info, warn};
 
+/// Convert proto DataNodeMode to internal DataNodeMode
+fn convert_proto_mode(proto_mode: i32) -> Option<DataNodeMode> {
+    match proto_mode {
+        1 => Some(DataNodeMode::Primary),
+        2 => Some(DataNodeMode::Standby),
+        _ => None, // Unspecified or unknown
+    }
+}
+
+/// Convert internal DataNodeMode to proto DataNodeMode
+fn mode_to_proto(mode: Option<DataNodeMode>) -> i32 {
+    match mode {
+        Some(DataNodeMode::Primary) => 1, // DATA_NODE_MODE_PRIMARY
+        Some(DataNodeMode::Standby) => 2, // DATA_NODE_MODE_STANDBY
+        None => 0, // DATA_NODE_MODE_UNSPECIFIED
+    }
+}
+
 /// Configuration for MetaClient
 #[derive(Debug, Clone)]
 pub struct MetaClientConfig {
@@ -209,6 +227,7 @@ impl MetaClient {
             registered_at: info.registered_at,
             last_heartbeat: info.last_heartbeat,
             labels: info.labels,
+            mode: mode_to_proto(info.mode),
         };
 
         let request = proto::RegisterNodeRequest {
@@ -315,6 +334,7 @@ impl MetaClient {
                 registered_at: n.registered_at,
                 last_heartbeat: n.last_heartbeat,
                 labels: n.labels,
+                mode: convert_proto_mode(n.mode),
             })
             .collect())
     }

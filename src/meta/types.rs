@@ -98,6 +98,52 @@ impl From<NodeState> for i32 {
     }
 }
 
+/// Data node operational mode (Cold Standby Architecture)
+///
+/// In the Cold Standby architecture, Data nodes are either Primary (actively
+/// serving traffic) or Standby (cold backup only). This prevents avalanche
+/// failures: when a Primary fails, a dedicated Standby takes over completely
+/// instead of adding load to other Primaries.
+///
+/// Key properties:
+/// - Primary nodes: Serve writes and queries, assigned as partition leaders
+/// - Standby nodes: Only receive replicated data, never serve queries until promoted
+/// - On failover: Standby becomes Primary (no extra load on other Primaries)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[repr(u8)]
+pub enum DataNodeMode {
+    /// Actively serves writes and queries, assigned as partition leaders
+    #[default]
+    Primary = 0,
+    /// Cold standby - only receives replication, promoted on Primary failure
+    Standby = 1,
+}
+
+impl From<i32> for DataNodeMode {
+    fn from(v: i32) -> Self {
+        match v {
+            0 => DataNodeMode::Primary,
+            1 => DataNodeMode::Standby,
+            _ => DataNodeMode::Primary,
+        }
+    }
+}
+
+impl From<DataNodeMode> for i32 {
+    fn from(mode: DataNodeMode) -> Self {
+        mode as i32
+    }
+}
+
+impl std::fmt::Display for DataNodeMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DataNodeMode::Primary => write!(f, "Primary"),
+            DataNodeMode::Standby => write!(f, "Standby"),
+        }
+    }
+}
+
 /// Information about a registered node
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeInfo {
@@ -110,6 +156,15 @@ pub struct NodeInfo {
     pub registered_at: i64,
     pub last_heartbeat: i64,
     pub labels: HashMap<String, String>,
+    /// Data node mode (only relevant for NodeRole::Data)
+    ///
+    /// - Primary: Actively serves writes and queries
+    /// - Standby: Cold backup, only receives replication until promoted
+    ///
+    /// None for non-Data nodes (Meta, Router, Compactor).
+    /// Auto-assigned by Meta based on `primary_standby_ratio` config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<DataNodeMode>,
 }
 
 impl NodeInfo {
@@ -125,6 +180,7 @@ impl NodeInfo {
             registered_at: now,
             last_heartbeat: now,
             labels: HashMap::new(),
+            mode: None, // Auto-assigned by Meta for Data nodes
         }
     }
 
@@ -141,6 +197,25 @@ impl NodeInfo {
     pub fn with_labels(mut self, labels: HashMap<String, String>) -> Self {
         self.labels = labels;
         self
+    }
+
+    /// Set the data node mode (Primary or Standby)
+    ///
+    /// Only meaningful for Data nodes. Typically auto-assigned by Meta
+    /// based on the cluster's `primary_standby_ratio` configuration.
+    pub fn with_mode(mut self, mode: DataNodeMode) -> Self {
+        self.mode = Some(mode);
+        self
+    }
+
+    /// Check if this is a Primary data node
+    pub fn is_primary(&self) -> bool {
+        self.role == NodeRole::Data && self.mode == Some(DataNodeMode::Primary)
+    }
+
+    /// Check if this is a Standby data node
+    pub fn is_standby(&self) -> bool {
+        self.role == NodeRole::Data && self.mode == Some(DataNodeMode::Standby)
     }
 
     /// Get the availability zone label if present
@@ -476,6 +551,11 @@ pub enum EventType {
     ReplicaPromoted = 10,
     /// Replica state changed (InSync/CatchingUp/Offline)
     ReplicaStateChanged = 11,
+    /// Data node mode changed (Cold Standby Architecture)
+    ///
+    /// Published when a Standby node is promoted to Primary.
+    /// Payload contains: {"node_id": "...", "old_mode": "Standby", "new_mode": "Primary"}
+    DataNodeModeChanged = 12,
 }
 
 impl From<i32> for EventType {
@@ -492,6 +572,7 @@ impl From<i32> for EventType {
             9 => EventType::ReplicaAssigned,
             10 => EventType::ReplicaPromoted,
             11 => EventType::ReplicaStateChanged,
+            12 => EventType::DataNodeModeChanged,
             _ => EventType::Unknown,
         }
     }
@@ -646,6 +727,23 @@ pub enum MetaCommand {
     RebalanceOnNodeJoin {
         node_id: String,
     },
+
+    /// Promote a Standby data node to Primary (Cold Standby Architecture)
+    ///
+    /// Called when a Primary node fails. The Standby takes over
+    /// the failed Primary's partition leadership.
+    PromoteDataNode {
+        standby_node_id: String,
+        failed_primary_id: Option<String>,
+    },
+
+    /// Update a data node's mode (Primary/Standby)
+    ///
+    /// Used internally during auto-assignment and promotion.
+    UpdateDataNodeMode {
+        node_id: String,
+        mode: DataNodeMode,
+    },
 }
 
 /// Response from applying a MetaCommand
@@ -709,6 +807,21 @@ pub enum MetaResponse {
     NoDataNodesAvailable,
     RebalanceCompleted {
         updated_count: usize,
+    },
+    /// Data node promoted from Standby to Primary
+    DataNodePromoted {
+        node_id: String,
+        old_mode: DataNodeMode,
+        new_mode: DataNodeMode,
+    },
+    /// Data node mode updated
+    DataNodeModeUpdated {
+        node_id: String,
+        mode: DataNodeMode,
+    },
+    /// Data node not found
+    DataNodeNotFound {
+        node_id: String,
     },
     Error {
         message: String,

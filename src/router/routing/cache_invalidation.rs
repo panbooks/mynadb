@@ -2,7 +2,7 @@
 //!
 //! Subscribes to Meta service events and updates the Router's ShardCache accordingly.
 
-use super::shard_cache::{DataNodeInfo, NodeState, PartitionKey, ShardCache};
+use super::shard_cache::{DataNodeInfo, DataNodeMode, NodeState, PartitionKey, ShardCache};
 use crate::meta::client::{EventSubscriber, MetaClient, MetaEvent, SubscriberConfig};
 use crate::meta::types::{EventType, NodeRole, NodeState as MetaNodeState};
 use crate::router::client::DataNodePool;
@@ -62,6 +62,7 @@ impl CacheInvalidationHandler {
                         grpc_addr: n.advertise_addr.clone(),
                         state: NodeState::Active,
                         load_score: 0.5,
+                        mode: DataNodeMode::Primary, // Default to Primary
                     })
                     .collect();
 
@@ -178,6 +179,9 @@ impl CacheInvalidationHandler {
                 EventType::ReplicaStateChanged => {
                     Self::handle_replica_state_changed(&shard_cache, &event);
                 }
+                EventType::DataNodeModeChanged => {
+                    Self::handle_data_node_mode_changed(&shard_cache, &event);
+                }
                 EventType::Unknown => {
                     debug!("Unknown event type");
                 }
@@ -206,6 +210,7 @@ impl CacheInvalidationHandler {
                     grpc_addr: grpc_addr.to_string(),
                     state: NodeState::Active,
                     load_score: 0.5,
+                    mode: DataNodeMode::Primary, // Default to Primary, will be updated via DataNodeModeChanged event
                 });
 
                 // Also add to connection pool
@@ -268,6 +273,7 @@ impl CacheInvalidationHandler {
                     grpc_addr: grpc_addr.to_string(),
                     state,
                     load_score: 0.5,
+                    mode: DataNodeMode::Primary, // Preserve mode or default to Primary
                 });
 
                 // Also update in connection pool (address may have changed)
@@ -396,6 +402,33 @@ impl CacheInvalidationHandler {
                 );
                 // State changes are informational for now
                 // Router uses node health for routing decisions
+            }
+        }
+    }
+
+    /// Handle data node mode changed event (Cold Standby Architecture)
+    ///
+    /// When a Standby node is promoted to Primary, or a node's mode changes,
+    /// this event is published. Router updates its shard cache to include/exclude
+    /// the node from query routing.
+    fn handle_data_node_mode_changed(shard_cache: &ShardCache, event: &MetaEvent) {
+        if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
+            let node_id = payload["node_id"].as_str().unwrap_or_default();
+            let mode_str = payload["mode"].as_str().unwrap_or("primary");
+
+            if !node_id.is_empty() {
+                let mode = match mode_str {
+                    "standby" => DataNodeMode::Standby,
+                    _ => DataNodeMode::Primary,
+                };
+
+                info!(
+                    "Data node mode changed: {} -> {:?}",
+                    node_id, mode
+                );
+
+                // Update node mode in shard cache
+                shard_cache.update_node_mode(node_id, mode);
             }
         }
     }

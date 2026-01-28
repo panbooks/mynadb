@@ -4,6 +4,24 @@ use crate::meta::proto;
 use crate::meta::raft::TypeConfig;
 use crate::meta::service::MetaNode;
 use crate::meta::types::*;
+
+/// Convert proto DataNodeMode to internal DataNodeMode
+fn convert_proto_mode(proto_mode: i32) -> Option<DataNodeMode> {
+    match proto_mode {
+        1 => Some(DataNodeMode::Primary),
+        2 => Some(DataNodeMode::Standby),
+        _ => None, // Unspecified or unknown
+    }
+}
+
+/// Convert internal DataNodeMode to proto DataNodeMode
+fn mode_to_proto(mode: Option<DataNodeMode>) -> i32 {
+    match mode {
+        Some(DataNodeMode::Primary) => 1, // DATA_NODE_MODE_PRIMARY
+        Some(DataNodeMode::Standby) => 2, // DATA_NODE_MODE_STANDBY
+        None => 0, // DATA_NODE_MODE_UNSPECIFIED
+    }
+}
 use openraft::raft::{AppendEntriesRequest, InstallSnapshotRequest, VoteRequest};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -57,6 +75,7 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
             registered_at: info.registered_at,
             last_heartbeat: info.last_heartbeat,
             labels: info.labels,
+            mode: convert_proto_mode(info.mode),
         };
 
         match self.node.register_node(node_info, req.lease_ttl_ms).await {
@@ -147,6 +166,7 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
                 registered_at: n.registered_at,
                 last_heartbeat: n.last_heartbeat,
                 labels: n.labels,
+                mode: mode_to_proto(n.mode),
             })
             .collect();
 
@@ -668,6 +688,7 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
                     registered_at: n.registered_at,
                     last_heartbeat: n.last_heartbeat,
                     labels: n.labels,
+                    mode: mode_to_proto(n.mode),
                 }
             })
             .collect();
@@ -836,6 +857,66 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
             })),
             Err(e) => Ok(Response::new(proto::UpdateReplicaStateResponse {
                 success: false,
+                error: e,
+            })),
+        }
+    }
+
+    // ========================================================================
+    // Data Node Mode Management (Cold Standby Architecture)
+    // ========================================================================
+
+    async fn promote_data_node(
+        &self,
+        request: Request<proto::PromoteDataNodeRequest>,
+    ) -> Result<Response<proto::PromoteDataNodeResponse>, Status> {
+        let req = request.into_inner();
+
+        let failed_primary = if req.failed_primary_id.is_empty() {
+            None
+        } else {
+            Some(req.failed_primary_id.as_str())
+        };
+
+        match self
+            .node
+            .promote_data_node(&req.standby_node_id, failed_primary)
+            .await
+        {
+            Ok((old_mode, new_mode)) => Ok(Response::new(proto::PromoteDataNodeResponse {
+                success: true,
+                error: String::new(),
+                promoted_node_id: req.standby_node_id,
+                old_mode: mode_to_proto(Some(old_mode)),
+                new_mode: mode_to_proto(Some(new_mode)),
+            })),
+            Err(e) => Ok(Response::new(proto::PromoteDataNodeResponse {
+                success: false,
+                error: e,
+                promoted_node_id: String::new(),
+                old_mode: 0,
+                new_mode: 0,
+            })),
+        }
+    }
+
+    async fn get_data_node_mode(
+        &self,
+        request: Request<proto::GetDataNodeModeRequest>,
+    ) -> Result<Response<proto::GetDataNodeModeResponse>, Status> {
+        let req = request.into_inner();
+
+        match self.node.get_data_node_mode(&req.node_id).await {
+            Ok(mode) => Ok(Response::new(proto::GetDataNodeModeResponse {
+                found: true,
+                node_id: req.node_id,
+                mode: mode_to_proto(Some(mode)),
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(proto::GetDataNodeModeResponse {
+                found: false,
+                node_id: req.node_id,
+                mode: 0,
                 error: e,
             })),
         }
