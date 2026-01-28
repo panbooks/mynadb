@@ -19,6 +19,7 @@ mod query;
 mod router;
 mod services;
 mod storage;
+mod utils;
 
 use clap::{Parser, Subcommand};
 

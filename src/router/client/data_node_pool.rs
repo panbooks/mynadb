@@ -510,6 +510,13 @@ impl DataNodePool {
             connected_count: self.channels.len(),
         }
     }
+
+    /// Send flush command to a specific node
+    pub async fn flush_node(&self, node_id: &str) -> Result<(), String> {
+        // Use DoAction with "FLUSH" action type
+        self.do_action(node_id, "FLUSH", b"").await?;
+        Ok(())
+    }
 }
 
 /// Pool statistics
