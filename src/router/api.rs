@@ -293,6 +293,8 @@ pub async fn list_data_nodes_handler(State(state): State<RouterAppState>) -> imp
                     NodeState::Draining => "draining",
                     NodeState::Unhealthy => "unhealthy",
                     NodeState::Suspect => "suspect",
+                    NodeState::Retiring => "retiring",
+                    NodeState::Drained => "drained",
                 },
                 "load_score": n.load_score,
             })

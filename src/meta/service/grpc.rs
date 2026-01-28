@@ -921,6 +921,179 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
             })),
         }
     }
+
+    // ========================================================================
+    // Scale-In (Retirement) Operations
+    // ========================================================================
+
+    async fn start_retire(
+        &self,
+        request: Request<proto::StartRetireRequest>,
+    ) -> Result<Response<proto::StartRetireResponse>, Status> {
+        let req = request.into_inner();
+
+        match self.node.start_retire(&req.node_id).await {
+            Ok(partitions_to_reassign) => Ok(Response::new(proto::StartRetireResponse {
+                success: true,
+                error: String::new(),
+                partitions_to_reassign: partitions_to_reassign as u32,
+            })),
+            Err(e) => Ok(Response::new(proto::StartRetireResponse {
+                success: false,
+                error: e,
+                partitions_to_reassign: 0,
+            })),
+        }
+    }
+
+    async fn complete_retire(
+        &self,
+        request: Request<proto::CompleteRetireRequest>,
+    ) -> Result<Response<proto::CompleteRetireResponse>, Status> {
+        let req = request.into_inner();
+
+        match self.node.complete_retire(&req.node_id).await {
+            Ok(()) => Ok(Response::new(proto::CompleteRetireResponse {
+                success: true,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(proto::CompleteRetireResponse {
+                success: false,
+                error: e,
+            })),
+        }
+    }
+
+    async fn cancel_retire(
+        &self,
+        request: Request<proto::CancelRetireRequest>,
+    ) -> Result<Response<proto::CancelRetireResponse>, Status> {
+        let req = request.into_inner();
+
+        match self.node.cancel_retire(&req.node_id).await {
+            Ok(()) => Ok(Response::new(proto::CancelRetireResponse {
+                success: true,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(proto::CancelRetireResponse {
+                success: false,
+                error: e,
+            })),
+        }
+    }
+
+    async fn get_retire_status(
+        &self,
+        request: Request<proto::GetRetireStatusRequest>,
+    ) -> Result<Response<proto::GetRetireStatusResponse>, Status> {
+        let req = request.into_inner();
+
+        match self.node.get_retire_status(&req.node_id).await {
+            Ok(status) => {
+                let progress = status.progress_percent();
+                Ok(Response::new(proto::GetRetireStatusResponse {
+                    found: true,
+                    node_id: status.node_id,
+                    state: i32::from(status.state),
+                    started_at: status.started_at,
+                    partitions_total: status.partitions_total as u32,
+                    partitions_reassigned: status.partitions_reassigned as u32,
+                    memtable_rows_remaining: status.memtable_rows_remaining,
+                    progress_percent: progress as u32,
+                    error: String::new(),
+                }))
+            }
+            Err(e) => Ok(Response::new(proto::GetRetireStatusResponse {
+                found: false,
+                node_id: req.node_id,
+                state: 0,
+                started_at: 0,
+                partitions_total: 0,
+                partitions_reassigned: 0,
+                memtable_rows_remaining: 0,
+                progress_percent: 0,
+                error: e,
+            })),
+        }
+    }
+
+    async fn reassign_partition_for_retire(
+        &self,
+        request: Request<proto::ReassignPartitionForRetireRequest>,
+    ) -> Result<Response<proto::ReassignPartitionForRetireResponse>, Status> {
+        let req = request.into_inner();
+
+        match self
+            .node
+            .reassign_partition_for_retire(&req.partition_key, &req.from_node_id, &req.to_node_id)
+            .await
+        {
+            Ok(()) => Ok(Response::new(proto::ReassignPartitionForRetireResponse {
+                success: true,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(proto::ReassignPartitionForRetireResponse {
+                success: false,
+                error: e,
+            })),
+        }
+    }
+
+    async fn remove_standby_from_replicas(
+        &self,
+        request: Request<proto::RemoveStandbyFromReplicasRequest>,
+    ) -> Result<Response<proto::RemoveStandbyFromReplicasResponse>, Status> {
+        let req = request.into_inner();
+
+        match self
+            .node
+            .remove_standby_from_replicas(&req.standby_node_id)
+            .await
+        {
+            Ok(partitions_affected) => {
+                Ok(Response::new(proto::RemoveStandbyFromReplicasResponse {
+                    success: true,
+                    error: String::new(),
+                    partitions_affected: partitions_affected as u32,
+                }))
+            }
+            Err(e) => Ok(Response::new(proto::RemoveStandbyFromReplicasResponse {
+                success: false,
+                error: e,
+                partitions_affected: 0,
+            })),
+        }
+    }
+
+    async fn recommend_scale_in(
+        &self,
+        request: Request<proto::RecommendScaleInRequest>,
+    ) -> Result<Response<proto::RecommendScaleInResponse>, Status> {
+        let req = request.into_inner();
+
+        match self
+            .node
+            .recommend_scale_in(req.reduce_primaries as usize, req.reduce_standbys as usize)
+            .await
+        {
+            Ok(recommendation) => Ok(Response::new(proto::RecommendScaleInResponse {
+                success: true,
+                error: String::new(),
+                recommended_primaries: recommendation.recommended_primaries,
+                recommended_standbys: recommendation.recommended_standbys,
+                reasons: recommendation.reasons,
+                warnings: recommendation.warnings,
+            })),
+            Err(e) => Ok(Response::new(proto::RecommendScaleInResponse {
+                success: false,
+                error: e,
+                recommended_primaries: vec![],
+                recommended_standbys: vec![],
+                reasons: std::collections::HashMap::new(),
+                warnings: vec![],
+            })),
+        }
+    }
 }
 
 /// Helper function to convert PartitionReplica to proto

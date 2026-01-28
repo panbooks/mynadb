@@ -1009,6 +1009,195 @@ impl MetaClient {
             Err(response.error)
         }
     }
+
+    // ========================================================================
+    // Scale-In (Retirement) Operations
+    // ========================================================================
+
+    /// Start retiring a node (scale-in)
+    ///
+    /// Returns the number of partitions that need to be reassigned.
+    pub async fn start_retire(&self, node_id: &str) -> Result<usize, String> {
+        let request = proto::StartRetireRequest {
+            node_id: node_id.to_string(),
+        };
+
+        let response = self
+            .with_retry("start_retire", |mut client| {
+                let req = request.clone();
+                async move { client.start_retire(req).await.map(|r| r.into_inner()) }
+            })
+            .await?;
+
+        if response.success {
+            Ok(response.partitions_to_reassign as usize)
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Mark a node as fully drained (scale-in complete)
+    pub async fn complete_retire(&self, node_id: &str) -> Result<(), String> {
+        let request = proto::CompleteRetireRequest {
+            node_id: node_id.to_string(),
+        };
+
+        let response = self
+            .with_retry("complete_retire", |mut client| {
+                let req = request.clone();
+                async move { client.complete_retire(req).await.map(|r| r.into_inner()) }
+            })
+            .await?;
+
+        if response.success {
+            Ok(())
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Cancel a node retirement (restore to Active)
+    pub async fn cancel_retire(&self, node_id: &str) -> Result<(), String> {
+        let request = proto::CancelRetireRequest {
+            node_id: node_id.to_string(),
+        };
+
+        let response = self
+            .with_retry("cancel_retire", |mut client| {
+                let req = request.clone();
+                async move { client.cancel_retire(req).await.map(|r| r.into_inner()) }
+            })
+            .await?;
+
+        if response.success {
+            Ok(())
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Get retirement status for a node
+    pub async fn get_retire_status(&self, node_id: &str) -> Result<RetireStatus, String> {
+        let request = proto::GetRetireStatusRequest {
+            node_id: node_id.to_string(),
+        };
+
+        let response = self
+            .with_retry("get_retire_status", |mut client| {
+                let req = request.clone();
+                async move { client.get_retire_status(req).await.map(|r| r.into_inner()) }
+            })
+            .await?;
+
+        if response.found {
+            Ok(RetireStatus {
+                node_id: response.node_id,
+                state: NodeState::from(response.state),
+                started_at: response.started_at,
+                partitions_total: response.partitions_total as usize,
+                partitions_reassigned: response.partitions_reassigned as usize,
+                memtable_rows_remaining: response.memtable_rows_remaining,
+                estimated_completion_secs: 0,
+            })
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Reassign a partition from a retiring node to another Primary
+    pub async fn reassign_partition_for_retire(
+        &self,
+        partition_key: &str,
+        from_node_id: &str,
+        to_node_id: &str,
+    ) -> Result<(), String> {
+        let request = proto::ReassignPartitionForRetireRequest {
+            partition_key: partition_key.to_string(),
+            from_node_id: from_node_id.to_string(),
+            to_node_id: to_node_id.to_string(),
+        };
+
+        let response = self
+            .with_retry("reassign_partition_for_retire", |mut client| {
+                let req = request.clone();
+                async move {
+                    client
+                        .reassign_partition_for_retire(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            })
+            .await?;
+
+        if response.success {
+            Ok(())
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Remove a standby from all partition replicas (for Standby scale-in)
+    pub async fn remove_standby_from_replicas(
+        &self,
+        standby_node_id: &str,
+    ) -> Result<usize, String> {
+        let request = proto::RemoveStandbyFromReplicasRequest {
+            standby_node_id: standby_node_id.to_string(),
+        };
+
+        let response = self
+            .with_retry("remove_standby_from_replicas", |mut client| {
+                let req = request.clone();
+                async move {
+                    client
+                        .remove_standby_from_replicas(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            })
+            .await?;
+
+        if response.success {
+            Ok(response.partitions_affected as usize)
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Get recommendations for which nodes to scale in
+    pub async fn recommend_scale_in(
+        &self,
+        reduce_primaries: usize,
+        reduce_standbys: usize,
+    ) -> Result<ScaleInRecommendation, String> {
+        let request = proto::RecommendScaleInRequest {
+            reduce_primaries: reduce_primaries as u32,
+            reduce_standbys: reduce_standbys as u32,
+        };
+
+        let response = self
+            .with_retry("recommend_scale_in", |mut client| {
+                let req = request.clone();
+                async move {
+                    client
+                        .recommend_scale_in(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            })
+            .await?;
+
+        if response.success {
+            Ok(ScaleInRecommendation {
+                recommended_primaries: response.recommended_primaries,
+                recommended_standbys: response.recommended_standbys,
+                reasons: response.reasons,
+                warnings: response.warnings,
+            })
+        } else {
+            Err(response.error)
+        }
+    }
 }
 
 /// Helper function to convert proto PartitionReplicaInfo to PartitionReplica

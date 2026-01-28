@@ -254,18 +254,37 @@ impl CacheInvalidationHandler {
     ) {
         if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
             let node_id = payload["node_id"].as_str().unwrap_or_default();
-            let state_str = payload["state"].as_str().unwrap_or("active");
+            // Support both "state" and "new_state" fields (NodeStateChanged uses "new_state")
+            let state_str = payload["new_state"]
+                .as_str()
+                .or_else(|| payload["state"].as_str())
+                .unwrap_or("active");
             let grpc_addr = payload["grpc_addr"].as_str().unwrap_or_default();
 
             if !node_id.is_empty() {
-                let state = match state_str {
+                let state = match state_str.to_lowercase().as_str() {
                     "active" => NodeState::Active,
                     "draining" => NodeState::Draining,
                     "suspect" => NodeState::Suspect,
+                    "retiring" => NodeState::Retiring,
+                    "drained" => NodeState::Drained,
                     _ => NodeState::Unhealthy,
                 };
 
-                debug!("Node updated: {} -> {:?}", node_id, state);
+                // For retiring/drained nodes, log a special message
+                if state == NodeState::Retiring {
+                    info!(
+                        "Node {} is retiring (scale-in): routing will stop sending new writes",
+                        node_id
+                    );
+                } else if state == NodeState::Drained {
+                    info!(
+                        "Node {} is drained (scale-in complete): safe to stop",
+                        node_id
+                    );
+                } else {
+                    debug!("Node updated: {} -> {:?}", node_id, state);
+                }
 
                 // Update shard cache
                 shard_cache.upsert_data_node(DataNodeInfo {

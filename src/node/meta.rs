@@ -8,8 +8,10 @@ use super::common;
 use crate::config::Config;
 use crate::meta::config::MetaConfig;
 use crate::meta::service::grpc::{start_grpc_server, MetaGrpcService, RaftInternalService};
+use crate::meta::service::http::{start_http_server, MetaHttpState};
 use crate::meta::service::meta_node::MetaNode;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{error, info};
 
 /// Macro for welcome messages
@@ -136,6 +138,7 @@ pub async fn start(config_path: &str) {
     // Start gRPC server
     let addr = meta_config.advertise_addr.parse().expect("Invalid address");
     welcome!("  Meta node started on {}", meta_config.advertise_addr);
+    welcome!("  HTTP API on port {}", meta_config.http_port);
     welcome!("===============================================");
 
     // Set up signal handler for graceful shutdown
@@ -146,6 +149,22 @@ pub async fn start(config_path: &str) {
         common::remove_pid_file(&data_dir, NODE_TYPE);
         std::process::exit(0);
     });
+
+    // Start HTTP server for scale-in and management API
+    let http_port = meta_config.http_port;
+    let node_id = meta_config.node_id;
+    if http_port > 0 {
+        let http_state = MetaHttpState {
+            node_id,
+            start_time: Instant::now(),
+            meta_node: Arc::clone(&node),
+        };
+        tokio::spawn(async move {
+            if let Err(e) = start_http_server("0.0.0.0", http_port, http_state).await {
+                error!("Meta HTTP server failed: {}", e);
+            }
+        });
+    }
 
     if let Err(e) = start_grpc_server(addr, grpc_service, raft_service).await {
         error!("Meta gRPC server failed: {}", e);
