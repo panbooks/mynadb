@@ -24,6 +24,7 @@ endpoint = "http://127.0.0.1:9000"
 access_key = "minioadmin"
 secret_key = "minioadmin"
 region = "us-east-1"
+allow_http = true
 data_dir = "./dev/data/coldstandby-simple/data4"
 
 [cache]
