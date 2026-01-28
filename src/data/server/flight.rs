@@ -6,7 +6,9 @@
 
 use crate::config::SchemaConfig;
 use crate::data::cache::ParquetLocalCache;
+use crate::data::replication::{ReplicationConfig, ReplicationManager};
 use crate::meta::client::MetaClient;
+use crate::meta::types::{NodeRole, NodeState, PartitionReplica};
 use crate::query::query_engine::QueryEngine;
 use crate::storage::cache::DataCache;
 use crate::storage::line_protocol::parse_multiple_lines;
@@ -20,6 +22,7 @@ use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaAsIpc, SchemaResult, Ticket,
 };
+use dashmap::DashMap;
 use futures::{stream, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -137,6 +140,14 @@ pub struct DataNodeFlightService {
     /// Local parquet file cache for cluster mode
     /// Caches files owned by this node for fast repeated access
     parquet_cache: Option<Arc<ParquetLocalCache>>,
+
+    /// Replication manager for warm standby replication
+    /// Sends writes to standby nodes for zero-downtime failover
+    replication_manager: Option<Arc<ReplicationManager>>,
+
+    /// Cached partition replicas (partition_key -> PartitionReplica)
+    /// Updated via Meta event subscription for efficient replication routing
+    replica_cache: Arc<DashMap<String, PartitionReplica>>,
 }
 
 impl DataNodeFlightService {
@@ -156,13 +167,132 @@ impl DataNodeFlightService {
             start_time: Instant::now(),
             status: Arc::new(RwLock::new("ready".to_string())),
             parquet_cache: None,
+            replication_manager: None,
+            replica_cache: Arc::new(DashMap::new()),
         }
+    }
+
+    /// Get a reference to the replica cache for external event subscription
+    pub fn replica_cache(&self) -> Arc<DashMap<String, PartitionReplica>> {
+        Arc::clone(&self.replica_cache)
     }
 
     /// Set the parquet local cache for cluster mode
     pub fn with_parquet_cache(mut self, cache: Arc<ParquetLocalCache>) -> Self {
         self.parquet_cache = Some(cache);
         self
+    }
+
+    /// Set the replication manager for warm standby replication
+    pub fn with_replication_manager(mut self, manager: Arc<ReplicationManager>) -> Self {
+        self.replication_manager = Some(manager);
+        self
+    }
+
+    /// Get standbys for a specific partition from cached PartitionReplica info
+    ///
+    /// This is the partition-aware replacement for the old brute-force get_standbys().
+    /// Instead of replicating to ALL data nodes, we only replicate to the assigned standbys.
+    ///
+    /// Returns list of (node_id, flight_addr) pairs for the partition's standby nodes.
+    async fn get_standbys_for_partition(&self, partition_key: &str) -> Vec<(String, String)> {
+        let meta_client = match &self.meta_client {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
+
+        // 1. Check local cache first for fast path
+        if let Some(replica) = self.replica_cache.get(partition_key) {
+            // Only replicate if we are the leader
+            if replica.leader_node_id != self.node_id {
+                debug!(
+                    "Not leader for partition {} (leader={}), skipping replication",
+                    partition_key, replica.leader_node_id
+                );
+                return Vec::new();
+            }
+
+            // Get flight addresses for standby nodes
+            return self.get_node_addresses(&replica.standby_node_ids).await;
+        }
+
+        // 2. Cache miss - query Meta and cache result
+        match meta_client.get_partition_replica(partition_key).await {
+            Ok(Some(replica)) => {
+                // Only replicate if we are the leader
+                if replica.leader_node_id != self.node_id {
+                    debug!(
+                        "Not leader for partition {} (leader={}), skipping replication",
+                        partition_key, replica.leader_node_id
+                    );
+                    self.replica_cache.insert(partition_key.to_string(), replica);
+                    return Vec::new();
+                }
+
+                let standbys = self.get_node_addresses(&replica.standby_node_ids).await;
+                self.replica_cache.insert(partition_key.to_string(), replica);
+                standbys
+            }
+            Ok(None) => {
+                // No replica assignment exists - trigger auto-assignment
+                debug!("No replica for partition {}, triggering auto-assignment", partition_key);
+                match meta_client.auto_assign_replica(partition_key).await {
+                    Ok(replica) => {
+                        // Check if we were assigned as leader
+                        if replica.leader_node_id != self.node_id {
+                            debug!(
+                                "Auto-assigned as standby for partition {} (leader={})",
+                                partition_key, replica.leader_node_id
+                            );
+                            self.replica_cache.insert(partition_key.to_string(), replica);
+                            return Vec::new();
+                        }
+
+                        let standbys = self.get_node_addresses(&replica.standby_node_ids).await;
+                        self.replica_cache.insert(partition_key.to_string(), replica);
+                        standbys
+                    }
+                    Err(e) => {
+                        warn!("Failed to auto-assign replica for {}: {}", partition_key, e);
+                        Vec::new()
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to get replica from Meta for {}: {}. Skipping replication.",
+                    partition_key, e
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    /// Helper: Get flight addresses for node IDs
+    async fn get_node_addresses(&self, node_ids: &[String]) -> Vec<(String, String)> {
+        if node_ids.is_empty() {
+            return Vec::new();
+        }
+
+        if let Some(ref meta_client) = self.meta_client {
+            match meta_client.list_nodes(Some(NodeRole::Data), Some(NodeState::Active)).await {
+                Ok(nodes) => {
+                    node_ids.iter()
+                        .filter_map(|id| {
+                            nodes.iter()
+                                .find(|n| &n.node_id == id)
+                                .and_then(|n| n.flight_addr.clone().map(|addr| (id.clone(), addr)))
+                        })
+                        .collect()
+                }
+                Err(e) => {
+                    warn!("Failed to get node addresses from Meta: {}", e);
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        }
     }
 
     /// Create a FlightServiceServer from this service
@@ -247,6 +377,14 @@ impl DataNodeFlightService {
             .await?;
         }
 
+        // Check if replication is enabled - if so, clone batches for replication
+        let replication_enabled = self.replication_manager.is_some();
+        let batches_for_replication: Vec<RecordBatch> = if replication_enabled {
+            batches.iter().filter(|b| b.num_rows() > 0).cloned().collect()
+        } else {
+            Vec::new()
+        };
+
         // Add RecordBatches directly to cache
         let mut total_rows = 0u64;
 
@@ -277,6 +415,40 @@ impl DataNodeFlightService {
                     );
                     return Err(Status::internal(format!("Cache error: {:?}", e)));
                 }
+            }
+        }
+
+        // Replicate to partition-specific standbys if enabled
+        if let Some(ref replication_manager) = self.replication_manager {
+            let partition_key = format!(
+                "{}/{}/{}/date={}",
+                ticket.catalog,
+                ticket.schema,
+                ticket.table,
+                crate::storage::line_protocol::format_date32_as_string(ticket.date)
+            );
+
+            // Use partition-aware standby lookup (not brute-force ALL nodes)
+            let standbys = self.get_standbys_for_partition(&partition_key).await;
+            if !standbys.is_empty() {
+                for batch in batches_for_replication {
+                    replication_manager.replicate_to_standbys(
+                        &partition_key,
+                        &standbys,
+                        &ticket.catalog,
+                        &ticket.schema,
+                        &ticket.table,
+                        ticket.date,
+                        batch,
+                    );
+                }
+
+                debug!(
+                    "Replicated {} rows to {} assigned standbys for partition {}",
+                    total_rows,
+                    standbys.len(),
+                    partition_key
+                );
             }
         }
 

@@ -2,10 +2,7 @@
 //!
 //! This module implements warm standby replication for zero-downtime failover.
 //!
-//! **Note**: This is a planned feature that is not yet integrated into the main write path.
-//! Enable via `[data.replication] enabled = true` in config when ready.
-
-#![allow(dead_code)]
+//! Enable via `[data.replication] enabled = true` in config.
 //!
 //! ## Architecture
 //!
@@ -54,7 +51,7 @@ pub mod stream;
 pub mod types;
 
 pub use receiver::{StandbyReceiver, StandbyStats};
-pub use stream::{ReplicationManager, ReplicationStats, ReplicationStream};
+pub use stream::{PartitionReplicationStats, ReplicationManager, ReplicationStats, ReplicationStream};
 pub use types::{
     ReplicateRequest, ReplicateResponse, ReplicationConfig, ReplicationEntry, ReplicationMode,
 };

@@ -748,6 +748,182 @@ impl MetaClient {
             healthy: response.healthy,
         })
     }
+
+    // ========================================================================
+    // Partition Replica Management
+    // ========================================================================
+
+    /// Get replica assignment for a partition
+    pub async fn get_partition_replica(
+        &self,
+        partition_key: &str,
+    ) -> Result<Option<PartitionReplica>, String> {
+        let request = proto::GetPartitionReplicaRequest {
+            partition_key: partition_key.to_string(),
+        };
+
+        let response = self
+            .with_retry("get_partition_replica", |mut client| {
+                let req = request.clone();
+                async move {
+                    client
+                        .get_partition_replica(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            })
+            .await?;
+
+        if !response.error.is_empty() {
+            return Err(response.error);
+        }
+
+        if response.found {
+            response
+                .replica
+                .map(|r| proto_to_partition_replica(&r))
+                .ok_or_else(|| "Replica found but missing from response".to_string())
+                .map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// List all partition replicas, optionally filtered by leader
+    pub async fn list_partition_replicas(
+        &self,
+        leader_node_id: Option<&str>,
+    ) -> Result<Vec<PartitionReplica>, String> {
+        let request = proto::ListPartitionReplicasRequest {
+            leader_node_id: leader_node_id.unwrap_or("").to_string(),
+        };
+
+        let response = self
+            .with_retry("list_partition_replicas", |mut client| {
+                let req = request.clone();
+                async move {
+                    client
+                        .list_partition_replicas(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            })
+            .await?;
+
+        Ok(response
+            .replicas
+            .into_iter()
+            .map(|r| proto_to_partition_replica(&r))
+            .collect())
+    }
+
+    /// Auto-assign replica for a new partition (first write)
+    pub async fn auto_assign_replica(
+        &self,
+        partition_key: &str,
+    ) -> Result<PartitionReplica, String> {
+        let request = proto::AutoAssignReplicaRequest {
+            partition_key: partition_key.to_string(),
+        };
+
+        let response = self
+            .with_retry("auto_assign_replica", |mut client| {
+                let req = request.clone();
+                async move {
+                    client
+                        .auto_assign_replica(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            })
+            .await?;
+
+        if response.success {
+            response
+                .replica
+                .map(|r| proto_to_partition_replica(&r))
+                .ok_or_else(|| "Replica assigned but missing from response".to_string())
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Promote standby to leader (failover)
+    pub async fn promote_standby(
+        &self,
+        partition_key: &str,
+    ) -> Result<(String, String), String> {
+        let request = proto::PromoteStandbyRequest {
+            partition_key: partition_key.to_string(),
+        };
+
+        let response = self
+            .with_retry("promote_standby", |mut client| {
+                let req = request.clone();
+                async move {
+                    client
+                        .promote_standby(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            })
+            .await?;
+
+        if response.success {
+            Ok((response.new_leader_id, response.old_leader_id))
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Update replica state (called by leader to report replication progress)
+    pub async fn update_replica_state(
+        &self,
+        partition_key: &str,
+        state: ReplicaState,
+        last_replicated_seq: u64,
+        replication_lag_ms: u64,
+    ) -> Result<(), String> {
+        let request = proto::UpdateReplicaStateRequest {
+            partition_key: partition_key.to_string(),
+            state: i32::from(state),
+            last_replicated_seq,
+            replication_lag_ms,
+        };
+
+        let response = self
+            .with_retry("update_replica_state", |mut client| {
+                let req = request.clone();
+                async move {
+                    client
+                        .update_replica_state(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            })
+            .await?;
+
+        if response.success {
+            Ok(())
+        } else {
+            Err(response.error)
+        }
+    }
+}
+
+/// Helper function to convert proto PartitionReplicaInfo to PartitionReplica
+fn proto_to_partition_replica(r: &proto::PartitionReplicaInfo) -> PartitionReplica {
+    PartitionReplica {
+        partition_key: r.partition_key.clone(),
+        leader_node_id: r.leader_node_id.clone(),
+        standby_node_ids: r.standby_node_ids.clone(),
+        replication_factor: r.replication_factor as u8,
+        last_replicated_seq: r.last_replicated_seq,
+        replication_lag_ms: r.replication_lag_ms,
+        state: ReplicaState::from(r.state),
+        created_at: r.created_at,
+        leader_last_seen: r.leader_last_seen,
+    }
 }
 
 /// Cluster status information
