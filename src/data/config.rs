@@ -22,6 +22,10 @@ pub struct DataNodeConfig {
     #[serde(default = "default_grpc_port")]
     pub grpc_port: u16,
 
+    /// HTTP port for health checks and monitoring (0 = disabled)
+    #[serde(default = "default_http_port")]
+    pub http_port: u16,
+
     /// Meta service endpoints
     ///
     /// For Kubernetes, use headless service DNS:
@@ -122,6 +126,10 @@ fn default_grpc_port() -> u16 {
     7200
 }
 
+fn default_http_port() -> u16 {
+    7201
+}
+
 fn default_meta_connect_timeout_ms() -> u64 {
     5000
 }
@@ -136,6 +144,7 @@ impl Default for DataNodeConfig {
             node_id: Self::derive_stable_node_id(),
             advertise_addr: "127.0.0.1:7200".to_string(),
             grpc_port: default_grpc_port(),
+            http_port: default_http_port(),
             meta_endpoints: Self::derive_meta_endpoints(),
             meta_connect_timeout_ms: default_meta_connect_timeout_ms(),
             meta_request_timeout_ms: default_meta_request_timeout_ms(),
