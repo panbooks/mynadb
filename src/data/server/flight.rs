@@ -99,12 +99,14 @@ fn convert_data_type(dt: &arrow::datatypes::DataType) -> arrow::datatypes::DataT
         DfDataType::Float64 => DataType::Float64,
         DfDataType::Utf8 => DataType::Utf8,
         DfDataType::LargeUtf8 => DataType::LargeUtf8,
+        DfDataType::Utf8View => DataType::Utf8View,
         DfDataType::Binary => DataType::Binary,
         DfDataType::LargeBinary => DataType::LargeBinary,
+        DfDataType::BinaryView => DataType::BinaryView,
         DfDataType::Timestamp(unit, tz) => DataType::Timestamp(*unit, tz.clone()),
         DfDataType::Date32 => DataType::Date32,
         DfDataType::Date64 => DataType::Date64,
-        _ => DataType::Utf8, // Fallback for unsupported types
+        other => other.clone(), // Pass through any other types directly
     }
 }
 

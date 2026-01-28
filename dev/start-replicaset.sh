@@ -34,11 +34,19 @@ if ! command -v goreman &> /dev/null; then
     exit 1
 fi
 
-# Build release binary
-echo "Building MynaDB (release mode)..."
-cargo build --release
+# Build binary (use debug for faster iteration, release for production)
+BUILD_MODE="${BUILD_MODE:-debug}"
+if [ "$BUILD_MODE" = "release" ]; then
+    echo "Building MynaDB (release mode)..."
+    cargo build --release
+    BINARY="./target/release/mynadb"
+else
+    echo "Building MynaDB (debug mode)..."
+    cargo build
+    BINARY="./target/debug/mynadb"
+fi
 
-if [ ! -f "./target/release/mynadb" ]; then
+if [ ! -f "$BINARY" ]; then
     echo "ERROR: Build failed - binary not found"
     exit 1
 fi

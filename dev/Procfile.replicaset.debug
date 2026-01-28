@@ -1,0 +1,10 @@
+# MynaDB Replica Set Development Environment (Debug Build)
+# Uses debug binary for faster iteration
+
+meta1: ./target/debug/mynadb -c ./dev/configs/replicaset/meta1.toml meta start
+meta2: ./target/debug/mynadb -c ./dev/configs/replicaset/meta2.toml meta start
+meta3: ./target/debug/mynadb -c ./dev/configs/replicaset/meta3.toml meta start
+router1: sleep 3 && ./target/debug/mynadb -c ./dev/configs/replicaset/router1.toml router start
+data1: sleep 3 && MYNADB_ZONE=zone-a ./target/debug/mynadb -c ./dev/configs/replicaset/data1.toml data start
+data2: sleep 3 && MYNADB_ZONE=zone-b ./target/debug/mynadb -c ./dev/configs/replicaset/data2.toml data start
+data3: sleep 3 && MYNADB_ZONE=zone-c ./target/debug/mynadb -c ./dev/configs/replicaset/data3.toml data start
