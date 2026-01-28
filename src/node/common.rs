@@ -121,19 +121,37 @@ pub fn init_query_engine(
     storage: Arc<storage_mod::Storage>,
     cache: Arc<cache::DataCache>,
 ) -> Arc<query_engine::QueryEngine> {
+    init_query_engine_with_parquet_cache(config, storage, cache, None)
+}
+
+/// Initialize query engine with memtable and optional parquet cache support
+pub fn init_query_engine_with_parquet_cache(
+    config: &Config,
+    storage: Arc<storage_mod::Storage>,
+    cache: Arc<cache::DataCache>,
+    parquet_cache: Option<Arc<crate::data::cache::ParquetLocalCache>>,
+) -> Arc<query_engine::QueryEngine> {
     info!("Initializing query engine with memtable support");
     let query_cache_config = query_cache::QueryCacheConfig::from(&config.query_cache);
     let hot_partition_cache_config =
         hot_partition_cache::HotPartitionCacheConfig::from(&config.hot_partition_cache);
 
-    Arc::new(query_engine::QueryEngine::new_with_memtable(
+    let mut engine = query_engine::QueryEngine::new_with_memtable(
         &config.storage.data_dir,
         Some(storage),
         query_cache_config,
         hot_partition_cache_config,
         config.query.use_custom_table_provider,
         cache,
-    ))
+    );
+
+    // Set parquet cache for cluster mode (object storage)
+    if let Some(cache) = parquet_cache {
+        engine.set_parquet_cache(cache);
+        info!("Parquet local cache enabled for query engine");
+    }
+
+    Arc::new(engine)
 }
 
 /// Initialize file cache for object storage backends

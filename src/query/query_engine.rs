@@ -60,6 +60,8 @@ pub struct QueryEngine {
     hot_partition_cache: SharedHotPartitionCache,
     use_custom_table_provider: bool,
     write_cache: Option<Arc<DataCache>>,
+    /// Local parquet file cache for cluster mode (object storage)
+    parquet_cache: Option<Arc<crate::data::cache::ParquetLocalCache>>,
 }
 
 impl QueryEngine {
@@ -260,6 +262,7 @@ impl QueryEngine {
             query_cache,
             hot_partition_cache,
             use_custom_table_provider,
+            parquet_cache: None,
             write_cache,
         }
     }
@@ -271,6 +274,17 @@ impl QueryEngine {
     /// Get reference to the metadata cache
     pub fn metadata_cache(&self) -> &Arc<TableMetadataCache> {
         &self.metadata_cache
+    }
+
+    /// Set the parquet local cache for cluster mode (object storage)
+    /// This cache is used to download and cache parquet files locally
+    pub fn set_parquet_cache(&mut self, cache: Arc<crate::data::cache::ParquetLocalCache>) {
+        self.parquet_cache = Some(cache);
+    }
+
+    /// Get parquet cache reference
+    pub fn parquet_cache(&self) -> Option<&Arc<crate::data::cache::ParquetLocalCache>> {
+        self.parquet_cache.as_ref()
     }
 
     /// Get metadata cache statistics
@@ -599,8 +613,13 @@ impl QueryEngine {
             .with_partitioned(partitioned)
             .with_batch_size(8192);
 
-        let provider = ParquetTableProvider::try_new(local_path, config)
+        let mut provider = ParquetTableProvider::try_new(local_path, config)
             .map_err(|e| format!("Failed to create table provider for '{}': {}", full_name, e))?;
+
+        // Add parquet cache for cluster mode (object storage)
+        if let Some(ref cache) = self.parquet_cache {
+            provider = provider.with_parquet_cache(cache.clone());
+        }
 
         self.register_provider(catalog_name, schema_name, table_name, Arc::new(provider))
     }
