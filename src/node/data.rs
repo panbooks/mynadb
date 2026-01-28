@@ -7,6 +7,7 @@
 use super::common;
 use crate::config::Config;
 use crate::data::config::DataNodeConfig;
+use crate::data::server::api::{start_http_server, DataNodeState};
 use crate::data::server::flight::{start_flight_server, DataNodeFlightService};
 use crate::meta::client::MetaClient;
 use crate::meta::types::{current_timestamp_ms, NodeInfo, NodeRole, NodeState};
@@ -14,7 +15,7 @@ use crate::storage::cache;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 /// Macro for welcome messages
@@ -173,6 +174,7 @@ pub async fn start(config_path: &str) {
     let meta_client_for_shutdown = meta_client.clone();
 
     // Create Flight service (replaces gRPC)
+    let data_cache_for_http = data_cache.clone();
     let flight_service = DataNodeFlightService::new(
         data_cache,
         query_engine,
@@ -185,6 +187,23 @@ pub async fn start(config_path: &str) {
     let addr = data_config.advertise_addr.parse().expect("Invalid address");
     welcome!("  Data node started on {}", data_config.advertise_addr);
     welcome!("  Protocol: Arrow Flight");
+
+    // Start HTTP server for health checks and monitoring (if port > 0)
+    let http_port = data_config.http_port;
+    if http_port > 0 {
+        let http_state = DataNodeState {
+            node_id: data_config.node_id.clone(),
+            start_time: Instant::now(),
+            cache: data_cache_for_http,
+        };
+        tokio::spawn(async move {
+            if let Err(e) = start_http_server("0.0.0.0", http_port, http_state).await {
+                error!("Data node HTTP server failed: {}", e);
+            }
+        });
+        welcome!("  HTTP API on port {}", http_port);
+    }
+
     welcome!("===============================================");
 
     // Set up signal handler for graceful shutdown

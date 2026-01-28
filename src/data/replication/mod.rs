@@ -2,6 +2,11 @@
 //!
 //! This module implements warm standby replication for zero-downtime failover.
 //!
+//! **Note**: This is a planned feature that is not yet integrated into the main write path.
+//! Enable via `[data.replication] enabled = true` in config when ready.
+
+#![allow(dead_code)]
+//!
 //! ## Architecture
 //!
 //! ```text
