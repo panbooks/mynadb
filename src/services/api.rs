@@ -143,6 +143,119 @@ pub async fn health() -> &'static str {
     "OK"
 }
 
+/// Prometheus-compatible metrics endpoint
+///
+/// Exports metrics in Prometheus exposition format for monitoring and alerting.
+/// Scrape this endpoint with Prometheus using:
+/// ```yaml
+/// scrape_configs:
+///   - job_name: 'mynadb'
+///     static_configs:
+///       - targets: ['localhost:7000']
+///     metrics_path: '/metrics'
+/// ```
+pub async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let mut output = String::new();
+
+    // Get cache stats
+    let cache_stats = state.cache.stats().await;
+
+    // Cache metrics
+    output.push_str("# HELP mynadb_cache_rows_total Total number of rows in the data cache\n");
+    output.push_str("# TYPE mynadb_cache_rows_total gauge\n");
+    output.push_str(&format!("mynadb_cache_rows_total {}\n", cache_stats.total_rows));
+
+    output.push_str("# HELP mynadb_cache_tables_total Number of tables in the data cache\n");
+    output.push_str("# TYPE mynadb_cache_tables_total gauge\n");
+    output.push_str(&format!(
+        "mynadb_cache_tables_total {}\n",
+        cache_stats.num_measurements
+    ));
+
+    output.push_str("# HELP mynadb_cache_size_bytes Current size of the data cache in bytes\n");
+    output.push_str("# TYPE mynadb_cache_size_bytes gauge\n");
+    output.push_str(&format!(
+        "mynadb_cache_size_bytes {}\n",
+        cache_stats.size_bytes
+    ));
+
+    output.push_str("# HELP mynadb_cache_max_size_bytes Maximum size of the data cache in bytes\n");
+    output.push_str("# TYPE mynadb_cache_max_size_bytes gauge\n");
+    output.push_str(&format!(
+        "mynadb_cache_max_size_bytes {}\n",
+        cache_stats.max_size_bytes
+    ));
+
+    output.push_str("# HELP mynadb_cache_usage_ratio Cache usage as a ratio (0.0-1.0)\n");
+    output.push_str("# TYPE mynadb_cache_usage_ratio gauge\n");
+    output.push_str(&format!(
+        "mynadb_cache_usage_ratio {:.4}\n",
+        cache_stats.usage_percent() as f64 / 100.0
+    ));
+
+    // File cache metrics (if available)
+    if let Some(fc) = &state.file_cache {
+        let fc_stats = fc.stats().await;
+        output.push_str("# HELP mynadb_file_cache_files_total Number of files in file cache\n");
+        output.push_str("# TYPE mynadb_file_cache_files_total gauge\n");
+        output.push_str(&format!(
+            "mynadb_file_cache_files_total {}\n",
+            fc_stats.file_count
+        ));
+
+        output.push_str("# HELP mynadb_file_cache_size_bytes File cache size in bytes\n");
+        output.push_str("# TYPE mynadb_file_cache_size_bytes gauge\n");
+        output.push_str(&format!(
+            "mynadb_file_cache_size_bytes {}\n",
+            fc_stats.total_size_bytes
+        ));
+
+        output.push_str("# HELP mynadb_file_cache_max_size_bytes File cache max size in bytes\n");
+        output.push_str("# TYPE mynadb_file_cache_max_size_bytes gauge\n");
+        output.push_str(&format!(
+            "mynadb_file_cache_max_size_bytes {}\n",
+            fc_stats.max_size_bytes
+        ));
+
+        output.push_str("# HELP mynadb_file_cache_hits_total Total file cache hits\n");
+        output.push_str("# TYPE mynadb_file_cache_hits_total counter\n");
+        output.push_str(&format!(
+            "mynadb_file_cache_hits_total {}\n",
+            fc_stats.hits
+        ));
+
+        output.push_str("# HELP mynadb_file_cache_misses_total Total file cache misses\n");
+        output.push_str("# TYPE mynadb_file_cache_misses_total counter\n");
+        output.push_str(&format!(
+            "mynadb_file_cache_misses_total {}\n",
+            fc_stats.misses
+        ));
+    }
+
+    // Build info (constant metric)
+    output.push_str("# HELP mynadb_build_info Build information\n");
+    output.push_str("# TYPE mynadb_build_info gauge\n");
+    output.push_str(&format!(
+        "mynadb_build_info{{version=\"{}\",git_hash=\"{}\"}} 1\n",
+        env!("GIT_VERSION"),
+        env!("GIT_HASH")
+    ));
+
+    // Up metric (always 1 when service is running)
+    output.push_str("# HELP mynadb_up Whether the MynaDB server is up\n");
+    output.push_str("# TYPE mynadb_up gauge\n");
+    output.push_str("mynadb_up 1\n");
+
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        output,
+    )
+}
+
 pub async fn version_handler() -> impl IntoResponse {
     let version_info = serde_json::json!({
         "version": env!("GIT_VERSION"),

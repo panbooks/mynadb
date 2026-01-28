@@ -3,6 +3,7 @@
 use crate::meta::proto;
 use crate::meta::types::*;
 use parking_lot::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -38,8 +39,13 @@ pub struct MetaClientConfig {
     pub request_timeout: Duration,
     /// Retry count for failed requests
     pub max_retries: u32,
-    /// Retry backoff
+    /// Base retry backoff (will be multiplied by attempt number)
     pub retry_backoff: Duration,
+    /// Maximum retry backoff (caps exponential growth)
+    pub max_retry_backoff: Duration,
+    /// Jitter factor (0.0-1.0) - adds randomness to prevent thundering herd
+    /// Example: 0.2 means ±20% random variation on the backoff
+    pub retry_jitter_factor: f64,
 }
 
 impl Default for MetaClientConfig {
@@ -50,8 +56,71 @@ impl Default for MetaClientConfig {
             request_timeout: Duration::from_secs(30),
             max_retries: 3,
             retry_backoff: Duration::from_millis(100),
+            max_retry_backoff: Duration::from_secs(10),
+            retry_jitter_factor: 0.3, // ±30% jitter by default
         }
     }
+}
+
+/// Global counter for generating pseudo-random jitter
+/// Uses a simple LCG-like approach without external dependencies
+static JITTER_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+impl MetaClientConfig {
+    /// Calculate backoff duration with exponential backoff and jitter
+    ///
+    /// Uses the "full jitter" algorithm: sleep = random(0, min(cap, base * 2^attempt))
+    /// This spreads retries over time to prevent thundering herd.
+    fn calculate_backoff(&self, attempt: u32) -> Duration {
+        if attempt == 0 {
+            return Duration::ZERO;
+        }
+
+        // Exponential backoff: base * 2^(attempt-1)
+        let base_ms = self.retry_backoff.as_millis() as f64;
+        let exp_backoff_ms = base_ms * (2.0_f64.powi(attempt as i32 - 1));
+
+        // Cap at max backoff
+        let max_ms = self.max_retry_backoff.as_millis() as f64;
+        let capped_ms = exp_backoff_ms.min(max_ms);
+
+        // Add jitter: ±jitter_factor variation using simple pseudo-random
+        let jitter_range = capped_ms * self.retry_jitter_factor;
+        let jitter = pseudo_random_jitter(jitter_range);
+        let final_ms = (capped_ms + jitter).max(0.0);
+
+        Duration::from_millis(final_ms as u64)
+    }
+}
+
+/// Generate pseudo-random jitter in range [-range, +range]
+///
+/// Uses a simple approach combining:
+/// - Atomic counter for uniqueness across calls
+/// - Current timestamp for additional entropy
+/// - Simple mixing function for distribution
+fn pseudo_random_jitter(range: f64) -> f64 {
+    if range <= 0.0 {
+        return 0.0;
+    }
+
+    // Get counter and timestamp for entropy
+    let counter = JITTER_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+
+    // Simple mixing function (xorshift-like)
+    let mut x = counter.wrapping_add(timestamp);
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x2545F4914F6CDD1D);
+
+    // Convert to [-1, 1] range then scale by jitter range
+    let normalized = ((x as f64) / (u64::MAX as f64)) * 2.0 - 1.0;
+    normalized * range
 }
 
 /// Client for Meta service
@@ -161,7 +230,9 @@ impl MetaClient {
         *self.client.write() = None;
     }
 
-    /// Execute with retry logic
+    /// Execute with retry logic using exponential backoff with jitter
+    ///
+    /// Jitter prevents thundering herd when multiple clients retry simultaneously.
     async fn with_retry<T, F, Fut>(&self, op_name: &str, f: F) -> Result<T, String>
     where
         F: Fn(proto::meta_service_client::MetaServiceClient<Channel>) -> Fut,
@@ -171,7 +242,16 @@ impl MetaClient {
 
         for attempt in 0..=self.config.max_retries {
             if attempt > 0 {
-                tokio::time::sleep(self.config.retry_backoff * attempt).await;
+                // Calculate backoff with exponential growth and jitter
+                let backoff = self.config.calculate_backoff(attempt);
+                debug!(
+                    "Meta {} retry {} of {}, waiting {:?}",
+                    op_name,
+                    attempt,
+                    self.config.max_retries,
+                    backoff
+                );
+                tokio::time::sleep(backoff).await;
             }
 
             let client = match self.get_client().await {

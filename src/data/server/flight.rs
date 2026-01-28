@@ -77,9 +77,16 @@ pub struct ReplicationTicket {
     pub table: String,
     pub date: i32,
     pub seq: u64,
+    #[serde(default)]
     pub source_node_id: String,
     /// Marker to identify this as replication data
     pub is_replication: bool,
+    /// CRC32 checksum of the batch data for integrity verification
+    #[serde(default)]
+    pub checksum: Option<u32>,
+    /// Total bytes in the batch (for verification)
+    #[serde(default)]
+    pub total_bytes: Option<u64>,
 }
 
 /// Convert DataFusion DataType to Arrow DataType
@@ -602,19 +609,60 @@ impl DataNodeFlightService {
     /// - Adds data to memtable (for fast failover)
     /// - Does NOT trigger flush (only leader writes Parquet)
     /// - Does NOT write to local WAL (leader has authoritative WAL)
+    /// - Verifies CRC32 checksum if provided to detect corruption
     async fn handle_replication_write(
         &self,
         ticket: ReplicationTicket,
         batches: Vec<RecordBatch>,
+        raw_bytes: Option<Vec<u8>>,
         start: Instant,
     ) -> Result<
         Response<Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>>,
         Status,
     > {
         debug!(
-            "Replication write from {}: {}/{}/{} date={} seq={}",
-            ticket.source_node_id, ticket.catalog, ticket.schema, ticket.table, ticket.date, ticket.seq
+            "Replication write from {}: {}/{}/{} date={} seq={} checksum={:?}",
+            ticket.source_node_id, ticket.catalog, ticket.schema, ticket.table,
+            ticket.date, ticket.seq, ticket.checksum
         );
+
+        // Verify checksum if provided
+        let checksum_verified = if let (Some(expected_checksum), Some(ref data)) = (ticket.checksum, &raw_bytes) {
+            use crate::data::replication::types::compute_checksum;
+            let actual_checksum = compute_checksum(data);
+            if actual_checksum != expected_checksum {
+                let partition_key = format!(
+                    "{}/{}/{}/date={}",
+                    ticket.catalog, ticket.schema, ticket.table,
+                    crate::storage::line_protocol::format_date32_as_string(ticket.date)
+                );
+                error!(
+                    "Checksum mismatch for replication seq {} partition {}: expected {:#x}, got {:#x}",
+                    ticket.seq, partition_key, expected_checksum, actual_checksum
+                );
+                // Return error response instead of applying corrupted data
+                let response = serde_json::json!({
+                    "standby_node_id": self.node_id,
+                    "last_applied_seq": ticket.seq.saturating_sub(1),
+                    "rows_applied": 0,
+                    "error": format!("Checksum mismatch: expected {:#x}, got {:#x}", expected_checksum, actual_checksum),
+                    "checksum_verified": false
+                });
+                let result = PutResult {
+                    app_metadata: serde_json::to_vec(&response).unwrap_or_default().into(),
+                };
+                let output = stream::once(async { Ok(result) });
+                return Ok(Response::new(Box::pin(output)));
+            }
+            debug!(
+                "Checksum verified for seq {} (checksum: {:#x})",
+                ticket.seq, actual_checksum
+            );
+            true
+        } else {
+            // No checksum provided or no raw bytes - cannot verify
+            ticket.checksum.is_none()
+        };
 
         let mut total_rows = 0u64;
 
@@ -660,7 +708,8 @@ impl DataNodeFlightService {
             "standby_node_id": self.node_id,
             "last_applied_seq": ticket.seq,
             "rows_applied": total_rows,
-            "error": null
+            "error": null,
+            "checksum_verified": checksum_verified
         });
 
         let result = PutResult {
@@ -892,11 +941,28 @@ impl FlightService for DataNodeFlightService {
             .cmd
             .clone();
 
-        // Collect all flight data and decode as RecordBatches
+        // Check if this is a replication request (need raw bytes for checksum verification)
+        let is_replication = serde_json::from_slice::<ReplicationTicket>(&descriptor_cmd)
+            .map(|t| t.is_replication)
+            .unwrap_or(false);
+
+        // Collect all flight data
         let mut all_data = vec![first_data];
         while let Some(data) = stream.next().await {
             all_data.push(data.map_err(|e| Status::internal(format!("Stream error: {}", e)))?);
         }
+
+        // For replication, capture raw bytes for checksum verification BEFORE decoding
+        let raw_bytes: Option<Vec<u8>> = if is_replication {
+            let mut bytes = Vec::new();
+            for fd in &all_data {
+                bytes.extend_from_slice(&fd.data_header);
+                bytes.extend_from_slice(&fd.data_body);
+            }
+            Some(bytes)
+        } else {
+            None
+        };
 
         // Decode the flight data stream into RecordBatches
         let flight_stream = FlightRecordBatchStream::new_from_flight_data(stream::iter(
@@ -911,7 +977,7 @@ impl FlightService for DataNodeFlightService {
         // Try to parse as ReplicationTicket first (standby receiving from leader)
         if let Ok(repl_ticket) = serde_json::from_slice::<ReplicationTicket>(&descriptor_cmd) {
             if repl_ticket.is_replication {
-                return self.handle_replication_write(repl_ticket, batches, start).await;
+                return self.handle_replication_write(repl_ticket, batches, raw_bytes, start).await;
             }
         }
 

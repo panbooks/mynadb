@@ -376,6 +376,7 @@ fn build_router(state: api::AppState, auth_middleware: Arc<auth::AuthMiddleware>
     Router::new()
         .route("/", get(api::home))
         .route("/health", get(api::health))
+        .route("/metrics", get(api::metrics_handler))
         .route("/version", get(api::version_handler))
         // Write endpoints
         .route("/write/:db", post(api::write_handler))
