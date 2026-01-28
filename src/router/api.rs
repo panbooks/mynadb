@@ -84,6 +84,8 @@ pub fn build_router(state: RouterAppState) -> Router {
         // Router-specific endpoints
         .route("/router/status", get(router_status_handler))
         .route("/router/nodes", get(list_data_nodes_handler))
+        .route("/stats", get(stats_handler))
+        .route("/flush", post(flush_handler))
         .with_state(state)
 }
 
@@ -94,9 +96,15 @@ pub fn build_router(state: RouterAppState) -> Router {
 /// Home page
 pub async fn home() -> &'static str {
     "MynaDB Router Node\n\n\
-     Write: POST /write/:db\n\
-     Query: GET/POST /query/:db\n\
-     Status: GET /router/status\n"
+     Endpoints:\n\
+       POST /write/:db          - Write data (InfluxDB line protocol)\n\
+       GET/POST /query/:db      - Execute SQL query\n\
+       GET /health              - Health check\n\
+       GET /version             - Version info\n\
+       GET /stats               - Router statistics\n\
+       POST /flush              - Flush all data nodes\n\
+       GET /router/status       - Router status\n\
+       GET /router/nodes        - List data nodes\n"
 }
 
 /// Health check
@@ -292,4 +300,43 @@ pub async fn list_data_nodes_handler(State(state): State<RouterAppState>) -> imp
         .collect();
 
     (StatusCode::OK, Json(node_list))
+}
+
+/// Stats handler - aggregate stats from data nodes
+pub async fn stats_handler(State(state): State<RouterAppState>) -> impl IntoResponse {
+    let nodes = state.shard_cache.get_active_data_nodes();
+
+    let stats = serde_json::json!({
+        "node_type": "router",
+        "node_id": state.router_config.node_id,
+        "active_data_nodes": nodes.len(),
+        "meta_connected": state.is_meta_connected(),
+        "queries_routed": 0,  // TODO: Add query counter
+        "writes_routed": 0,   // TODO: Add write counter
+    });
+
+    (StatusCode::OK, Json(stats))
+}
+
+/// Flush handler - broadcast flush to all data nodes
+pub async fn flush_handler(State(state): State<RouterAppState>) -> impl IntoResponse {
+    // Broadcast flush to all data nodes via Flight
+    let result = state.write_router.broadcast_flush().await;
+
+    match result {
+        Ok(count) => {
+            let response = serde_json::json!({
+                "success": true,
+                "nodes_flushed": count,
+            });
+            (StatusCode::OK, Json(response))
+        }
+        Err(e) => {
+            let response = serde_json::json!({
+                "success": false,
+                "error": e,
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(response))
+        }
+    }
 }

@@ -388,4 +388,36 @@ impl WriteRouter {
             last_error
         ))
     }
+
+    /// Broadcast flush command to all active data nodes
+    pub async fn broadcast_flush(&self) -> Result<usize, String> {
+        let nodes = self.shard_cache.get_active_data_nodes();
+        if nodes.is_empty() {
+            return Err("No active data nodes".to_string());
+        }
+
+        let mut success_count = 0;
+        let mut errors = Vec::new();
+
+        for node in &nodes {
+            match self.data_node_pool.flush_node(&node.node_id).await {
+                Ok(_) => {
+                    success_count += 1;
+                    debug!("Flushed node {}", node.node_id);
+                }
+                Err(e) => {
+                    errors.push(format!("{}: {}", node.node_id, e));
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(success_count)
+        } else if success_count > 0 {
+            // Partial success
+            Ok(success_count)
+        } else {
+            Err(errors.join("; "))
+        }
+    }
 }
