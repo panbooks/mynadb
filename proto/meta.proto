@@ -37,6 +37,13 @@ service MetaService {
     // Cluster status
     rpc GetClusterStatus(GetClusterStatusRequest) returns (GetClusterStatusResponse);
     rpc GetRaftStatus(GetRaftStatusRequest) returns (GetRaftStatusResponse);
+
+    // Partition Replica Management
+    rpc GetPartitionReplica(GetPartitionReplicaRequest) returns (GetPartitionReplicaResponse);
+    rpc ListPartitionReplicas(ListPartitionReplicasRequest) returns (ListPartitionReplicasResponse);
+    rpc AutoAssignReplica(AutoAssignReplicaRequest) returns (AutoAssignReplicaResponse);
+    rpc PromoteStandby(PromoteStandbyRequest) returns (PromoteStandbyResponse);
+    rpc UpdateReplicaState(UpdateReplicaStateRequest) returns (UpdateReplicaStateResponse);
 }
 
 // ============================================================================
@@ -285,6 +292,16 @@ enum EventType {
     EVENT_TYPE_LEADER_CHANGED = 6;
     EVENT_TYPE_CACHE_INVALIDATE = 7;
     EVENT_TYPE_SCHEMA_CHANGED = 8;
+    EVENT_TYPE_REPLICA_ASSIGNED = 9;
+    EVENT_TYPE_REPLICA_PROMOTED = 10;
+    EVENT_TYPE_REPLICA_STATE_CHANGED = 11;
+}
+
+// Replica state for partition replication
+enum ReplicaState {
+    REPLICA_STATE_IN_SYNC = 0;      // Standby fully caught up with leader
+    REPLICA_STATE_CATCHING_UP = 1;  // Standby behind, receiving data
+    REPLICA_STATE_OFFLINE = 2;      // Standby unreachable
 }
 
 message Event {
@@ -311,6 +328,74 @@ message PublishResponse {
     bool success = 1;
     uint64 sequence = 2;
     string error = 3;
+}
+
+// ============================================================================
+// Partition Replica Management
+// ============================================================================
+
+// Partition replica information
+message PartitionReplicaInfo {
+    string partition_key = 1;           // "catalog/schema/table/date=YYYY-MM-DD"
+    string leader_node_id = 2;          // Node handling writes and flushes
+    repeated string standby_node_ids = 3; // Nodes with in-memory copies
+    uint32 replication_factor = 4;      // 1=no standby, 2=1 standby, etc.
+    ReplicaState state = 5;             // Current replication state
+    uint64 last_replicated_seq = 6;     // Last sequence number replicated
+    uint64 replication_lag_ms = 7;      // Replication lag in milliseconds
+    int64 created_at = 8;               // Creation timestamp (ms since epoch)
+    int64 leader_last_seen = 9;         // Last leader heartbeat timestamp
+}
+
+message GetPartitionReplicaRequest {
+    string partition_key = 1;
+}
+
+message GetPartitionReplicaResponse {
+    bool found = 1;
+    PartitionReplicaInfo replica = 2;
+    string error = 3;
+}
+
+message ListPartitionReplicasRequest {
+    string leader_node_id = 1;          // Optional: filter by leader (empty = all)
+}
+
+message ListPartitionReplicasResponse {
+    repeated PartitionReplicaInfo replicas = 1;
+}
+
+message AutoAssignReplicaRequest {
+    string partition_key = 1;
+}
+
+message AutoAssignReplicaResponse {
+    bool success = 1;
+    PartitionReplicaInfo replica = 2;
+    string error = 3;
+}
+
+message PromoteStandbyRequest {
+    string partition_key = 1;
+}
+
+message PromoteStandbyResponse {
+    bool success = 1;
+    string new_leader_id = 2;
+    string old_leader_id = 3;
+    string error = 4;
+}
+
+message UpdateReplicaStateRequest {
+    string partition_key = 1;
+    ReplicaState state = 2;
+    uint64 last_replicated_seq = 3;
+    uint64 replication_lag_ms = 4;
+}
+
+message UpdateReplicaStateResponse {
+    bool success = 1;
+    string error = 2;
 }
 
 // ============================================================================

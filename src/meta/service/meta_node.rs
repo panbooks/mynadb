@@ -665,6 +665,255 @@ impl MetaNode {
     }
 
     // ========================================================================
+    // Partition Replica Management
+    // ========================================================================
+
+    /// Get replica for a partition (read-only, direct from state machine)
+    pub async fn get_partition_replica(&self, partition_key: &str) -> Option<PartitionReplica> {
+        self.state_machine.get_replica(partition_key)
+    }
+
+    /// List all replicas, optionally filtered by leader node
+    pub async fn list_partition_replicas(
+        &self,
+        leader_node_id: Option<&str>,
+    ) -> Vec<PartitionReplica> {
+        match leader_node_id {
+            Some(leader) => self.state_machine.get_replicas_by_leader(leader),
+            None => self.state_machine.list_replicas(),
+        }
+    }
+
+    /// Auto-assign replica for a partition (writes go through Raft)
+    pub async fn auto_assign_replica(
+        &self,
+        partition_key: &str,
+    ) -> Result<PartitionReplica, String> {
+        let cmd = MetaCommand::AutoAssignReplica {
+            partition_key: partition_key.to_string(),
+        };
+
+        let result = self.raft.client_write(cmd.clone()).await;
+        match result {
+            Ok(response) => match response.data {
+                MetaResponse::ReplicaAutoAssigned {
+                    partition_key,
+                    leader_node_id,
+                    standby_node_ids,
+                    replication_factor,
+                } => Ok(PartitionReplica {
+                    partition_key,
+                    leader_node_id,
+                    standby_node_ids,
+                    replication_factor,
+                    last_replicated_seq: 0,
+                    replication_lag_ms: 0,
+                    state: ReplicaState::CatchingUp,
+                    created_at: current_timestamp_ms(),
+                    leader_last_seen: current_timestamp_ms(),
+                }),
+                MetaResponse::ReplicaAlreadyExists { partition_key } => {
+                    // Replica already exists, fetch it
+                    self.state_machine
+                        .get_replica(&partition_key)
+                        .ok_or_else(|| "Replica exists but not found".to_string())
+                }
+                MetaResponse::NoDataNodesAvailable => {
+                    Err("No data nodes available for replica assignment".to_string())
+                }
+                MetaResponse::Error { message } => Err(message),
+                _ => Err("Unexpected response from auto_assign_replica".to_string()),
+            },
+            Err(e) => {
+                // Handle ForwardToLeader
+                if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
+                    if let Some(leader_id) = forward.leader_id {
+                        debug!("Forwarding auto_assign_replica to leader node {}", leader_id);
+                        return self.forward_auto_assign_to_leader(leader_id, cmd).await;
+                    }
+                }
+                Err(format!("Raft error: {}", e))
+            }
+        }
+    }
+
+    /// Forward auto_assign_replica to leader
+    async fn forward_auto_assign_to_leader(
+        &self,
+        leader_id: NodeId,
+        cmd: MetaCommand,
+    ) -> Result<PartitionReplica, String> {
+        let channel = self
+            .network
+            .get_channel_to(leader_id)
+            .await
+            .map_err(|e| format!("Failed to connect to leader {}: {}", leader_id, e))?;
+
+        let mut client = proto::raft_internal_client::RaftInternalClient::new(channel);
+
+        let command_data =
+            bincode::serialize(&cmd).map_err(|e| format!("Failed to serialize command: {}", e))?;
+
+        let request = tonic::Request::new(proto::ForwardCommandRequest { command_data });
+
+        let response = client
+            .forward_command(request)
+            .await
+            .map_err(|e| format!("Forward to leader failed: {}", e))?
+            .into_inner();
+
+        if response.success {
+            if !response.response_data.is_empty() {
+                let meta_resp: MetaResponse = bincode::deserialize(&response.response_data)
+                    .map_err(|e| format!("Failed to deserialize response: {}", e))?;
+                match meta_resp {
+                    MetaResponse::ReplicaAutoAssigned {
+                        partition_key,
+                        leader_node_id,
+                        standby_node_ids,
+                        replication_factor,
+                    } => Ok(PartitionReplica {
+                        partition_key,
+                        leader_node_id,
+                        standby_node_ids,
+                        replication_factor,
+                        last_replicated_seq: 0,
+                        replication_lag_ms: 0,
+                        state: ReplicaState::CatchingUp,
+                        created_at: current_timestamp_ms(),
+                        leader_last_seen: current_timestamp_ms(),
+                    }),
+                    MetaResponse::ReplicaAlreadyExists { partition_key } => {
+                        self.state_machine
+                            .get_replica(&partition_key)
+                            .ok_or_else(|| "Replica exists but not found".to_string())
+                    }
+                    MetaResponse::NoDataNodesAvailable => {
+                        Err("No data nodes available for replica assignment".to_string())
+                    }
+                    MetaResponse::Error { message } => Err(message),
+                    _ => Err("Unexpected response".to_string()),
+                }
+            } else {
+                Err("No response data from leader".to_string())
+            }
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Promote standby to leader for a partition
+    pub async fn promote_standby(
+        &self,
+        partition_key: &str,
+    ) -> Result<(String, String), String> {
+        let cmd = MetaCommand::PromoteStandby {
+            partition_key: partition_key.to_string(),
+        };
+
+        let result = self.raft.client_write(cmd.clone()).await;
+        match result {
+            Ok(response) => match response.data {
+                MetaResponse::StandbyPromoted {
+                    new_leader_id,
+                    old_leader_id,
+                    ..
+                } => Ok((new_leader_id, old_leader_id)),
+                MetaResponse::NoStandbyAvailable { partition_key } => {
+                    Err(format!("No standby available for partition {}", partition_key))
+                }
+                MetaResponse::ReplicaNotFound { partition_key } => {
+                    Err(format!("Replica not found for partition {}", partition_key))
+                }
+                MetaResponse::Error { message } => Err(message),
+                _ => Err("Unexpected response from promote_standby".to_string()),
+            },
+            Err(e) => {
+                // Handle ForwardToLeader
+                if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
+                    if let Some(leader_id) = forward.leader_id {
+                        debug!("Forwarding promote_standby to leader node {}", leader_id);
+                        return self.forward_promote_to_leader(leader_id, cmd).await;
+                    }
+                }
+                Err(format!("Raft error: {}", e))
+            }
+        }
+    }
+
+    /// Forward promote_standby to leader
+    async fn forward_promote_to_leader(
+        &self,
+        leader_id: NodeId,
+        cmd: MetaCommand,
+    ) -> Result<(String, String), String> {
+        let channel = self
+            .network
+            .get_channel_to(leader_id)
+            .await
+            .map_err(|e| format!("Failed to connect to leader {}: {}", leader_id, e))?;
+
+        let mut client = proto::raft_internal_client::RaftInternalClient::new(channel);
+
+        let command_data =
+            bincode::serialize(&cmd).map_err(|e| format!("Failed to serialize command: {}", e))?;
+
+        let request = tonic::Request::new(proto::ForwardCommandRequest { command_data });
+
+        let response = client
+            .forward_command(request)
+            .await
+            .map_err(|e| format!("Forward to leader failed: {}", e))?
+            .into_inner();
+
+        if response.success {
+            if !response.response_data.is_empty() {
+                let meta_resp: MetaResponse = bincode::deserialize(&response.response_data)
+                    .map_err(|e| format!("Failed to deserialize response: {}", e))?;
+                match meta_resp {
+                    MetaResponse::StandbyPromoted {
+                        new_leader_id,
+                        old_leader_id,
+                        ..
+                    } => Ok((new_leader_id, old_leader_id)),
+                    MetaResponse::NoStandbyAvailable { partition_key } => {
+                        Err(format!("No standby available for partition {}", partition_key))
+                    }
+                    MetaResponse::ReplicaNotFound { partition_key } => {
+                        Err(format!("Replica not found for partition {}", partition_key))
+                    }
+                    MetaResponse::Error { message } => Err(message),
+                    _ => Err("Unexpected response".to_string()),
+                }
+            } else {
+                Err("No response data from leader".to_string())
+            }
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Update replica state (replication progress)
+    pub async fn update_replica_state(
+        &self,
+        partition_key: &str,
+        state: ReplicaState,
+        last_replicated_seq: u64,
+        replication_lag_ms: u64,
+    ) -> Result<(), String> {
+        let cmd = MetaCommand::UpdateReplicaState {
+            partition_key: partition_key.to_string(),
+            state,
+            last_replicated_seq,
+            replication_lag_ms,
+        };
+        match self.apply_command(cmd).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    // ========================================================================
     // Cluster Management
     // ========================================================================
 

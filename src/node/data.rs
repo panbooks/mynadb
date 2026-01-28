@@ -209,8 +209,9 @@ pub async fn start(config_path: &str) {
         parquet_cache.clone(),
     );
 
-    // Clone meta_client before moving to FlightService (needed for shutdown handler)
+    // Clone meta_client before moving to FlightService (needed for shutdown and event subscription)
     let meta_client_for_shutdown = meta_client.clone();
+    let meta_client_for_events = meta_client.clone();
 
     // Create Flight service (replaces gRPC)
     let data_cache_for_http = data_cache.clone();
@@ -225,6 +226,160 @@ pub async fn start(config_path: &str) {
     // Add parquet cache if available
     if let Some(ref cache) = parquet_cache {
         flight_service = flight_service.with_parquet_cache(cache.clone());
+    }
+
+    // Initialize replication manager if enabled
+    let replication_manager_for_reporting: Option<Arc<crate::data::replication::ReplicationManager>> =
+        if data_config.replication.enabled {
+            use crate::data::replication::{ReplicationConfig as ReplicationTypesConfig, ReplicationManager};
+
+            let replication_config = ReplicationTypesConfig::from(&data_config.replication);
+            let replication_manager = Arc::new(ReplicationManager::new(
+                data_config.node_id.clone(),
+                replication_config,
+            ));
+
+            flight_service = flight_service.with_replication_manager(Arc::clone(&replication_manager));
+            info!(
+                "Replication enabled: mode={}, batch_interval={}ms",
+                data_config.replication.mode, data_config.replication.batch_interval_ms
+            );
+
+            Some(replication_manager)
+        } else {
+            None
+        };
+
+    // Start replication state reporting task if both replication and Meta are available
+    if let (Some(ref client), Some(ref repl_manager)) = (&meta_client_for_events, &replication_manager_for_reporting) {
+        use crate::meta::types::ReplicaState;
+
+        let meta_client_for_report = Arc::clone(client);
+        let repl_manager_for_report = Arc::clone(repl_manager);
+        let report_interval_secs = 5u64; // Report every 5 seconds
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(report_interval_secs));
+
+            loop {
+                interval.tick().await;
+
+                // Get per-partition stats from replication manager
+                let partition_stats = repl_manager_for_report.partition_stats();
+
+                // Report each partition's state to Meta
+                for stats in partition_stats {
+                    let state = if stats.in_sync {
+                        ReplicaState::InSync
+                    } else if stats.max_lag_ms < 10000 {
+                        ReplicaState::CatchingUp
+                    } else {
+                        ReplicaState::Offline
+                    };
+
+                    if let Err(e) = meta_client_for_report
+                        .update_replica_state(
+                            &stats.partition_key,
+                            state,
+                            stats.last_replicated_seq,
+                            stats.max_lag_ms,
+                        )
+                        .await
+                    {
+                        warn!(
+                            "Failed to report replica state for {}: {}",
+                            stats.partition_key, e
+                        );
+                    }
+                }
+            }
+        });
+
+        info!("Started replication state reporting task (every {}s)", report_interval_secs);
+    }
+
+    // Subscribe to replica events from Meta for cache invalidation
+    // This keeps replica_cache updated when partitions are assigned/promoted
+    if let Some(ref client) = meta_client_for_events {
+        use crate::meta::types::{EventType, PartitionReplica};
+
+        let replica_cache = flight_service.replica_cache();
+        let node_id = data_config.node_id.clone();
+        let meta_client_for_sub = Arc::clone(client);
+
+        tokio::spawn(async move {
+            // Subscribe to replica-related events
+            let topics = vec!["replicas".to_string()];
+            let mut retry_count: u32 = 0;
+            const MAX_RETRY_DELAY_SECS: u64 = 30;
+
+            loop {
+                match meta_client_for_sub.subscribe(topics.clone(), 0).await {
+                    Ok(mut rx) => {
+                        retry_count = 0; // Reset on successful connection
+                        info!("Subscribed to replica events from Meta");
+
+                        while let Some(event) = rx.recv().await {
+                            match event.event_type {
+                                EventType::ReplicaAssigned | EventType::ReplicaPromoted => {
+                                    // Parse and cache the replica info
+                                    match serde_json::from_slice::<PartitionReplica>(&event.payload) {
+                                        Ok(replica) => {
+                                            let is_leader = replica.leader_node_id == node_id;
+                                            let is_standby = replica.standby_node_ids.contains(&node_id);
+
+                                            if is_leader || is_standby {
+                                                info!(
+                                                    "Replica event for {}: leader={}, standbys={:?} (I'm {})",
+                                                    replica.partition_key,
+                                                    replica.leader_node_id,
+                                                    replica.standby_node_ids,
+                                                    if is_leader { "leader" } else { "standby" }
+                                                );
+
+                                                // If promoted to leader, should start flushing
+                                                if event.event_type == EventType::ReplicaPromoted && is_leader {
+                                                    info!(
+                                                        "PROMOTED to leader for partition {}! Will start flushing.",
+                                                        replica.partition_key
+                                                    );
+                                                    // The DataCache will automatically flush based on normal intervals
+                                                    // Future: Could trigger immediate flush here
+                                                }
+
+                                                replica_cache.insert(replica.partition_key.clone(), replica);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!("Failed to parse replica event: {}", e);
+                                        }
+                                    }
+                                }
+                                EventType::ReplicaStateChanged => {
+                                    // Update cached replica state
+                                    if let Ok(replica) = serde_json::from_slice::<PartitionReplica>(&event.payload) {
+                                        if replica.leader_node_id == node_id || replica.standby_node_ids.contains(&node_id) {
+                                            replica_cache.insert(replica.partition_key.clone(), replica);
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        warn!("Replica event subscription ended, reconnecting...");
+                    }
+                    Err(e) => {
+                        let delay = std::cmp::min(1 << retry_count, MAX_RETRY_DELAY_SECS);
+                        warn!(
+                            "Failed to subscribe to replica events: {}. Retrying in {}s...",
+                            e, delay
+                        );
+                        tokio::time::sleep(Duration::from_secs(delay)).await;
+                        retry_count = retry_count.saturating_add(1);
+                    }
+                }
+            }
+        });
     }
 
     // Start Flight server

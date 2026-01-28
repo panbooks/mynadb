@@ -430,13 +430,56 @@ impl ReplicationManager {
             in_sync_count,
         }
     }
+
+    /// Get per-partition replication stats for reporting to Meta
+    ///
+    /// Returns a list of (partition_key, last_acked_seq, lag_ms, is_in_sync) tuples
+    pub fn partition_stats(&self) -> Vec<PartitionReplicationStats> {
+        let streams = self.streams.read();
+        let mut partition_stats: std::collections::HashMap<String, PartitionReplicationStats> =
+            std::collections::HashMap::new();
+
+        for (key, stream) in streams.iter() {
+            // Key format: "partition_key:standby_node_id"
+            if let Some(partition_key) = key.split(':').next() {
+                let lag = stream.lag_ms();
+                let acked = stream.last_acked_seq();
+                let in_sync = stream.is_in_sync(self.config.max_lag_alert_ms);
+
+                let entry = partition_stats
+                    .entry(partition_key.to_string())
+                    .or_insert_with(|| PartitionReplicationStats {
+                        partition_key: partition_key.to_string(),
+                        last_replicated_seq: 0,
+                        max_lag_ms: 0,
+                        in_sync: true,
+                    });
+
+                // Update with max values across standbys
+                entry.last_replicated_seq = entry.last_replicated_seq.max(acked);
+                entry.max_lag_ms = entry.max_lag_ms.max(lag);
+                entry.in_sync = entry.in_sync && in_sync;
+            }
+        }
+
+        partition_stats.into_values().collect()
+    }
 }
 
-/// Replication statistics
+/// Replication statistics (aggregate)
 #[derive(Debug, Clone)]
 pub struct ReplicationStats {
     pub stream_count: usize,
     pub avg_lag_ms: u64,
     pub max_lag_ms: u64,
     pub in_sync_count: usize,
+}
+
+/// Per-partition replication statistics for reporting to Meta
+#[derive(Debug, Clone)]
+pub struct PartitionReplicationStats {
+    pub partition_key: String,
+    pub last_replicated_seq: u64,
+    pub max_lag_ms: u64,
+    pub in_sync: bool,
 }

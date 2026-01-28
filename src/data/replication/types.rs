@@ -162,3 +162,22 @@ impl Default for ReplicationConfig {
         }
     }
 }
+
+impl From<&crate::data::config::ReplicationConfig> for ReplicationConfig {
+    fn from(config: &crate::data::config::ReplicationConfig) -> Self {
+        let mode = match config.mode.as_str() {
+            "sync" => ReplicationMode::Sync,
+            "sync_all" => ReplicationMode::SyncAll,
+            _ => ReplicationMode::Async,
+        };
+
+        Self {
+            enabled: config.enabled,
+            mode,
+            batch_interval_ms: config.batch_interval_ms,
+            max_batch_size: config.max_batch_size,
+            ack_timeout_ms: config.ack_timeout_ms,
+            max_lag_alert_ms: config.max_lag_alert_ms,
+        }
+    }
+}

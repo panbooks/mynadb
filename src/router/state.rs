@@ -52,13 +52,6 @@ impl RouterAppState {
         let pool_config = super::client::data_node_pool::PoolConfig::default();
         let data_node_pool = Arc::new(DataNodePool::new(pool_config));
 
-        // Initialize write router
-        let write_router = Arc::new(WriteRouter::new(
-            Arc::clone(&shard_cache),
-            Arc::clone(&data_node_pool),
-            config.schema.clone(),
-        ));
-
         // Connect to Meta service (optional)
         let meta_client = match MetaClient::connect(&router_config.meta.endpoints).await {
             Ok(client) => {
@@ -71,6 +64,20 @@ impl RouterAppState {
                     e
                 );
                 None
+            }
+        };
+
+        // Initialize write router (with MetaClient for replica auto-assignment if available)
+        let write_router = {
+            let base = WriteRouter::new(
+                Arc::clone(&shard_cache),
+                Arc::clone(&data_node_pool),
+                config.schema.clone(),
+            );
+            if let Some(ref client) = meta_client {
+                Arc::new(base.with_meta_client(Arc::clone(client)))
+            } else {
+                Arc::new(base)
             }
         };
 
