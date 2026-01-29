@@ -124,8 +124,7 @@ impl CircuitBreaker {
 
         if current_state == CircuitState::HalfOpen as u8 {
             // Failure in half-open state - go back to open
-            self.state
-                .store(CircuitState::Open as u8, Ordering::SeqCst);
+            self.state.store(CircuitState::Open as u8, Ordering::SeqCst);
             self.last_failure_ms
                 .store(current_timestamp_ms(), Ordering::SeqCst);
             self.half_open_requests.store(0, Ordering::SeqCst);

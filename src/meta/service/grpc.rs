@@ -19,7 +19,7 @@ fn mode_to_proto(mode: Option<DataNodeMode>) -> i32 {
     match mode {
         Some(DataNodeMode::Primary) => 1, // DATA_NODE_MODE_PRIMARY
         Some(DataNodeMode::Standby) => 2, // DATA_NODE_MODE_STANDBY
-        None => 0, // DATA_NODE_MODE_UNSPECIFIED
+        None => 0,                        // DATA_NODE_MODE_UNSPECIFIED
     }
 }
 use openraft::raft::{AppendEntriesRequest, InstallSnapshotRequest, VoteRequest};

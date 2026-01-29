@@ -935,7 +935,10 @@ async fn read_parquet_file(
             Ok(cached_path) => cached_path,
             Err(e) => {
                 // Cache fetch failed - fall back to original path
-                debug!("Parquet cache fetch failed for {}: {}, using original path", path_str, e);
+                debug!(
+                    "Parquet cache fetch failed for {}: {}, using original path",
+                    path_str, e
+                );
                 file_info.path.clone()
             }
         }

@@ -875,10 +875,7 @@ pub fn resolve_env_var(var_name: &str, default: Option<&str>) -> Result<String, 
         Ok(val) => Ok(val),
         Err(_) => match default {
             Some(d) => Ok(d.to_string()),
-            None => Err(format!(
-                "Environment variable '{}' is not set",
-                var_name
-            )),
+            None => Err(format!("Environment variable '{}' is not set", var_name)),
         },
     }
 }
@@ -933,8 +930,8 @@ impl Config {
         // Resolve environment variables in the TOML content
         let resolved = resolve_env_vars(&content)?;
 
-        let config: Config = toml::from_str(&resolved)
-            .map_err(|e| format!("Failed to parse config file: {}", e))?;
+        let config: Config =
+            toml::from_str(&resolved).map_err(|e| format!("Failed to parse config file: {}", e))?;
 
         Ok(config)
     }
@@ -952,10 +949,7 @@ impl Config {
                 config
             }
             Err(e) => {
-                eprintln!(
-                    "[config] Could not load config file '{}': {}",
-                    path, e
-                );
+                eprintln!("[config] Could not load config file '{}': {}", path, e);
                 eprintln!("[config] Using default configuration");
                 Config::default()
             }

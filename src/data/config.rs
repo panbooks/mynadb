@@ -221,18 +221,29 @@ impl DataNodeConfig {
         let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost".to_string());
 
         // Check if we're in K8s (pod name typically contains hyphens and ordinals)
-        if hostname.contains('-') && hostname.chars().last().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        if hostname.contains('-')
+            && hostname
+                .chars()
+                .last()
+                .map(|c| c.is_ascii_digit())
+                .unwrap_or(false)
+        {
             let service = std::env::var("MYNADB_HEADLESS_SERVICE")
                 .unwrap_or_else(|_| "mynadb-data-headless".to_string());
             let namespace = std::env::var("MYNADB_NAMESPACE")
                 .or_else(|_| {
                     // Try to read namespace from K8s service account
-                    std::fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
-                        .map(|s| s.trim().to_string())
+                    std::fs::read_to_string(
+                        "/var/run/secrets/kubernetes.io/serviceaccount/namespace",
+                    )
+                    .map(|s| s.trim().to_string())
                 })
                 .unwrap_or_else(|_| "default".to_string());
 
-            format!("{}.{}.{}.svc.cluster.local:{}", hostname, service, namespace, port)
+            format!(
+                "{}.{}.{}.svc.cluster.local:{}",
+                hostname, service, namespace, port
+            )
         } else {
             // Not in K8s, use localhost
             format!("127.0.0.1:{}", port)
@@ -241,12 +252,16 @@ impl DataNodeConfig {
 
     /// Get the zone label if present
     pub fn zone(&self) -> Option<&str> {
-        self.labels.get("topology.kubernetes.io/zone").map(|s| s.as_str())
+        self.labels
+            .get("topology.kubernetes.io/zone")
+            .map(|s| s.as_str())
     }
 
     /// Get the region label if present
     pub fn region(&self) -> Option<&str> {
-        self.labels.get("topology.kubernetes.io/region").map(|s| s.as_str())
+        self.labels
+            .get("topology.kubernetes.io/region")
+            .map(|s| s.as_str())
     }
 
     /// Get the rack label if present
@@ -255,7 +270,10 @@ impl DataNodeConfig {
     }
 
     /// Check if this node is in a different zone than another node's labels
-    pub fn is_different_zone(&self, other_labels: &std::collections::HashMap<String, String>) -> bool {
+    pub fn is_different_zone(
+        &self,
+        other_labels: &std::collections::HashMap<String, String>,
+    ) -> bool {
         match (self.zone(), other_labels.get("topology.kubernetes.io/zone")) {
             (Some(z1), Some(z2)) => z1 != z2,
             _ => false, // If either doesn't have zone, we can't determine

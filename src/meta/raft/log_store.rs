@@ -68,7 +68,11 @@ impl SledLogStore {
             Ok(Some(v)) => match bincode::deserialize(&v) {
                 Ok(c) => Some(c),
                 Err(e) => {
-                    error!("Failed to deserialize committed ({} bytes): {:?}", v.len(), e);
+                    error!(
+                        "Failed to deserialize committed ({} bytes): {:?}",
+                        v.len(),
+                        e
+                    );
                     None
                 }
             },
@@ -83,7 +87,11 @@ impl SledLogStore {
             Ok(Some(v)) => match bincode::deserialize(&v) {
                 Ok(lp) => Some(lp),
                 Err(e) => {
-                    error!("Failed to deserialize last_purged ({} bytes): {:?}", v.len(), e);
+                    error!(
+                        "Failed to deserialize last_purged ({} bytes): {:?}",
+                        v.len(),
+                        e
+                    );
                     None
                 }
             },
@@ -194,7 +202,10 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
 
         tracing::info!(
             "get_log_state: last_purged={:?}, last_log={:?}, actual_first={:?}, actual_last={:?}",
-            last_purged_log_id, last_log_id, first_idx, last_idx
+            last_purged_log_id,
+            last_log_id,
+            first_idx,
+            last_idx
         );
 
         Ok(LogState {
@@ -211,11 +222,13 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
         let data =
             bincode::serialize(vote).map_err(|e| Self::storage_error(e, "serialize vote"))?;
 
-        self.inner.db
+        self.inner
+            .db
             .insert(KEY_VOTE, data)
             .map_err(|e| Self::storage_error(e, "insert vote"))?;
 
-        self.inner.db
+        self.inner
+            .db
             .flush()
             .map_err(|e| Self::storage_error(e, "flush vote"))?;
 
@@ -232,7 +245,8 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
             let data =
                 bincode::serialize(c).map_err(|e| Self::storage_error(e, "serialize committed"))?;
 
-            self.inner.db
+            self.inner
+                .db
                 .insert(KEY_COMMITTED, data)
                 .map_err(|e| Self::storage_error(e, "insert committed"))?;
         }
@@ -263,13 +277,15 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
             let data = bincode::serialize(&entry)
                 .map_err(|e| Self::storage_error(e, "serialize entry"))?;
 
-            self.inner.db
+            self.inner
+                .db
                 .insert(key.as_bytes(), data)
                 .map_err(|e| Self::storage_error(e, "insert entry"))?;
             count += 1;
         }
 
-        self.inner.db
+        self.inner
+            .db
             .flush()
             .map_err(|e| Self::storage_error(e, "flush entries"))?;
 
@@ -294,7 +310,8 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
 
         let count = keys_to_remove.len();
         for key in keys_to_remove {
-            self.inner.db
+            self.inner
+                .db
                 .remove(key)
                 .map_err(|e| Self::storage_error(e, "remove entry"))?;
         }
@@ -309,7 +326,9 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
         let last_before = self.last_log_index();
         tracing::info!(
             "PURGE: BEFORE - first={:?}, last={:?}, purging up to {:?}",
-            first_before, last_before, log_id
+            first_before,
+            last_before,
+            log_id
         );
 
         // Remove all entries up to and including log_id.index
@@ -327,7 +346,8 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
 
         let count = keys_to_remove.len();
         for key in keys_to_remove {
-            self.inner.db
+            self.inner
+                .db
                 .remove(key)
                 .map_err(|e| Self::storage_error(e, "purge entry"))?;
         }
@@ -335,7 +355,8 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
         // Update last purged
         let data = bincode::serialize(&log_id)
             .map_err(|e| Self::storage_error(e, "serialize last_purged"))?;
-        self.inner.db
+        self.inner
+            .db
             .insert(KEY_LAST_PURGED, data)
             .map_err(|e| Self::storage_error(e, "insert last_purged"))?;
 
@@ -346,7 +367,10 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
         let last_after = self.last_log_index();
         tracing::info!(
             "PURGE: AFTER - first={:?}, last={:?}, purged {} entries up to index {}",
-            first_after, last_after, count, log_id.index
+            first_after,
+            last_after,
+            count,
+            log_id.index
         );
         Ok(())
     }
@@ -399,19 +423,13 @@ impl RaftLogReader<TypeConfig> for SledLogStore {
                         entries.push(entry);
                     }
                     Err(e) => {
-                        error!(
-                            "Failed to deserialize entry at idx={}: {:?}",
-                            idx, e
-                        );
+                        error!("Failed to deserialize entry at idx={}: {:?}", idx, e);
                     }
                 }
             }
         }
 
-        debug!(
-            "Read {} entries for range {:?}",
-            entries.len(), range
-        );
+        debug!("Read {} entries for range {:?}", entries.len(), range);
         Ok(entries)
     }
 }

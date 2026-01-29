@@ -9,7 +9,10 @@ fn main() {
 
     if args.len() < 2 {
         eprintln!("Usage: {} <db_path> [prefix]", args[0]);
-        eprintln!("Example: {} ./dev/data/coldstandby-simple/meta1/sled /nodes/", args[0]);
+        eprintln!(
+            "Example: {} ./dev/data/coldstandby-simple/meta1/sled /nodes/",
+            args[0]
+        );
         std::process::exit(1);
     }
 
@@ -57,7 +60,8 @@ fn main() {
 
                 // Try to decode as NodeInfo if it looks like a node key
                 if key_str.starts_with("/nodes/") {
-                    if let Ok(node) = bincode::deserialize::<mynadb::meta::types::NodeInfo>(&value) {
+                    if let Ok(node) = bincode::deserialize::<mynadb::meta::types::NodeInfo>(&value)
+                    {
                         println!("  Decoded NodeInfo:");
                         println!("    node_id: {}", node.node_id);
                         println!("    role: {:?}", node.role);
@@ -74,7 +78,8 @@ fn main() {
                 }
                 // Try to decode as FileInfo if it looks like a file key
                 else if key_str.starts_with("/files/") {
-                    if let Ok(file) = bincode::deserialize::<mynadb::meta::types::FileInfo>(&value) {
+                    if let Ok(file) = bincode::deserialize::<mynadb::meta::types::FileInfo>(&value)
+                    {
                         println!("  Decoded FileInfo:");
                         println!("    path: {}", file.path);
                         println!("    created_by: {}", file.created_by);
@@ -84,7 +89,9 @@ fn main() {
                 }
                 // Try to decode as PartitionReplica
                 else if key_str.starts_with("/replicas/") {
-                    if let Ok(replica) = bincode::deserialize::<mynadb::meta::types::PartitionReplica>(&value) {
+                    if let Ok(replica) =
+                        bincode::deserialize::<mynadb::meta::types::PartitionReplica>(&value)
+                    {
                         println!("  Decoded PartitionReplica:");
                         println!("    partition_key: {}", replica.partition_key);
                         println!("    leader: {}", replica.leader_node_id);

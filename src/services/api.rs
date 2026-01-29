@@ -163,7 +163,10 @@ pub async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse
     // Cache metrics
     output.push_str("# HELP mynadb_cache_rows_total Total number of rows in the data cache\n");
     output.push_str("# TYPE mynadb_cache_rows_total gauge\n");
-    output.push_str(&format!("mynadb_cache_rows_total {}\n", cache_stats.total_rows));
+    output.push_str(&format!(
+        "mynadb_cache_rows_total {}\n",
+        cache_stats.total_rows
+    ));
 
     output.push_str("# HELP mynadb_cache_tables_total Number of tables in the data cache\n");
     output.push_str("# TYPE mynadb_cache_tables_total gauge\n");
@@ -219,10 +222,7 @@ pub async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse
 
         output.push_str("# HELP mynadb_file_cache_hits_total Total file cache hits\n");
         output.push_str("# TYPE mynadb_file_cache_hits_total counter\n");
-        output.push_str(&format!(
-            "mynadb_file_cache_hits_total {}\n",
-            fc_stats.hits
-        ));
+        output.push_str(&format!("mynadb_file_cache_hits_total {}\n", fc_stats.hits));
 
         output.push_str("# HELP mynadb_file_cache_misses_total Total file cache misses\n");
         output.push_str("# TYPE mynadb_file_cache_misses_total counter\n");

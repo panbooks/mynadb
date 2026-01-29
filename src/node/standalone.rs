@@ -43,7 +43,12 @@ pub async fn run(config_path: &str) {
     let wal = common::init_wal(&config, storage.clone()).await;
 
     // Initialize cache with "standalone" node_id for single-node deployments
-    let cache = common::init_data_cache(storage.clone(), &config, wal.as_ref().map(Arc::clone), "standalone");
+    let cache = common::init_data_cache(
+        storage.clone(),
+        &config,
+        wal.as_ref().map(Arc::clone),
+        "standalone",
+    );
 
     // Initialize metadata manager
     let metadata_manager = common::init_metadata_manager(&config).await;

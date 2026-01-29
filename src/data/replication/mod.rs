@@ -51,7 +51,9 @@ pub mod stream;
 pub mod types;
 
 pub use receiver::{StandbyReceiver, StandbyStats};
-pub use stream::{PartitionReplicationStats, ReplicationManager, ReplicationStats, ReplicationStream};
+pub use stream::{
+    PartitionReplicationStats, ReplicationManager, ReplicationStats, ReplicationStream,
+};
 pub use types::{
     ReplicateRequest, ReplicateResponse, ReplicationConfig, ReplicationEntry, ReplicationMode,
 };

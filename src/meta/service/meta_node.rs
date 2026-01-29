@@ -819,7 +819,10 @@ impl MetaNode {
                 // Handle ForwardToLeader
                 if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
                     if let Some(leader_id) = forward.leader_id {
-                        debug!("Forwarding auto_assign_replica to leader node {}", leader_id);
+                        debug!(
+                            "Forwarding auto_assign_replica to leader node {}",
+                            leader_id
+                        );
                         return self.forward_auto_assign_to_leader(leader_id, cmd).await;
                     }
                 }
@@ -874,11 +877,10 @@ impl MetaNode {
                         created_at: current_timestamp_ms(),
                         leader_last_seen: current_timestamp_ms(),
                     }),
-                    MetaResponse::ReplicaAlreadyExists { partition_key } => {
-                        self.state_machine
-                            .get_replica(&partition_key)
-                            .ok_or_else(|| "Replica exists but not found".to_string())
-                    }
+                    MetaResponse::ReplicaAlreadyExists { partition_key } => self
+                        .state_machine
+                        .get_replica(&partition_key)
+                        .ok_or_else(|| "Replica exists but not found".to_string()),
                     MetaResponse::NoDataNodesAvailable => {
                         Err("No data nodes available for replica assignment".to_string())
                     }
@@ -894,10 +896,7 @@ impl MetaNode {
     }
 
     /// Promote standby to leader for a partition
-    pub async fn promote_standby(
-        &self,
-        partition_key: &str,
-    ) -> Result<(String, String), String> {
+    pub async fn promote_standby(&self, partition_key: &str) -> Result<(String, String), String> {
         let cmd = MetaCommand::PromoteStandby {
             partition_key: partition_key.to_string(),
         };
@@ -910,9 +909,10 @@ impl MetaNode {
                     old_leader_id,
                     ..
                 } => Ok((new_leader_id, old_leader_id)),
-                MetaResponse::NoStandbyAvailable { partition_key } => {
-                    Err(format!("No standby available for partition {}", partition_key))
-                }
+                MetaResponse::NoStandbyAvailable { partition_key } => Err(format!(
+                    "No standby available for partition {}",
+                    partition_key
+                )),
                 MetaResponse::ReplicaNotFound { partition_key } => {
                     Err(format!("Replica not found for partition {}", partition_key))
                 }
@@ -967,9 +967,10 @@ impl MetaNode {
                         old_leader_id,
                         ..
                     } => Ok((new_leader_id, old_leader_id)),
-                    MetaResponse::NoStandbyAvailable { partition_key } => {
-                        Err(format!("No standby available for partition {}", partition_key))
-                    }
+                    MetaResponse::NoStandbyAvailable { partition_key } => Err(format!(
+                        "No standby available for partition {}",
+                        partition_key
+                    )),
                     MetaResponse::ReplicaNotFound { partition_key } => {
                         Err(format!("Replica not found for partition {}", partition_key))
                     }
@@ -1251,7 +1252,7 @@ impl MetaNode {
             state: node.state,
             started_at: node.last_heartbeat, // Approximate with last_heartbeat for now
             partitions_total,
-            partitions_reassigned: 0, // Would need additional tracking
+            partitions_reassigned: 0,   // Would need additional tracking
             memtable_rows_remaining: 0, // Would need to query data node
             estimated_completion_secs: 0,
         })
@@ -1302,9 +1303,7 @@ impl MetaNode {
                             "Forwarding remove_standby_from_replicas to leader node {}",
                             leader_id
                         );
-                        return self
-                            .forward_remove_standby_to_leader(leader_id, cmd)
-                            .await;
+                        return self.forward_remove_standby_to_leader(leader_id, cmd).await;
                     }
                 }
                 Err(format!("Raft error: {}", e))
@@ -1569,7 +1568,10 @@ mod tests {
 
         // Also verify via list_nodes method
         let nodes = sm2.list_nodes(None, None);
-        assert!(!nodes.is_empty(), "list_nodes should return the inserted node");
+        assert!(
+            !nodes.is_empty(),
+            "list_nodes should return the inserted node"
+        );
         assert_eq!(nodes[0].node_id, "test-node-1");
     }
 

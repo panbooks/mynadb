@@ -24,7 +24,7 @@ fn mode_to_proto(mode: Option<DataNodeMode>) -> i32 {
     match mode {
         Some(DataNodeMode::Primary) => 1, // DATA_NODE_MODE_PRIMARY
         Some(DataNodeMode::Standby) => 2, // DATA_NODE_MODE_STANDBY
-        None => 0, // DATA_NODE_MODE_UNSPECIFIED
+        None => 0,                        // DATA_NODE_MODE_UNSPECIFIED
     }
 }
 
@@ -246,10 +246,7 @@ impl MetaClient {
                 let backoff = self.config.calculate_backoff(attempt);
                 debug!(
                     "Meta {} retry {} of {}, waiting {:?}",
-                    op_name,
-                    attempt,
-                    self.config.max_retries,
-                    backoff
+                    op_name, attempt, self.config.max_retries, backoff
                 );
                 tokio::time::sleep(backoff).await;
             }
@@ -949,10 +946,7 @@ impl MetaClient {
     }
 
     /// Promote standby to leader (failover)
-    pub async fn promote_standby(
-        &self,
-        partition_key: &str,
-    ) -> Result<(String, String), String> {
+    pub async fn promote_standby(&self, partition_key: &str) -> Result<(String, String), String> {
         let request = proto::PromoteStandbyRequest {
             partition_key: partition_key.to_string(),
         };
@@ -960,12 +954,7 @@ impl MetaClient {
         let response = self
             .with_retry("promote_standby", |mut client| {
                 let req = request.clone();
-                async move {
-                    client
-                        .promote_standby(req)
-                        .await
-                        .map(|r| r.into_inner())
-                }
+                async move { client.promote_standby(req).await.map(|r| r.into_inner()) }
             })
             .await?;
 
@@ -1178,12 +1167,7 @@ impl MetaClient {
         let response = self
             .with_retry("recommend_scale_in", |mut client| {
                 let req = request.clone();
-                async move {
-                    client
-                        .recommend_scale_in(req)
-                        .await
-                        .map(|r| r.into_inner())
-                }
+                async move { client.recommend_scale_in(req).await.map(|r| r.into_inner()) }
             })
             .await?;
 

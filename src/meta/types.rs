@@ -906,7 +906,6 @@ pub enum MetaCommand {
     },
 
     // Scale-in (retirement) operations
-
     /// Start retiring a node (scale-in)
     ///
     /// Marks the node as Retiring:
@@ -1045,7 +1044,6 @@ pub enum MetaResponse {
     },
 
     // Scale-in (retirement) responses
-
     /// Node retirement started successfully
     RetireStarted {
         node_id: String,

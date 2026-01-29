@@ -232,17 +232,22 @@ impl DataNodeFlightService {
                         "Not leader for partition {} (leader={}), skipping replication",
                         partition_key, replica.leader_node_id
                     );
-                    self.replica_cache.insert(partition_key.to_string(), replica);
+                    self.replica_cache
+                        .insert(partition_key.to_string(), replica);
                     return Vec::new();
                 }
 
                 let standbys = self.get_node_addresses(&replica.standby_node_ids).await;
-                self.replica_cache.insert(partition_key.to_string(), replica);
+                self.replica_cache
+                    .insert(partition_key.to_string(), replica);
                 standbys
             }
             Ok(None) => {
                 // No replica assignment exists - trigger auto-assignment
-                debug!("No replica for partition {}, triggering auto-assignment", partition_key);
+                debug!(
+                    "No replica for partition {}, triggering auto-assignment",
+                    partition_key
+                );
                 match meta_client.auto_assign_replica(partition_key).await {
                     Ok(replica) => {
                         // Check if we were assigned as leader
@@ -251,12 +256,14 @@ impl DataNodeFlightService {
                                 "Auto-assigned as standby for partition {} (leader={})",
                                 partition_key, replica.leader_node_id
                             );
-                            self.replica_cache.insert(partition_key.to_string(), replica);
+                            self.replica_cache
+                                .insert(partition_key.to_string(), replica);
                             return Vec::new();
                         }
 
                         let standbys = self.get_node_addresses(&replica.standby_node_ids).await;
-                        self.replica_cache.insert(partition_key.to_string(), replica);
+                        self.replica_cache
+                            .insert(partition_key.to_string(), replica);
                         standbys
                     }
                     Err(e) => {
@@ -282,16 +289,19 @@ impl DataNodeFlightService {
         }
 
         if let Some(ref meta_client) = self.meta_client {
-            match meta_client.list_nodes(Some(NodeRole::Data), Some(NodeState::Active)).await {
-                Ok(nodes) => {
-                    node_ids.iter()
-                        .filter_map(|id| {
-                            nodes.iter()
-                                .find(|n| &n.node_id == id)
-                                .and_then(|n| n.flight_addr.clone().map(|addr| (id.clone(), addr)))
-                        })
-                        .collect()
-                }
+            match meta_client
+                .list_nodes(Some(NodeRole::Data), Some(NodeState::Active))
+                .await
+            {
+                Ok(nodes) => node_ids
+                    .iter()
+                    .filter_map(|id| {
+                        nodes
+                            .iter()
+                            .find(|n| &n.node_id == id)
+                            .and_then(|n| n.flight_addr.clone().map(|addr| (id.clone(), addr)))
+                    })
+                    .collect(),
                 Err(e) => {
                     warn!("Failed to get node addresses from Meta: {}", e);
                     Vec::new()
@@ -387,7 +397,11 @@ impl DataNodeFlightService {
         // Check if replication is enabled - if so, clone batches for replication
         let replication_enabled = self.replication_manager.is_some();
         let batches_for_replication: Vec<RecordBatch> = if replication_enabled {
-            batches.iter().filter(|b| b.num_rows() > 0).cloned().collect()
+            batches
+                .iter()
+                .filter(|b| b.num_rows() > 0)
+                .cloned()
+                .collect()
         } else {
             Vec::new()
         };
@@ -622,18 +636,27 @@ impl DataNodeFlightService {
     > {
         debug!(
             "Replication write from {}: {}/{}/{} date={} seq={} checksum={:?}",
-            ticket.source_node_id, ticket.catalog, ticket.schema, ticket.table,
-            ticket.date, ticket.seq, ticket.checksum
+            ticket.source_node_id,
+            ticket.catalog,
+            ticket.schema,
+            ticket.table,
+            ticket.date,
+            ticket.seq,
+            ticket.checksum
         );
 
         // Verify checksum if provided
-        let checksum_verified = if let (Some(expected_checksum), Some(ref data)) = (ticket.checksum, &raw_bytes) {
+        let checksum_verified = if let (Some(expected_checksum), Some(ref data)) =
+            (ticket.checksum, &raw_bytes)
+        {
             use crate::data::replication::types::compute_checksum;
             let actual_checksum = compute_checksum(data);
             if actual_checksum != expected_checksum {
                 let partition_key = format!(
                     "{}/{}/{}/date={}",
-                    ticket.catalog, ticket.schema, ticket.table,
+                    ticket.catalog,
+                    ticket.schema,
+                    ticket.table,
                     crate::storage::line_protocol::format_date32_as_string(ticket.date)
                 );
                 error!(
@@ -713,9 +736,7 @@ impl DataNodeFlightService {
         });
 
         let result = PutResult {
-            app_metadata: serde_json::to_vec(&response)
-                .unwrap_or_default()
-                .into(),
+            app_metadata: serde_json::to_vec(&response).unwrap_or_default().into(),
         };
         let output = stream::once(async { Ok(result) });
         Ok(Response::new(Box::pin(output)))
@@ -977,7 +998,9 @@ impl FlightService for DataNodeFlightService {
         // Try to parse as ReplicationTicket first (standby receiving from leader)
         if let Ok(repl_ticket) = serde_json::from_slice::<ReplicationTicket>(&descriptor_cmd) {
             if repl_ticket.is_replication {
-                return self.handle_replication_write(repl_ticket, batches, raw_bytes, start).await;
+                return self
+                    .handle_replication_write(repl_ticket, batches, raw_bytes, start)
+                    .await;
             }
         }
 
