@@ -456,21 +456,8 @@ fn build_router(state: api::AppState, auth_middleware: Arc<auth::AuthMiddleware>
             "/retention/:catalog/:schema/:table",
             post(api::delete_old_partitions_handler),
         )
-        .route("/metrics", get(metrics_handler))
         .fallback(api::log_request)
         .with_state(state)
         .layer(axum::middleware::from_fn(auth::auth_middleware_fn))
         .layer(axum::Extension(auth_middleware))
-}
-
-/// GET /metrics - Prometheus metrics endpoint
-///
-/// Currently returns empty. Future implementation would expose:
-/// - Write throughput (points/sec, bytes/sec)
-/// - Query latency histograms
-/// - Cache hit/miss rates
-/// - WAL/flush statistics
-async fn metrics_handler() -> String {
-    // Metrics collection not yet implemented - returns empty for compatibility
-    String::new()
 }
