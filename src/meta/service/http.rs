@@ -55,6 +55,13 @@ pub fn build_router(state: MetaHttpState) -> Router {
         .route("/", get(home))
         .route("/health", get(health))
         .route("/version", get(version))
+        // Node endpoints
+        .route("/nodes", get(list_nodes))
+        .route("/nodes/:node_id", get(get_node))
+        // Replica endpoints
+        .route("/replicas", get(list_replicas))
+        // File endpoints
+        .route("/files/:catalog/:schema/:table", get(list_files))
         // Scale-in endpoints
         .route("/nodes/:node_id/retire", post(retire_node))
         .route("/nodes/:node_id/retire/status", get(retire_status))
@@ -67,9 +74,13 @@ pub fn build_router(state: MetaHttpState) -> Router {
 /// Home page
 async fn home() -> &'static str {
     "MynaDB Meta Node\n\n\
-     Endpoints:\n\
+     Cluster Endpoints:\n\
        GET  /health                      - Health check\n\
-       GET  /version                     - Version info\n\n\
+       GET  /version                     - Version info\n\
+       GET  /nodes                       - List all registered nodes\n\
+       GET  /nodes/{node_id}             - Get specific node info\n\
+       GET  /replicas                    - List all partition replicas\n\
+       GET  /files/{catalog}/{schema}/{table} - List files for a table\n\n\
      Scale-In Endpoints:\n\
        POST /nodes/{node_id}/retire      - Start graceful retirement\n\
        GET  /nodes/{node_id}/retire/status - Get retirement progress\n\
@@ -98,6 +109,246 @@ async fn version() -> impl IntoResponse {
         git_hash: env!("GIT_HASH"),
     };
     (StatusCode::OK, Json(response))
+}
+
+// ========================================================================
+// Node Management Endpoints
+// ========================================================================
+
+/// Query params for listing nodes
+#[derive(Deserialize, Default)]
+pub struct ListNodesQuery {
+    /// Filter by role: "meta", "router", "data", "compactor"
+    #[serde(default)]
+    pub role: Option<String>,
+    /// Filter by state: "active", "retiring", "drained", etc.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// Filter by mode: "primary", "standby" (data nodes only)
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+/// Node info response (simplified for JSON)
+#[derive(Serialize)]
+pub struct NodeInfoResponse {
+    pub node_id: String,
+    pub role: String,
+    pub state: String,
+    pub mode: Option<String>,
+    pub advertise_addr: String,
+    pub http_addr: Option<String>,
+    pub flight_addr: Option<String>,
+    pub zone: Option<String>,
+    pub registered_at: i64,
+    pub last_heartbeat: i64,
+}
+
+impl From<crate::meta::types::NodeInfo> for NodeInfoResponse {
+    fn from(info: crate::meta::types::NodeInfo) -> Self {
+        let role_str = match info.role {
+            crate::meta::types::NodeRole::Meta => "meta",
+            crate::meta::types::NodeRole::Router => "router",
+            crate::meta::types::NodeRole::Data => "data",
+            crate::meta::types::NodeRole::Compactor => "compactor",
+            crate::meta::types::NodeRole::Unknown => "unknown",
+        };
+        let state_str = match info.state {
+            NodeState::Active => "active",
+            NodeState::Starting => "starting",
+            NodeState::Draining => "draining",
+            NodeState::Inactive => "inactive",
+            NodeState::Retiring => "retiring",
+            NodeState::Drained => "drained",
+            NodeState::Unknown => "unknown",
+        };
+        let mode_str = info.mode.map(|m| match m {
+            crate::meta::types::DataNodeMode::Primary => "primary".to_string(),
+            crate::meta::types::DataNodeMode::Standby => "standby".to_string(),
+        });
+        // Get zone before moving other fields
+        let zone = info.zone().map(String::from);
+        NodeInfoResponse {
+            node_id: info.node_id,
+            role: role_str.to_string(),
+            state: state_str.to_string(),
+            mode: mode_str,
+            advertise_addr: info.advertise_addr,
+            http_addr: info.http_addr,
+            flight_addr: info.flight_addr,
+            zone,
+            registered_at: info.registered_at,
+            last_heartbeat: info.last_heartbeat,
+        }
+    }
+}
+
+/// List all registered nodes
+async fn list_nodes(
+    State(state): State<MetaHttpState>,
+    Query(query): Query<ListNodesQuery>,
+) -> impl IntoResponse {
+    use crate::meta::types::{DataNodeMode, NodeRole};
+
+    // Parse role filter
+    let role_filter = query.role.as_ref().and_then(|r| match r.to_lowercase().as_str() {
+        "meta" => Some(NodeRole::Meta),
+        "router" => Some(NodeRole::Router),
+        "data" => Some(NodeRole::Data),
+        "compactor" => Some(NodeRole::Compactor),
+        _ => None,
+    });
+
+    // Parse state filter
+    let state_filter = query.state.as_ref().and_then(|s| match s.to_lowercase().as_str() {
+        "active" => Some(NodeState::Active),
+        "starting" => Some(NodeState::Starting),
+        "draining" => Some(NodeState::Draining),
+        "inactive" => Some(NodeState::Inactive),
+        "retiring" => Some(NodeState::Retiring),
+        "drained" => Some(NodeState::Drained),
+        _ => None,
+    });
+
+    // Parse mode filter
+    let mode_filter = query.mode.as_ref().and_then(|m| match m.to_lowercase().as_str() {
+        "primary" => Some(DataNodeMode::Primary),
+        "standby" => Some(DataNodeMode::Standby),
+        _ => None,
+    });
+
+    let nodes = state.meta_node.list_nodes(role_filter, state_filter).await;
+
+    // Apply mode filter if specified
+    let filtered_nodes: Vec<NodeInfoResponse> = nodes
+        .into_iter()
+        .filter(|n| {
+            if let Some(mode) = mode_filter {
+                n.mode == Some(mode)
+            } else {
+                true
+            }
+        })
+        .map(NodeInfoResponse::from)
+        .collect();
+
+    (StatusCode::OK, Json(filtered_nodes))
+}
+
+/// Get a specific node by ID
+async fn get_node(
+    State(state): State<MetaHttpState>,
+    Path(node_id): Path<String>,
+) -> impl IntoResponse {
+    match state.meta_node.get_node(&node_id).await {
+        Some(info) => (StatusCode::OK, Json(Some(NodeInfoResponse::from(info)))),
+        None => (StatusCode::NOT_FOUND, Json(None)),
+    }
+}
+
+// ========================================================================
+// Replica Management Endpoints
+// ========================================================================
+
+/// Query params for listing replicas
+#[derive(Deserialize, Default)]
+pub struct ListReplicasQuery {
+    /// Filter by leader node ID
+    #[serde(default)]
+    pub leader: Option<String>,
+}
+
+/// Replica info response
+#[derive(Serialize)]
+pub struct ReplicaInfoResponse {
+    pub partition_key: String,
+    pub leader_node_id: String,
+    pub standby_node_ids: Vec<String>,
+    pub replication_factor: u8,
+    pub state: String,
+    pub last_replicated_seq: u64,
+    pub replication_lag_ms: u64,
+}
+
+impl From<crate::meta::types::PartitionReplica> for ReplicaInfoResponse {
+    fn from(r: crate::meta::types::PartitionReplica) -> Self {
+        let state_str = match r.state {
+            crate::meta::types::ReplicaState::InSync => "in_sync",
+            crate::meta::types::ReplicaState::CatchingUp => "catching_up",
+            crate::meta::types::ReplicaState::Offline => "offline",
+        };
+        ReplicaInfoResponse {
+            partition_key: r.partition_key,
+            leader_node_id: r.leader_node_id,
+            standby_node_ids: r.standby_node_ids,
+            replication_factor: r.replication_factor,
+            state: state_str.to_string(),
+            last_replicated_seq: r.last_replicated_seq,
+            replication_lag_ms: r.replication_lag_ms,
+        }
+    }
+}
+
+/// List all partition replicas
+async fn list_replicas(
+    State(state): State<MetaHttpState>,
+    Query(query): Query<ListReplicasQuery>,
+) -> impl IntoResponse {
+    let replicas = state
+        .meta_node
+        .list_partition_replicas(query.leader.as_deref())
+        .await;
+
+    let responses: Vec<ReplicaInfoResponse> = replicas.into_iter().map(ReplicaInfoResponse::from).collect();
+
+    (StatusCode::OK, Json(responses))
+}
+
+// ========================================================================
+// File Management Endpoints
+// ========================================================================
+
+/// File info response
+#[derive(Serialize)]
+pub struct FileInfoResponse {
+    pub path: String,
+    pub partition: String,
+    pub level: u8,
+    pub size_bytes: u64,
+    pub row_count: u64,
+    pub min_time: i64,
+    pub max_time: i64,
+    pub created_by: String,
+}
+
+impl From<crate::meta::types::FileInfo> for FileInfoResponse {
+    fn from(f: crate::meta::types::FileInfo) -> Self {
+        FileInfoResponse {
+            path: f.path,
+            partition: f.partition,
+            level: f.level,
+            size_bytes: f.size_bytes,
+            row_count: f.row_count,
+            min_time: f.min_time,
+            max_time: f.max_time,
+            created_by: f.created_by,
+        }
+    }
+}
+
+/// List files for a table
+async fn list_files(
+    State(state): State<MetaHttpState>,
+    Path((catalog, schema, table)): Path<(String, String, String)>,
+) -> impl IntoResponse {
+    let files = state
+        .meta_node
+        .list_files_for_table(&catalog, &schema, &table)
+        .await;
+
+    let responses: Vec<FileInfoResponse> = files.into_iter().map(FileInfoResponse::from).collect();
+
+    (StatusCode::OK, Json(responses))
 }
 
 // ========================================================================

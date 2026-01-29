@@ -137,6 +137,12 @@ impl MetaStateMachine {
         Ok(Self::new(db))
     }
 
+    /// Get a reference to the underlying sled database
+    /// Used for direct reads that bypass the state machine
+    pub fn db(&self) -> &Db {
+        &self.db
+    }
+
     /// Get the next event sequence number
     fn next_sequence(&self) -> u64 {
         let seq = self.event_sequence.fetch_add(1, Ordering::SeqCst) + 1;

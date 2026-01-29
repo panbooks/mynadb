@@ -19,6 +19,7 @@ use tracing::{debug, error, info, warn};
 pub struct MetaNode {
     /// State machine (handles all metadata operations)
     /// Kept for direct read operations (reads don't need consensus)
+    /// The state machine has a db() method for direct database access
     state_machine: MetaStateMachine,
 
     /// Node ID
@@ -46,10 +47,13 @@ impl MetaNode {
 
         // Open sled database for state machine
         let state_machine_db = sled::open(config.sled_path())?;
-        // Create one state machine and clone it - ensures both share the same Db handle
+        // Create one state machine - the original goes to Raft (which applies writes)
+        // Clone is kept for reads - they share the same underlying sled::Db via Arc
         let state_machine = MetaStateMachine::new(state_machine_db);
-        let state_machine_for_raft = state_machine.clone();
-        let state_machine_for_reads = state_machine;
+        // Clone for reads (stored in MetaNode)
+        let state_machine_for_reads = state_machine.clone();
+        // Original goes to Raft
+        let state_machine_for_raft = state_machine;
 
         // Open sled database for Raft log store
         let log_store_db = sled::open(config.raft_log_path())?;
@@ -605,12 +609,62 @@ impl MetaNode {
         role: Option<NodeRole>,
         state: Option<NodeState>,
     ) -> Vec<NodeInfo> {
-        self.state_machine.list_nodes(role, state)
+        // Read directly from db to avoid state machine clone issues
+        let prefix = crate::meta::types::keys::PREFIX_NODE;
+        let mut nodes = Vec::new();
+
+        // Flush to ensure we see latest writes
+        let flush_result = self.state_machine.db().flush();
+        info!(
+            "list_nodes: flush result={:?}, prefix={:?}, db_size_on_disk={:?}",
+            flush_result,
+            prefix,
+            self.state_machine.db().size_on_disk()
+        );
+
+        let mut scanned = 0;
+        for item in self.state_machine.db().scan_prefix(prefix) {
+            scanned += 1;
+            match item {
+                Ok((k, v)) => {
+                    let key_str = String::from_utf8_lossy(&k);
+                    info!("list_nodes: scanned key={}, value_len={}", key_str, v.len());
+                    if let Ok(info) = bincode::deserialize::<NodeInfo>(&v) {
+                        let role_match = role.map_or(true, |r| info.role == r);
+                        let state_match = state.map_or(true, |s| info.state == s);
+                        if role_match && state_match {
+                            nodes.push(info);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("list_nodes: scan error: {:?}", e);
+                }
+            }
+        }
+
+        info!(
+            "list_nodes: scanned={}, matched={}, role={:?}, state={:?}",
+            scanned,
+            nodes.len(),
+            role,
+            state
+        );
+
+        nodes
     }
 
     /// Get a node by ID
     pub async fn get_node(&self, node_id: &str) -> Option<NodeInfo> {
-        self.state_machine.get_node(node_id)
+        // Read directly from db to avoid state machine clone issues
+        let key = format!("{}{}", crate::meta::types::keys::PREFIX_NODE, node_id);
+        let _ = self.state_machine.db().flush();
+        self.state_machine
+            .db()
+            .get(key.as_bytes())
+            .ok()
+            .flatten()
+            .and_then(|v| bincode::deserialize::<NodeInfo>(&v).ok())
     }
 
     /// List files for a partition
@@ -632,8 +686,27 @@ impl MetaNode {
         schema: &str,
         table: &str,
     ) -> Vec<FileInfo> {
-        self.state_machine
-            .list_files_for_table(catalog, schema, table)
+        // Read directly from db to avoid state machine clone issues
+        let prefix = format!(
+            "{}{}/{}/{}/",
+            crate::meta::types::keys::PREFIX_FILE,
+            catalog,
+            schema,
+            table
+        );
+        let mut files = Vec::new();
+
+        let _ = self.state_machine.db().flush();
+
+        for item in self.state_machine.db().scan_prefix(prefix.as_bytes()) {
+            if let Ok((_, v)) = item {
+                if let Ok(info) = bincode::deserialize::<FileInfo>(&v) {
+                    files.push(info);
+                }
+            }
+        }
+
+        files
     }
 
     /// Get lock info
@@ -678,10 +751,28 @@ impl MetaNode {
         &self,
         leader_node_id: Option<&str>,
     ) -> Vec<PartitionReplica> {
-        match leader_node_id {
-            Some(leader) => self.state_machine.get_replicas_by_leader(leader),
-            None => self.state_machine.list_replicas(),
+        // Read directly from db to avoid state machine clone issues
+        let prefix = crate::meta::types::keys::PREFIX_REPLICA;
+        let mut replicas = Vec::new();
+
+        let _ = self.state_machine.db().flush();
+
+        for item in self.state_machine.db().scan_prefix(prefix) {
+            if let Ok((_, v)) = item {
+                if let Ok(replica) = bincode::deserialize::<PartitionReplica>(&v) {
+                    // Filter by leader if specified
+                    if let Some(leader) = leader_node_id {
+                        if replica.leader_node_id == leader {
+                            replicas.push(replica);
+                        }
+                    } else {
+                        replicas.push(replica);
+                    }
+                }
+            }
         }
+
+        replicas
     }
 
     /// Auto-assign replica for a partition (writes go through Raft)
@@ -1391,4 +1482,212 @@ pub struct MetaMetrics {
     pub node_id: NodeId,
     pub is_leader: bool,
     pub current_term: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::meta::raft::MetaStateMachine;
+    use crate::meta::types::{keys, DataNodeMode, NodeInfo, NodeRole, NodeState};
+
+    /// Test that sled::Db clones share the same underlying data
+    #[test]
+    fn test_sled_db_clone_shares_data() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test_db");
+
+        // Open database and write data
+        let db1 = sled::open(&db_path).unwrap();
+        db1.insert(b"test_key", b"test_value").unwrap();
+        db1.flush().unwrap();
+
+        // Clone the db handle
+        let db2 = db1.clone();
+
+        // Verify clone can see the data
+        let value = db2.get(b"test_key").unwrap();
+        assert!(value.is_some());
+        assert_eq!(value.unwrap().as_ref(), b"test_value");
+
+        // Write through clone
+        db2.insert(b"another_key", b"another_value").unwrap();
+        db2.flush().unwrap();
+
+        // Verify original can see clone's write
+        let value = db1.get(b"another_key").unwrap();
+        assert!(value.is_some());
+        assert_eq!(value.unwrap().as_ref(), b"another_value");
+    }
+
+    /// Test that MetaStateMachine clones share database state
+    #[test]
+    fn test_state_machine_clone_shares_data() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test_sm_db");
+
+        // Create state machine
+        let db = sled::open(&db_path).unwrap();
+        let sm1 = MetaStateMachine::new(db);
+
+        // Clone the state machine
+        let sm2 = sm1.clone();
+
+        // Write a node directly through sm1's db
+        let node_info = NodeInfo {
+            node_id: "test-node-1".to_string(),
+            role: NodeRole::Data,
+            state: NodeState::Active,
+            advertise_addr: "127.0.0.1:7200".to_string(),
+            http_addr: None,
+            flight_addr: Some("127.0.0.1:7200".to_string()),
+            registered_at: 1000,
+            last_heartbeat: 1000,
+            labels: std::collections::HashMap::new(),
+            mode: Some(DataNodeMode::Primary),
+        };
+
+        let key = format!("{}{}", keys::PREFIX_NODE, node_info.node_id);
+        let serialized = bincode::serialize(&node_info).unwrap();
+        sm1.db().insert(key.as_bytes(), serialized).unwrap();
+        sm1.db().flush().unwrap();
+
+        // Verify sm2 (clone) can see the data via scan
+        let prefix = keys::PREFIX_NODE;
+        let mut found = false;
+        for item in sm2.db().scan_prefix(prefix) {
+            if let Ok((k, v)) = item {
+                let key_str = String::from_utf8_lossy(&k);
+                if key_str.contains("test-node-1") {
+                    found = true;
+                    let info: NodeInfo = bincode::deserialize(&v).unwrap();
+                    assert_eq!(info.node_id, "test-node-1");
+                    assert_eq!(info.role, NodeRole::Data);
+                }
+            }
+        }
+        assert!(found, "Node should be visible through cloned state machine");
+
+        // Also verify via list_nodes method
+        let nodes = sm2.list_nodes(None, None);
+        assert!(!nodes.is_empty(), "list_nodes should return the inserted node");
+        assert_eq!(nodes[0].node_id, "test-node-1");
+    }
+
+    /// Test that writes through apply_command are visible to clones
+    #[test]
+    fn test_apply_command_visible_to_clone() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test_apply_db");
+
+        // Create state machine
+        let db = sled::open(&db_path).unwrap();
+        let sm = MetaStateMachine::new(db);
+
+        // Clone for "reads" (simulating MetaNode's setup)
+        let sm_for_reads = sm.clone();
+
+        // Create a node info for registration
+        let node_info = NodeInfo {
+            node_id: "applied-node".to_string(),
+            role: NodeRole::Data,
+            state: NodeState::Active,
+            advertise_addr: "127.0.0.1:7201".to_string(),
+            http_addr: None,
+            flight_addr: Some("127.0.0.1:7201".to_string()),
+            registered_at: 2000,
+            last_heartbeat: 2000,
+            labels: std::collections::HashMap::new(),
+            mode: Some(DataNodeMode::Primary),
+        };
+
+        // Apply command through original state machine (simulating Raft apply)
+        let cmd = MetaCommand::RegisterNode {
+            info: node_info,
+            lease_id: 0,
+            lease_ttl_ms: 10000,
+        };
+        let response = sm.apply_command(cmd);
+        assert!(matches!(response, MetaResponse::NodeRegistered { .. }));
+
+        // Flush to ensure visibility
+        sm.db().flush().unwrap();
+
+        // Verify the clone can see the applied data
+        let nodes = sm_for_reads.list_nodes(None, None);
+        assert!(
+            !nodes.is_empty(),
+            "Clone should see node registered via apply_command"
+        );
+        assert_eq!(nodes[0].node_id, "applied-node");
+    }
+
+    /// Test direct db access for reads
+    #[test]
+    fn test_direct_db_read() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test_direct_db");
+
+        // Open database
+        let db = sled::open(&db_path).unwrap();
+
+        // Create state machine with this db
+        let sm = MetaStateMachine::new(db.clone());
+
+        // Write through state machine's apply_command
+        let node_info = NodeInfo {
+            node_id: "direct-read-node".to_string(),
+            role: NodeRole::Data,
+            state: NodeState::Active,
+            advertise_addr: "127.0.0.1:7202".to_string(),
+            http_addr: None,
+            flight_addr: Some("127.0.0.1:7202".to_string()),
+            registered_at: 3000,
+            last_heartbeat: 3000,
+            labels: std::collections::HashMap::new(),
+            mode: Some(DataNodeMode::Standby),
+        };
+
+        let cmd = MetaCommand::RegisterNode {
+            info: node_info.clone(),
+            lease_id: 0,
+            lease_ttl_ms: 10000,
+        };
+        sm.apply_command(cmd);
+        sm.db().flush().unwrap();
+
+        // Read directly from the original db reference
+        let key = format!("{}{}", keys::PREFIX_NODE, "direct-read-node");
+        db.flush().unwrap(); // Ensure sync
+        let result = db.get(key.as_bytes()).unwrap();
+        assert!(result.is_some(), "Direct db read should find the node");
+
+        let info: NodeInfo = bincode::deserialize(&result.unwrap()).unwrap();
+        assert_eq!(info.node_id, "direct-read-node");
+        assert_eq!(info.mode, Some(DataNodeMode::Standby));
+    }
+
+    /// Test that state_machine.db() returns working reference
+    #[test]
+    fn test_state_machine_db_method() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test_db_method");
+
+        let db = sled::open(&db_path).unwrap();
+        let sm = MetaStateMachine::new(db);
+
+        // Write through db() method
+        sm.db().insert(b"method_key", b"method_value").unwrap();
+        sm.db().flush().unwrap();
+
+        // Read back through same method
+        let value = sm.db().get(b"method_key").unwrap();
+        assert!(value.is_some());
+        assert_eq!(value.unwrap().as_ref(), b"method_value");
+
+        // Clone and verify
+        let sm2 = sm.clone();
+        let value = sm2.db().get(b"method_key").unwrap();
+        assert!(value.is_some());
+        assert_eq!(value.unwrap().as_ref(), b"method_value");
+    }
 }
