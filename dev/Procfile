@@ -1,4 +1,4 @@
-# MynaDB Cluster Development Environment (Default)
+# MynaDB Cluster Development Environment
 # Full cluster: 3 meta nodes + 1 router + 2 data nodes
 #
 # Port assignments:
@@ -10,11 +10,10 @@
 #   data2:   Flight 7201
 #
 # Start with: goreman start
-# Or: cd dev && goreman start
 
-meta1: ./target/release/mynadb -c ./dev/configs/meta1.toml meta start
-meta2: ./target/release/mynadb -c ./dev/configs/meta2.toml meta start
-meta3: ./target/release/mynadb -c ./dev/configs/meta3.toml meta start
-router1: sleep 3 && ./target/release/mynadb -c ./dev/configs/router1.toml router start
-data1: sleep 3 && ./target/release/mynadb -c ./dev/configs/data1.toml data start
-data2: sleep 3 && ./target/release/mynadb -c ./dev/configs/data2.toml data start
+meta1: ./target/debug/mynadb -c ./dev/configs/cluster/meta1.toml meta start
+meta2: ./target/debug/mynadb -c ./dev/configs/cluster/meta2.toml meta start
+meta3: ./target/debug/mynadb -c ./dev/configs/cluster/meta3.toml meta start
+router1: sleep 3 && ./target/debug/mynadb -c ./dev/configs/cluster/router1.toml router start
+data1: sleep 3 && ./target/debug/mynadb -c ./dev/configs/cluster/data1.toml data start
+data2: sleep 3 && ./target/debug/mynadb -c ./dev/configs/cluster/data2.toml data start

@@ -13,11 +13,11 @@ cd "$PROJECT_ROOT"
 echo "=== MynaDB Standalone Development Environment ==="
 echo ""
 
-# Build release binary
-echo "Building MynaDB (release mode)..."
-cargo build --release
+# Build debug binary
+echo "Building MynaDB (debug mode)..."
+cargo build --debug
 
-if [ ! -f "./target/release/mynadb" ]; then
+if [ ! -f "./target/debug/mynadb" ]; then
     echo "ERROR: Build failed - binary not found"
     exit 1
 fi
@@ -51,5 +51,5 @@ if command -v goreman &> /dev/null; then
     goreman -f ./dev/Procfile.standalone start
 else
     # Run directly without goreman
-    ./target/release/mynadb -c ./dev/configs/standalone.toml standalone
+    ./target/debug/mynadb -c ./dev/configs/standalone.toml standalone
 fi

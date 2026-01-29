@@ -8,4 +8,4 @@
 #
 # Start with: goreman -f dev/Procfile.standalone start
 
-mynadb: ./target/release/mynadb -c ./dev/configs/standalone.toml standalone
+mynadb: ./target/debug/mynadb -c ./dev/configs/standalone.toml standalone

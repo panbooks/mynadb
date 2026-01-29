@@ -11,8 +11,10 @@ bind_addr = "0.0.0.0:7100"
 # Address advertised to other nodes for Raft communication
 advertise_addr = "127.0.0.1:7100"
 
+http_port = 7110
+
 # Directory for sled database and Raft logs
-data_dir = "./dev/data/meta1"
+data_dir = "./dev/data/cluster/meta1"
 
 # Initial cluster peers (other meta nodes)
 peers = ["127.0.0.1:7101", "127.0.0.1:7102"]
@@ -40,7 +42,7 @@ retention_secs = 3600
 
 [logging]
 level = "info"
-log_dir = "./dev/logs/meta1"
+log_dir = "./dev/logs/cluster/meta1"
 file_prefix = "meta1"
 rotation = "daily"
 max_files = 7
