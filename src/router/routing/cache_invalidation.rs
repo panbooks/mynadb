@@ -104,7 +104,10 @@ impl CacheInvalidationHandler {
             }
         }
 
-        warn!("No data nodes found after {} attempts, will rely on events", MAX_RETRIES);
+        warn!(
+            "No data nodes found after {} attempts, will rely on events",
+            MAX_RETRIES
+        );
         Ok(())
     }
 
@@ -415,10 +418,7 @@ impl CacheInvalidationHandler {
             let state = payload["state"].as_str().unwrap_or("offline");
 
             if !partition_key.is_empty() {
-                debug!(
-                    "Replica state changed: {} -> {}",
-                    partition_key, state
-                );
+                debug!("Replica state changed: {} -> {}", partition_key, state);
                 // State changes are informational for now
                 // Router uses node health for routing decisions
             }
@@ -441,10 +441,7 @@ impl CacheInvalidationHandler {
                     _ => DataNodeMode::Primary,
                 };
 
-                info!(
-                    "Data node mode changed: {} -> {:?}",
-                    node_id, mode
-                );
+                info!("Data node mode changed: {} -> {:?}", node_id, mode);
 
                 // Update node mode in shard cache
                 shard_cache.update_node_mode(node_id, mode);

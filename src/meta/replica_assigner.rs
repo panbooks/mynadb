@@ -128,9 +128,7 @@ impl ReplicaAssigner {
         partition_counts: &HashMap<String, usize>,
     ) -> Option<PartitionReplica> {
         // Calculate effective replication factor
-        let rf = self
-            .config
-            .effective_replication_factor(nodes.len());
+        let rf = self.config.effective_replication_factor(nodes.len());
 
         // Select leader (least-loaded)
         let leader = self.select_least_loaded(nodes, partition_counts)?;
@@ -219,10 +217,7 @@ impl ReplicaAssigner {
         count: usize,
     ) -> Vec<String> {
         // Filter out leader
-        let candidates: Vec<&&NodeInfo> = nodes
-            .iter()
-            .filter(|n| n.node_id != leader_id)
-            .collect();
+        let candidates: Vec<&&NodeInfo> = nodes.iter().filter(|n| n.node_id != leader_id).collect();
 
         if candidates.is_empty() || count == 0 {
             return vec![];
@@ -272,12 +267,15 @@ impl ReplicaAssigner {
         match self.config.load_balance_strategy.as_str() {
             "round_robin" => {
                 // For round_robin, we use partition count but prefer deterministic ordering
-                nodes.iter().min_by_key(|n| {
-                    (
-                        *partition_counts.get(&n.node_id).unwrap_or(&0),
-                        n.node_id.clone(),
-                    )
-                }).copied()
+                nodes
+                    .iter()
+                    .min_by_key(|n| {
+                        (
+                            *partition_counts.get(&n.node_id).unwrap_or(&0),
+                            n.node_id.clone(),
+                        )
+                    })
+                    .copied()
             }
             "random" => {
                 // For random, use a simple hash-based selection (deterministic for same input)
@@ -293,9 +291,10 @@ impl ReplicaAssigner {
             }
             _ => {
                 // "least_loaded" (default)
-                nodes.iter().min_by_key(|n| {
-                    partition_counts.get(&n.node_id).unwrap_or(&0)
-                }).copied()
+                nodes
+                    .iter()
+                    .min_by_key(|n| partition_counts.get(&n.node_id).unwrap_or(&0))
+                    .copied()
             }
         }
     }
@@ -341,7 +340,10 @@ impl ReplicaAssigner {
             }
 
             // Case 2: Departed node was standby
-            if updated.standby_node_ids.contains(&departed_node_id.to_string()) {
+            if updated
+                .standby_node_ids
+                .contains(&departed_node_id.to_string())
+            {
                 updated.standby_node_ids.retain(|id| id != departed_node_id);
                 needs_update = true;
             }
@@ -354,9 +356,10 @@ impl ReplicaAssigner {
                 // First pass: collect candidates from different zones
                 let mut candidates: Vec<String> = Vec::new();
                 {
-                    let existing: std::collections::HashSet<&String> = std::iter::once(&updated.leader_node_id)
-                        .chain(updated.standby_node_ids.iter())
-                        .collect();
+                    let existing: std::collections::HashSet<&String> =
+                        std::iter::once(&updated.leader_node_id)
+                            .chain(updated.standby_node_ids.iter())
+                            .collect();
 
                     for node in &active_data_nodes {
                         if existing.contains(&node.node_id) {
@@ -389,9 +392,10 @@ impl ReplicaAssigner {
                 if updated.standby_node_ids.len() < target_standbys {
                     let mut more_candidates: Vec<String> = Vec::new();
                     {
-                        let existing: std::collections::HashSet<&String> = std::iter::once(&updated.leader_node_id)
-                            .chain(updated.standby_node_ids.iter())
-                            .collect();
+                        let existing: std::collections::HashSet<&String> =
+                            std::iter::once(&updated.leader_node_id)
+                                .chain(updated.standby_node_ids.iter())
+                                .collect();
 
                         for node in &active_data_nodes {
                             if existing.contains(&node.node_id) {
@@ -399,7 +403,9 @@ impl ReplicaAssigner {
                             }
 
                             more_candidates.push(node.node_id.clone());
-                            if updated.standby_node_ids.len() + more_candidates.len() >= target_standbys {
+                            if updated.standby_node_ids.len() + more_candidates.len()
+                                >= target_standbys
+                            {
                                 break;
                             }
                         }
@@ -460,7 +466,8 @@ impl ReplicaAssigner {
                     if !leader.is_different_zone(new_node) {
                         // Check if all existing standbys are same-zone too
                         let all_same_zone = replica.standby_node_ids.iter().all(|sid| {
-                            nodes.iter()
+                            nodes
+                                .iter()
                                 .find(|n| n.node_id == *sid)
                                 .map(|n| !leader.is_different_zone(n))
                                 .unwrap_or(true)
@@ -494,7 +501,8 @@ mod tests {
         // Default to Primary mode for backward compatibility
         node.mode = Some(DataNodeMode::Primary);
         if let Some(z) = zone {
-            node.labels.insert("topology.kubernetes.io/zone".to_string(), z.to_string());
+            node.labels
+                .insert("topology.kubernetes.io/zone".to_string(), z.to_string());
         }
         node
     }
@@ -524,7 +532,8 @@ mod tests {
 
         let counts: HashMap<String, usize> = HashMap::new();
 
-        let replica = assigner.assign_new_partition("mydb/default/cpu/date=2024-01-15", &nodes, &counts);
+        let replica =
+            assigner.assign_new_partition("mydb/default/cpu/date=2024-01-15", &nodes, &counts);
         assert!(replica.is_some());
 
         let replica = replica.unwrap();
@@ -551,7 +560,8 @@ mod tests {
         let mut counts: HashMap<String, usize> = HashMap::new();
         counts.insert("data-2".to_string(), 10);
 
-        let replica = assigner.assign_new_partition("mydb/default/cpu/date=2024-01-15", &nodes, &counts);
+        let replica =
+            assigner.assign_new_partition("mydb/default/cpu/date=2024-01-15", &nodes, &counts);
         assert!(replica.is_some());
 
         let replica = replica.unwrap();
@@ -567,7 +577,8 @@ mod tests {
         let nodes = vec![make_node("data-1", Some("zone-a"))];
         let counts: HashMap<String, usize> = HashMap::new();
 
-        let replica = assigner.assign_new_partition("mydb/default/cpu/date=2024-01-15", &nodes, &counts);
+        let replica =
+            assigner.assign_new_partition("mydb/default/cpu/date=2024-01-15", &nodes, &counts);
         assert!(replica.is_some());
 
         let replica = replica.unwrap();
@@ -652,7 +663,8 @@ mod tests {
 
         let counts: HashMap<String, usize> = HashMap::new();
 
-        let replica = assigner.assign_new_partition("mydb/default/cpu/date=2024-01-15", &nodes, &counts);
+        let replica =
+            assigner.assign_new_partition("mydb/default/cpu/date=2024-01-15", &nodes, &counts);
         assert!(replica.is_some());
 
         let replica = replica.unwrap();
@@ -689,7 +701,8 @@ mod tests {
 
         let counts: HashMap<String, usize> = HashMap::new();
 
-        let replica = assigner.assign_new_partition("mydb/default/cpu/date=2024-01-15", &nodes, &counts);
+        let replica =
+            assigner.assign_new_partition("mydb/default/cpu/date=2024-01-15", &nodes, &counts);
         assert!(replica.is_some());
 
         let replica = replica.unwrap();

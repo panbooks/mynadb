@@ -229,7 +229,9 @@ impl ShardCache {
 
     /// Get partition replica info
     pub fn get_partition_replica(&self, partition_key: &str) -> Option<PartitionReplicaInfo> {
-        self.partition_replicas.get(partition_key).map(|r| r.clone())
+        self.partition_replicas
+            .get(partition_key)
+            .map(|r| r.clone())
     }
 
     /// Promote standby to leader (called on ReplicaPromoted event)
@@ -529,7 +531,10 @@ impl ShardCache {
     pub fn update_node_mode(&self, node_id: &str, mode: DataNodeMode) {
         let mut nodes = self.data_nodes.write();
         if let Some(node) = nodes.get_mut(node_id) {
-            info!("Updating node {} mode from {:?} to {:?}", node_id, node.mode, mode);
+            info!(
+                "Updating node {} mode from {:?} to {:?}",
+                node_id, node.mode, mode
+            );
             node.mode = mode;
         }
     }

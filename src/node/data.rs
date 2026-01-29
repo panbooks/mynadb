@@ -79,8 +79,7 @@ pub async fn start(config_path: &str) {
     // Initialize data cache with node_id for distributed parallel queries
     info!(
         "Initializing data cache (max: {}MB, node_id: {})",
-        config.cache.max_size_mb,
-        data_config.node_id
+        config.cache.max_size_mb, data_config.node_id
     );
     let data_cache = Arc::new(cache::DataCache::new(
         storage.clone(),
@@ -172,35 +171,35 @@ pub async fn start(config_path: &str) {
 
     // Initialize parquet local cache for cluster mode (if configured)
     // This must be done before query engine initialization
-    let parquet_cache: Option<Arc<ParquetLocalCache>> =
-        if let Some(cache_size_mb) = config.cache.parquet_cache_mb {
-            info!(
-                "Initializing parquet local cache (max: {}MB, node_id: {})",
-                cache_size_mb, data_config.node_id
-            );
-            let cache_dir = PathBuf::from(&config.storage.data_dir).join("_parquet_cache");
-            let cache = ParquetLocalCache::new(
-                cache_dir,
-                cache_size_mb,
-                data_config.node_id.clone(),
-            )
+    let parquet_cache: Option<Arc<ParquetLocalCache>> = if let Some(cache_size_mb) =
+        config.cache.parquet_cache_mb
+    {
+        info!(
+            "Initializing parquet local cache (max: {}MB, node_id: {})",
+            cache_size_mb, data_config.node_id
+        );
+        let cache_dir = PathBuf::from(&config.storage.data_dir).join("_parquet_cache");
+        let cache = ParquetLocalCache::new(cache_dir, cache_size_mb, data_config.node_id.clone())
             .with_storage(storage.clone());
 
-            // Scan existing cache directory to rebuild tracking
-            let cache = Arc::new(cache);
-            let cache_for_scan = cache.clone();
-            tokio::spawn(async move {
-                if let Ok(count) = cache_for_scan.scan_existing().await {
-                    if count > 0 {
-                        info!("Parquet cache warmed up: {} files from previous session", count);
-                    }
+        // Scan existing cache directory to rebuild tracking
+        let cache = Arc::new(cache);
+        let cache_for_scan = cache.clone();
+        tokio::spawn(async move {
+            if let Ok(count) = cache_for_scan.scan_existing().await {
+                if count > 0 {
+                    info!(
+                        "Parquet cache warmed up: {} files from previous session",
+                        count
+                    );
                 }
-            });
+            }
+        });
 
-            Some(cache)
-        } else {
-            None
-        };
+        Some(cache)
+    } else {
+        None
+    };
 
     // Initialize query engine for local query execution (with parquet cache if available)
     let query_engine = common::init_query_engine_with_parquet_cache(
@@ -231,29 +230,34 @@ pub async fn start(config_path: &str) {
     }
 
     // Initialize replication manager if enabled
-    let replication_manager_for_reporting: Option<Arc<crate::data::replication::ReplicationManager>> =
-        if data_config.replication.enabled {
-            use crate::data::replication::{ReplicationConfig as ReplicationTypesConfig, ReplicationManager};
-
-            let replication_config = ReplicationTypesConfig::from(&data_config.replication);
-            let replication_manager = Arc::new(ReplicationManager::new(
-                data_config.node_id.clone(),
-                replication_config,
-            ));
-
-            flight_service = flight_service.with_replication_manager(Arc::clone(&replication_manager));
-            info!(
-                "Replication enabled: mode={}, batch_interval={}ms",
-                data_config.replication.mode, data_config.replication.batch_interval_ms
-            );
-
-            Some(replication_manager)
-        } else {
-            None
+    let replication_manager_for_reporting: Option<
+        Arc<crate::data::replication::ReplicationManager>,
+    > = if data_config.replication.enabled {
+        use crate::data::replication::{
+            ReplicationConfig as ReplicationTypesConfig, ReplicationManager,
         };
 
+        let replication_config = ReplicationTypesConfig::from(&data_config.replication);
+        let replication_manager = Arc::new(ReplicationManager::new(
+            data_config.node_id.clone(),
+            replication_config,
+        ));
+
+        flight_service = flight_service.with_replication_manager(Arc::clone(&replication_manager));
+        info!(
+            "Replication enabled: mode={}, batch_interval={}ms",
+            data_config.replication.mode, data_config.replication.batch_interval_ms
+        );
+
+        Some(replication_manager)
+    } else {
+        None
+    };
+
     // Start replication state reporting task if both replication and Meta are available
-    if let (Some(ref client), Some(ref repl_manager)) = (&meta_client_for_events, &replication_manager_for_reporting) {
+    if let (Some(ref client), Some(ref repl_manager)) =
+        (&meta_client_for_events, &replication_manager_for_reporting)
+    {
         use crate::meta::types::ReplicaState;
 
         let meta_client_for_report = Arc::clone(client);
@@ -297,7 +301,10 @@ pub async fn start(config_path: &str) {
             }
         });
 
-        info!("Started replication state reporting task (every {}s)", report_interval_secs);
+        info!(
+            "Started replication state reporting task (every {}s)",
+            report_interval_secs
+        );
     }
 
     // Subscribe to replica events from Meta for cache invalidation
@@ -325,10 +332,12 @@ pub async fn start(config_path: &str) {
                             match event.event_type {
                                 EventType::ReplicaAssigned | EventType::ReplicaPromoted => {
                                     // Parse and cache the replica info
-                                    match serde_json::from_slice::<PartitionReplica>(&event.payload) {
+                                    match serde_json::from_slice::<PartitionReplica>(&event.payload)
+                                    {
                                         Ok(replica) => {
                                             let is_leader = replica.leader_node_id == node_id;
-                                            let is_standby = replica.standby_node_ids.contains(&node_id);
+                                            let is_standby =
+                                                replica.standby_node_ids.contains(&node_id);
 
                                             if is_leader || is_standby {
                                                 info!(
@@ -340,7 +349,9 @@ pub async fn start(config_path: &str) {
                                                 );
 
                                                 // If promoted to leader, should start flushing
-                                                if event.event_type == EventType::ReplicaPromoted && is_leader {
+                                                if event.event_type == EventType::ReplicaPromoted
+                                                    && is_leader
+                                                {
                                                     info!(
                                                         "PROMOTED to leader for partition {}! Will start flushing.",
                                                         replica.partition_key
@@ -349,7 +360,8 @@ pub async fn start(config_path: &str) {
                                                     // Future: Could trigger immediate flush here
                                                 }
 
-                                                replica_cache.insert(replica.partition_key.clone(), replica);
+                                                replica_cache
+                                                    .insert(replica.partition_key.clone(), replica);
                                             }
                                         }
                                         Err(e) => {
@@ -359,9 +371,14 @@ pub async fn start(config_path: &str) {
                                 }
                                 EventType::ReplicaStateChanged => {
                                     // Update cached replica state
-                                    if let Ok(replica) = serde_json::from_slice::<PartitionReplica>(&event.payload) {
-                                        if replica.leader_node_id == node_id || replica.standby_node_ids.contains(&node_id) {
-                                            replica_cache.insert(replica.partition_key.clone(), replica);
+                                    if let Ok(replica) =
+                                        serde_json::from_slice::<PartitionReplica>(&event.payload)
+                                    {
+                                        if replica.leader_node_id == node_id
+                                            || replica.standby_node_ids.contains(&node_id)
+                                        {
+                                            replica_cache
+                                                .insert(replica.partition_key.clone(), replica);
                                         }
                                     }
                                 }

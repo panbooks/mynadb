@@ -122,21 +122,19 @@ pub fn array_value_to_json(
                 .unwrap();
             Ok(serde_json::json!(arr.value(index)))
         }
-        DataType::Dictionary(key_type, _) => {
-            match key_type.as_ref() {
-                DataType::UInt16 => {
-                    let dict_array = array
-                        .as_any()
-                        .downcast_ref::<DictionaryArray<UInt16Type>>()
-                        .unwrap();
-                    let keys = dict_array.keys();
-                    let key = keys.value(index);
-                    let values = dict_array.values();
-                    array_value_to_json(values, key as usize)
-                }
-                _ => Ok(serde_json::json!(format!("<dict:{:?}>", array.data_type()))),
+        DataType::Dictionary(key_type, _) => match key_type.as_ref() {
+            DataType::UInt16 => {
+                let dict_array = array
+                    .as_any()
+                    .downcast_ref::<DictionaryArray<UInt16Type>>()
+                    .unwrap();
+                let keys = dict_array.keys();
+                let key = keys.value(index);
+                let values = dict_array.values();
+                array_value_to_json(values, key as usize)
             }
-        }
+            _ => Ok(serde_json::json!(format!("<dict:{:?}>", array.data_type()))),
+        },
         other => Ok(serde_json::json!(format!("<{:?}>", other))),
     }
 }

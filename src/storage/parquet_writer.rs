@@ -81,7 +81,13 @@ impl ParquetWriter {
     }
 
     /// Get partition path: {node_id}/catalog/schema/table/date=YYYY-MM-DD/
-    fn get_partition_path(node_id: &str, catalog: &str, schema: &str, table: &str, date: i32) -> String {
+    fn get_partition_path(
+        node_id: &str,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date: i32,
+    ) -> String {
         format!(
             "{}/{}",
             Self::get_table_path(node_id, catalog, schema, table),
@@ -227,8 +233,16 @@ impl ParquetWriter {
         batches: Vec<RecordBatch>,
     ) -> Result<FileWriteResult, String> {
         // Default: sort by time only (backward compatible)
-        self.write_batches_partitioned_with_sort(node_id, catalog, schema, table, date, batches, &[])
-            .await
+        self.write_batches_partitioned_with_sort(
+            node_id,
+            catalog,
+            schema,
+            table,
+            date,
+            batches,
+            &[],
+        )
+        .await
     }
 
     /// Write batches with cardinality-based sort ordering
@@ -338,7 +352,15 @@ impl ParquetWriter {
         date: i32,
         batches: Vec<RecordBatch>,
     ) -> Result<FileWriteResult, String> {
-        self.write_batches_partitioned_with_sort_sync(node_id, catalog, schema, table, date, batches, &[])
+        self.write_batches_partitioned_with_sort_sync(
+            node_id,
+            catalog,
+            schema,
+            table,
+            date,
+            batches,
+            &[],
+        )
     }
 
     /// Write batches synchronously with cardinality-based sort ordering

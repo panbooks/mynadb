@@ -341,8 +341,7 @@ impl QueryCoordinator {
     /// Otherwise, falls back to broadcast query to all nodes.
     async fn fan_out_query(&self, plan: &DistributedQueryPlan) -> (Vec<RecordBatch>, Vec<String>) {
         // Type alias for boxed futures (needed because different async blocks have different types)
-        type QueryFuture =
-            Pin<Box<dyn Future<Output = Result<Vec<RecordBatch>, String>> + Send>>;
+        type QueryFuture = Pin<Box<dyn Future<Output = Result<Vec<RecordBatch>, String>> + Send>>;
 
         let mut futures: Vec<QueryFuture> = Vec::new();
 

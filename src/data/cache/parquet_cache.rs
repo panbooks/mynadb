@@ -338,20 +338,26 @@ mod tests {
     #[tokio::test]
     async fn test_is_owned_by_node() {
         let temp_dir = TempDir::new().unwrap();
-        let cache = ParquetLocalCache::new(temp_dir.path().to_path_buf(), 100, "data-1".to_string());
+        let cache =
+            ParquetLocalCache::new(temp_dir.path().to_path_buf(), 100, "data-1".to_string());
 
         // Owned by this node
-        assert!(cache.is_owned_by_this_node("data-1/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet"));
+        assert!(
+            cache.is_owned_by_this_node("data-1/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet")
+        );
 
         // Not owned by this node
-        assert!(!cache.is_owned_by_this_node("data-2/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet"));
+        assert!(
+            !cache.is_owned_by_this_node("data-2/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet")
+        );
         assert!(!cache.is_owned_by_this_node("mydb/default/cpu/date=2024-01-15/L0_xxx.parquet"));
     }
 
     #[tokio::test]
     async fn test_local_path() {
         let temp_dir = TempDir::new().unwrap();
-        let cache = ParquetLocalCache::new(temp_dir.path().to_path_buf(), 100, "data-1".to_string());
+        let cache =
+            ParquetLocalCache::new(temp_dir.path().to_path_buf(), 100, "data-1".to_string());
 
         let path = "data-1/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet";
         let local = cache.local_path(path);

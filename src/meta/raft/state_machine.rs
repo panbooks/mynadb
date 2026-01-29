@@ -12,7 +12,6 @@ use parking_lot::RwLock;
 use sled::Db;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
@@ -237,7 +236,12 @@ impl MetaStateMachine {
                 leader_node_id,
                 standby_node_ids,
                 replication_factor,
-            } => self.assign_replica(&partition_key, &leader_node_id, standby_node_ids, replication_factor),
+            } => self.assign_replica(
+                &partition_key,
+                &leader_node_id,
+                standby_node_ids,
+                replication_factor,
+            ),
 
             MetaCommand::PromoteStandby { partition_key } => self.promote_standby(&partition_key),
 
@@ -246,11 +250,18 @@ impl MetaStateMachine {
                 state,
                 last_replicated_seq,
                 replication_lag_ms,
-            } => self.update_replica_state(&partition_key, state, last_replicated_seq, replication_lag_ms),
+            } => self.update_replica_state(
+                &partition_key,
+                state,
+                last_replicated_seq,
+                replication_lag_ms,
+            ),
 
             MetaCommand::RemoveReplica { partition_key } => self.remove_replica(&partition_key),
 
-            MetaCommand::AutoAssignReplica { partition_key } => self.auto_assign_replica(&partition_key),
+            MetaCommand::AutoAssignReplica { partition_key } => {
+                self.auto_assign_replica(&partition_key)
+            }
 
             MetaCommand::RebalanceOnNodeJoin { node_id } => self.rebalance_on_node_join(&node_id),
 
@@ -281,7 +292,9 @@ impl MetaStateMachine {
                 node_id,
                 partitions_reassigned,
                 memtable_rows_remaining,
-            } => self.update_retire_status(&node_id, partitions_reassigned, memtable_rows_remaining),
+            } => {
+                self.update_retire_status(&node_id, partitions_reassigned, memtable_rows_remaining)
+            }
 
             MetaCommand::RemoveStandbyFromReplicas { standby_node_id } => {
                 self.remove_standby_from_replicas(&standby_node_id)
@@ -299,7 +312,10 @@ impl MetaStateMachine {
 
         tracing::info!(
             "register_node: registering node_id={}, key={}, role={:?}, state={:?}",
-            info.node_id, key, info.role, info.state
+            info.node_id,
+            key,
+            info.role,
+            info.state
         );
 
         // Cold Standby Architecture: Auto-assign mode for Data nodes
@@ -345,14 +361,23 @@ impl MetaStateMachine {
                     Ok(Some(data)) => {
                         tracing::info!(
                             "register_node: INSERT OK - key={}, wrote {} bytes, read back {} bytes",
-                            key, serialized.len(), data.len()
+                            key,
+                            serialized.len(),
+                            data.len()
                         );
                     }
                     Ok(None) => {
-                        tracing::error!("register_node: INSERT FAILED - key={} not found after insert!", key);
+                        tracing::error!(
+                            "register_node: INSERT FAILED - key={} not found after insert!",
+                            key
+                        );
                     }
                     Err(e) => {
-                        tracing::error!("register_node: GET FAILED after insert - key={}, error={:?}", key, e);
+                        tracing::error!(
+                            "register_node: GET FAILED after insert - key={}, error={:?}",
+                            key,
+                            e
+                        );
                     }
                 }
             }
@@ -429,7 +454,8 @@ impl MetaStateMachine {
         let standby_config = crate::meta::config::StandbyConfig::default();
         if standby_config.enabled && standby_config.auto_promote {
             if let Some(ref node_info) = info {
-                if node_info.role == NodeRole::Data && node_info.mode == Some(DataNodeMode::Primary) {
+                if node_info.role == NodeRole::Data && node_info.mode == Some(DataNodeMode::Primary)
+                {
                     // Find an available Standby node to promote
                     if let Some(standby) = self.select_standby_to_promote(node_id) {
                         info!(
@@ -1007,9 +1033,11 @@ impl MetaStateMachine {
     fn rebalance_on_node_join(&self, node_id: &str) -> MetaResponse {
         let node = match self.get_node(node_id) {
             Some(n) => n,
-            None => return MetaResponse::Error {
-                message: format!("Node {} not found", node_id),
-            },
+            None => {
+                return MetaResponse::Error {
+                    message: format!("Node {} not found", node_id),
+                }
+            }
         };
 
         if node.role != NodeRole::Data || node.state != NodeState::Active {
@@ -1098,9 +1126,7 @@ impl MetaStateMachine {
         // If we have zone info for the failed primary, prefer standbys in different zones
         if let Some(ref failed) = failed_primary {
             // First, try to find a standby in a different zone
-            let different_zone = standbys
-                .iter()
-                .find(|s| s.is_different_zone(failed));
+            let different_zone = standbys.iter().find(|s| s.is_different_zone(failed));
             if let Some(standby) = different_zone {
                 return Some(standby.clone());
             }
@@ -1151,7 +1177,10 @@ impl MetaStateMachine {
         // Verify it's a Standby data node
         if node.role != NodeRole::Data {
             return MetaResponse::Error {
-                message: format!("Node {} is not a Data node (role={:?})", standby_node_id, node.role),
+                message: format!(
+                    "Node {} is not a Data node (role={:?})",
+                    standby_node_id, node.role
+                ),
             };
         }
 
@@ -1368,9 +1397,7 @@ impl MetaStateMachine {
 
         info!(
             "Starting retirement of node {} ({:?}): {} partitions to reassign",
-            node_id,
-            node.mode,
-            partitions_to_reassign
+            node_id, node.mode, partitions_to_reassign
         );
 
         // Publish event for Router to stop routing to this node
@@ -1619,7 +1646,10 @@ impl MetaStateMachine {
             .db
             .insert(node_key.as_bytes(), bincode::serialize(&node).unwrap());
 
-        info!("Cancelled retirement of node {}: restored to Active", node_id);
+        info!(
+            "Cancelled retirement of node {}: restored to Active",
+            node_id
+        );
 
         // Publish event
         let payload = serde_json::json!({
@@ -1675,7 +1705,10 @@ impl MetaStateMachine {
         let mut affected_count = 0;
 
         for replica in replicas {
-            if replica.standby_node_ids.contains(&standby_node_id.to_string()) {
+            if replica
+                .standby_node_ids
+                .contains(&standby_node_id.to_string())
+            {
                 let storage_key = replica.storage_key();
 
                 let mut updated = replica.clone();
@@ -1774,7 +1807,10 @@ impl MetaStateMachine {
                 reduce_standbys, standbys_available
             ));
         }
-        for node in standbys.iter().take(reduce_standbys.min(standbys_available)) {
+        for node in standbys
+            .iter()
+            .take(reduce_standbys.min(standbys_available))
+        {
             let count = partition_counts.get(&node.node_id).unwrap_or(&0);
             recommendation.add_standby(
                 node.node_id.clone(),
@@ -1868,7 +1904,9 @@ impl MetaStateMachine {
                         let key_str = String::from_utf8_lossy(&k);
                         tracing::warn!(
                             "list_nodes: failed to deserialize node key={}, len={}, error={:?}",
-                            key_str, v.len(), e
+                            key_str,
+                            v.len(),
+                            e
                         );
                     }
                 }
@@ -1877,7 +1915,11 @@ impl MetaStateMachine {
 
         tracing::info!(
             "list_nodes: role={:?}, state={:?}, scanned={}, deserialized={}, matched={}",
-            role, state, scanned, deserialized, matched
+            role,
+            state,
+            scanned,
+            deserialized,
+            matched
         );
 
         nodes

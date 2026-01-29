@@ -228,7 +228,11 @@ impl WriteRouter {
         let partition_path = partition_key.to_path();
 
         // Check if partition already has replica assignment in cache
-        if self.shard_cache.get_partition_replica(&partition_path).is_some() {
+        if self
+            .shard_cache
+            .get_partition_replica(&partition_path)
+            .is_some()
+        {
             return; // Already assigned
         }
 

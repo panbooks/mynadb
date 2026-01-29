@@ -70,8 +70,7 @@ pub fn init_data_cache(
 ) -> cache::DataCache {
     info!(
         "Initializing data cache (max: {}MB, flush threshold: 80%, node_id: {})",
-        config.cache.max_size_mb,
-        node_id
+        config.cache.max_size_mb, node_id
     );
     cache::DataCache::new(storage, config.cache.max_size_mb, wal, node_id.to_string())
 }
@@ -88,10 +87,7 @@ pub async fn init_metadata_manager_for_node(
     config: &Config,
     node_id: &str,
 ) -> catalog::SharedMetadataManager {
-    info!(
-        "Initializing metadata manager for node: {}",
-        node_id
-    );
+    info!("Initializing metadata manager for node: {}", node_id);
     let metadata_dir = format!("{}/_metadata", config.storage.data_dir);
     let metadata_manager: catalog::SharedMetadataManager =
         Arc::new(catalog::MemoryMetadataManager::new(&metadata_dir));
@@ -359,8 +355,8 @@ pub fn start_background_flush_with_meta_registration(
                         level: file.level,
                         size_bytes: file.size_bytes,
                         row_count: file.row_count,
-                        min_time: 0,  // TODO: Extract from file metadata
-                        max_time: 0,  // TODO: Extract from file metadata
+                        min_time: 0, // TODO: Extract from file metadata
+                        max_time: 0, // TODO: Extract from file metadata
                         created_at: crate::meta::current_timestamp_ms(),
                         created_by: node_id.clone(), // Critical: Set to this node's ID
                     })

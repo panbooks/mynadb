@@ -4,12 +4,12 @@
 
 use super::manager::{GlobalStats, MetadataError, MetadataManager, MetadataResult};
 use super::types::*;
+use crate::meta::current_timestamp_ms;
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use crate::meta::current_timestamp_ms;
 use tracing::{debug, info, warn};
 
 /// File name for the metadata snapshot
@@ -735,7 +735,12 @@ impl MetadataManager for MemoryMetadataManager {
                             // Path format: {node_id}/{catalog}/{schema}/{table}/{partition}/{filename}
                             let path = format!(
                                 "{}/{}/{}/{}/{}/{}",
-                                node_id, catalog_name, schema_name, table_name, partition_dir, file_name
+                                node_id,
+                                catalog_name,
+                                schema_name,
+                                table_name,
+                                partition_dir,
+                                file_name
                             );
 
                             let file_info = FileInfo {

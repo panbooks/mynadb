@@ -12,8 +12,8 @@
 use super::types::{compute_checksum, ReplicateResponse, ReplicationConfig, ReplicationEntry};
 use arrow::array::RecordBatch;
 use arrow_flight::{
-    encode::FlightDataEncoderBuilder, flight_service_client::FlightServiceClient,
-    FlightData, FlightDescriptor,
+    encode::FlightDataEncoderBuilder, flight_service_client::FlightServiceClient, FlightData,
+    FlightDescriptor,
 };
 use futures::{stream, StreamExt};
 use parking_lot::RwLock;
@@ -194,8 +194,7 @@ impl ReplicationStream {
             // Encode the batch as FlightData (without descriptor first, we'll add it after computing checksum)
             let batch_stream =
                 stream::iter(vec![Ok::<_, arrow_flight::error::FlightError>(entry.batch)]);
-            let flight_data_stream = FlightDataEncoderBuilder::new()
-                .build(batch_stream);
+            let flight_data_stream = FlightDataEncoderBuilder::new().build(batch_stream);
 
             let mut flight_data: Vec<FlightData> = flight_data_stream
                 .collect::<Vec<_>>()
@@ -297,7 +296,10 @@ impl ReplicationStream {
             .map_err(|e| format!("Connect failed: {}", e))?;
 
         *self.channel.write() = Some(channel.clone());
-        info!("Connected to standby {} at {}", self.standby_node_id, self.standby_addr);
+        info!(
+            "Connected to standby {} at {}",
+            self.standby_node_id, self.standby_addr
+        );
 
         Ok(channel)
     }
@@ -423,7 +425,11 @@ impl ReplicationManager {
         let count = streams.len();
         ReplicationStats {
             stream_count: count,
-            avg_lag_ms: if count > 0 { total_lag_ms / count as u64 } else { 0 },
+            avg_lag_ms: if count > 0 {
+                total_lag_ms / count as u64
+            } else {
+                0
+            },
             max_lag_ms,
             in_sync_count,
         }

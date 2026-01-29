@@ -97,12 +97,8 @@ pub async fn start(config_path: &str) {
                             }
                             Err(e) => {
                                 if attempt < 4 {
-                                    info!(
-                                        "Failed to add learner {} ({}), retrying...",
-                                        peer_id, e
-                                    );
-                                    tokio::time::sleep(std::time::Duration::from_millis(500))
-                                        .await;
+                                    info!("Failed to add learner {} ({}), retrying...", peer_id, e);
+                                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                                 } else {
                                     error!("Failed to add learner {}: {}", peer_id, e);
                                 }

@@ -445,7 +445,12 @@ impl QueryEngine {
             if !storage.is_local() {
                 // Object storage in cluster mode: use node_id prefix
                 if let Some(ref cache) = self.write_cache {
-                    storage.table_url_with_node(cache.node_id(), catalog_name, schema_name, table_name)
+                    storage.table_url_with_node(
+                        cache.node_id(),
+                        catalog_name,
+                        schema_name,
+                        table_name,
+                    )
                 } else {
                     storage.table_url(catalog_name, schema_name, table_name)
                 }

@@ -191,31 +191,40 @@ async fn list_nodes(
     use crate::meta::types::{DataNodeMode, NodeRole};
 
     // Parse role filter
-    let role_filter = query.role.as_ref().and_then(|r| match r.to_lowercase().as_str() {
-        "meta" => Some(NodeRole::Meta),
-        "router" => Some(NodeRole::Router),
-        "data" => Some(NodeRole::Data),
-        "compactor" => Some(NodeRole::Compactor),
-        _ => None,
-    });
+    let role_filter = query
+        .role
+        .as_ref()
+        .and_then(|r| match r.to_lowercase().as_str() {
+            "meta" => Some(NodeRole::Meta),
+            "router" => Some(NodeRole::Router),
+            "data" => Some(NodeRole::Data),
+            "compactor" => Some(NodeRole::Compactor),
+            _ => None,
+        });
 
     // Parse state filter
-    let state_filter = query.state.as_ref().and_then(|s| match s.to_lowercase().as_str() {
-        "active" => Some(NodeState::Active),
-        "starting" => Some(NodeState::Starting),
-        "draining" => Some(NodeState::Draining),
-        "inactive" => Some(NodeState::Inactive),
-        "retiring" => Some(NodeState::Retiring),
-        "drained" => Some(NodeState::Drained),
-        _ => None,
-    });
+    let state_filter = query
+        .state
+        .as_ref()
+        .and_then(|s| match s.to_lowercase().as_str() {
+            "active" => Some(NodeState::Active),
+            "starting" => Some(NodeState::Starting),
+            "draining" => Some(NodeState::Draining),
+            "inactive" => Some(NodeState::Inactive),
+            "retiring" => Some(NodeState::Retiring),
+            "drained" => Some(NodeState::Drained),
+            _ => None,
+        });
 
     // Parse mode filter
-    let mode_filter = query.mode.as_ref().and_then(|m| match m.to_lowercase().as_str() {
-        "primary" => Some(DataNodeMode::Primary),
-        "standby" => Some(DataNodeMode::Standby),
-        _ => None,
-    });
+    let mode_filter = query
+        .mode
+        .as_ref()
+        .and_then(|m| match m.to_lowercase().as_str() {
+            "primary" => Some(DataNodeMode::Primary),
+            "standby" => Some(DataNodeMode::Standby),
+            _ => None,
+        });
 
     let nodes = state.meta_node.list_nodes(role_filter, state_filter).await;
 
@@ -299,7 +308,10 @@ async fn list_replicas(
         .list_partition_replicas(query.leader.as_deref())
         .await;
 
-    let responses: Vec<ReplicaInfoResponse> = replicas.into_iter().map(ReplicaInfoResponse::from).collect();
+    let responses: Vec<ReplicaInfoResponse> = replicas
+        .into_iter()
+        .map(ReplicaInfoResponse::from)
+        .collect();
 
     (StatusCode::OK, Json(responses))
 }

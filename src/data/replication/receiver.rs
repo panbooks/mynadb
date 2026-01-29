@@ -84,7 +84,10 @@ impl StandbyReceiver {
     /// Disable standby mode (e.g., when promoted to leader)
     pub fn disable_standby_mode(&self) {
         self.is_standby.store(false, Ordering::SeqCst);
-        info!("Standby mode disabled for node {} (promoted to leader)", self.node_id);
+        info!(
+            "Standby mode disabled for node {} (promoted to leader)",
+            self.node_id
+        );
     }
 
     /// Check if this node is in standby mode
@@ -182,7 +185,8 @@ impl StandbyReceiver {
         );
 
         // Verify checksum if provided
-        let checksum_verified = if let (Some(data), Some(checksum)) = (raw_data, expected_checksum) {
+        let checksum_verified = if let (Some(data), Some(checksum)) = (raw_data, expected_checksum)
+        {
             match self.verify_batch_checksum(data, Some(checksum), &partition_key, seq) {
                 Ok(()) => true,
                 Err(e) => {
@@ -201,8 +205,17 @@ impl StandbyReceiver {
         };
 
         // Call the original receive_batch logic
-        self.receive_batch_internal(catalog, schema, table, date, seq, batch, source_node_id, checksum_verified)
-            .await
+        self.receive_batch_internal(
+            catalog,
+            schema,
+            table,
+            date,
+            seq,
+            batch,
+            source_node_id,
+            checksum_verified,
+        )
+        .await
     }
 
     /// Receive and apply a replicated batch (legacy method without checksum)
@@ -220,8 +233,17 @@ impl StandbyReceiver {
         source_node_id: &str,
     ) -> Result<ReplicateResponse, String> {
         // Call without checksum verification
-        self.receive_batch_internal(catalog, schema, table, date, seq, batch, source_node_id, false)
-            .await
+        self.receive_batch_internal(
+            catalog,
+            schema,
+            table,
+            date,
+            seq,
+            batch,
+            source_node_id,
+            false,
+        )
+        .await
     }
 
     /// Internal method to receive and apply a replicated batch
@@ -354,11 +376,7 @@ impl StandbyReceiver {
 
     /// Get partitions this standby is responsible for
     pub fn get_standby_partitions(&self) -> Vec<String> {
-        self.partitions
-            .read()
-            .keys()
-            .cloned()
-            .collect()
+        self.partitions.read().keys().cloned().collect()
     }
 }
 
