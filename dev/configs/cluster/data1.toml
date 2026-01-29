@@ -1,16 +1,11 @@
 # MynaDB Data Node 1 Configuration
 # Storage and query execution node
 
-[server]
-http_host = "0.0.0.0"
-http_port = 7010
-flight_host = "0.0.0.0"
-flight_port = 7011
-
 [data]
 node_id = "data-1"
 advertise_addr = "127.0.0.1:7200"
 grpc_port = 7200
+http_port = 7210
 
 # Meta service endpoints
 meta_endpoints = ["127.0.0.1:7100", "127.0.0.1:7101", "127.0.0.1:7102"]
@@ -19,7 +14,7 @@ meta_request_timeout_ms = 30000
 
 [storage]
 backend = "minio"
-data_dir = "./dev/data/data1"
+data_dir = "./dev/data/cluster/data1"
 bucket = "mynadb"
 region = "us-east-1"
 access_key = "minioadmin"
@@ -60,7 +55,7 @@ enabled = false
 
 [logging]
 level = "info"
-log_dir = "./dev/logs/data1"
+log_dir = "./dev/logs/cluster/data1"
 file_prefix = "data1"
 rotation = "daily"
 max_files = 7

@@ -26,11 +26,11 @@ if ! command -v goreman &> /dev/null; then
     exit 1
 fi
 
-# Build release binary
-echo "Building MynaDB (release mode)..."
-cargo build --release
+# Build debug binary
+echo "Building MynaDB (debug mode)..."
+cargo build
 
-if [ ! -f "./target/release/mynadb" ]; then
+if [ ! -f "./target/debug/mynadb" ]; then
     echo "ERROR: Build failed - binary not found"
     exit 1
 fi
@@ -40,17 +40,17 @@ echo ""
 
 # Create data and log directories
 echo "Creating data directories..."
-mkdir -p ./dev/data/meta1
-mkdir -p ./dev/data/meta2
-mkdir -p ./dev/data/meta3
-mkdir -p ./dev/data/data1
-mkdir -p ./dev/data/data2
-mkdir -p ./dev/logs/meta1
-mkdir -p ./dev/logs/meta2
-mkdir -p ./dev/logs/meta3
-mkdir -p ./dev/logs/router1
-mkdir -p ./dev/logs/data1
-mkdir -p ./dev/logs/data2
+mkdir -p ./dev/data/cluster/meta1
+mkdir -p ./dev/data/cluster/meta2
+mkdir -p ./dev/data/cluster/meta3
+mkdir -p ./dev/data/cluster/data1
+mkdir -p ./dev/data/cluster/data2
+mkdir -p ./dev/logs/cluster/meta1
+mkdir -p ./dev/logs/cluster/meta2
+mkdir -p ./dev/logs/cluster/meta3
+mkdir -p ./dev/logs/cluster/router1
+mkdir -p ./dev/logs/cluster/data1
+mkdir -p ./dev/logs/cluster/data2
 
 echo ""
 echo "Starting cluster..."
