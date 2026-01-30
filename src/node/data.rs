@@ -214,8 +214,13 @@ pub async fn start(config_path: &str) {
     let meta_client_for_events = meta_client.clone();
     let meta_client_for_http = meta_client.clone();
 
-    // Create Flight service (replaces gRPC)
+    // Clone components for HTTP API (before they're moved to Flight service)
     let data_cache_for_http = data_cache.clone();
+    let query_engine_for_http = query_engine.clone();
+    let config_for_http = config.clone();
+    let wal_for_http = wal.clone();
+
+    // Create Flight service (replaces gRPC)
     let mut flight_service = DataNodeFlightService::new(
         data_cache,
         query_engine,
@@ -416,6 +421,11 @@ pub async fn start(config_path: &str) {
             meta_client: meta_client_for_http,
             is_retiring: Arc::new(AtomicBool::new(false)),
             retire_status: Arc::new(parking_lot::RwLock::new(None)),
+            query_engine: Some(query_engine_for_http),
+            config: Some(config_for_http),
+            wal: wal_for_http,
+            compactor: None,  // Compaction handled by leader node in cluster mode
+            db_manager: None, // TODO: Initialize if needed for partition management
         };
         tokio::spawn(async move {
             if let Err(e) = start_http_server("0.0.0.0", http_port, http_state).await {

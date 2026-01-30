@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+use super::shared;
 use crate::config;
 use crate::jobs::compactor;
 use crate::jobs::profiling;
@@ -396,27 +397,16 @@ pub async fn list_tables_handler(
 ) -> impl IntoResponse {
     debug!("List Tables Request: db={}", db);
 
-    // Auto-register database
-    if let Err(e) = state.query_engine.ensure_database_registered(&db).await {
-        error!("Error registering database: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e));
+    match shared::list_tables_impl(&state.query_engine, &db).await {
+        Ok(response) => (
+            StatusCode::OK,
+            serde_json::to_string_pretty(&response).unwrap(),
+        ),
+        Err(e) => {
+            error!("List tables error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
+        }
     }
-
-    let tables = state.query_engine.list_tables().await;
-    let db_tables: Vec<String> = tables
-        .into_iter()
-        .filter(|t| t.starts_with(&format!("{}_", db)))
-        .collect();
-
-    let response = serde_json::json!({
-        "database": db,
-        "tables": db_tables,
-        "count": db_tables.len()
-    });
-    (
-        StatusCode::OK,
-        serde_json::to_string_pretty(&response).unwrap(),
-    )
 }
 
 pub async fn schema_handler(
@@ -425,18 +415,11 @@ pub async fn schema_handler(
 ) -> impl IntoResponse {
     debug!("Schema Request: db={}, table={}", db, table);
 
-    // Auto-register database
-    if let Err(e) = state.query_engine.ensure_database_registered(&db).await {
-        error!("Error registering database: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e));
-    }
-
-    let full_table_name = format!("{}_{}", db, table);
-    match state.query_engine.get_table_schema(&full_table_name).await {
+    match shared::get_table_schema_impl(&state.query_engine, &db, &table).await {
         Ok(schema) => (StatusCode::OK, schema),
         Err(e) => {
             error!("Get schema error: {}", e);
-            (StatusCode::NOT_FOUND, format!("Error: {}", e))
+            (StatusCode::NOT_FOUND, e)
         }
     }
 }
@@ -447,14 +430,9 @@ pub async fn list_schemas_handler(
 ) -> impl IntoResponse {
     debug!("List Schemas Request: db={}", db);
 
-    match state.query_engine.list_schemas(&db).await {
-        Ok(schemas) => {
-            let response = serde_json::json!({
-                "database": db,
-                "schemas": schemas,
-                "count": schemas.len()
-            });
-            info!("Found {} schema(s)", schemas.len());
+    match shared::list_schemas_impl(&state.query_engine, &db).await {
+        Ok(response) => {
+            info!("Found {} schema(s)", response["count"]);
             (
                 StatusCode::OK,
                 serde_json::to_string_pretty(&response).unwrap(),
@@ -462,7 +440,7 @@ pub async fn list_schemas_handler(
         }
         Err(e) => {
             error!("List schemas error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
+            (StatusCode::INTERNAL_SERVER_ERROR, e)
         }
     }
 }
@@ -473,15 +451,9 @@ pub async fn list_schema_tables_handler(
 ) -> impl IntoResponse {
     debug!("List Schema Tables Request: db={}, schema={}", db, schema);
 
-    match state.query_engine.list_tables_in_schema(&db, &schema).await {
-        Ok(tables) => {
-            let response = serde_json::json!({
-                "database": db,
-                "schema": schema,
-                "tables": tables,
-                "count": tables.len()
-            });
-            info!("Found {} table(s)", tables.len());
+    match shared::list_schema_tables_impl(&state.query_engine, &db, &schema).await {
+        Ok(response) => {
+            info!("Found {} table(s)", response["count"]);
             (
                 StatusCode::OK,
                 serde_json::to_string_pretty(&response).unwrap(),
@@ -489,7 +461,7 @@ pub async fn list_schema_tables_handler(
         }
         Err(e) => {
             error!("List schema tables error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
+            (StatusCode::INTERNAL_SERVER_ERROR, e)
         }
     }
 }
@@ -535,45 +507,7 @@ pub async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
 
 pub async fn memory_handler(State(state): State<AppState>) -> impl IntoResponse {
     let cache_stats = state.cache.stats().await;
-
-    // Format bytes
-    let format_bytes = |bytes: usize| -> String {
-        if bytes >= 1024 * 1024 * 1024 {
-            format!("{:.2} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
-        } else if bytes >= 1024 * 1024 {
-            format!("{:.2} MB", bytes as f64 / 1024.0 / 1024.0)
-        } else if bytes >= 1024 {
-            format!("{:.2} KB", bytes as f64 / 1024.0)
-        } else {
-            format!("{} B", bytes)
-        }
-    };
-
-    let mut output = String::new();
-    output.push_str("Memory Usage Statistics:\n");
-    output.push_str("══════════════════════════════════════════\n\n");
-
-    // Cache memory
-    output.push_str(&format!("Data Cache:\n"));
-    output.push_str(&format!(
-        "  Size: {} ({} bytes)\n",
-        format_bytes(cache_stats.size_bytes),
-        cache_stats.size_bytes
-    ));
-    output.push_str(&format!(
-        "  Limit: {} ({} bytes)\n\n",
-        format_bytes(cache_stats.max_size_bytes),
-        cache_stats.max_size_bytes
-    ));
-
-    output.push_str("──────────────────────────────────────────\n");
-    output.push_str(&format!(
-        "Total: {} ({} bytes)\n",
-        format_bytes(cache_stats.size_bytes),
-        cache_stats.size_bytes
-    ));
-    output.push_str("══════════════════════════════════════════\n");
-
+    let output = shared::get_memory_stats(&cache_stats);
     (StatusCode::OK, output)
 }
 
@@ -667,44 +601,7 @@ pub async fn flush_handler(State(state): State<AppState>) -> impl IntoResponse {
 
 /// Get query cache statistics (metadata + query result caches)
 pub async fn query_cache_stats_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let metadata_stats = state.query_engine.get_cache_stats();
-    let query_stats = state.query_engine.get_query_cache_stats();
-
-    let response = serde_json::json!({
-        "metadata_cache": {
-            "table_cache": {
-                "size": metadata_stats.table_cache_size,
-                "hits": metadata_stats.table_hits,
-                "misses": metadata_stats.table_misses,
-                "hit_rate_percent": format!("{:.2}", metadata_stats.table_hit_rate())
-            },
-            "file_listing_cache": {
-                "size": metadata_stats.file_listing_cache_size,
-                "hits": metadata_stats.file_listing_hits,
-                "misses": metadata_stats.file_listing_misses
-            },
-            "parquet_metadata_cache": {
-                "size": metadata_stats.parquet_metadata_cache_size,
-                "hits": metadata_stats.parquet_metadata_hits,
-                "misses": metadata_stats.parquet_metadata_misses,
-                "hit_rate_percent": format!("{:.2}", metadata_stats.parquet_hit_rate())
-            }
-        },
-        "query_result_cache": {
-            "enabled": query_stats.enabled,
-            "entry_count": query_stats.entry_count,
-            "size_bytes": query_stats.size_bytes,
-            "size_mb": format!("{:.2}", query_stats.size_bytes as f64 / 1024.0 / 1024.0),
-            "max_size_mb": format!("{:.2}", query_stats.max_size_bytes as f64 / 1024.0 / 1024.0),
-            "usage_percent": format!("{:.2}", query_stats.usage_percent()),
-            "hits": query_stats.hits,
-            "misses": query_stats.misses,
-            "hit_rate_percent": format!("{:.2}", query_stats.hit_rate()),
-            "evictions": query_stats.evictions,
-            "invalidations": query_stats.invalidations
-        }
-    });
-
+    let response = shared::get_query_cache_stats_impl(&state.query_engine);
     (StatusCode::OK, axum::Json(response))
 }
 
@@ -715,7 +612,7 @@ pub async fn prewarm_cache_handler(
 ) -> impl IntoResponse {
     info!("Pre-warming cache for catalog: {}", catalog);
 
-    match state.query_engine.prewarm_catalog_cache(&catalog).await {
+    match shared::prewarm_cache_impl(&state.query_engine, &catalog).await {
         Ok(count) => {
             info!("Pre-warmed cache for '{}': {} files", catalog, count);
             (
@@ -750,11 +647,7 @@ pub async fn prewarm_table_cache_handler(
         catalog, schema, table
     );
 
-    match state
-        .query_engine
-        .prewarm_table_cache(&catalog, &schema, &table)
-        .await
-    {
+    match shared::prewarm_table_cache_impl(&state.query_engine, &catalog, &schema, &table).await {
         Ok(count) => {
             info!(
                 "Pre-warmed cache for '{}.{}.{}': {} files",
@@ -1032,20 +925,14 @@ pub async fn query_handler_post(
 }
 
 async fn execute_query(db: String, sql: String, state: AppState) -> impl IntoResponse {
-    // Execute query with database context (auto-prefix table names)
-    // Tables will be registered on-demand based on the query
-    match state
-        .query_engine
-        .execute_query_json_with_db(&sql, &db)
-        .await
-    {
+    match shared::execute_query_impl(&state.query_engine, &db, &sql).await {
         Ok(json) => {
             info!("Query executed successfully");
             (StatusCode::OK, json)
         }
         Err(e) => {
             error!("Query error: {}", e);
-            (StatusCode::BAD_REQUEST, format!("Query error: {}", e))
+            (StatusCode::BAD_REQUEST, e)
         }
     }
 }
@@ -1073,24 +960,22 @@ pub async fn explain_handler(
         db, params.sql, params.verbose, params.analyze
     );
 
-    match state
-        .query_engine
-        .explain_query(&params.sql, &db, params.verbose, params.analyze)
-        .await
+    match shared::explain_query_impl(
+        &state.query_engine,
+        &db,
+        &params.sql,
+        params.verbose,
+        params.analyze,
+    )
+    .await
     {
-        Ok(result) => {
+        Ok(json) => {
             info!("Explain executed successfully");
-            match serde_json::to_string_pretty(&result) {
-                Ok(json) => (StatusCode::OK, json),
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("JSON error: {}", e),
-                ),
-            }
+            (StatusCode::OK, json)
         }
         Err(e) => {
             error!("Explain error: {}", e);
-            (StatusCode::BAD_REQUEST, format!("Explain error: {}", e))
+            (StatusCode::BAD_REQUEST, e)
         }
     }
 }
@@ -1103,24 +988,22 @@ pub async fn explain_handler_post(
 ) -> impl IntoResponse {
     debug!("Explain Request (POST): db={}, sql={}", db, params.sql);
 
-    match state
-        .query_engine
-        .explain_query(&params.sql, &db, params.verbose, params.analyze)
-        .await
+    match shared::explain_query_impl(
+        &state.query_engine,
+        &db,
+        &params.sql,
+        params.verbose,
+        params.analyze,
+    )
+    .await
     {
-        Ok(result) => {
+        Ok(json) => {
             info!("Explain executed successfully");
-            match serde_json::to_string_pretty(&result) {
-                Ok(json) => (StatusCode::OK, json),
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("JSON error: {}", e),
-                ),
-            }
+            (StatusCode::OK, json)
         }
         Err(e) => {
             error!("Explain error: {}", e);
-            (StatusCode::BAD_REQUEST, format!("Explain error: {}", e))
+            (StatusCode::BAD_REQUEST, e)
         }
     }
 }
@@ -1133,20 +1016,14 @@ pub async fn analyze_handler(
 ) -> impl IntoResponse {
     debug!("Analyze Request: db={}, sql={}", db, params.sql);
 
-    match state.query_engine.analyze_query(&params.sql, &db).await {
-        Ok(result) => {
+    match shared::analyze_query_impl(&state.query_engine, &db, &params.sql).await {
+        Ok(json) => {
             info!("Analyze executed successfully");
-            match serde_json::to_string_pretty(&result) {
-                Ok(json) => (StatusCode::OK, json),
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("JSON error: {}", e),
-                ),
-            }
+            (StatusCode::OK, json)
         }
         Err(e) => {
             error!("Analyze error: {}", e);
-            (StatusCode::BAD_REQUEST, format!("Analyze error: {}", e))
+            (StatusCode::BAD_REQUEST, e)
         }
     }
 }
@@ -1159,20 +1036,14 @@ pub async fn analyze_handler_post(
 ) -> impl IntoResponse {
     debug!("Analyze Request (POST): db={}, sql={}", db, body);
 
-    match state.query_engine.analyze_query(&body, &db).await {
-        Ok(result) => {
+    match shared::analyze_query_impl(&state.query_engine, &db, &body).await {
+        Ok(json) => {
             info!("Analyze executed successfully");
-            match serde_json::to_string_pretty(&result) {
-                Ok(json) => (StatusCode::OK, json),
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("JSON error: {}", e),
-                ),
-            }
+            (StatusCode::OK, json)
         }
         Err(e) => {
             error!("Analyze error: {}", e);
-            (StatusCode::BAD_REQUEST, format!("Analyze error: {}", e))
+            (StatusCode::BAD_REQUEST, e)
         }
     }
 }
@@ -1240,83 +1111,27 @@ pub async fn write_handler_query_param(
 }
 
 async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCode, String) {
-    let data_len = data.len();
-    debug!("Processing write data: {} bytes", data_len);
+    debug!("Processing write data: {} bytes", data.len());
 
-    // STEP 1: WAL write - sync or async based on configuration
-    if let Some(ref wal) = state.wal {
-        // Check WAL sync mode
-        let sync_on_write = state
-            .wal
-            .as_ref()
-            .map(|w| w.is_sync_on_write())
-            .unwrap_or(false);
-        if sync_on_write {
-            // Strict durability: wait for WAL write before proceeding
-            if let Err(e) = wal.log_data_write(db, data).await {
+    match shared::process_write_impl(&state.cache, &state.config, state.wal.as_ref(), db, data)
+        .await
+    {
+        Ok(point_count) => {
+            debug!("Added {} points to cache", point_count);
+            (StatusCode::NO_CONTENT, "".to_string())
+        }
+        Err(e) => {
+            if e.contains("WAL error") {
                 error!("WAL write failed: {}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("WAL error: {}\n", e),
-                );
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("{}\n", e))
+            } else if e.contains("Cache full") {
+                error!("Cache write failed: {}", e);
+                (StatusCode::SERVICE_UNAVAILABLE, format!("{}\n", e))
+            } else {
+                (StatusCode::BAD_REQUEST, e)
             }
-        } else {
-            // High throughput: WAL write in background
-            let wal = wal.clone();
-            let db_owned = db.to_string();
-            let data_owned = data.to_string();
-            tokio::spawn(async move {
-                if let Err(e) = wal.log_data_write(&db_owned, &data_owned).await {
-                    error!("WAL write failed (async): {}", e);
-                }
-            });
         }
     }
-
-    // STEP 2: Parse line protocol (fast, no need for spawn_blocking)
-    let points = parse_multiple_lines(data, &state.config.schema);
-
-    if points.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            "No valid points to write".to_string(),
-        );
-    }
-
-    let point_count = points.len();
-
-    // STEP 3: Group and add to cache
-    // Pre-size: typically few unique (schema, table) combinations per request
-    let mut grouped: HashMap<(String, String), Vec<_>> = HashMap::with_capacity(8);
-    for point in points {
-        let (schema, table) = match state.config.schema.strategy {
-            config::SchemaTableStrategy::ServiceAsSchema => {
-                (point.service.clone(), point.measurement.clone())
-            }
-            config::SchemaTableStrategy::ServiceAsTable => (
-                state.config.schema.default_name.clone(),
-                point.service.clone(),
-            ),
-        };
-        grouped
-            .entry((schema, table))
-            .or_insert_with(|| Vec::with_capacity(point_count / 4))
-            .push(point);
-    }
-
-    // Add to cache (sharded, fast)
-    for ((schema, table), points) in grouped {
-        if let Err(e) = state.cache.add_points(db, &schema, &table, points).await {
-            error!("Cache write failed: {}", e);
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("Cache full, try again later: {}\n", e),
-            );
-        }
-    }
-
-    debug!("Added {} points to cache", point_count);
-    (StatusCode::NO_CONTENT, "".to_string())
 }
 
 /// Helper function to parse line protocol and add to cache
@@ -1390,55 +1205,13 @@ pub async fn compact_handler(
 ) -> impl IntoResponse {
     info!("Compact Catalog Request: catalog={}", catalog);
 
-    // Convert config to compactor's CompactionConfig
     let config = compactor::CompactionConfig::from(&state.config.compaction);
 
-    match state.compactor.compact_catalog(&catalog, &config).await {
-        Ok(results) => {
-            if results.is_empty() {
-                (
-                    StatusCode::OK,
-                    "No compaction needed (minimum file threshold not met)".to_string(),
-                )
-            } else {
-                let summary = results
-                    .iter()
-                    .map(|r| {
-                        format!(
-                            "{}.{}.{}/{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
-                            r.catalog,
-                            r.schema,
-                            r.table,
-                            r.date_partition,
-                            r.l0_files_before,
-                            r.l0_files_after,
-                            r.files_before,
-                            r.files_after,
-                            r.bytes_before as f64 / 1024.0 / 1024.0,
-                            r.bytes_after as f64 / 1024.0 / 1024.0,
-                            r.rows_compacted
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                (
-                    StatusCode::OK,
-                    format!(
-                        "Compacted {} partition(s) in catalog '{}'\n\n{}",
-                        results.len(),
-                        catalog,
-                        summary
-                    ),
-                )
-            }
-        }
+    match shared::compact_catalog_impl(&state.compactor, &catalog, &config).await {
+        Ok(msg) => (StatusCode::OK, msg),
         Err(e) => {
             error!("Compaction error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Compaction error: {}", e),
-            )
+            (StatusCode::INTERNAL_SERVER_ERROR, e)
         }
     }
 }
@@ -1452,61 +1225,13 @@ pub async fn compact_table_handler(
         catalog, schema, table
     );
 
-    // Convert config to compactor's CompactionConfig
     let config = compactor::CompactionConfig::from(&state.config.compaction);
 
-    match state
-        .compactor
-        .compact_table_all_partitions(&catalog, &schema, &table, &config)
-        .await
-    {
-        Ok(results) => {
-            if results.is_empty() {
-                (
-                    StatusCode::OK,
-                    format!(
-                        "No compaction needed for {}.{}.{} (minimum file threshold not met)",
-                        catalog, schema, table
-                    ),
-                )
-            } else {
-                let summary = results
-                    .iter()
-                    .map(|r| {
-                        format!(
-                            "{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
-                            r.date_partition,
-                            r.l0_files_before,
-                            r.l0_files_after,
-                            r.files_before,
-                            r.files_after,
-                            r.bytes_before as f64 / 1024.0 / 1024.0,
-                            r.bytes_after as f64 / 1024.0 / 1024.0,
-                            r.rows_compacted
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                (
-                    StatusCode::OK,
-                    format!(
-                        "Compacted {} partition(s) in {}.{}.{}\n\n{}",
-                        results.len(),
-                        catalog,
-                        schema,
-                        table,
-                        summary
-                    ),
-                )
-            }
-        }
+    match shared::compact_table_impl(&state.compactor, &catalog, &schema, &table, &config).await {
+        Ok(msg) => (StatusCode::OK, msg),
         Err(e) => {
             error!("Compaction error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Compaction error: {}", e),
-            )
+            (StatusCode::INTERNAL_SERVER_ERROR, e)
         }
     }
 }
@@ -1520,53 +1245,25 @@ pub async fn compact_partition_handler(
         catalog, schema, table, date
     );
 
-    // Format as date partition (date=YYYY-MM-DD)
-    let date_partition = if date.starts_with("date=") {
-        date.clone()
-    } else {
-        format!("date={}", date)
-    };
-
-    // Convert config to compactor's CompactionConfig
     let config = compactor::CompactionConfig::from(&state.config.compaction);
 
-    match state
-        .compactor
-        .compact_table_partition(&catalog, &schema, &table, &date_partition, &config)
-        .await
+    match shared::compact_partition_impl(
+        &state.compactor,
+        &catalog,
+        &schema,
+        &table,
+        &date,
+        &config,
+    )
+    .await
     {
-        Ok(Some(result)) => {
-            let message = format!(
-                "Compacted {}.{}.{}/{}: L0 files {} -> {}, Total {} -> {} files ({:.2} MB -> {:.2} MB, {} rows)",
-                result.catalog,
-                result.schema,
-                result.table,
-                result.date_partition,
-                result.l0_files_before,
-                result.l0_files_after,
-                result.files_before,
-                result.files_after,
-                result.bytes_before as f64 / 1024.0 / 1024.0,
-                result.bytes_after as f64 / 1024.0 / 1024.0,
-                result.rows_compacted
-            );
-            info!("{}", message);
-            (StatusCode::OK, message)
-        }
-        Ok(None) => {
-            let message = format!(
-                "No compaction needed for {}.{}.{}/{} (minimum file threshold not met)",
-                catalog, schema, table, date_partition
-            );
-            info!("{}", message);
-            (StatusCode::OK, message)
+        Ok(msg) => {
+            info!("{}", msg);
+            (StatusCode::OK, msg)
         }
         Err(e) => {
             error!("Compaction error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Compaction error: {}", e),
-            )
+            (StatusCode::INTERNAL_SERVER_ERROR, e)
         }
     }
 }
@@ -1582,27 +1279,9 @@ pub async fn list_partitions_handler(
         catalog, schema, table
     );
 
-    match state
-        .db_manager
-        .discover_table_partitions(&catalog, &schema, &table)
-    {
-        Ok(partitions) => {
-            let response = serde_json::json!({
-                "catalog": catalog,
-                "schema": schema,
-                "table": table,
-                "partitions": partitions.iter().map(|p| {
-                    serde_json::json!({
-                        "partition": p.partition,
-                        "date": p.date,
-                        "file_count": p.file_count,
-                        "size_mb": p.total_size_bytes as f64 / 1024.0 / 1024.0
-                    })
-                }).collect::<Vec<_>>(),
-                "count": partitions.len(),
-                "total_size_mb": partitions.iter().map(|p| p.total_size_bytes).sum::<u64>() as f64 / 1024.0 / 1024.0
-            });
-            info!("Found {} partition(s)", partitions.len());
+    match shared::list_partitions_impl(&state.db_manager, &catalog, &schema, &table) {
+        Ok(response) => {
+            info!("Found {} partition(s)", response["count"]);
             (
                 StatusCode::OK,
                 serde_json::to_string_pretty(&response).unwrap(),
@@ -1610,7 +1289,7 @@ pub async fn list_partitions_handler(
         }
         Err(e) => {
             error!("List partitions error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
+            (StatusCode::INTERNAL_SERVER_ERROR, e)
         }
     }
 }
@@ -1624,17 +1303,14 @@ pub async fn delete_partition_handler(
         catalog, schema, table, date
     );
 
-    match state
-        .db_manager
-        .delete_partition(&catalog, &schema, &table, &date)
-    {
+    match shared::delete_partition_impl(&state.db_manager, &catalog, &schema, &table, &date) {
         Ok(msg) => {
             info!("{}", msg);
             (StatusCode::OK, msg)
         }
         Err(e) => {
             error!("Delete partition error: {}", e);
-            (StatusCode::NOT_FOUND, format!("Error: {}", e))
+            (StatusCode::NOT_FOUND, e)
         }
     }
 }
@@ -1649,40 +1325,22 @@ pub async fn delete_old_partitions_handler(
         catalog, schema, table
     );
 
-    let deleted = if let Some(days) = req.older_than_days {
-        info!("Deleting partitions older than {} days", days);
-        state
-            .db_manager
-            .delete_partitions_older_than_days(&catalog, &schema, &table, days)
-    } else if let Some(before_date) = req.before_date {
-        info!("Deleting partitions before {}", before_date);
-        state
-            .db_manager
-            .delete_partitions_before(&catalog, &schema, &table, &before_date)
-    } else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "Must specify either 'older_than_days' or 'before_date'".to_string(),
-        );
-    };
-
-    match deleted {
-        Ok(messages) => {
-            if messages.is_empty() {
-                (StatusCode::OK, "No partitions to delete".to_string())
-            } else {
-                let summary = format!(
-                    "Deleted {} partition(s):\n{}",
-                    messages.len(),
-                    messages.join("\n")
-                );
-                info!("{}", summary);
-                (StatusCode::OK, summary)
-            }
-        }
+    match shared::delete_old_partitions_impl(
+        &state.db_manager,
+        &catalog,
+        &schema,
+        &table,
+        req.older_than_days,
+        req.before_date.as_deref(),
+    ) {
+        Ok(msg) => (StatusCode::OK, msg),
         Err(e) => {
-            error!("Delete partitions error: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e))
+            if e.contains("Must specify") {
+                (StatusCode::BAD_REQUEST, e)
+            } else {
+                error!("Delete partitions error: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, e)
+            }
         }
     }
 }

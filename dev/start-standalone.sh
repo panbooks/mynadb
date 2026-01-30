@@ -15,7 +15,7 @@ echo ""
 
 # Build debug binary
 echo "Building MynaDB (debug mode)..."
-cargo build --debug
+cargo build
 
 if [ ! -f "./target/debug/mynadb" ]; then
     echo "ERROR: Build failed - binary not found"
