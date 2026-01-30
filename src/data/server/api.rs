@@ -1,12 +1,13 @@
 //! Data Node HTTP API handlers
 //!
-//! Provides basic HTTP endpoints for monitoring and administration.
+//! Provides HTTP endpoints for monitoring, administration, and data operations.
+//! Uses shared handlers from services/shared.rs to avoid code duplication.
 
 use axum::{
-    extract::State,
+    extract::{Path, Query as AxumQuery, Request, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use parking_lot::RwLock;
@@ -14,10 +15,20 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+use tracing::{debug, info};
 
+use crate::config;
+use crate::jobs::compactor::Compactor;
+use crate::jobs::database_manager::DatabaseManager;
 use crate::meta::client::MetaClient;
-use crate::meta::types::NodeState;
+use crate::query::query_engine::QueryEngine;
+use crate::services::shared;
 use crate::storage::cache::DataCache;
+use crate::storage::wal::Wal;
+
+// ============================================================================
+// State and Types
+// ============================================================================
 
 /// Data node HTTP state
 #[derive(Clone)]
@@ -25,12 +36,14 @@ pub struct DataNodeState {
     pub node_id: String,
     pub start_time: Instant,
     pub cache: Arc<DataCache>,
-    /// Meta client for scale-in operations (optional)
     pub meta_client: Option<Arc<MetaClient>>,
-    /// Whether this node is currently retiring
     pub is_retiring: Arc<AtomicBool>,
-    /// Retirement status details
     pub retire_status: Arc<RwLock<Option<RetireStatusDetail>>>,
+    pub query_engine: Option<Arc<QueryEngine>>,
+    pub config: Option<Arc<config::Config>>,
+    pub wal: Option<Arc<Wal>>,
+    pub compactor: Option<Arc<Compactor>>,
+    pub db_manager: Option<Arc<DatabaseManager>>,
 }
 
 /// Detailed retirement status
@@ -42,106 +55,64 @@ pub struct RetireStatusDetail {
     pub memtable_rows_remaining: u64,
 }
 
-/// Health response
+// Response types
 #[derive(Serialize)]
-pub struct HealthResponse {
-    pub status: &'static str,
-    pub node_id: String,
-    pub node_type: &'static str,
+struct HealthResponse {
+    status: &'static str,
+    node_id: String,
+    node_type: &'static str,
 }
 
-/// Stats response
 #[derive(Serialize)]
-pub struct StatsResponse {
-    pub node_id: String,
-    pub node_type: &'static str,
-    pub uptime_secs: u64,
-    pub cache_size_bytes: usize,
-    pub cache_entries: usize,
-    pub total_rows: usize,
+struct StatsResponse {
+    node_id: String,
+    node_type: &'static str,
+    uptime_secs: u64,
+    cache_size_bytes: usize,
+    cache_entries: usize,
+    total_rows: usize,
 }
 
-/// Version response
 #[derive(Serialize)]
-pub struct VersionResponse {
-    pub version: &'static str,
-    pub git_hash: &'static str,
+struct VersionResponse {
+    version: &'static str,
+    git_hash: &'static str,
 }
 
-/// Build the Data node HTTP API router
-pub fn build_router(state: DataNodeState) -> Router {
-    Router::new()
-        .route("/", get(home))
-        .route("/health", get(health))
-        .route("/version", get(version))
-        .route("/stats", get(stats))
-        .route("/retire", post(retire))
-        .route("/retire/status", get(retire_status))
-        .route("/retire/cancel", post(cancel_retire))
-        .with_state(state)
+// Request types
+#[derive(Deserialize)]
+pub struct QueryParams {
+    pub sql: String,
 }
 
-/// Home page
-async fn home() -> &'static str {
-    "MynaDB Data Node\n\n\
-     Endpoints:\n\
-       GET  /health         - Health check\n\
-       GET  /version        - Version info\n\
-       GET  /stats          - Node statistics\n\
-       POST /retire         - Start graceful retirement (scale-in)\n\
-       GET  /retire/status  - Get retirement progress\n\
-       POST /retire/cancel  - Cancel retirement\n\n\
-     Primary protocol: Arrow Flight\n"
+#[derive(Deserialize)]
+pub struct WriteQueryParams {
+    pub db: String,
 }
 
-/// Health check
-async fn health(State(state): State<DataNodeState>) -> impl IntoResponse {
-    let response = HealthResponse {
-        status: "healthy",
-        node_id: state.node_id.clone(),
-        node_type: "data",
-    };
-    (StatusCode::OK, Json(response))
+#[derive(Deserialize)]
+pub struct RetentionRequest {
+    #[serde(default)]
+    pub before_date: Option<String>,
+    #[serde(default)]
+    pub older_than_days: Option<u32>,
 }
 
-/// Version info
-async fn version() -> impl IntoResponse {
-    let response = VersionResponse {
-        version: env!("GIT_VERSION"),
-        git_hash: env!("GIT_HASH"),
-    };
-    (StatusCode::OK, Json(response))
+#[derive(Debug, Deserialize)]
+pub struct ExplainParams {
+    pub sql: String,
+    #[serde(default)]
+    pub verbose: bool,
+    #[serde(default)]
+    pub analyze: bool,
 }
 
-/// Statistics
-async fn stats(State(state): State<DataNodeState>) -> impl IntoResponse {
-    let cache_stats = state.cache.stats().await;
-    let uptime = state.start_time.elapsed().as_secs();
-
-    let response = StatsResponse {
-        node_id: state.node_id.clone(),
-        node_type: "data",
-        uptime_secs: uptime,
-        cache_size_bytes: cache_stats.size_bytes,
-        cache_entries: cache_stats.num_measurements,
-        total_rows: cache_stats.total_rows,
-    };
-    (StatusCode::OK, Json(response))
-}
-
-// ========================================================================
-// Scale-In (Retirement) Endpoints
-// ========================================================================
-
-/// Retire request (optional parameters)
 #[derive(Deserialize, Default)]
 pub struct RetireRequest {
-    /// Force retirement even if memtable has data (will trigger flush)
     #[serde(default)]
     pub force_flush: bool,
 }
 
-/// Retire response
 #[derive(Serialize)]
 pub struct RetireResponse {
     pub success: bool,
@@ -151,7 +122,6 @@ pub struct RetireResponse {
     pub error: Option<String>,
 }
 
-/// Retire status response
 #[derive(Serialize)]
 pub struct RetireStatusResponse {
     pub state: String,
@@ -165,19 +135,182 @@ pub struct RetireStatusResponse {
     pub estimated_completion_secs: Option<u64>,
 }
 
-/// Start graceful retirement (scale-in)
-///
-/// This endpoint:
-/// 1. Tells Meta service to mark this node as Retiring
-/// 2. Router stops sending new writes to this node
-/// 3. Waits for memtable to flush to S3
-/// 4. Partitions get reassigned to other nodes
-/// 5. Once drained, node can be safely stopped
+// ============================================================================
+// Router
+// ============================================================================
+
+/// Build the Data node HTTP API router
+pub fn build_router(state: DataNodeState) -> Router {
+    Router::new()
+        // Basic endpoints
+        .route("/", get(home))
+        .route("/health", get(health))
+        .route("/version", get(version))
+        .route("/stats", get(stats))
+        .route("/metrics", get(metrics_handler))
+        // Retirement endpoints
+        .route("/retire", post(retire))
+        .route("/retire/status", get(retire_status))
+        .route("/retire/cancel", post(cancel_retire))
+        // Query endpoints
+        .route("/query/{db}", get(query_handler))
+        .route("/query/{db}", post(query_handler_post))
+        .route("/explain/{db}", get(explain_handler))
+        .route("/explain/{db}", post(explain_handler_post))
+        .route("/analyze/{db}", get(analyze_handler))
+        .route("/analyze/{db}", post(analyze_handler_post))
+        // Write endpoints
+        .route("/write/{db}", post(write_handler))
+        .route("/write", post(write_handler_query_param))
+        // Schema/Table endpoints
+        .route("/tables/{db}", get(list_tables_handler))
+        .route("/databases/{db}/schemas", get(list_schemas_handler))
+        .route(
+            "/databases/{db}/schemas/{schema}/tables",
+            get(list_schema_tables_handler),
+        )
+        .route("/schema/{db}/{table}", get(schema_handler))
+        // Cache management
+        .route("/flush", post(flush_handler))
+        .route("/memory", get(memory_handler))
+        .route("/cache/stats", get(query_cache_stats_handler))
+        .route("/cache/clear", post(clear_cache_handler))
+        .route("/cache/prewarm/{catalog}", post(prewarm_cache_handler))
+        .route(
+            "/cache/prewarm/{catalog}/{schema}/{table}",
+            post(prewarm_table_cache_handler),
+        )
+        // Compaction endpoints
+        .route("/compact/{catalog}", post(compact_handler))
+        .route(
+            "/compact/{catalog}/{schema}/{table}",
+            post(compact_table_handler),
+        )
+        .route(
+            "/compact/{catalog}/{schema}/{table}/{date}",
+            post(compact_partition_handler),
+        )
+        // Partition management
+        .route(
+            "/partitions/{catalog}/{schema}/{table}",
+            get(list_partitions_handler),
+        )
+        .route(
+            "/partitions/{catalog}/{schema}/{table}/{date}",
+            delete(delete_partition_handler),
+        )
+        .route(
+            "/retention/{catalog}/{schema}/{table}",
+            post(delete_old_partitions_handler),
+        )
+        .with_state(state)
+}
+
+// ============================================================================
+// Basic Handlers
+// ============================================================================
+
+async fn home() -> &'static str {
+    "MynaDB Data Node\n\n\
+     Basic Endpoints:\n\
+       GET  /health              - Health check\n\
+       GET  /version             - Version info\n\
+       GET  /stats               - Node statistics\n\
+       GET  /metrics             - Prometheus metrics\n\n\
+     Scale-In Endpoints:\n\
+       POST /retire              - Start graceful retirement\n\
+       GET  /retire/status       - Get retirement progress\n\
+       POST /retire/cancel       - Cancel retirement\n\n\
+     Query Endpoints:\n\
+       GET  /query/:db?sql=      - Execute SQL query (GET)\n\
+       POST /query/:db           - Execute SQL query (POST body)\n\
+       GET  /explain/:db?sql=    - Get query execution plan\n\
+       POST /explain/:db         - Get query execution plan (POST)\n\
+       GET  /analyze/:db?sql=    - Analyze query with statistics\n\
+       POST /analyze/:db         - Analyze query (POST)\n\n\
+     Write Endpoints:\n\
+       POST /write/:db           - Write data (line protocol)\n\
+       POST /write?db=:db        - Write data (InfluxDB-compatible)\n\n\
+     Schema/Table Endpoints:\n\
+       GET  /tables/:db          - List tables in database\n\
+       GET  /databases/:db/schemas - List schemas\n\
+       GET  /databases/:db/schemas/:schema/tables - List tables in schema\n\
+       GET  /schema/:db/:table   - Get table schema\n\n\
+     Cache Management:\n\
+       GET  /memory              - Memory usage stats\n\
+       POST /flush               - Flush cache to disk\n\
+       GET  /cache/stats         - Cache statistics\n\
+       POST /cache/clear         - Clear all caches\n\
+       POST /cache/prewarm/:catalog - Pre-warm cache\n\
+       POST /cache/prewarm/:catalog/:schema/:table - Pre-warm table cache\n\n\
+     Compaction:\n\
+       POST /compact/:catalog    - Compact all tables in catalog\n\
+       POST /compact/:catalog/:schema/:table - Compact table\n\
+       POST /compact/:catalog/:schema/:table/:date - Compact partition\n\n\
+     Partition Management:\n\
+       GET    /partitions/:catalog/:schema/:table - List partitions\n\
+       DELETE /partitions/:catalog/:schema/:table/:date - Delete partition\n\
+       POST   /retention/:catalog/:schema/:table - Delete old partitions\n\n\
+     Primary protocol: Arrow Flight\n"
+}
+
+async fn health(State(state): State<DataNodeState>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(HealthResponse {
+            status: "healthy",
+            node_id: state.node_id.clone(),
+            node_type: "data",
+        }),
+    )
+}
+
+async fn version() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(VersionResponse {
+            version: env!("GIT_VERSION"),
+            git_hash: env!("GIT_HASH"),
+        }),
+    )
+}
+
+async fn stats(State(state): State<DataNodeState>) -> impl IntoResponse {
+    let cache_stats = state.cache.stats().await;
+    (
+        StatusCode::OK,
+        Json(StatsResponse {
+            node_id: state.node_id.clone(),
+            node_type: "data",
+            uptime_secs: state.start_time.elapsed().as_secs(),
+            cache_size_bytes: cache_stats.size_bytes,
+            cache_entries: cache_stats.num_measurements,
+            total_rows: cache_stats.total_rows,
+        }),
+    )
+}
+
+async fn metrics_handler(State(state): State<DataNodeState>) -> impl IntoResponse {
+    let cache_stats = state.cache.stats().await;
+    let output = shared::generate_metrics(&cache_stats, "data");
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        output,
+    )
+}
+
+// ============================================================================
+// Retirement Handlers
+// ============================================================================
+
 async fn retire(
     State(state): State<DataNodeState>,
     Json(request): Json<RetireRequest>,
 ) -> impl IntoResponse {
-    // Check if already retiring
     if state.is_retiring.load(Ordering::Relaxed) {
         return (
             StatusCode::OK,
@@ -190,7 +323,6 @@ async fn retire(
         );
     }
 
-    // Need meta client for retirement
     let meta_client = match &state.meta_client {
         Some(mc) => mc,
         None => {
@@ -208,13 +340,9 @@ async fn retire(
         }
     };
 
-    // Start retirement with Meta service
     match meta_client.start_retire(&state.node_id).await {
         Ok(partitions_to_reassign) => {
-            // Mark local state as retiring
             state.is_retiring.store(true, Ordering::SeqCst);
-
-            // Store retirement details
             *state.retire_status.write() = Some(RetireStatusDetail {
                 state: "retiring".to_string(),
                 started_at: chrono::Utc::now().timestamp_millis(),
@@ -222,17 +350,15 @@ async fn retire(
                 memtable_rows_remaining: state.cache.stats().await.total_rows as u64,
             });
 
-            // If force_flush requested, trigger a flush
             if request.force_flush {
                 if let Err(e) = state.cache.flush().await {
                     tracing::warn!("Error during force flush: {}", e);
                 }
             }
 
-            tracing::info!(
+            info!(
                 "Node {} started retirement: {} partitions to reassign",
-                state.node_id,
-                partitions_to_reassign
+                state.node_id, partitions_to_reassign
             );
 
             (
@@ -257,23 +383,19 @@ async fn retire(
     }
 }
 
-/// Get retirement status
 async fn retire_status(State(state): State<DataNodeState>) -> impl IntoResponse {
     let is_retiring = state.is_retiring.load(Ordering::Relaxed);
     let cache_stats = state.cache.stats().await;
 
     if let Some(status) = state.retire_status.read().as_ref() {
-        // Currently retiring or drained
         let current_state = if cache_stats.total_rows == 0 {
-            "drained" // Memtable is empty, safe to stop
+            "drained"
         } else {
             &status.state
         };
 
-        // Estimate completion time based on flush rate
         let estimated_secs = if cache_stats.total_rows > 0 {
-            // Rough estimate: assume 10k rows/sec flush rate
-            Some((cache_stats.total_rows as u64 / 10000).max(1) * 60) // 60 sec per 10k rows
+            Some((cache_stats.total_rows as u64 / 10000).max(1) * 60)
         } else {
             Some(0)
         };
@@ -290,7 +412,6 @@ async fn retire_status(State(state): State<DataNodeState>) -> impl IntoResponse 
             }),
         )
     } else {
-        // Not retiring
         (
             StatusCode::OK,
             Json(RetireStatusResponse {
@@ -305,7 +426,6 @@ async fn retire_status(State(state): State<DataNodeState>) -> impl IntoResponse 
     }
 }
 
-/// Cancel retirement (restore to Active)
 async fn cancel_retire(State(state): State<DataNodeState>) -> impl IntoResponse {
     if !state.is_retiring.load(Ordering::Relaxed) {
         return (
@@ -338,9 +458,7 @@ async fn cancel_retire(State(state): State<DataNodeState>) -> impl IntoResponse 
         Ok(()) => {
             state.is_retiring.store(false, Ordering::SeqCst);
             *state.retire_status.write() = None;
-
-            tracing::info!("Node {} retirement cancelled", state.node_id);
-
+            info!("Node {} retirement cancelled", state.node_id);
             (
                 StatusCode::OK,
                 Json(RetireResponse {
@@ -362,6 +480,540 @@ async fn cancel_retire(State(state): State<DataNodeState>) -> impl IntoResponse 
         ),
     }
 }
+
+// ============================================================================
+// Query Handlers (using shared)
+// ============================================================================
+
+async fn query_handler(
+    Path(db): Path<String>,
+    AxumQuery(params): AxumQuery<QueryParams>,
+    State(state): State<DataNodeState>,
+) -> impl IntoResponse {
+    debug!("Query Request (GET): db={}, sql={}", db, params.sql);
+    let qe = match &state.query_engine {
+        Some(qe) => qe,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Query engine not available".to_string(),
+            )
+        }
+    };
+    match shared::execute_query_impl(qe, &db, &params.sql).await {
+        Ok(json) => (StatusCode::OK, json),
+        Err(e) => (StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn query_handler_post(
+    Path(db): Path<String>,
+    State(state): State<DataNodeState>,
+    body: String,
+) -> impl IntoResponse {
+    debug!("Query Request (POST): db={}, sql={}", db, body);
+    let qe = match &state.query_engine {
+        Some(qe) => qe,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Query engine not available".to_string(),
+            )
+        }
+    };
+    match shared::execute_query_impl(qe, &db, &body).await {
+        Ok(json) => (StatusCode::OK, json),
+        Err(e) => (StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn explain_handler(
+    Path(db): Path<String>,
+    AxumQuery(params): AxumQuery<ExplainParams>,
+    State(state): State<DataNodeState>,
+) -> impl IntoResponse {
+    let qe = match &state.query_engine {
+        Some(qe) => qe,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Query engine not available".to_string(),
+            )
+        }
+    };
+    match shared::explain_query_impl(qe, &db, &params.sql, params.verbose, params.analyze).await {
+        Ok(json) => (StatusCode::OK, json),
+        Err(e) => (StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn explain_handler_post(
+    Path(db): Path<String>,
+    State(state): State<DataNodeState>,
+    Json(params): Json<ExplainParams>,
+) -> impl IntoResponse {
+    let qe = match &state.query_engine {
+        Some(qe) => qe,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Query engine not available".to_string(),
+            )
+        }
+    };
+    match shared::explain_query_impl(qe, &db, &params.sql, params.verbose, params.analyze).await {
+        Ok(json) => (StatusCode::OK, json),
+        Err(e) => (StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn analyze_handler(
+    Path(db): Path<String>,
+    AxumQuery(params): AxumQuery<QueryParams>,
+    State(state): State<DataNodeState>,
+) -> impl IntoResponse {
+    let qe = match &state.query_engine {
+        Some(qe) => qe,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Query engine not available".to_string(),
+            )
+        }
+    };
+    match shared::analyze_query_impl(qe, &db, &params.sql).await {
+        Ok(json) => (StatusCode::OK, json),
+        Err(e) => (StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn analyze_handler_post(
+    Path(db): Path<String>,
+    State(state): State<DataNodeState>,
+    body: String,
+) -> impl IntoResponse {
+    let qe = match &state.query_engine {
+        Some(qe) => qe,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Query engine not available".to_string(),
+            )
+        }
+    };
+    match shared::analyze_query_impl(qe, &db, &body).await {
+        Ok(json) => (StatusCode::OK, json),
+        Err(e) => (StatusCode::BAD_REQUEST, e),
+    }
+}
+
+// ============================================================================
+// Write Handlers (using shared)
+// ============================================================================
+
+async fn write_handler(
+    Path(db): Path<String>,
+    State(state): State<DataNodeState>,
+    req: Request,
+) -> impl IntoResponse {
+    debug!("Write Request: db={}", db);
+    let config = match &state.config {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Config not available".to_string(),
+            )
+        }
+    };
+
+    let body = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Error reading body: {}", e),
+            )
+        }
+    };
+
+    let data = match String::from_utf8(body.to_vec()) {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e)),
+    };
+
+    match shared::process_write_impl(&state.cache, config, state.wal.as_ref(), &db, &data).await {
+        Ok(_) => (StatusCode::NO_CONTENT, "".to_string()),
+        Err(e) => (StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn write_handler_query_param(
+    AxumQuery(params): AxumQuery<WriteQueryParams>,
+    State(state): State<DataNodeState>,
+    req: Request,
+) -> impl IntoResponse {
+    debug!("Write Request (InfluxDB-compatible): db={}", params.db);
+    let config = match &state.config {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Config not available".to_string(),
+            )
+        }
+    };
+
+    let body = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Error reading body: {}", e),
+            )
+        }
+    };
+
+    let data = match String::from_utf8(body.to_vec()) {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e)),
+    };
+
+    match shared::process_write_impl(&state.cache, config, state.wal.as_ref(), &params.db, &data)
+        .await
+    {
+        Ok(_) => (StatusCode::NO_CONTENT, "".to_string()),
+        Err(e) => (StatusCode::BAD_REQUEST, e),
+    }
+}
+
+// ============================================================================
+// Schema/Table Handlers (using shared)
+// ============================================================================
+
+async fn list_tables_handler(
+    Path(db): Path<String>,
+    State(state): State<DataNodeState>,
+) -> impl IntoResponse {
+    let qe = match &state.query_engine {
+        Some(qe) => qe,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Query engine not available".to_string(),
+            )
+        }
+    };
+    match shared::list_tables_impl(qe, &db).await {
+        Ok(json) => (StatusCode::OK, serde_json::to_string_pretty(&json).unwrap()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn list_schemas_handler(
+    Path(db): Path<String>,
+    State(state): State<DataNodeState>,
+) -> impl IntoResponse {
+    let qe = match &state.query_engine {
+        Some(qe) => qe,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Query engine not available".to_string(),
+            )
+        }
+    };
+    match shared::list_schemas_impl(qe, &db).await {
+        Ok(json) => (StatusCode::OK, serde_json::to_string_pretty(&json).unwrap()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn list_schema_tables_handler(
+    Path((db, schema)): Path<(String, String)>,
+    State(state): State<DataNodeState>,
+) -> impl IntoResponse {
+    let qe = match &state.query_engine {
+        Some(qe) => qe,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Query engine not available".to_string(),
+            )
+        }
+    };
+    match shared::list_schema_tables_impl(qe, &db, &schema).await {
+        Ok(json) => (StatusCode::OK, serde_json::to_string_pretty(&json).unwrap()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn schema_handler(
+    Path((db, table)): Path<(String, String)>,
+    State(state): State<DataNodeState>,
+) -> impl IntoResponse {
+    let qe = match &state.query_engine {
+        Some(qe) => qe,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Query engine not available".to_string(),
+            )
+        }
+    };
+    match shared::get_table_schema_impl(qe, &db, &table).await {
+        Ok(schema) => (StatusCode::OK, schema),
+        Err(e) => (StatusCode::NOT_FOUND, e),
+    }
+}
+
+// ============================================================================
+// Cache Handlers (using shared)
+// ============================================================================
+
+async fn memory_handler(State(state): State<DataNodeState>) -> impl IntoResponse {
+    let cache_stats = state.cache.stats().await;
+    (StatusCode::OK, shared::get_memory_stats(&cache_stats))
+}
+
+async fn flush_handler(State(state): State<DataNodeState>) -> impl IntoResponse {
+    info!("Manual Flush Request");
+    match shared::flush_cache_impl(&state.cache, state.query_engine.as_ref()).await {
+        Ok(count) => (StatusCode::OK, format!("Flushed {} file(s) to disk", count)),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn query_cache_stats_handler(State(state): State<DataNodeState>) -> impl IntoResponse {
+    let qe = match &state.query_engine {
+        Some(qe) => qe,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Query engine not available"})),
+            )
+        }
+    };
+    (StatusCode::OK, Json(shared::get_query_cache_stats_impl(qe)))
+}
+
+async fn clear_cache_handler(State(state): State<DataNodeState>) -> impl IntoResponse {
+    info!("Clearing all caches");
+    if let Some(ref qe) = state.query_engine {
+        qe.clear_all_caches();
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "success", "message": "All caches cleared"})),
+    )
+}
+
+async fn prewarm_cache_handler(
+    Path(catalog): Path<String>,
+    State(state): State<DataNodeState>,
+) -> impl IntoResponse {
+    let qe = match &state.query_engine {
+        Some(qe) => qe,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Query engine not available"})),
+            )
+        }
+    };
+    match shared::prewarm_cache_impl(qe, &catalog).await {
+        Ok(count) => (
+            StatusCode::OK,
+            Json(
+                serde_json::json!({"status": "success", "catalog": catalog, "files_cached": count}),
+            ),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"status": "error", "message": e})),
+        ),
+    }
+}
+
+async fn prewarm_table_cache_handler(
+    Path((catalog, schema, table)): Path<(String, String, String)>,
+    State(state): State<DataNodeState>,
+) -> impl IntoResponse {
+    let qe = match &state.query_engine {
+        Some(qe) => qe,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Query engine not available"})),
+            )
+        }
+    };
+    match shared::prewarm_table_cache_impl(qe, &catalog, &schema, &table).await {
+        Ok(count) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "success", "catalog": catalog, "schema": schema, "table": table, "files_cached": count
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"status": "error", "message": e})),
+        ),
+    }
+}
+
+// ============================================================================
+// Compaction Handlers (using shared)
+// ============================================================================
+
+async fn compact_handler(
+    Path(catalog): Path<String>,
+    State(state): State<DataNodeState>,
+) -> impl IntoResponse {
+    let compactor = match &state.compactor {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Compactor not available".to_string(),
+            )
+        }
+    };
+    let config = match &state.config {
+        Some(c) => crate::jobs::compactor::CompactionConfig::from(&c.compaction),
+        None => crate::jobs::compactor::CompactionConfig::default(),
+    };
+    match shared::compact_catalog_impl(compactor, &catalog, &config).await {
+        Ok(msg) => (StatusCode::OK, msg),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn compact_table_handler(
+    Path((catalog, schema, table)): Path<(String, String, String)>,
+    State(state): State<DataNodeState>,
+) -> impl IntoResponse {
+    let compactor = match &state.compactor {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Compactor not available".to_string(),
+            )
+        }
+    };
+    let config = match &state.config {
+        Some(c) => crate::jobs::compactor::CompactionConfig::from(&c.compaction),
+        None => crate::jobs::compactor::CompactionConfig::default(),
+    };
+    match shared::compact_table_impl(compactor, &catalog, &schema, &table, &config).await {
+        Ok(msg) => (StatusCode::OK, msg),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn compact_partition_handler(
+    Path((catalog, schema, table, date)): Path<(String, String, String, String)>,
+    State(state): State<DataNodeState>,
+) -> impl IntoResponse {
+    let compactor = match &state.compactor {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Compactor not available".to_string(),
+            )
+        }
+    };
+    let config = match &state.config {
+        Some(c) => crate::jobs::compactor::CompactionConfig::from(&c.compaction),
+        None => crate::jobs::compactor::CompactionConfig::default(),
+    };
+    match shared::compact_partition_impl(compactor, &catalog, &schema, &table, &date, &config).await
+    {
+        Ok(msg) => (StatusCode::OK, msg),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+// ============================================================================
+// Partition Handlers (using shared)
+// ============================================================================
+
+async fn list_partitions_handler(
+    Path((catalog, schema, table)): Path<(String, String, String)>,
+    State(state): State<DataNodeState>,
+) -> impl IntoResponse {
+    let dm = match &state.db_manager {
+        Some(dm) => dm,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Database manager not available".to_string(),
+            )
+        }
+    };
+    match shared::list_partitions_impl(dm, &catalog, &schema, &table) {
+        Ok(json) => (StatusCode::OK, serde_json::to_string_pretty(&json).unwrap()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn delete_partition_handler(
+    Path((catalog, schema, table, date)): Path<(String, String, String, String)>,
+    State(state): State<DataNodeState>,
+) -> impl IntoResponse {
+    let dm = match &state.db_manager {
+        Some(dm) => dm,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Database manager not available".to_string(),
+            )
+        }
+    };
+    match shared::delete_partition_impl(dm, &catalog, &schema, &table, &date) {
+        Ok(msg) => (StatusCode::OK, msg),
+        Err(e) => (StatusCode::NOT_FOUND, e),
+    }
+}
+
+async fn delete_old_partitions_handler(
+    Path((catalog, schema, table)): Path<(String, String, String)>,
+    State(state): State<DataNodeState>,
+    Json(req): Json<RetentionRequest>,
+) -> impl IntoResponse {
+    let dm = match &state.db_manager {
+        Some(dm) => dm,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Database manager not available".to_string(),
+            )
+        }
+    };
+    match shared::delete_old_partitions_impl(
+        dm,
+        &catalog,
+        &schema,
+        &table,
+        req.older_than_days,
+        req.before_date.as_deref(),
+    ) {
+        Ok(msg) => (StatusCode::OK, msg),
+        Err(e) => {
+            if e.contains("Must specify") {
+                (StatusCode::BAD_REQUEST, e)
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e)
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Server
+// ============================================================================
 
 /// Start HTTP server for data node
 pub async fn start_http_server(

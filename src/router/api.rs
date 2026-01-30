@@ -19,7 +19,7 @@ use std::collections::HashMap;
 // Request/Response Types
 // ============================================================================
 
-/// Query parameters for SQL queries
+/// Query parameters for SQL queries (GET request)
 #[derive(Debug, Deserialize)]
 pub struct QueryParams {
     /// SQL query string
@@ -28,6 +28,13 @@ pub struct QueryParams {
     /// Query format (json, csv, etc.)
     #[serde(default)]
     pub format: Option<String>,
+}
+
+/// Query request body for POST requests
+#[derive(Debug, Deserialize)]
+pub struct QueryRequestBody {
+    /// SQL query string
+    pub sql: String,
 }
 
 /// Query response
@@ -205,12 +212,21 @@ pub async fn query_handler(
 }
 
 /// Query handler - distributed query across Data nodes (POST)
+/// Accepts JSON body: {"sql": "SELECT ..."}
+/// Or plain text body with just the SQL query
 pub async fn query_handler_post(
     Path(db): Path<String>,
     State(state): State<RouterAppState>,
     body: String,
 ) -> impl IntoResponse {
-    execute_query(&state, &db, &body).await
+    // Try to parse as JSON first, then fall back to treating body as raw SQL
+    let sql = if let Ok(request) = serde_json::from_str::<QueryRequestBody>(&body) {
+        request.sql
+    } else {
+        // Treat body as raw SQL
+        body
+    };
+    execute_query(&state, &db, &sql).await
 }
 
 /// Execute a distributed query
