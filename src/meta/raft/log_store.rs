@@ -437,7 +437,49 @@ impl RaftLogReader<TypeConfig> for SledLogStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::meta::types::MetaCommand;
+    use openraft::EntryPayload;
     use tempfile::tempdir;
+
+    /// Create a test entry with the given index and term
+    fn create_test_entry(index: u64, term: u64) -> Entry {
+        Entry {
+            log_id: LogId::new(openraft::LeaderId::new(term, 1), index),
+            payload: EntryPayload::Blank,
+        }
+    }
+
+    /// Create a test entry with a Normal payload
+    fn create_normal_entry(index: u64, term: u64, cmd: MetaCommand) -> Entry {
+        Entry {
+            log_id: LogId::new(openraft::LeaderId::new(term, 1), index),
+            payload: EntryPayload::Normal(cmd),
+        }
+    }
+
+    impl SledLogStore {
+        /// Test helper: append entries directly to storage without callback
+        #[cfg(test)]
+        async fn test_append(&mut self, entries: Vec<Entry>) -> Result<(), StorageError<NodeId>> {
+            let mut count = 0;
+            for entry in entries {
+                let key = Self::log_key(entry.log_id.index);
+                let data = bincode::serialize(&entry)
+                    .map_err(|e| Self::storage_error(e, "serialize entry"))?;
+                self.inner
+                    .db
+                    .insert(key.as_bytes(), data)
+                    .map_err(|e| Self::storage_error(e, "insert entry"))?;
+                count += 1;
+            }
+            self.inner
+                .db
+                .flush()
+                .map_err(|e| Self::storage_error(e, "flush entries"))?;
+            debug!("Test appended {} entries", count);
+            Ok(())
+        }
+    }
 
     #[tokio::test]
     async fn test_log_store_vote() {
@@ -454,5 +496,363 @@ mod tests {
         // Read it back
         let read_vote = store.read_vote().await.unwrap();
         assert_eq!(read_vote, Some(vote));
+    }
+
+    #[tokio::test]
+    async fn test_log_store_vote_persistence() {
+        let dir = tempdir().unwrap();
+
+        // First: save a vote
+        {
+            let mut store = SledLogStore::open(dir.path()).unwrap();
+            let vote = openraft::Vote::new(5, 10);
+            store.save_vote(&vote).await.unwrap();
+        }
+
+        // Second: reopen and verify vote persisted
+        {
+            let mut store = SledLogStore::open(dir.path()).unwrap();
+            let read_vote = store.read_vote().await.unwrap();
+            assert!(read_vote.is_some());
+            let vote = read_vote.unwrap();
+            assert_eq!(vote.leader_id().term, 5);
+            assert_eq!(vote.leader_id().node_id, 10);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_log_store_append_entries() {
+        let dir = tempdir().unwrap();
+        let mut store = SledLogStore::open(dir.path()).unwrap();
+
+        // Initially empty
+        let state = store.get_log_state().await.unwrap();
+        assert!(state.last_log_id.is_none());
+
+        // Append some entries
+        let entries = vec![
+            create_test_entry(1, 1),
+            create_test_entry(2, 1),
+            create_test_entry(3, 1),
+        ];
+        store.test_append(entries).await.unwrap();
+
+        // Verify state
+        let state = store.get_log_state().await.unwrap();
+        assert!(state.last_log_id.is_some());
+        assert_eq!(state.last_log_id.unwrap().index, 3);
+    }
+
+    #[tokio::test]
+    async fn test_log_store_append_normal_entries() {
+        let dir = tempdir().unwrap();
+        let mut store = SledLogStore::open(dir.path()).unwrap();
+
+        // Append entries with actual commands
+        let entries = vec![
+            create_normal_entry(
+                1,
+                1,
+                MetaCommand::RegisterFiles { files: vec![] },
+            ),
+            create_normal_entry(
+                2,
+                1,
+                MetaCommand::DeregisterNode {
+                    node_id: "test-node".to_string(),
+                },
+            ),
+        ];
+        store.test_append(entries).await.unwrap();
+
+        // Read back
+        let reader = store.get_log_reader().await;
+        let read_entries = reader.clone().try_get_log_entries(1..3).await.unwrap();
+        assert_eq!(read_entries.len(), 2);
+        assert_eq!(read_entries[0].log_id.index, 1);
+        assert_eq!(read_entries[1].log_id.index, 2);
+    }
+
+    #[tokio::test]
+    async fn test_log_store_read_entries_range() {
+        let dir = tempdir().unwrap();
+        let mut store = SledLogStore::open(dir.path()).unwrap();
+
+        // Append entries 1-10
+        let entries: Vec<_> = (1..=10).map(|i| create_test_entry(i, 1)).collect();
+        store.test_append(entries).await.unwrap();
+
+        // Test various ranges
+        let mut reader = store.get_log_reader().await;
+
+        // Read all
+        let all = reader.try_get_log_entries(1..11).await.unwrap();
+        assert_eq!(all.len(), 10);
+
+        // Read subset (3..7)
+        let subset = reader.try_get_log_entries(3..7).await.unwrap();
+        assert_eq!(subset.len(), 4);
+        assert_eq!(subset[0].log_id.index, 3);
+        assert_eq!(subset[3].log_id.index, 6);
+
+        // Read single entry
+        let single = reader.try_get_log_entries(5..6).await.unwrap();
+        assert_eq!(single.len(), 1);
+        assert_eq!(single[0].log_id.index, 5);
+
+        // Read empty range
+        let empty = reader.try_get_log_entries(100..101).await.unwrap();
+        assert_eq!(empty.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_log_store_truncate() {
+        let dir = tempdir().unwrap();
+        let mut store = SledLogStore::open(dir.path()).unwrap();
+
+        // Append entries 1-10
+        let entries: Vec<_> = (1..=10).map(|i| create_test_entry(i, 1)).collect();
+        store.test_append(entries).await.unwrap();
+
+        // Truncate from index 6
+        let truncate_log_id = LogId::new(openraft::LeaderId::new(1, 1), 6);
+        store.truncate(truncate_log_id).await.unwrap();
+
+        // Verify only entries 1-5 remain
+        let mut reader = store.get_log_reader().await;
+        let remaining = reader.try_get_log_entries(1..11).await.unwrap();
+        assert_eq!(remaining.len(), 5);
+        assert_eq!(remaining.last().unwrap().log_id.index, 5);
+    }
+
+    #[tokio::test]
+    async fn test_log_store_purge() {
+        let dir = tempdir().unwrap();
+        let mut store = SledLogStore::open(dir.path()).unwrap();
+
+        // Append entries 1-10
+        let entries: Vec<_> = (1..=10).map(|i| create_test_entry(i, 1)).collect();
+        store.test_append(entries).await.unwrap();
+
+        // Purge up to index 5
+        let purge_log_id = LogId::new(openraft::LeaderId::new(1, 1), 5);
+        store.purge(purge_log_id).await.unwrap();
+
+        // Verify state
+        let state = store.get_log_state().await.unwrap();
+        assert!(state.last_purged_log_id.is_some());
+        assert_eq!(state.last_purged_log_id.unwrap().index, 5);
+
+        // Verify only entries 6-10 remain
+        let mut reader = store.get_log_reader().await;
+        let remaining = reader.try_get_log_entries(1..11).await.unwrap();
+        assert_eq!(remaining.len(), 5);
+        assert_eq!(remaining.first().unwrap().log_id.index, 6);
+    }
+
+    #[tokio::test]
+    async fn test_log_store_committed() {
+        let dir = tempdir().unwrap();
+        let mut store = SledLogStore::open(dir.path()).unwrap();
+
+        // Initially no committed
+        let state = store.get_log_state().await.unwrap();
+        assert!(state.last_purged_log_id.is_none());
+
+        // Save committed
+        let committed_id = LogId::new(openraft::LeaderId::new(1, 1), 5);
+        store.save_committed(Some(committed_id)).await.unwrap();
+
+        // Verify cached value (committed is cached, not stored in log_state)
+        let cached = store.inner.committed.read().clone();
+        assert_eq!(cached, Some(committed_id));
+    }
+
+    #[tokio::test]
+    async fn test_log_store_persistence_entries() {
+        let dir = tempdir().unwrap();
+
+        // First: append entries
+        {
+            let mut store = SledLogStore::open(dir.path()).unwrap();
+            let entries: Vec<_> = (1..=5).map(|i| create_test_entry(i, 1)).collect();
+            store.test_append(entries).await.unwrap();
+        }
+
+        // Second: reopen and verify entries persisted
+        {
+            let mut store = SledLogStore::open(dir.path()).unwrap();
+            let state = store.get_log_state().await.unwrap();
+            assert!(state.last_log_id.is_some());
+            assert_eq!(state.last_log_id.unwrap().index, 5);
+
+            let mut reader = store.get_log_reader().await;
+            let entries = reader.try_get_log_entries(1..6).await.unwrap();
+            assert_eq!(entries.len(), 5);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_log_store_empty_range() {
+        let dir = tempdir().unwrap();
+        let mut store = SledLogStore::open(dir.path()).unwrap();
+
+        // Empty store - reading should return empty
+        let mut reader = store.get_log_reader().await;
+        let entries = reader.try_get_log_entries(1..10).await.unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_log_store_overwrite_vote() {
+        let dir = tempdir().unwrap();
+        let mut store = SledLogStore::open(dir.path()).unwrap();
+
+        // Save first vote
+        let vote1 = openraft::Vote::new(1, 2);
+        store.save_vote(&vote1).await.unwrap();
+
+        // Overwrite with second vote
+        let vote2 = openraft::Vote::new(2, 3);
+        store.save_vote(&vote2).await.unwrap();
+
+        // Verify second vote is stored
+        let read_vote = store.read_vote().await.unwrap();
+        assert_eq!(read_vote, Some(vote2));
+    }
+
+    #[tokio::test]
+    async fn test_log_store_append_after_truncate() {
+        let dir = tempdir().unwrap();
+        let mut store = SledLogStore::open(dir.path()).unwrap();
+
+        // Append entries 1-10
+        let entries: Vec<_> = (1..=10).map(|i| create_test_entry(i, 1)).collect();
+        store.test_append(entries).await.unwrap();
+
+        // Truncate from index 5
+        let truncate_log_id = LogId::new(openraft::LeaderId::new(1, 1), 5);
+        store.truncate(truncate_log_id).await.unwrap();
+
+        // Append new entries 5-8 with term 2 (simulating new leader)
+        let new_entries: Vec<_> = (5..=8).map(|i| create_test_entry(i, 2)).collect();
+        store.test_append(new_entries).await.unwrap();
+
+        // Verify final state
+        let mut reader = store.get_log_reader().await;
+        let all = reader.try_get_log_entries(1..20).await.unwrap();
+        assert_eq!(all.len(), 8); // 1-4 (term 1) + 5-8 (term 2)
+
+        // Verify entry 5 has term 2
+        let entry5 = all.iter().find(|e| e.log_id.index == 5).unwrap();
+        assert_eq!(entry5.log_id.leader_id.term, 2);
+    }
+
+    #[tokio::test]
+    async fn test_log_store_large_index_numbers() {
+        let dir = tempdir().unwrap();
+        let mut store = SledLogStore::open(dir.path()).unwrap();
+
+        // Use large index numbers to test zero-padding in keys
+        let entries = vec![
+            create_test_entry(1_000_000, 1),
+            create_test_entry(1_000_001, 1),
+            create_test_entry(10_000_000, 1),
+        ];
+        store.test_append(entries).await.unwrap();
+
+        // Read back
+        let mut reader = store.get_log_reader().await;
+
+        // Read specific range
+        let subset = reader.try_get_log_entries(1_000_000..1_000_002).await.unwrap();
+        assert_eq!(subset.len(), 2);
+
+        // Read all
+        let all = reader.try_get_log_entries(0..u64::MAX).await.unwrap();
+        assert_eq!(all.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_log_store_membership_entry() {
+        use openraft::Membership;
+        use std::collections::BTreeMap;
+
+        let dir = tempdir().unwrap();
+        let mut store = SledLogStore::open(dir.path()).unwrap();
+
+        // Create a membership entry
+        let mut nodes: BTreeMap<NodeId, openraft::BasicNode> = BTreeMap::new();
+        nodes.insert(1, openraft::BasicNode { addr: "127.0.0.1:6000".to_string() });
+        nodes.insert(2, openraft::BasicNode { addr: "127.0.0.1:6100".to_string() });
+
+        let membership = Membership::new(vec![vec![1, 2].into_iter().collect()], nodes);
+
+        let entry = Entry {
+            log_id: LogId::new(openraft::LeaderId::new(1, 1), 1),
+            payload: EntryPayload::Membership(membership),
+        };
+
+        store.test_append(vec![entry]).await.unwrap();
+
+        // Read back and verify
+        let mut reader = store.get_log_reader().await;
+        let entries = reader.try_get_log_entries(1..2).await.unwrap();
+        assert_eq!(entries.len(), 1);
+
+        match &entries[0].payload {
+            EntryPayload::Membership(m) => {
+                // Check that we have nodes in the membership
+                let nodes = m.nodes();
+                assert_eq!(nodes.count(), 2);
+            }
+            _ => panic!("Expected membership entry"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_log_store_purge_all() {
+        let dir = tempdir().unwrap();
+        let mut store = SledLogStore::open(dir.path()).unwrap();
+
+        // Append entries 1-5
+        let entries: Vec<_> = (1..=5).map(|i| create_test_entry(i, 1)).collect();
+        store.test_append(entries).await.unwrap();
+
+        // Purge all entries
+        let purge_log_id = LogId::new(openraft::LeaderId::new(1, 1), 5);
+        store.purge(purge_log_id).await.unwrap();
+
+        // Verify no entries remain
+        let mut reader = store.get_log_reader().await;
+        let remaining = reader.try_get_log_entries(1..10).await.unwrap();
+        assert!(remaining.is_empty());
+
+        // But last_purged should be set
+        let state = store.get_log_state().await.unwrap();
+        assert_eq!(state.last_purged_log_id, Some(purge_log_id));
+    }
+
+    #[tokio::test]
+    async fn test_log_store_clone_shares_state() {
+        let dir = tempdir().unwrap();
+        let mut store1 = SledLogStore::open(dir.path()).unwrap();
+
+        // Append using first handle
+        let entries: Vec<_> = (1..=3).map(|i| create_test_entry(i, 1)).collect();
+        store1.test_append(entries).await.unwrap();
+
+        // Clone and verify the clone sees the same data
+        let mut store2 = store1.clone();
+        let state = store2.get_log_state().await.unwrap();
+        assert_eq!(state.last_log_id.unwrap().index, 3);
+
+        // Append more using clone
+        let more_entries: Vec<_> = (4..=5).map(|i| create_test_entry(i, 1)).collect();
+        store2.test_append(more_entries).await.unwrap();
+
+        // Verify original sees the new entries
+        let state = store1.get_log_state().await.unwrap();
+        assert_eq!(state.last_log_id.unwrap().index, 5);
     }
 }
