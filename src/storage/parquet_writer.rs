@@ -1,7 +1,7 @@
 use super::line_protocol::format_date32_as_partition;
 use super::storage::Storage;
-use arrow::array::{ArrayRef, RecordBatch, UInt32Array};
-use arrow::compute::{concat_batches, lexsort_to_indices, sort_to_indices, take, SortColumn};
+use arrow::array::{ArrayRef, RecordBatch};
+use arrow::compute::{concat_batches, lexsort_to_indices, take, SortColumn};
 use arrow::datatypes::{Field, Schema};
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;

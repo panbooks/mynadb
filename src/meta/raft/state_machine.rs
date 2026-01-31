@@ -396,29 +396,79 @@ impl MetaStateMachine {
     fn heartbeat(&self, node_id: &str, lease_id: u64, timestamp: i64) -> MetaResponse {
         // Update lease
         let lease_key = format!("{}{}", keys::PREFIX_LEASE, lease_id);
-        if let Ok(Some(data)) = self.db.get(lease_key.as_bytes()) {
-            if let Ok(mut lease) = bincode::deserialize::<LeaseInfo>(&data) {
-                if lease.node_id == node_id {
-                    lease.renew();
-                    let _ = self
-                        .db
-                        .insert(lease_key.as_bytes(), bincode::serialize(&lease).unwrap());
+        let lease_updated = match self.db.get(lease_key.as_bytes()) {
+            Ok(Some(data)) => match bincode::deserialize::<LeaseInfo>(&data) {
+                Ok(mut lease) => {
+                    if lease.node_id == node_id {
+                        lease.renew();
+                        let _ = self
+                            .db
+                            .insert(lease_key.as_bytes(), bincode::serialize(&lease).unwrap());
+                        true
+                    } else {
+                        tracing::warn!(
+                                "heartbeat: lease node_id mismatch - lease.node_id={}, request node_id={}",
+                                lease.node_id,
+                                node_id
+                            );
+                        false
+                    }
                 }
+                Err(e) => {
+                    tracing::warn!(
+                        "heartbeat: failed to deserialize lease {}: {}",
+                        lease_key,
+                        e
+                    );
+                    false
+                }
+            },
+            Ok(None) => {
+                tracing::warn!(
+                    "heartbeat: lease not found - key={}, lease_id={}",
+                    lease_key,
+                    lease_id
+                );
+                false
             }
-        }
+            Err(e) => {
+                tracing::warn!("heartbeat: db.get failed for lease {}: {}", lease_key, e);
+                false
+            }
+        };
 
         // Update node heartbeat timestamp
         let node_key = format!("{}{}", keys::PREFIX_NODE, node_id);
-        if let Ok(Some(data)) = self.db.get(node_key.as_bytes()) {
-            if let Ok(mut info) = bincode::deserialize::<NodeInfo>(&data) {
-                info.last_heartbeat = timestamp;
-                if info.state == NodeState::Starting {
-                    info.state = NodeState::Active;
+        let node_updated = match self.db.get(node_key.as_bytes()) {
+            Ok(Some(data)) => match bincode::deserialize::<NodeInfo>(&data) {
+                Ok(mut info) => {
+                    info.last_heartbeat = timestamp;
+                    if info.state == NodeState::Starting {
+                        info.state = NodeState::Active;
+                    }
+                    let _ = self
+                        .db
+                        .insert(node_key.as_bytes(), bincode::serialize(&info).unwrap());
+                    true
                 }
-                let _ = self
-                    .db
-                    .insert(node_key.as_bytes(), bincode::serialize(&info).unwrap());
+                Err(e) => {
+                    tracing::warn!("heartbeat: failed to deserialize node {}: {}", node_key, e);
+                    false
+                }
+            },
+            Ok(None) => {
+                tracing::warn!("heartbeat: node not found - key={}", node_key);
+                false
             }
+            Err(e) => {
+                tracing::warn!("heartbeat: db.get failed for node {}: {}", node_key, e);
+                false
+            }
+        };
+
+        // Flush to ensure updates are visible
+        if lease_updated || node_updated {
+            let _ = self.db.flush();
         }
 
         MetaResponse::Success
@@ -2457,7 +2507,11 @@ mod tests {
         let deserialized: MetaCommand = bincode::deserialize(&serialized).unwrap();
 
         match deserialized {
-            MetaCommand::RegisterNode { info, lease_id, lease_ttl_ms } => {
+            MetaCommand::RegisterNode {
+                info,
+                lease_id,
+                lease_ttl_ms,
+            } => {
                 assert_eq!(info.node_id, "test-node");
                 assert_eq!(lease_id, 123);
                 assert_eq!(lease_ttl_ms, 30000);
@@ -2478,7 +2532,11 @@ mod tests {
         let deserialized: MetaCommand = bincode::deserialize(&serialized).unwrap();
 
         match deserialized {
-            MetaCommand::Heartbeat { node_id, lease_id, timestamp } => {
+            MetaCommand::Heartbeat {
+                node_id,
+                lease_id,
+                timestamp,
+            } => {
                 assert_eq!(node_id, "test-node");
                 assert_eq!(lease_id, 456);
                 assert_eq!(timestamp, 9876543210);
@@ -2517,7 +2575,11 @@ mod tests {
         let deserialized: MetaCommand = bincode::deserialize(&serialized).unwrap();
 
         match deserialized {
-            MetaCommand::AcquireLock { key, holder, ttl_ms } => {
+            MetaCommand::AcquireLock {
+                key,
+                holder,
+                ttl_ms,
+            } => {
                 assert_eq!(key, "partition/db/schema/table/2024-01-15");
                 assert_eq!(holder, "node-1");
                 assert_eq!(ttl_ms, 10000);
@@ -2536,16 +2598,15 @@ mod tests {
                 current_holder: "other-node".to_string(),
                 expires_at: 9999999999,
             },
-            MetaResponse::Error { message: "Test error".to_string() },
+            MetaResponse::Error {
+                message: "Test error".to_string(),
+            },
         ];
 
         for response in responses {
             let serialized = bincode::serialize(&response).unwrap();
             let deserialized: MetaResponse = bincode::deserialize(&serialized).unwrap();
-            assert_eq!(
-                format!("{:?}", response),
-                format!("{:?}", deserialized)
-            );
+            assert_eq!(format!("{:?}", response), format!("{:?}", deserialized));
         }
     }
 
@@ -2600,14 +2661,26 @@ mod tests {
         use std::collections::BTreeMap;
 
         let mut nodes: BTreeMap<NodeId, openraft::BasicNode> = BTreeMap::new();
-        nodes.insert(1, openraft::BasicNode { addr: "127.0.0.1:6000".to_string() });
-        nodes.insert(2, openraft::BasicNode { addr: "127.0.0.1:6100".to_string() });
-        nodes.insert(3, openraft::BasicNode { addr: "127.0.0.1:6200".to_string() });
-
-        let membership = Membership::new(
-            vec![vec![1, 2, 3].into_iter().collect()],
-            nodes,
+        nodes.insert(
+            1,
+            openraft::BasicNode {
+                addr: "127.0.0.1:6000".to_string(),
+            },
         );
+        nodes.insert(
+            2,
+            openraft::BasicNode {
+                addr: "127.0.0.1:6100".to_string(),
+            },
+        );
+        nodes.insert(
+            3,
+            openraft::BasicNode {
+                addr: "127.0.0.1:6200".to_string(),
+            },
+        );
+
+        let membership = Membership::new(vec![vec![1, 2, 3].into_iter().collect()], nodes);
 
         let entry = Entry {
             log_id: LogId::new(openraft::LeaderId::new(1, 1), 1),
@@ -2891,7 +2964,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_state_machine_snapshot_and_restore() {
-        use openraft::storage::{RaftStateMachine, RaftSnapshotBuilder};
+        use openraft::storage::{RaftSnapshotBuilder, RaftStateMachine};
 
         // Create state machine and populate with data
         let mut sm1 = create_test_state_machine();
@@ -2919,7 +2992,9 @@ mod tests {
 
         // Create new state machine and restore
         let mut sm2 = create_test_state_machine();
-        sm2.install_snapshot(&snapshot.meta, snapshot.snapshot).await.unwrap();
+        sm2.install_snapshot(&snapshot.meta, snapshot.snapshot)
+            .await
+            .unwrap();
 
         // Verify nodes were restored
         let nodes = sm2.list_nodes(None, None);

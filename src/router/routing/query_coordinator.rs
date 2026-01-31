@@ -23,7 +23,6 @@ use crate::meta::client::MetaClient;
 use crate::query::sql_utils::{extract_table_references, extract_time_range};
 use crate::router::client::DataNodePool;
 use arrow::record_batch::RecordBatch;
-use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::*;
 use std::collections::HashMap;

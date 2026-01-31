@@ -5,7 +5,7 @@
 use super::client::DataNodePool;
 use super::config::RouterConfig;
 use super::routing::{QueryCoordinator, ShardCache, WriteRouter};
-use crate::config::{Config, SchemaConfig};
+use crate::config::Config;
 use crate::meta::client::MetaClient;
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -53,7 +53,13 @@ impl RouterAppState {
         let data_node_pool = Arc::new(DataNodePool::new(pool_config));
 
         // Connect to Meta service (optional)
-        let meta_client = match MetaClient::connect(&router_config.meta.endpoints).await {
+        // Use connect_with_node_id so heartbeats use the correct router node ID
+        let meta_client = match MetaClient::connect_with_node_id(
+            &router_config.meta.endpoints,
+            router_config.node_id.clone(),
+        )
+        .await
+        {
             Ok(client) => {
                 info!("Connected to Meta service");
                 Some(Arc::new(client))

@@ -9,7 +9,7 @@ use crate::router::client::DataNodePool;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Cache invalidation handler
 pub struct CacheInvalidationHandler {

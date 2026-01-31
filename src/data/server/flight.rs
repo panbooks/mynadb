@@ -6,7 +6,7 @@
 
 use crate::config::SchemaConfig;
 use crate::data::cache::ParquetLocalCache;
-use crate::data::replication::{ReplicationConfig, ReplicationManager};
+use crate::data::replication::ReplicationManager;
 use crate::meta::client::MetaClient;
 use crate::meta::types::{NodeRole, NodeState, PartitionReplica};
 use crate::query::query_engine::QueryEngine;

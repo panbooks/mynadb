@@ -5,4 +5,4 @@
 
 mod parquet_cache;
 
-pub use parquet_cache::{CacheStats, ParquetLocalCache};
+pub use parquet_cache::ParquetLocalCache;

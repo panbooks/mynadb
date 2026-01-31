@@ -15,8 +15,8 @@ pub mod network;
 pub mod state_machine;
 
 pub use log_store::SledLogStore;
-pub use network::{MetaNetworkConnection, MetaNetworkFactory};
-pub use state_machine::{MetaSnapshot, MetaSnapshotBuilder, MetaStateMachine};
+pub use network::MetaNetworkFactory;
+pub use state_machine::MetaStateMachine;
 
 use crate::meta::types::{MetaCommand, MetaResponse};
 use openraft::raft::responder::OneshotResponder;

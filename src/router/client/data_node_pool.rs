@@ -7,8 +7,7 @@ use arrow::array::{RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_flight::{
     decode::FlightRecordBatchStream, encode::FlightDataEncoderBuilder,
-    flight_service_client::FlightServiceClient, Action, FlightData, FlightDescriptor, PutResult,
-    Ticket,
+    flight_service_client::FlightServiceClient, Action, FlightData, FlightDescriptor, Ticket,
 };
 use dashmap::DashMap;
 use futures::{stream, StreamExt, TryStreamExt};
@@ -16,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::Channel;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 
 /// Write request metadata sent via Flight Ticket
 #[derive(Debug, Serialize, Deserialize)]

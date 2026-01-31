@@ -444,12 +444,7 @@ impl QueryEngine {
         let table_url = if let Some(ref storage) = self.storage {
             if let Some(ref cache) = self.write_cache {
                 // With write_cache, always use node_id prefix (both local and object storage)
-                storage.table_url_with_node(
-                    cache.node_id(),
-                    catalog_name,
-                    schema_name,
-                    table_name,
-                )
+                storage.table_url_with_node(cache.node_id(), catalog_name, schema_name, table_name)
             } else {
                 storage.table_url(catalog_name, schema_name, table_name)
             }
@@ -458,7 +453,11 @@ impl QueryEngine {
             if let Some(ref cache) = self.write_cache {
                 format!(
                     "file://{}/{}/{}/{}/{}",
-                    self.data_dir, cache.node_id(), catalog_name, schema_name, table_name
+                    self.data_dir,
+                    cache.node_id(),
+                    catalog_name,
+                    schema_name,
+                    table_name
                 )
             } else {
                 format!(
@@ -473,7 +472,11 @@ impl QueryEngine {
         let table_path = if let Some(ref cache) = self.write_cache {
             format!(
                 "{}/{}/{}/{}/{}",
-                self.data_dir, cache.node_id(), catalog_name, schema_name, table_name
+                self.data_dir,
+                cache.node_id(),
+                catalog_name,
+                schema_name,
+                table_name
             )
         } else {
             format!(

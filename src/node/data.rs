@@ -62,7 +62,13 @@ pub async fn start(config_path: &str) {
     let wal = common::init_wal(&config, storage.clone()).await;
 
     // Connect to Meta service first (needed for file registration during flush)
-    let meta_client = match MetaClient::connect(&data_config.meta_endpoints).await {
+    // Use connect_with_node_id so heartbeats use the correct data node ID
+    let meta_client = match MetaClient::connect_with_node_id(
+        &data_config.meta_endpoints,
+        data_config.node_id.clone(),
+    )
+    .await
+    {
         Ok(client) => {
             info!("Connected to Meta service");
             Some(Arc::new(client))
