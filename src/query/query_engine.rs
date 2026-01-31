@@ -1179,76 +1179,166 @@ impl QueryEngine {
     // Auto-discovery
     // ========================================================================
 
-    /// Auto-discover and register all tables in catalog.schema from disk
+    /// Auto-discover and register all tables in catalog.schema
+    /// Works with both local filesystem and object storage (S3/MinIO)
     pub async fn discover_and_register(
         &self,
         catalog_name: &str,
         schema_name: &str,
     ) -> Result<usize, String> {
-        let schema_path = format!("{}/{}/{}", self.data_dir, catalog_name, schema_name);
+        let mut tables_found: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        if !std::path::Path::new(&schema_path).exists() {
-            return Ok(0);
-        }
+        // Try object storage first if configured
+        if let Some(ref storage) = self.storage {
+            // Build prefix based on whether we have node_id
+            let prefix = if let Some(ref cache) = self.write_cache {
+                format!("{}/{}/{}/", cache.node_id(), catalog_name, schema_name)
+            } else {
+                format!("{}/{}/", catalog_name, schema_name)
+            };
 
-        let entries = std::fs::read_dir(&schema_path)
-            .map_err(|e| format!("Failed to read schema directory: {}", e))?;
-
-        let mut count = 0;
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                if let Some(table_name) = path.file_name().and_then(|s| s.to_str()) {
-                    if !table_name.starts_with('.') {
-                        if let Err(e) = self
-                            .register_table(catalog_name, schema_name, table_name)
-                            .await
+            // List files from object storage
+            if let Ok(files) = storage.list(&prefix).await {
+                for file in files {
+                    // Extract table name from path like: {table}/date=YYYY-MM-DD/file.parquet
+                    // or {node_id}/{catalog}/{schema}/{table}/date=YYYY-MM-DD/file.parquet
+                    let relative = file.strip_prefix(&prefix).unwrap_or(&file);
+                    if let Some(table_name) = relative.split('/').next() {
+                        if !table_name.is_empty()
+                            && !table_name.starts_with('.')
+                            && !table_name.starts_with("date=")
                         {
-                            warn!(
-                                "Failed to register {}.{}.{}: {}",
-                                catalog_name, schema_name, table_name, e
-                            );
-                        } else {
-                            count += 1;
+                            tables_found.insert(table_name.to_string());
+                        }
+                    }
+                }
+            }
+        } else {
+            // Fallback to local filesystem
+            let schema_path = format!("{}/{}/{}", self.data_dir, catalog_name, schema_name);
+
+            if std::path::Path::new(&schema_path).exists() {
+                if let Ok(entries) = std::fs::read_dir(&schema_path) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            if let Some(table_name) = path.file_name().and_then(|s| s.to_str()) {
+                                if !table_name.starts_with('.') {
+                                    tables_found.insert(table_name.to_string());
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
+        // Register all discovered tables
+        let mut count = 0;
+        for table_name in tables_found {
+            if let Err(e) = self
+                .register_table(catalog_name, schema_name, &table_name)
+                .await
+            {
+                warn!(
+                    "Failed to register {}.{}.{}: {}",
+                    catalog_name, schema_name, table_name, e
+                );
+            } else {
+                count += 1;
+            }
+        }
+
         Ok(count)
     }
 
-    /// Auto-discover all schemas in a catalog
+    /// Auto-discover all schemas and tables in a catalog
+    /// Works with both local filesystem and object storage (S3/MinIO)
+    /// Also includes tables from in-memory cache (write_cache)
     pub async fn discover_catalog(&self, catalog_name: &str) -> Result<usize, String> {
-        let catalog_path = format!("{}/{}", self.data_dir, catalog_name);
+        let mut schemas_found: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut cached_tables: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
 
-        if !std::path::Path::new(&catalog_path).exists() {
-            return Ok(0);
+        // Get tables from in-memory cache first
+        if let Some(ref cache) = self.write_cache {
+            cached_tables = cache.list_cached_tables_in_catalog(catalog_name);
+            for (schema, _table) in &cached_tables {
+                schemas_found.insert(schema.clone());
+            }
         }
 
-        let entries = std::fs::read_dir(&catalog_path)
-            .map_err(|e| format!("Failed to read catalog directory: {}", e))?;
+        // Discover schemas from storage
+        if let Some(ref storage) = self.storage {
+            // Build prefix based on whether we have node_id
+            let prefix = if let Some(ref cache) = self.write_cache {
+                format!("{}/{}/", cache.node_id(), catalog_name)
+            } else {
+                format!("{}/", catalog_name)
+            };
 
-        let mut total_tables = 0;
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                if let Some(schema_name) = path.file_name().and_then(|s| s.to_str()) {
-                    if !schema_name.starts_with('.') {
-                        match self.discover_and_register(catalog_name, schema_name).await {
-                            Ok(count) => total_tables += count,
-                            Err(e) => warn!(
-                                "Failed to discover schema {}.{}: {}",
-                                catalog_name, schema_name, e
-                            ),
+            // List files from object storage
+            if let Ok(files) = storage.list(&prefix).await {
+                for file in files {
+                    // Extract schema name from path
+                    let relative = file.strip_prefix(&prefix).unwrap_or(&file);
+                    if let Some(schema_name) = relative.split('/').next() {
+                        if !schema_name.is_empty()
+                            && !schema_name.starts_with('.')
+                            && !schema_name.starts_with("date=")
+                        {
+                            schemas_found.insert(schema_name.to_string());
                         }
                     }
                 }
+            }
+        } else {
+            // Fallback to local filesystem
+            let catalog_path = format!("{}/{}", self.data_dir, catalog_name);
+
+            if std::path::Path::new(&catalog_path).exists() {
+                if let Ok(entries) = std::fs::read_dir(&catalog_path) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            if let Some(schema_name) = path.file_name().and_then(|s| s.to_str()) {
+                                if !schema_name.starts_with('.') {
+                                    schemas_found.insert(schema_name.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Discover and register tables from each schema
+        let mut total_tables = 0;
+        for schema_name in &schemas_found {
+            match self.discover_and_register(catalog_name, schema_name).await {
+                Ok(count) => total_tables += count,
+                Err(e) => warn!(
+                    "Failed to discover schema {}.{}: {}",
+                    catalog_name, schema_name, e
+                ),
+            }
+        }
+
+        // Register tables from in-memory cache that might not have parquet files yet
+        for (schema_name, table_name) in cached_tables {
+            if let Err(e) = self
+                .register_table(catalog_name, &schema_name, &table_name)
+                .await
+            {
+                // Don't warn if table already registered
+                if !e.contains("already") {
+                    warn!(
+                        "Failed to register cached table {}.{}.{}: {}",
+                        catalog_name, schema_name, table_name, e
+                    );
+                }
+            } else {
+                total_tables += 1;
             }
         }
 
