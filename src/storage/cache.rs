@@ -857,6 +857,26 @@ impl DataCache {
         dates
     }
 
+    /// List all tables that have cached data in this catalog
+    /// Returns a set of (schema, table) tuples
+    pub fn list_cached_tables_in_catalog(
+        &self,
+        catalog: &str,
+    ) -> std::collections::HashSet<(String, String)> {
+        let mut tables = std::collections::HashSet::new();
+
+        for shard in self.shards.iter() {
+            let data = shard.data.lock();
+            for (key, batches) in data.iter() {
+                if key.0 == catalog && !batches.is_empty() {
+                    tables.insert((key.1.clone(), key.2.clone()));
+                }
+            }
+        }
+
+        tables
+    }
+
     /// Get statistics about cached data for a table
     pub fn get_table_cache_stats(
         &self,
