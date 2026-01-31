@@ -112,6 +112,9 @@ pub async fn home() -> &'static str {
        POST   /databases/:db/tables   - Create table (with partitioning)\n\
        GET    /databases/:db/tables   - List tables\n\
        DELETE /databases/:db/tables/:table - Delete table\n\n\
+     Quick Access:\n\
+       GET    /tables/:db             - List tables (shorthand)\n\
+       GET    /schemas/:db            - List schemas (shorthand)\n\n\
      Data Operations:\n\
        POST   /write/:db              - Write data (line protocol)\n\
        POST   /write?db=:db           - Write data (InfluxDB-compatible)\n\

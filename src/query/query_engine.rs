@@ -440,35 +440,47 @@ impl QueryEngine {
         }
 
         // Build table URL based on storage backend
-        // In cluster mode (object storage + write_cache), files are stored with node_id prefix
+        // When write_cache is present, files are stored with node_id prefix
         let table_url = if let Some(ref storage) = self.storage {
-            if !storage.is_local() {
-                // Object storage in cluster mode: use node_id prefix
-                if let Some(ref cache) = self.write_cache {
-                    storage.table_url_with_node(
-                        cache.node_id(),
-                        catalog_name,
-                        schema_name,
-                        table_name,
-                    )
-                } else {
-                    storage.table_url(catalog_name, schema_name, table_name)
-                }
+            if let Some(ref cache) = self.write_cache {
+                // With write_cache, always use node_id prefix (both local and object storage)
+                storage.table_url_with_node(
+                    cache.node_id(),
+                    catalog_name,
+                    schema_name,
+                    table_name,
+                )
             } else {
                 storage.table_url(catalog_name, schema_name, table_name)
             }
         } else {
-            format!(
-                "file://{}/{}/{}/{}",
-                self.data_dir, catalog_name, schema_name, table_name
-            )
+            // No storage configured, use data_dir with node_id prefix if write_cache exists
+            if let Some(ref cache) = self.write_cache {
+                format!(
+                    "file://{}/{}/{}/{}/{}",
+                    self.data_dir, cache.node_id(), catalog_name, schema_name, table_name
+                )
+            } else {
+                format!(
+                    "file://{}/{}/{}/{}",
+                    self.data_dir, catalog_name, schema_name, table_name
+                )
+            }
         };
 
         // Build local path for existence check (only for local storage)
-        let table_path = format!(
-            "{}/{}/{}/{}",
-            self.data_dir, catalog_name, schema_name, table_name
-        );
+        // Include node_id prefix if write_cache is present
+        let table_path = if let Some(ref cache) = self.write_cache {
+            format!(
+                "{}/{}/{}/{}/{}",
+                self.data_dir, cache.node_id(), catalog_name, schema_name, table_name
+            )
+        } else {
+            format!(
+                "{}/{}/{}/{}",
+                self.data_dir, catalog_name, schema_name, table_name
+            )
+        };
 
         // For local storage, check if path exists
         let path_exists = if self.storage.is_none()
