@@ -49,7 +49,7 @@ impl MetaNode {
         let state_machine_db = sled::open(config.sled_path())?;
         // Create one state machine - the original goes to Raft (which applies writes)
         // Clone is kept for reads - they share the same underlying sled::Db via Arc
-        let state_machine = MetaStateMachine::new(state_machine_db);
+        let state_machine = MetaStateMachine::new(state_machine_db, config.standby.clone());
         // Clone for reads (stored in MetaNode)
         let state_machine_for_reads = state_machine.clone();
         // Original goes to Raft
@@ -1526,7 +1526,7 @@ mod tests {
 
         // Create state machine
         let db = sled::open(&db_path).unwrap();
-        let sm1 = MetaStateMachine::new(db);
+        let sm1 = MetaStateMachine::new(db, crate::meta::config::StandbyConfig::default());
 
         // Clone the state machine
         let sm2 = sm1.clone();
@@ -1583,7 +1583,7 @@ mod tests {
 
         // Create state machine
         let db = sled::open(&db_path).unwrap();
-        let sm = MetaStateMachine::new(db);
+        let sm = MetaStateMachine::new(db, crate::meta::config::StandbyConfig::default());
 
         // Clone for "reads" (simulating MetaNode's setup)
         let sm_for_reads = sm.clone();
@@ -1633,7 +1633,7 @@ mod tests {
         let db = sled::open(&db_path).unwrap();
 
         // Create state machine with this db
-        let sm = MetaStateMachine::new(db.clone());
+        let sm = MetaStateMachine::new(db.clone(), crate::meta::config::StandbyConfig::default());
 
         // Write through state machine's apply_command
         let node_info = NodeInfo {
@@ -1675,7 +1675,7 @@ mod tests {
         let db_path = temp_dir.path().join("test_db_method");
 
         let db = sled::open(&db_path).unwrap();
-        let sm = MetaStateMachine::new(db);
+        let sm = MetaStateMachine::new(db, crate::meta::config::StandbyConfig::default());
 
         // Write through db() method
         sm.db().insert(b"method_key", b"method_value").unwrap();
