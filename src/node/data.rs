@@ -246,6 +246,10 @@ pub async fn start(config_path: &str) {
     let is_retiring = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let is_retiring_for_http = Arc::clone(&is_retiring);
 
+    // Create shared in_flight_queries counter (used by Flight, shared with HTTP for status)
+    let in_flight_queries = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let in_flight_queries_for_http = Arc::clone(&in_flight_queries);
+
     // Create Flight service (replaces gRPC)
     let mut flight_service = DataNodeFlightService::new(
         data_cache,
@@ -255,7 +259,8 @@ pub async fn start(config_path: &str) {
         data_config.node_id.clone(),
     )
     .with_db_manager(db_manager)
-    .with_is_retiring(is_retiring);
+    .with_is_retiring(is_retiring)
+    .with_in_flight_queries(in_flight_queries);
 
     // Add parquet cache if available
     if let Some(ref cache) = parquet_cache {
@@ -454,6 +459,7 @@ pub async fn start(config_path: &str) {
             wal: wal_for_http,
             compactor: None, // Compaction handled by leader node in cluster mode
             db_manager: Some(db_manager_for_http),
+            in_flight_queries: Some(in_flight_queries_for_http), // Shared with Flight service
         };
         tokio::spawn(async move {
             if let Err(e) = start_http_server("0.0.0.0", http_port, http_state).await {

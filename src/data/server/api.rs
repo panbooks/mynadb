@@ -44,6 +44,8 @@ pub struct DataNodeState {
     pub wal: Option<Arc<Wal>>,
     pub compactor: Option<Arc<Compactor>>,
     pub db_manager: Option<Arc<DatabaseManager>>,
+    /// Counter for in-flight queries (shared with Flight service)
+    pub in_flight_queries: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 /// Detailed retirement status
@@ -131,6 +133,9 @@ pub struct RetireStatusResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub partitions_to_reassign: Option<usize>,
     pub memtable_rows: u64,
+    pub in_flight_queries: u64,
+    /// True when node is ready for shutdown (retiring, no in-flight queries, memtable drained)
+    pub ready_for_shutdown: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub estimated_completion_secs: Option<u64>,
 }
@@ -383,10 +388,17 @@ async fn retire(
 async fn retire_status(State(state): State<DataNodeState>) -> impl IntoResponse {
     let is_retiring = state.is_retiring.load(Ordering::Relaxed);
     let cache_stats = state.cache.stats().await;
+    let in_flight = state
+        .in_flight_queries
+        .as_ref()
+        .map(|c| c.load(Ordering::Relaxed))
+        .unwrap_or(0);
 
     if let Some(status) = state.retire_status.read().as_ref() {
-        let current_state = if cache_stats.total_rows == 0 {
+        let current_state = if cache_stats.total_rows == 0 && in_flight == 0 {
             "drained"
+        } else if cache_stats.total_rows == 0 {
+            "draining_queries"
         } else {
             &status.state
         };
@@ -397,6 +409,10 @@ async fn retire_status(State(state): State<DataNodeState>) -> impl IntoResponse 
             Some(0)
         };
 
+        // Ready for shutdown when retiring, memtable empty, and no in-flight queries
+        let ready_for_shutdown =
+            is_retiring && cache_stats.total_rows == 0 && in_flight == 0;
+
         (
             StatusCode::OK,
             Json(RetireStatusResponse {
@@ -405,6 +421,8 @@ async fn retire_status(State(state): State<DataNodeState>) -> impl IntoResponse 
                 started_at: Some(status.started_at),
                 partitions_to_reassign: Some(status.partitions_to_reassign),
                 memtable_rows: cache_stats.total_rows as u64,
+                in_flight_queries: in_flight,
+                ready_for_shutdown,
                 estimated_completion_secs: estimated_secs,
             }),
         )
@@ -417,6 +435,8 @@ async fn retire_status(State(state): State<DataNodeState>) -> impl IntoResponse 
                 started_at: None,
                 partitions_to_reassign: None,
                 memtable_rows: cache_stats.total_rows as u64,
+                in_flight_queries: in_flight,
+                ready_for_shutdown: false,
                 estimated_completion_secs: None,
             }),
         )
