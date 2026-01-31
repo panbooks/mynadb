@@ -9,8 +9,6 @@ use crate::config::Config;
 use crate::jobs::{compactor, database_manager, retention_manager};
 use crate::services::{api, auth};
 use crate::storage::cache;
-use axum::routing::{delete, get, post};
-use axum::Router;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
@@ -155,7 +153,7 @@ pub async fn run(config_path: &str) {
     );
 
     // Build router (standalone mode)
-    let app = build_router(state.clone(), auth_middleware);
+    let app = api::build_router(state.clone(), auth_middleware);
 
     print_server_info(&config);
 
@@ -375,96 +373,3 @@ fn start_wal_cleanup_task(wal: &Arc<crate::storage::wal::Wal>, config: &Config) 
     });
 }
 
-/// Build the Axum router with all routes (standalone mode)
-fn build_router(state: api::AppState, auth_middleware: Arc<auth::AuthMiddleware>) -> Router {
-    Router::new()
-        .route("/", get(api::home))
-        .route("/health", get(api::health))
-        .route("/metrics", get(api::metrics_handler))
-        .route("/version", get(api::version_handler))
-        // Write endpoints
-        .route("/write/:db", post(api::write_handler))
-        .route("/write", post(api::write_handler_query_param))
-        // Cache management
-        .route("/stats", get(api::stats_handler))
-        .route("/memory", get(api::memory_handler))
-        .route("/flush", post(api::flush_handler))
-        // Query cache management
-        .route("/cache/stats", get(api::query_cache_stats_handler))
-        .route("/cache/prewarm/:catalog", post(api::prewarm_cache_handler))
-        .route(
-            "/cache/prewarm/:catalog/:schema/:table",
-            post(api::prewarm_table_cache_handler),
-        )
-        .route("/cache/clear", post(api::clear_query_cache_handler))
-        .route(
-            "/cache/clear/results",
-            post(api::clear_query_result_cache_handler),
-        )
-        .route(
-            "/cache/parquet/:catalog/:schema/:table",
-            get(api::table_parquet_stats_handler),
-        )
-        // Profiling endpoints
-        .route("/debug/heap", get(api::heap_profile_handler))
-        .route("/debug/cpu", get(api::cpu_profile_handler))
-        .route("/debug/profile/heap", get(api::heap_profile_handler))
-        .route("/debug/profile/cpu", get(api::cpu_profile_handler))
-        // Query endpoints
-        .route("/query/:db", get(api::query_handler))
-        .route("/query/:db", post(api::query_handler_post))
-        // Query analysis endpoints
-        .route("/explain/:db", get(api::explain_handler))
-        .route("/explain/:db", post(api::explain_handler_post))
-        .route("/analyze/:db", get(api::analyze_handler))
-        .route("/analyze/:db", post(api::analyze_handler_post))
-        // Database management
-        .route("/databases", get(api::list_databases_handler))
-        .route("/databases", post(api::create_database_handler))
-        .route("/databases/:db", delete(api::delete_database_handler))
-        .route("/databases/:db", get(api::get_database_info_handler))
-        // Schema/Table shorthand endpoints
-        .route("/tables/:db", get(api::list_tables_handler))
-        .route("/schemas/:db", get(api::list_schemas_handler))
-        // Schema management (full path)
-        .route("/databases/:db/schemas", get(api::list_schemas_handler))
-        .route(
-            "/databases/:db/schemas/:schema/tables",
-            get(api::list_schema_tables_handler),
-        )
-        // Table management
-        .route("/databases/:db/tables", post(api::create_table_handler))
-        .route("/databases/:db/tables", get(api::list_tables_handler))
-        .route(
-            "/databases/:db/tables/:table",
-            delete(api::delete_table_handler),
-        )
-        .route("/schema/:db/:table", get(api::schema_handler))
-        // Compaction endpoints
-        .route("/compact/:catalog", post(api::compact_handler))
-        .route(
-            "/compact/:catalog/:schema/:table",
-            post(api::compact_table_handler),
-        )
-        .route(
-            "/compact/:catalog/:schema/:table/:date",
-            post(api::compact_partition_handler),
-        )
-        // Partition management
-        .route(
-            "/partitions/:catalog/:schema/:table",
-            get(api::list_partitions_handler),
-        )
-        .route(
-            "/partitions/:catalog/:schema/:table/:date",
-            delete(api::delete_partition_handler),
-        )
-        .route(
-            "/retention/:catalog/:schema/:table",
-            post(api::delete_old_partitions_handler),
-        )
-        .fallback(api::log_request)
-        .with_state(state)
-        .layer(axum::middleware::from_fn(auth::auth_middleware_fn))
-        .layer(axum::Extension(auth_middleware))
-}

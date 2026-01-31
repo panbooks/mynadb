@@ -12,7 +12,8 @@ use axum::{
     extract::{Path, Query as AxumQuery, Request, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
+    routing::{delete, get, post},
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -107,20 +108,18 @@ pub async fn home() -> &'static str {
        POST   /databases              - Create database\n\
        DELETE /databases/:db          - Delete database\n\
        GET    /databases/:db          - Get database info\n\
-       GET    /databases/:db/schemas  - List all schemas (services) in database\n\
-       GET    /databases/:db/schemas/:schema/tables - List tables in schema\n\
        POST   /databases/:db/tables   - Create table (with partitioning)\n\
-       GET    /databases/:db/tables   - List tables\n\
        DELETE /databases/:db/tables/:table - Delete table\n\n\
-     Quick Access:\n\
-       GET    /tables/:db             - List tables (shorthand)\n\
-       GET    /schemas/:db            - List schemas (shorthand)\n\n\
+     Schema/Table Endpoints:\n\
+       GET    /schemas/:db            - List schemas\n\
+       GET    /tables/:db             - List all tables\n\
+       GET    /tables/:db/:schema     - List tables in schema\n\
+       GET    /schema/:db/:schema/:table - Get table schema\n\n\
      Data Operations:\n\
        POST   /write/:db              - Write data (line protocol)\n\
        POST   /write?db=:db           - Write data (InfluxDB-compatible)\n\
        GET    /query/:db?sql=<query>  - Query data (GET)\n\
-       POST   /query/:db              - Query data (POST body)\n\
-       GET    /schema/:db/:table      - Get table schema\n\n\
+       POST   /query/:db              - Query data (POST body)\n\n\
      Cache Management:\n\
        GET    /stats                  - Cache statistics\n\
        GET    /memory                 - Memory usage breakdown\n\
@@ -413,12 +412,17 @@ pub async fn list_tables_handler(
 }
 
 pub async fn schema_handler(
-    Path((db, table)): Path<(String, String)>,
+    Path((db, schema, table)): Path<(String, String, String)>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    debug!("Schema Request: db={}, table={}", db, table);
+    debug!(
+        "Schema Request: db={}, schema={}, table={}",
+        db, schema, table
+    );
 
-    match shared::get_table_schema_impl(&state.query_engine, &db, &table).await {
+    // Construct full table path: schema.table
+    let full_table = format!("{}.{}", schema, table);
+    match shared::get_table_schema_impl(&state.query_engine, &db, &full_table).await {
         Ok(schema) => (StatusCode::OK, schema),
         Err(e) => {
             error!("Get schema error: {}", e);
@@ -1360,4 +1364,97 @@ pub async fn log_request(req: Request) -> impl IntoResponse {
         StatusCode::NOT_FOUND,
         format!("Endpoint not found: {} {}", method, uri),
     )
+}
+
+// ===== Router Builder =====
+
+use super::auth;
+
+/// Build the Axum router with all routes (standalone/data node mode)
+pub fn build_router(state: AppState, auth_middleware: Arc<auth::AuthMiddleware>) -> Router {
+    Router::new()
+        .route("/", get(home))
+        .route("/health", get(health))
+        .route("/metrics", get(metrics_handler))
+        .route("/version", get(version_handler))
+        // Write endpoints
+        .route("/write/:db", post(write_handler))
+        .route("/write", post(write_handler_query_param))
+        // Cache management
+        .route("/stats", get(stats_handler))
+        .route("/memory", get(memory_handler))
+        .route("/flush", post(flush_handler))
+        // Query cache management
+        .route("/cache/stats", get(query_cache_stats_handler))
+        .route("/cache/prewarm/:catalog", post(prewarm_cache_handler))
+        .route(
+            "/cache/prewarm/:catalog/:schema/:table",
+            post(prewarm_table_cache_handler),
+        )
+        .route("/cache/clear", post(clear_query_cache_handler))
+        .route(
+            "/cache/clear/results",
+            post(clear_query_result_cache_handler),
+        )
+        .route(
+            "/cache/parquet/:catalog/:schema/:table",
+            get(table_parquet_stats_handler),
+        )
+        // Profiling endpoints
+        .route("/debug/heap", get(heap_profile_handler))
+        .route("/debug/cpu", get(cpu_profile_handler))
+        .route("/debug/profile/heap", get(heap_profile_handler))
+        .route("/debug/profile/cpu", get(cpu_profile_handler))
+        // Query endpoints
+        .route("/query/:db", get(query_handler))
+        .route("/query/:db", post(query_handler_post))
+        // Query analysis endpoints
+        .route("/explain/:db", get(explain_handler))
+        .route("/explain/:db", post(explain_handler_post))
+        .route("/analyze/:db", get(analyze_handler))
+        .route("/analyze/:db", post(analyze_handler_post))
+        // Database management
+        .route("/databases", get(list_databases_handler))
+        .route("/databases", post(create_database_handler))
+        .route("/databases/:db", delete(delete_database_handler))
+        .route("/databases/:db", get(get_database_info_handler))
+        // Schema/Table endpoints (short paths)
+        .route("/schemas/:db", get(list_schemas_handler))
+        .route("/tables/:db", get(list_tables_handler))
+        .route("/tables/:db/:schema", get(list_schema_tables_handler))
+        .route("/schema/:db/:schema/:table", get(schema_handler))
+        // Table management
+        .route("/databases/:db/tables", post(create_table_handler))
+        .route("/databases/:db/tables", get(list_tables_handler))
+        .route(
+            "/databases/:db/tables/:table",
+            delete(delete_table_handler),
+        )
+        // Compaction endpoints
+        .route("/compact/:catalog", post(compact_handler))
+        .route(
+            "/compact/:catalog/:schema/:table",
+            post(compact_table_handler),
+        )
+        .route(
+            "/compact/:catalog/:schema/:table/:date",
+            post(compact_partition_handler),
+        )
+        // Partition management
+        .route(
+            "/partitions/:catalog/:schema/:table",
+            get(list_partitions_handler),
+        )
+        .route(
+            "/partitions/:catalog/:schema/:table/:date",
+            delete(delete_partition_handler),
+        )
+        .route(
+            "/retention/:catalog/:schema/:table",
+            post(delete_old_partitions_handler),
+        )
+        .fallback(log_request)
+        .with_state(state)
+        .layer(axum::middleware::from_fn(auth::auth_middleware_fn))
+        .layer(axum::Extension(auth_middleware))
 }
