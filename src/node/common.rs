@@ -381,6 +381,105 @@ pub fn start_background_flush_with_meta_registration(
     );
 }
 
+/// Start background flush with Meta file registration AND QueryEngine refresh
+///
+/// This is the correct function for Data nodes in cluster mode. After flush:
+/// 1. Registers files with Meta service (for distributed query routing)
+/// 2. Refreshes QueryEngine table registrations (so local queries find new files)
+///
+/// Without step 2, queries after flush return empty because the old table
+/// registration still points to memtable-only (which is now empty).
+pub fn start_background_flush_with_meta_and_query_engine(
+    cache: cache::DataCache,
+    interval_secs: u64,
+    meta_client: Arc<crate::meta::client::MetaClient>,
+    query_engine: Arc<query_engine::QueryEngine>,
+    node_id: String,
+) {
+    let meta_for_flush = meta_client;
+    let qe_for_flush = query_engine;
+    let node_id_for_flush = node_id;
+
+    cache.start_background_flush_with_callback(
+        interval_secs,
+        Some(move |files: Vec<parquet_writer::FileWriteResult>| {
+            let client = meta_for_flush.clone();
+            let qe = qe_for_flush.clone();
+            let node_id = node_id_for_flush.clone();
+
+            tokio::spawn(async move {
+                if files.is_empty() {
+                    return;
+                }
+
+                // Track unique tables that were flushed
+                let mut flushed_tables: HashSet<(String, String, String)> = HashSet::new();
+
+                // Convert FileWriteResult to Meta FileInfo with created_by
+                let meta_files: Vec<crate::meta::types::FileInfo> = files
+                    .iter()
+                    .map(|file| {
+                        // Track this table for later refresh
+                        flushed_tables.insert((
+                            file.catalog.clone(),
+                            file.schema.clone(),
+                            file.table.clone(),
+                        ));
+
+                        crate::meta::types::FileInfo {
+                            path: file.path.clone(),
+                            catalog: file.catalog.clone(),
+                            schema: file.schema.clone(),
+                            table: file.table.clone(),
+                            partition: file.partition_key.clone(),
+                            level: file.level,
+                            size_bytes: file.size_bytes,
+                            row_count: file.row_count,
+                            min_time: 0,
+                            max_time: 0,
+                            created_at: crate::meta::current_timestamp_ms(),
+                            created_by: node_id.clone(),
+                        }
+                    })
+                    .collect();
+
+                // Register files with Meta service
+                match client.register_files(meta_files).await {
+                    Ok(seq) => {
+                        info!(
+                            "Registered {} files with Meta (seq={}), created_by={}",
+                            files.len(),
+                            seq,
+                            node_id
+                        );
+                    }
+                    Err(e) => {
+                        warn!("Failed to register files with Meta: {}", e);
+                    }
+                }
+
+                // CRITICAL: Refresh QueryEngine table registrations for all flushed tables
+                // This ensures DataFusion can find the new Parquet files
+                for (catalog, schema, table) in &flushed_tables {
+                    debug!(
+                        "Refreshing table after flush: {}.{}.{}",
+                        catalog, schema, table
+                    );
+                    qe.refresh_table_after_flush(catalog, schema, table);
+                }
+
+                if !flushed_tables.is_empty() {
+                    info!(
+                        "Background flush complete: {} files, {} tables refreshed",
+                        files.len(),
+                        flushed_tables.len()
+                    );
+                }
+            });
+        }),
+    );
+}
+
 /// Start Arrow Flight server
 pub async fn start_flight_server(
     addr: &str,

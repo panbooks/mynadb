@@ -94,21 +94,8 @@ pub async fn start(config_path: &str) {
         data_config.node_id.clone(),
     ));
 
-    // Start background flush with appropriate registration
-    if let Some(ref client) = meta_client {
-        // With Meta: Register files including created_by for distributed queries
-        common::start_background_flush_with_meta_registration(
-            (*data_cache).clone(),
-            config.cache.flush_interval_secs,
-            Arc::clone(client),
-            data_config.node_id.clone(),
-        );
-    } else {
-        // Without Meta: Simple flush without registration
-        (*data_cache)
-            .clone()
-            .start_background_flush(config.cache.flush_interval_secs);
-    }
+    // NOTE: Background flush is started AFTER query_engine initialization
+    // (see below) to ensure table registrations are refreshed after flush
 
     // Register with Meta service and start heartbeat
     let lease_id = Arc::new(AtomicU64::new(0));
@@ -214,6 +201,24 @@ pub async fn start(config_path: &str) {
         data_cache.clone(),
         parquet_cache.clone(),
     );
+
+    // Start background flush with appropriate registration
+    // Must be done AFTER query_engine is created so we can refresh tables after flush
+    if let Some(ref client) = meta_client {
+        // With Meta: Register files AND refresh query engine tables
+        common::start_background_flush_with_meta_and_query_engine(
+            (*data_cache).clone(),
+            config.cache.flush_interval_secs,
+            Arc::clone(client),
+            query_engine.clone(),
+            data_config.node_id.clone(),
+        );
+    } else {
+        // Without Meta: Simple flush without registration
+        (*data_cache)
+            .clone()
+            .start_background_flush(config.cache.flush_interval_secs);
+    }
 
     // Clone meta_client before moving to FlightService (needed for shutdown, event subscription, and HTTP API)
     let meta_client_for_shutdown = meta_client.clone();
