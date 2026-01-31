@@ -424,7 +424,10 @@ fn build_router(state: api::AppState, auth_middleware: Arc<auth::AuthMiddleware>
         .route("/databases", post(api::create_database_handler))
         .route("/databases/:db", delete(api::delete_database_handler))
         .route("/databases/:db", get(api::get_database_info_handler))
-        // Schema management
+        // Schema/Table shorthand endpoints
+        .route("/tables/:db", get(api::list_tables_handler))
+        .route("/schemas/:db", get(api::list_schemas_handler))
+        // Schema management (full path)
         .route("/databases/:db/schemas", get(api::list_schemas_handler))
         .route(
             "/databases/:db/schemas/:schema/tables",

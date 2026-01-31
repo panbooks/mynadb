@@ -162,8 +162,10 @@ pub fn build_router(state: DataNodeState) -> Router {
         // Write endpoints
         .route("/write/{db}", post(write_handler))
         .route("/write", post(write_handler_query_param))
-        // Schema/Table endpoints
+        // Schema/Table endpoints (shorthand)
         .route("/tables/{db}", get(list_tables_handler))
+        .route("/schemas/{db}", get(list_schemas_handler))
+        // Schema/Table endpoints (full path)
         .route("/databases/{db}/schemas", get(list_schemas_handler))
         .route(
             "/databases/{db}/schemas/{schema}/tables",
@@ -232,7 +234,8 @@ async fn home() -> &'static str {
        POST /write/:db           - Write data (line protocol)\n\
        POST /write?db=:db        - Write data (InfluxDB-compatible)\n\n\
      Schema/Table Endpoints:\n\
-       GET  /tables/:db          - List tables in database\n\
+       GET  /tables/:db          - List tables (shorthand)\n\
+       GET  /schemas/:db         - List schemas (shorthand)\n\
        GET  /databases/:db/schemas - List schemas\n\
        GET  /databases/:db/schemas/:schema/tables - List tables in schema\n\
        GET  /schema/:db/:table   - Get table schema\n\n\
