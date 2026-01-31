@@ -158,6 +158,10 @@ pub struct DataNodeFlightService {
 
     /// Database manager for partition operations
     db_manager: Option<Arc<crate::jobs::database_manager::DatabaseManager>>,
+
+    /// Flag indicating if node is retiring (scale-in in progress)
+    /// When true, new writes are rejected to allow memtable flush
+    is_retiring: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl DataNodeFlightService {
@@ -180,7 +184,23 @@ impl DataNodeFlightService {
             replication_manager: None,
             replica_cache: Arc::new(DashMap::new()),
             db_manager: None,
+            is_retiring: None,
         }
+    }
+
+    /// Set the retiring flag (shared with HTTP API)
+    /// When true, the node will reject new writes to allow graceful scale-in
+    pub fn with_is_retiring(mut self, is_retiring: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.is_retiring = Some(is_retiring);
+        self
+    }
+
+    /// Check if the node is currently retiring
+    fn is_node_retiring(&self) -> bool {
+        self.is_retiring
+            .as_ref()
+            .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(false)
     }
 
     /// Set the database manager for partition operations
@@ -1011,10 +1031,20 @@ impl FlightService for DataNodeFlightService {
         // Try to parse as ReplicationTicket first (standby receiving from leader)
         if let Ok(repl_ticket) = serde_json::from_slice::<ReplicationTicket>(&descriptor_cmd) {
             if repl_ticket.is_replication {
+                // Replication writes are ALWAYS allowed - standbys must stay in sync
                 return self
                     .handle_replication_write(repl_ticket, batches, raw_bytes, start)
                     .await;
             }
+        }
+
+        // For non-replication writes, check if node is retiring
+        // This allows graceful scale-in by draining the memtable
+        if self.is_node_retiring() {
+            return Err(Status::unavailable(format!(
+                "Node {} is retiring and not accepting new writes. Please retry on another node.",
+                self.node_id
+            )));
         }
 
         // Try to parse as BatchWriteTicket (new efficient format from Router)
