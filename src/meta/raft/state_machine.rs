@@ -45,6 +45,9 @@ pub struct MetaStateMachine {
     /// Broadcast channel for real-time event notifications
     /// Subscribers receive events instantly without polling
     event_broadcast: broadcast::Sender<Event>,
+
+    /// Cold Standby configuration for Primary/Standby mode assignment
+    standby_config: crate::meta::config::StandbyConfig,
 }
 
 /// Snapshot data for the Meta state machine
@@ -78,8 +81,8 @@ pub struct MetaSnapshotBuilder {
 }
 
 impl MetaStateMachine {
-    /// Create a new state machine with the given sled database
-    pub fn new(db: Db) -> Self {
+    /// Create a new state machine with the given sled database and standby config
+    pub fn new(db: Db, standby_config: crate::meta::config::StandbyConfig) -> Self {
         // Load counters from database
         let event_sequence = db
             .get(keys::META_SEQUENCE)
@@ -110,8 +113,8 @@ impl MetaStateMachine {
             .unwrap_or_else(StoredMembership::default);
 
         debug!(
-            "MetaStateMachine initialized: last_applied={:?}, membership={:?}",
-            last_applied, last_membership
+            "MetaStateMachine initialized: last_applied={:?}, membership={:?}, standby_enabled={}",
+            last_applied, last_membership, standby_config.enabled
         );
 
         // Create broadcast channel with capacity for 1000 events
@@ -127,13 +130,14 @@ impl MetaStateMachine {
             last_applied: RwLock::new(last_applied),
             last_membership: RwLock::new(last_membership),
             event_broadcast,
+            standby_config,
         }
     }
 
-    /// Open or create a sled database at the given path
+    /// Open or create a sled database at the given path (uses default standby config)
     pub fn open(path: &std::path::Path) -> Result<Self, sled::Error> {
         let db = sled::open(path)?;
-        Ok(Self::new(db))
+        Ok(Self::new(db, crate::meta::config::StandbyConfig::default()))
     }
 
     /// Get a reference to the underlying sled database
@@ -320,13 +324,12 @@ impl MetaStateMachine {
 
         // Cold Standby Architecture: Auto-assign mode for Data nodes
         if info.role == NodeRole::Data && info.mode.is_none() {
-            let standby_config = crate::meta::config::StandbyConfig::default();
-            if standby_config.enabled && standby_config.auto_assign_mode {
+            if self.standby_config.enabled && self.standby_config.auto_assign_mode {
                 // Count current Primary and Standby nodes
                 let (primary_count, standby_count) = self.count_data_nodes_by_mode();
 
                 // Determine mode based on ratio
-                let assigned_mode = standby_config.mode_for_new_node(primary_count, standby_count);
+                let assigned_mode = self.standby_config.mode_for_new_node(primary_count, standby_count);
                 info.mode = Some(assigned_mode);
 
                 info!(
@@ -501,8 +504,7 @@ impl MetaStateMachine {
         }
 
         // Cold Standby Architecture: If a PRIMARY Data node left, promote a STANDBY node
-        let standby_config = crate::meta::config::StandbyConfig::default();
-        if standby_config.enabled && standby_config.auto_promote {
+        if self.standby_config.enabled && self.standby_config.auto_promote {
             if let Some(ref node_info) = info {
                 if node_info.role == NodeRole::Data && node_info.mode == Some(DataNodeMode::Primary)
                 {
@@ -2178,6 +2180,7 @@ impl Clone for MetaStateMachine {
             last_applied: RwLock::new(self.last_applied.read().clone()),
             last_membership: RwLock::new(self.last_membership.read().clone()),
             event_broadcast,
+            standby_config: self.standby_config.clone(),
         }
     }
 }
@@ -2454,7 +2457,7 @@ mod tests {
     fn create_test_state_machine() -> MetaStateMachine {
         let dir = tempdir().unwrap();
         let db = sled::open(dir.path()).unwrap();
-        MetaStateMachine::new(db)
+        MetaStateMachine::new(db, crate::meta::config::StandbyConfig::default())
     }
 
     // ============================================================================
