@@ -89,14 +89,10 @@ pub fn build_router(state: RouterAppState) -> Router {
         .route("/query/:db", get(query_handler))
         .route("/query/:db", post(query_handler_post))
         // Schema/Table endpoints (forwarded to Data nodes)
-        .route("/tables/:db", get(list_tables_handler))
         .route("/schemas/:db", get(list_schemas_handler))
-        .route("/databases/:db/schemas", get(list_schemas_handler))
-        .route(
-            "/databases/:db/schemas/:schema/tables",
-            get(list_schema_tables_handler),
-        )
-        .route("/schema/:db/:table", get(schema_handler))
+        .route("/tables/:db", get(list_tables_handler))
+        .route("/tables/:db/:schema", get(list_schema_tables_handler))
+        .route("/schema/:db/:schema/:table", get(schema_handler))
         // Partition endpoint (forwarded to Data nodes)
         .route(
             "/partitions/:catalog/:schema/:table",
@@ -126,11 +122,10 @@ pub async fn home() -> &'static str {
        POST /write/:db           - Write data (InfluxDB line protocol)\n\
        GET/POST /query/:db       - Execute SQL query\n\n\
      Schema/Table Endpoints:\n\
-       GET  /tables/:db          - List tables in database\n\
-       GET  /schemas/:db         - List schemas in database\n\
-       GET  /databases/:db/schemas - List schemas\n\
-       GET  /databases/:db/schemas/:schema/tables - List tables in schema\n\
-       GET  /schema/:db/:table   - Get table schema\n\n\
+       GET  /schemas/:db         - List schemas\n\
+       GET  /tables/:db          - List all tables\n\
+       GET  /tables/:db/:schema  - List tables in schema\n\
+       GET  /schema/:db/:schema/:table - Get table schema\n\n\
      Partition Endpoints:\n\
        GET  /partitions/:catalog/:schema/:table - List partitions\n\n\
      Memory/Stats Endpoints:\n\
@@ -536,7 +531,7 @@ pub async fn list_schema_tables_handler(
 
 /// Get table schema - try nodes until one succeeds (not all nodes have all tables)
 pub async fn schema_handler(
-    Path((db, table)): Path<(String, String)>,
+    Path((db, schema, table)): Path<(String, String, String)>,
     State(state): State<RouterAppState>,
 ) -> impl IntoResponse {
     let nodes = state.shard_cache.get_active_data_nodes();
@@ -547,12 +542,15 @@ pub async fn schema_handler(
         );
     }
 
+    // Construct full table path: schema.table
+    let full_table = format!("{}.{}", schema, table);
+
     // Try each node until one succeeds (table might only be on some nodes)
     let mut last_error = String::new();
     for node in &nodes {
         match state
             .data_node_pool
-            .get_table_schema(&node.node_id, &db, &table)
+            .get_table_schema(&node.node_id, &db, &full_table)
             .await
         {
             Ok(schema) => return (StatusCode::OK, schema),

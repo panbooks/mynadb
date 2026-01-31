@@ -162,16 +162,11 @@ pub fn build_router(state: DataNodeState) -> Router {
         // Write endpoints
         .route("/write/:db", post(write_handler))
         .route("/write", post(write_handler_query_param))
-        // Schema/Table endpoints (shorthand)
-        .route("/tables/:db", get(list_tables_handler))
+        // Schema/Table endpoints
         .route("/schemas/:db", get(list_schemas_handler))
-        // Schema/Table endpoints (full path)
-        .route("/databases/:db/schemas", get(list_schemas_handler))
-        .route(
-            "/databases/:db/schemas/:schema/tables",
-            get(list_schema_tables_handler),
-        )
-        .route("/schema/:db/:table", get(schema_handler))
+        .route("/tables/:db", get(list_tables_handler))
+        .route("/tables/:db/:schema", get(list_schema_tables_handler))
+        .route("/schema/:db/:schema/:table", get(schema_handler))
         // Cache management
         .route("/flush", post(flush_handler))
         .route("/memory", get(memory_handler))
@@ -234,11 +229,10 @@ async fn home() -> &'static str {
        POST /write/:db           - Write data (line protocol)\n\
        POST /write?db=:db        - Write data (InfluxDB-compatible)\n\n\
      Schema/Table Endpoints:\n\
-       GET  /tables/:db          - List tables (shorthand)\n\
-       GET  /schemas/:db         - List schemas (shorthand)\n\
-       GET  /databases/:db/schemas - List schemas\n\
-       GET  /databases/:db/schemas/:schema/tables - List tables in schema\n\
-       GET  /schema/:db/:table   - Get table schema\n\n\
+       GET  /schemas/:db         - List schemas\n\
+       GET  /tables/:db          - List all tables\n\
+       GET  /tables/:db/:schema  - List tables in schema\n\
+       GET  /schema/:db/:schema/:table - Get table schema\n\n\
      Cache Management:\n\
        GET  /memory              - Memory usage stats\n\
        POST /flush               - Flush cache to disk\n\
@@ -752,7 +746,7 @@ async fn list_schema_tables_handler(
 }
 
 async fn schema_handler(
-    Path((db, table)): Path<(String, String)>,
+    Path((db, schema, table)): Path<(String, String, String)>,
     State(state): State<DataNodeState>,
 ) -> impl IntoResponse {
     let qe = match &state.query_engine {
@@ -764,7 +758,9 @@ async fn schema_handler(
             )
         }
     };
-    match shared::get_table_schema_impl(qe, &db, &table).await {
+    // Construct full table path: schema.table
+    let full_table = format!("{}.{}", schema, table);
+    match shared::get_table_schema_impl(qe, &db, &full_table).await {
         Ok(schema) => (StatusCode::OK, schema),
         Err(e) => (StatusCode::NOT_FOUND, e),
     }
