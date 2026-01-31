@@ -1,11 +1,12 @@
 # Data Node 2 - Cold Standby testing
 [data]
 node_id = "data-2"
-advertise_addr = "127.0.0.1:5103"
-grpc_port = 5103
+# HTTP port for health checks and management API (base + 0)
 http_port = 5100
-flight_port = 5101
-meta_endpoints = ["127.0.0.1:6000"]
+# Advertised address for Flight server (base + 1)
+advertise_addr = "127.0.0.1:5101"
+# Meta service endpoints (gRPC port)
+meta_endpoints = ["127.0.0.1:6001"]
 meta_connect_timeout_ms = 5000
 meta_request_timeout_ms = 30000
 

@@ -3,12 +3,13 @@
 
 [data]
 node_id = "data-4"
-advertise_addr = "127.0.0.1:5303"
-grpc_port = 5303
+# HTTP port for health checks and management API (base + 0)
 http_port = 5300
-flight_port = 5301
+# Advertised address for Flight server (base + 1)
+advertise_addr = "127.0.0.1:5301"
 
-meta_endpoints = ["127.0.0.1:6000", "127.0.0.1:6100", "127.0.0.1:6200"]
+# Meta service endpoints (gRPC ports)
+meta_endpoints = ["127.0.0.1:6001", "127.0.0.1:6101", "127.0.0.1:6201"]
 meta_connect_timeout_ms = 5000
 meta_request_timeout_ms = 30000
 

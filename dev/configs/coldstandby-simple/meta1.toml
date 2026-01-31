@@ -1,10 +1,13 @@
 # Single Meta Node for Cold Standby testing
 [meta]
 node_id = 1
-bind_addr = "0.0.0.0:6000"
-advertise_addr = "127.0.0.1:6000"
-data_dir = "./dev/data/coldstandby-simple/meta1"
+# HTTP port for health checks and management API (base + 0)
 http_port = 6000
+# Address to bind the gRPC server (base + 1)
+bind_addr = "0.0.0.0:6001"
+advertise_addr = "127.0.0.1:6001"
+data_dir = "./dev/data/coldstandby-simple/meta1"
+# Single-node cluster (no peers)
 peers = []
 
 [meta.raft]

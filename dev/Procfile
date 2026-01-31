@@ -1,13 +1,13 @@
 # MynaDB Cluster Development Environment
 # Full cluster: 3 meta nodes + 1 router + 2 data nodes
 #
-# Port assignments:
-#   meta1:   gRPC 7100
-#   meta2:   gRPC 7101
-#   meta3:   gRPC 7102
-#   router1: HTTP 7000, Flight 7001
-#   data1:   Flight 7200
-#   data2:   Flight 7201
+# Port assignments (base + offset pattern):
+#   meta1:   HTTP 6000, gRPC 6001
+#   meta2:   HTTP 6100, gRPC 6101
+#   meta3:   HTTP 6200, gRPC 6201
+#   router1: HTTP 7000, Flight 7001, MySQL 7002
+#   data1:   HTTP 5000, Flight 5001
+#   data2:   HTTP 5100, Flight 5101
 #
 # Start with: goreman start
 
