@@ -251,14 +251,14 @@ impl QueryCoordinator {
             || sql_upper.contains(" MIN(")
             || sql_upper.contains(" MAX(");
 
-        // Get queryable data nodes (Active or Retiring)
-        // Note: We query all queryable nodes because any node might have data for the table.
+        // Get queryable Primary data nodes (Active or Retiring)
+        // Note: We only query Primary nodes - Standby nodes are cold backups.
         // Retiring nodes are included because they may have unflushed memtable data.
         // Partition-level pruning would require a reverse index (table→partitions→nodes),
         // which adds complexity. Since queries are typically fast and parallelized,
         // the overhead of querying extra nodes is minimal compared to building/maintaining
         // a reverse index. The time_range is used for partition pruning at the data node level.
-        let target_nodes = self.shard_cache.get_queryable_data_nodes();
+        let target_nodes = self.shard_cache.get_queryable_primary_nodes();
 
         // Limit parallel fan-out
         let target_nodes: Vec<_> = target_nodes

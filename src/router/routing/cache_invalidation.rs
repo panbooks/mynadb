@@ -4,7 +4,9 @@
 
 use super::shard_cache::{DataNodeInfo, DataNodeMode, NodeState, PartitionKey, ShardCache};
 use crate::meta::client::{EventSubscriber, MetaClient, MetaEvent, SubscriberConfig};
-use crate::meta::types::{EventType, NodeRole, NodeState as MetaNodeState};
+use crate::meta::types::{
+    DataNodeMode as MetaDataNodeMode, EventType, NodeRole, NodeState as MetaNodeState,
+};
 use crate::router::client::DataNodePool;
 use dashmap::DashSet;
 use std::sync::Arc;
@@ -68,7 +70,7 @@ impl CacheInvalidationHandler {
                         grpc_addr: n.advertise_addr.clone(),
                         state: NodeState::Active,
                         load_score: 0.5,
-                        mode: DataNodeMode::Primary, // Default to Primary
+                        mode: convert_node_mode(n.mode),
                     })
                     .collect();
 
@@ -164,7 +166,7 @@ impl CacheInvalidationHandler {
                     grpc_addr: node.advertise_addr.clone(),
                     state: NodeState::Active,
                     load_score: 0.5,
-                    mode: DataNodeMode::Primary,
+                    mode: convert_node_mode(node.mode),
                 });
                 self.data_node_pool
                     .add_node(&node.node_id, &node.advertise_addr);
@@ -261,7 +263,16 @@ impl CacheInvalidationHandler {
             let grpc_addr = payload["grpc_addr"].as_str().unwrap_or_default();
 
             if !node_id.is_empty() && !grpc_addr.is_empty() {
-                info!("Node joined: {} at {}", node_id, grpc_addr);
+                // Extract mode from payload if present
+                let mode = match payload["mode"].as_str() {
+                    Some("standby") | Some("Standby") => DataNodeMode::Standby,
+                    _ => DataNodeMode::Primary, // Default to Primary
+                };
+
+                info!(
+                    "Node joined: {} at {} (mode: {:?})",
+                    node_id, grpc_addr, mode
+                );
 
                 // Update shard cache for routing
                 shard_cache.upsert_data_node(DataNodeInfo {
@@ -269,7 +280,7 @@ impl CacheInvalidationHandler {
                     grpc_addr: grpc_addr.to_string(),
                     state: NodeState::Active,
                     load_score: 0.5,
-                    mode: DataNodeMode::Primary, // Default to Primary, will be updated via DataNodeModeChanged event
+                    mode,
                 });
 
                 // Also add to connection pool
@@ -360,13 +371,25 @@ impl CacheInvalidationHandler {
                     debug!("Node updated: {} -> {:?}", node_id, state);
                 }
 
+                // Preserve existing mode or extract from payload
+                let existing_mode = shard_cache
+                    .get_data_node(node_id)
+                    .map(|n| n.mode)
+                    .unwrap_or_else(|| {
+                        // Try to get mode from payload
+                        match payload["mode"].as_str() {
+                            Some("standby") | Some("Standby") => DataNodeMode::Standby,
+                            _ => DataNodeMode::Primary,
+                        }
+                    });
+
                 // Update shard cache
                 shard_cache.upsert_data_node(DataNodeInfo {
                     node_id: node_id.to_string(),
                     grpc_addr: grpc_addr.to_string(),
                     state,
                     load_score: 0.5,
-                    mode: DataNodeMode::Primary, // Preserve mode or default to Primary
+                    mode: existing_mode,
                 });
 
                 // Also update in connection pool (address may have changed)
@@ -518,5 +541,13 @@ impl CacheInvalidationHandler {
                 shard_cache.update_node_mode(node_id, mode);
             }
         }
+    }
+}
+
+/// Convert meta's DataNodeMode to router's DataNodeMode
+fn convert_node_mode(mode: Option<MetaDataNodeMode>) -> DataNodeMode {
+    match mode {
+        Some(MetaDataNodeMode::Standby) => DataNodeMode::Standby,
+        Some(MetaDataNodeMode::Primary) | None => DataNodeMode::Primary,
     }
 }
