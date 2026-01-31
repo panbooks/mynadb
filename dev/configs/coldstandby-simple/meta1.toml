@@ -1,10 +1,10 @@
 # Single Meta Node for Cold Standby testing
 [meta]
 node_id = 1
-bind_addr = "0.0.0.0:7100"
-advertise_addr = "127.0.0.1:7100"
+bind_addr = "0.0.0.0:6000"
+advertise_addr = "127.0.0.1:6000"
 data_dir = "./dev/data/coldstandby-simple/meta1"
-http_port = 9100
+http_port = 6000
 peers = []
 
 [meta.raft]

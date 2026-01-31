@@ -1,17 +1,14 @@
 # MynaDB Data Node 6 - Zone C (Standby - assigned by Meta)
 # Cold Standby Architecture
 
-[server]
-http_host = "0.0.0.0"
-http_port = 7060
-flight_host = "0.0.0.0"
-flight_port = 7061
-
 [data]
 node_id = "data-6"
-advertise_addr = "127.0.0.1:7205"
-grpc_port = 7205
-meta_endpoints = ["127.0.0.1:7100", "127.0.0.1:7101", "127.0.0.1:7102"]
+advertise_addr = "127.0.0.1:5503"
+grpc_port = 5503
+http_port = 5500
+flight_port = 5501
+
+meta_endpoints = ["127.0.0.1:6000", "127.0.0.1:6100", "127.0.0.1:6200"]
 meta_connect_timeout_ms = 5000
 meta_request_timeout_ms = 30000
 

@@ -6,16 +6,18 @@
 node_id = 2
 
 # Address to bind the gRPC server
-bind_addr = "0.0.0.0:7101"
+bind_addr = "0.0.0.0:6100"
 
 # Address advertised to other nodes for Raft communication
-advertise_addr = "127.0.0.1:7101"
+advertise_addr = "127.0.0.1:6100"
+
+http_port = 6100
 
 # Directory for sled database and Raft logs
 data_dir = "./dev/data/replicaset/meta2"
 
 # Initial cluster peers (other meta nodes)
-peers = ["127.0.0.1:7100", "127.0.0.1:7102"]
+peers = ["127.0.0.1:6000", "127.0.0.1:6200"]
 
 [meta.raft]
 # Heartbeat interval in milliseconds

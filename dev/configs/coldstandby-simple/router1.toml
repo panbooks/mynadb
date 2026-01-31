@@ -12,7 +12,7 @@ mysql_enabled = true
 node_id = "router-1"
 
 [router.meta]
-endpoints = ["127.0.0.1:7100"]
+endpoints = ["127.0.0.1:6000"]
 connect_timeout_ms = 5000
 request_timeout_ms = 30000
 

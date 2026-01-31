@@ -2,12 +2,12 @@
 # Full cluster: 3 meta nodes + 1 router + 2 data nodes
 #
 # Port assignments:
-#   meta1:   gRPC 7100
-#   meta2:   gRPC 7101
-#   meta3:   gRPC 7102
-#   router1: HTTP 7000, Flight 7001
-#   data1:   Flight 7200
-#   data2:   Flight 7201
+#   meta1:   gRPC 6000, HTTP 6000
+#   meta2:   gRPC 6100, HTTP 6100
+#   meta3:   gRPC 6200, HTTP 6200
+#   router1: HTTP 7000, Flight 7001, MySQL 7002
+#   data1:   HTTP 5000, Flight 5001, MySQL 5002, gRPC 5003
+#   data2:   HTTP 5100, Flight 5101, MySQL 5102, gRPC 5103
 #
 # Start with: goreman start
 
