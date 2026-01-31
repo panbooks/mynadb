@@ -1236,12 +1236,14 @@ impl FlightService for DataNodeFlightService {
 
                 match &self.db_manager {
                     Some(dm) => {
-                        match crate::services::shared::list_partitions_impl(
+                        match crate::services::shared::list_partitions_impl_async(
                             dm,
                             &req.catalog,
                             &req.schema,
                             &req.table,
-                        ) {
+                        )
+                        .await
+                        {
                             Ok(json) => {
                                 let result = arrow_flight::Result {
                                     body: serde_json::to_vec(&json).unwrap_or_default().into(),

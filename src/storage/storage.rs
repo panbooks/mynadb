@@ -246,6 +246,47 @@ impl Storage {
         Ok(meta.size as u64)
     }
 
+    /// List immediate subdirectories (common prefixes) under a path
+    /// Returns just the directory names, not the full paths
+    pub async fn list_prefixes(&self, prefix: &str) -> Result<Vec<String>, String> {
+        let full_prefix = if prefix.is_empty() {
+            if self.base_path.is_empty() {
+                ObjectPath::from("")
+            } else {
+                ObjectPath::from(format!("{}/", self.base_path))
+            }
+        } else {
+            self.full_path(&format!("{}/", prefix.trim_end_matches('/')))
+        };
+        debug!("Listing prefixes under: {}", full_prefix);
+
+        let store = self.object_store();
+
+        // Use list_with_delimiter to get immediate children
+        let result = store
+            .list_with_delimiter(Some(&full_prefix))
+            .await
+            .map_err(|e| format!("Failed to list prefixes: {}", e))?;
+
+        // Extract just the directory names from common_prefixes
+        let prefixes: Vec<String> = result
+            .common_prefixes
+            .into_iter()
+            .filter_map(|p| {
+                let path_str = p.to_string();
+                // Get the last component (directory name)
+                path_str
+                    .trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .map(|s| s.to_string())
+            })
+            .filter(|s| !s.is_empty() && !s.starts_with('.') && s != "_system" && s != "_wal")
+            .collect();
+
+        Ok(prefixes)
+    }
+
     /// Check if this is local storage
     pub fn is_local(&self) -> bool {
         matches!(self.backend, StorageBackend::Local(_))

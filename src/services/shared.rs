@@ -194,7 +194,26 @@ pub async fn get_table_schema_impl(
         return Err(format!("Error: {}", e));
     }
 
-    let full_table_name = format!("{}_{}", db, table);
+    // Handle different table name formats:
+    // - "cpu" -> "db.default.cpu"
+    // - "schema.cpu" -> "db.schema.cpu"
+    // - "db.schema.cpu" -> "db.schema.cpu"
+    let full_table_name = if table.contains('.') {
+        let parts: Vec<&str> = table.split('.').collect();
+        if parts.len() == 2 {
+            // schema.table format
+            format!("{}.{}.{}", db, parts[0], parts[1])
+        } else if parts.len() >= 3 {
+            // Already fully qualified
+            table.to_string()
+        } else {
+            format!("{}.default.{}", db, table)
+        }
+    } else {
+        // Simple table name
+        format!("{}.default.{}", db, table)
+    };
+
     query_engine
         .get_table_schema(&full_table_name)
         .await
@@ -464,7 +483,7 @@ pub async fn compact_partition_impl(
 // Partition Operations
 // ============================================================================
 
-/// List partitions for a table
+/// List partitions for a table (sync version for local filesystem)
 pub fn list_partitions_impl(
     db_manager: &DatabaseManager,
     catalog: &str,
@@ -472,6 +491,36 @@ pub fn list_partitions_impl(
     table: &str,
 ) -> Result<serde_json::Value, String> {
     match db_manager.discover_table_partitions(catalog, schema, table) {
+        Ok(partitions) => Ok(serde_json::json!({
+            "catalog": catalog,
+            "schema": schema,
+            "table": table,
+            "partitions": partitions.iter().map(|p| {
+                serde_json::json!({
+                    "partition": p.partition,
+                    "date": p.date,
+                    "file_count": p.file_count,
+                    "size_mb": p.total_size_bytes as f64 / 1024.0 / 1024.0
+                })
+            }).collect::<Vec<_>>(),
+            "count": partitions.len(),
+            "total_size_mb": partitions.iter().map(|p| p.total_size_bytes).sum::<u64>() as f64 / 1024.0 / 1024.0
+        })),
+        Err(e) => Err(format!("Error: {}", e)),
+    }
+}
+
+/// List partitions for a table (async version for object storage)
+pub async fn list_partitions_impl_async(
+    db_manager: &DatabaseManager,
+    catalog: &str,
+    schema: &str,
+    table: &str,
+) -> Result<serde_json::Value, String> {
+    match db_manager
+        .discover_table_partitions_async(catalog, schema, table)
+        .await
+    {
         Ok(partitions) => Ok(serde_json::json!({
             "catalog": catalog,
             "schema": schema,

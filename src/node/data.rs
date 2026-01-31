@@ -226,10 +226,13 @@ pub async fn start(config_path: &str) {
     let meta_client_for_http = meta_client.clone();
 
     // Initialize database manager for partition operations
-    let db_manager = Arc::new(crate::jobs::database_manager::DatabaseManager::with_storage(
-        &config.storage.data_dir,
-        storage.clone(),
-    ));
+    let db_manager = Arc::new(
+        crate::jobs::database_manager::DatabaseManager::with_storage_and_node_id(
+            &config.storage.data_dir,
+            storage.clone(),
+            &data_config.node_id,
+        ),
+    );
     let db_manager_for_http = db_manager.clone();
 
     // Clone components for HTTP API (before they're moved to Flight service)
