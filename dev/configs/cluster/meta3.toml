@@ -11,7 +11,7 @@ bind_addr = "0.0.0.0:6200"
 # Address advertised to other nodes for Raft communication
 advertise_addr = "127.0.0.1:6200"
 
-http_port = 6200
+http_port = 6201
 
 # Directory for sled database and Raft logs
 data_dir = "./dev/data/cluster/meta3"
