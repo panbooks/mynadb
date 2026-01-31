@@ -55,21 +55,33 @@ if command -v mc &> /dev/null; then
     echo "Bucket mynadb-coldstandby ready"
 fi
 
-# Build binary
+# Build binary if it doesn't exist
 BUILD_MODE="${BUILD_MODE:-debug}"
 if [ "$BUILD_MODE" = "release" ]; then
-    echo ""
-    echo "Building MynaDB (release mode)..."
-    RUSTFLAGS="-A dead_code -A unused_imports" cargo build --release
-    # Update Procfile to use release binary
-    sed -i 's|target/debug|target/release|g' ./dev/Procfile.coldstandby
+    BINARY="./target/release/mynadb"
+    if [ ! -f "$BINARY" ]; then
+        echo ""
+        echo "Building MynaDB (release mode)..."
+        RUSTFLAGS="-A dead_code -A unused_imports" cargo build --release
+        # Update Procfile to use release binary
+        sed -i 's|target/debug|target/release|g' ./dev/Procfile.coldstandby
+        echo "Build complete!"
+    else
+        echo "Using existing binary: $BINARY"
+        # Still update Procfile for release binary
+        sed -i 's|target/debug|target/release|g' ./dev/Procfile.coldstandby
+    fi
 else
-    echo ""
-    echo "Building MynaDB (debug mode)..."
-    RUSTFLAGS="-A dead_code -A unused_imports" cargo build
+    BINARY="./target/debug/mynadb"
+    if [ ! -f "$BINARY" ]; then
+        echo ""
+        echo "Building MynaDB (debug mode)..."
+        RUSTFLAGS="-A dead_code -A unused_imports" cargo build
+        echo "Build complete!"
+    else
+        echo "Using existing binary: $BINARY"
+    fi
 fi
-
-echo "Build complete!"
 
 # Create data and log directories
 echo ""
