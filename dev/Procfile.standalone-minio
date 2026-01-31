@@ -1,0 +1,15 @@
+# MynaDB Standalone Development Environment - MinIO Storage
+# Single-node mode with MinIO (S3-compatible) storage
+#
+# Prerequisites:
+#   - MinIO running on localhost:9000
+#   - Bucket "mynadb" created
+#
+# Port assignments:
+#   HTTP:   7000
+#   Flight: 7001
+#   MySQL:  7002
+#
+# Start with: goreman -f dev/Procfile.standalone-minio start
+
+mynadb: ./target/debug/mynadb -c ./dev/configs/standalone/minio.toml standalone
