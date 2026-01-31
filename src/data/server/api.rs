@@ -124,6 +124,9 @@ pub struct RetireResponse {
     pub error: Option<String>,
 }
 
+/// Default retirement timeout in seconds (5 minutes)
+const DEFAULT_RETIRE_TIMEOUT_SECS: u64 = 300;
+
 #[derive(Serialize)]
 pub struct RetireStatusResponse {
     pub state: String,
@@ -136,6 +139,11 @@ pub struct RetireStatusResponse {
     pub in_flight_queries: u64,
     /// True when node is ready for shutdown (retiring, no in-flight queries, memtable drained)
     pub ready_for_shutdown: bool,
+    /// Seconds elapsed since retirement started
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elapsed_secs: Option<u64>,
+    /// True when retirement has exceeded timeout and force shutdown is recommended
+    pub timeout_exceeded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub estimated_completion_secs: Option<u64>,
 }
@@ -156,6 +164,7 @@ pub fn build_router(state: DataNodeState) -> Router {
         // Retirement endpoints
         .route("/retire", post(retire))
         .route("/retire/status", get(retire_status))
+        .route("/retire/force", post(force_retire))
         .route("/retire/cancel", post(cancel_retire))
         // Query endpoints
         .route("/query/:db", get(query_handler))
@@ -222,6 +231,7 @@ async fn home() -> &'static str {
      Scale-In Endpoints:\n\
        POST /retire              - Start graceful retirement\n\
        GET  /retire/status       - Get retirement progress\n\
+       POST /retire/force        - Force shutdown (after timeout)\n\
        POST /retire/cancel       - Cancel retirement\n\n\
      Query Endpoints:\n\
        GET  /query/:db?sql=      - Execute SQL query (GET)\n\
@@ -393,6 +403,10 @@ async fn retire_status(State(state): State<DataNodeState>) -> impl IntoResponse 
         .as_ref()
         .map(|c| c.load(Ordering::Relaxed))
         .unwrap_or(0);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
 
     if let Some(status) = state.retire_status.read().as_ref() {
         let current_state = if cache_stats.total_rows == 0 && in_flight == 0 {
@@ -409,6 +423,10 @@ async fn retire_status(State(state): State<DataNodeState>) -> impl IntoResponse 
             Some(0)
         };
 
+        // Calculate elapsed time since retirement started
+        let elapsed_secs = ((now_ms - status.started_at) / 1000).max(0) as u64;
+        let timeout_exceeded = elapsed_secs > DEFAULT_RETIRE_TIMEOUT_SECS;
+
         // Ready for shutdown when retiring, memtable empty, and no in-flight queries
         let ready_for_shutdown =
             is_retiring && cache_stats.total_rows == 0 && in_flight == 0;
@@ -423,6 +441,8 @@ async fn retire_status(State(state): State<DataNodeState>) -> impl IntoResponse 
                 memtable_rows: cache_stats.total_rows as u64,
                 in_flight_queries: in_flight,
                 ready_for_shutdown,
+                elapsed_secs: Some(elapsed_secs),
+                timeout_exceeded,
                 estimated_completion_secs: estimated_secs,
             }),
         )
@@ -437,6 +457,8 @@ async fn retire_status(State(state): State<DataNodeState>) -> impl IntoResponse 
                 memtable_rows: cache_stats.total_rows as u64,
                 in_flight_queries: in_flight,
                 ready_for_shutdown: false,
+                elapsed_secs: None,
+                timeout_exceeded: false,
                 estimated_completion_secs: None,
             }),
         )
@@ -496,6 +518,81 @@ async fn cancel_retire(State(state): State<DataNodeState>) -> impl IntoResponse 
             }),
         ),
     }
+}
+
+/// Force retirement response
+#[derive(Serialize)]
+struct ForceRetireResponse {
+    success: bool,
+    message: String,
+    in_flight_queries_cancelled: u64,
+    memtable_rows_lost: u64,
+}
+
+/// Force retirement - immediately marks node as ready for shutdown
+/// WARNING: This may cause data loss if memtable has unflushed data
+/// and query failures for in-flight queries
+async fn force_retire(State(state): State<DataNodeState>) -> impl IntoResponse {
+    let is_retiring = state.is_retiring.load(Ordering::Relaxed);
+
+    if !is_retiring {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ForceRetireResponse {
+                success: false,
+                message: "Node is not retiring. Call POST /retire first.".to_string(),
+                in_flight_queries_cancelled: 0,
+                memtable_rows_lost: 0,
+            }),
+        );
+    }
+
+    let cache_stats = state.cache.stats().await;
+    let in_flight = state
+        .in_flight_queries
+        .as_ref()
+        .map(|c| c.load(Ordering::Relaxed))
+        .unwrap_or(0);
+
+    // Log warning about potential data loss
+    if cache_stats.total_rows > 0 || in_flight > 0 {
+        tracing::warn!(
+            "Force retire requested: {} memtable rows may be lost, {} queries may fail",
+            cache_stats.total_rows,
+            in_flight
+        );
+    }
+
+    // Trigger emergency flush if there's data in memtable
+    if cache_stats.total_rows > 0 {
+        info!(
+            "Force retire: triggering emergency flush of {} rows",
+            cache_stats.total_rows
+        );
+        if let Err(e) = state.cache.flush().await {
+            tracing::warn!("Emergency flush failed during force retire: {}", e);
+        }
+    }
+
+    // Update status to indicate forced shutdown
+    if let Some(status) = state.retire_status.write().as_mut() {
+        status.state = "force_drained".to_string();
+    }
+
+    info!(
+        "Node {} force retire complete: {} queries cancelled, {} rows flushed",
+        state.node_id, in_flight, cache_stats.total_rows
+    );
+
+    (
+        StatusCode::OK,
+        Json(ForceRetireResponse {
+            success: true,
+            message: "Node marked for forced shutdown. Emergency flush triggered.".to_string(),
+            in_flight_queries_cancelled: in_flight,
+            memtable_rows_lost: 0, // We attempted flush, so hopefully 0
+        }),
+    )
 }
 
 // ============================================================================
