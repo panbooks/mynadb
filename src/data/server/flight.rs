@@ -1028,8 +1028,34 @@ impl FlightService for DataNodeFlightService {
                 // Trigger cache flush
                 match self.cache.flush().await {
                     Ok(results) => {
+                        let files_count = results.len();
+
+                        // CRITICAL: Refresh QueryEngine table registrations for all flushed tables
+                        // Without this, queries after flush return empty because old table
+                        // registrations still point to memtable-only (now empty after flush)
+                        let mut refreshed_tables =
+                            std::collections::HashSet::<(String, String, String)>::new();
+                        for file in &results {
+                            refreshed_tables.insert((
+                                file.catalog.clone(),
+                                file.schema.clone(),
+                                file.table.clone(),
+                            ));
+                        }
+                        for (catalog, schema, table) in &refreshed_tables {
+                            self.query_engine
+                                .refresh_table_after_flush(catalog, schema, table);
+                        }
+                        if !refreshed_tables.is_empty() {
+                            info!(
+                                "Flight FLUSH: {} files, {} tables refreshed",
+                                files_count,
+                                refreshed_tables.len()
+                            );
+                        }
+
                         let response =
-                            format!("{{\"files_flushed\":{},\"success\":true}}", results.len());
+                            format!("{{\"files_flushed\":{},\"success\":true}}", files_count);
                         let result = arrow_flight::Result {
                             body: response.into_bytes().into(),
                         };
