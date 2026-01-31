@@ -44,16 +44,18 @@ echo ""
 echo "Storage: $STORAGE_DESC"
 echo ""
 
-# Build debug binary
-echo "Building MynaDB (debug mode)..."
-cargo build
-
+# Build debug binary if it doesn't exist
 if [ ! -f "./target/debug/mynadb" ]; then
-    echo "ERROR: Build failed - binary not found"
-    exit 1
+    echo "Building MynaDB (debug mode)..."
+    cargo build
+    if [ ! -f "./target/debug/mynadb" ]; then
+        echo "ERROR: Build failed - binary not found"
+        exit 1
+    fi
+    echo "Build complete!"
+else
+    echo "Using existing binary: ./target/debug/mynadb"
 fi
-
-echo "Build complete!"
 echo ""
 
 # Create data and log directories

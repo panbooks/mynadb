@@ -148,7 +148,7 @@ pub async fn list_tables_impl(
     let tables = query_engine.list_tables().await;
     let db_tables: Vec<String> = tables
         .into_iter()
-        .filter(|t| t.starts_with(&format!("{}_", db)))
+        .filter(|t| t.starts_with(&format!("{}.", db)))
         .collect();
 
     Ok(serde_json::json!({
