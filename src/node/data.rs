@@ -241,6 +241,11 @@ pub async fn start(config_path: &str) {
     let config_for_http = config.clone();
     let wal_for_http = wal.clone();
 
+    // Create shared is_retiring flag (used by both Flight and HTTP services)
+    // When true, the node rejects new writes to allow graceful scale-in
+    let is_retiring = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let is_retiring_for_http = Arc::clone(&is_retiring);
+
     // Create Flight service (replaces gRPC)
     let mut flight_service = DataNodeFlightService::new(
         data_cache,
@@ -249,7 +254,8 @@ pub async fn start(config_path: &str) {
         config.schema.clone(),
         data_config.node_id.clone(),
     )
-    .with_db_manager(db_manager);
+    .with_db_manager(db_manager)
+    .with_is_retiring(is_retiring);
 
     // Add parquet cache if available
     if let Some(ref cache) = parquet_cache {
@@ -441,7 +447,7 @@ pub async fn start(config_path: &str) {
             start_time: Instant::now(),
             cache: data_cache_for_http,
             meta_client: meta_client_for_http,
-            is_retiring: Arc::new(AtomicBool::new(false)),
+            is_retiring: is_retiring_for_http, // Shared with Flight service
             retire_status: Arc::new(parking_lot::RwLock::new(None)),
             query_engine: Some(query_engine_for_http),
             config: Some(config_for_http),

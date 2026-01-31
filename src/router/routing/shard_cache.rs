@@ -395,20 +395,22 @@ impl ShardCache {
         if let Some(replica) = self.partition_replicas.get(&partition_key) {
             let nodes = self.data_nodes.read();
 
-            // Check leader health
+            // Check leader health AND mode
+            // Leader must be Active (not Retiring/Drained) AND Primary (not Standby node)
             if let Some(leader) = nodes.get(&replica.leader_node_id) {
-                if leader.state == NodeState::Active {
-                    // Leader healthy - use it
+                if leader.state == NodeState::Active && leader.mode == DataNodeMode::Primary {
+                    // Leader healthy and is Primary - use it
                     return Some(leader.clone());
                 }
             }
 
-            // Leader unhealthy or not found - IMMEDIATELY use standby (zero-downtime!)
+            // Leader unhealthy/retiring/standby - IMMEDIATELY use standby (zero-downtime!)
+            // Note: partition standby replicas should be on Primary nodes
             for standby_id in &replica.standby_node_ids {
                 if let Some(standby) = nodes.get(standby_id) {
-                    if standby.state == NodeState::Active {
+                    if standby.state == NodeState::Active && standby.mode == DataNodeMode::Primary {
                         info!(
-                            "Leader {} unhealthy, instant failover to standby {} for partition {}",
+                            "Leader {} unavailable, instant failover to standby {} for partition {}",
                             replica.leader_node_id, standby_id, partition_key
                         );
                         return Some(standby.clone());
@@ -422,11 +424,12 @@ impl ShardCache {
         if let Some(owner_id) = self.get_partition_owner(key) {
             let nodes = self.data_nodes.read();
             if let Some(owner) = nodes.get(&owner_id) {
-                if owner.state == NodeState::Active {
+                // Owner must be Active AND Primary
+                if owner.state == NodeState::Active && owner.mode == DataNodeMode::Primary {
                     return Some(owner.clone());
                 }
             }
-            // Owner unhealthy → fall through to hash-based
+            // Owner unhealthy/retiring/standby → fall through to hash-based
         }
 
         // === PRIORITY 4: Hash-based selection among Active PRIMARY nodes ===
