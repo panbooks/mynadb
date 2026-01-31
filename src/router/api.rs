@@ -315,11 +315,12 @@ pub async fn router_status_handler(State(state): State<RouterAppState>) -> impl 
     (StatusCode::OK, Json(status))
 }
 
-/// List active Data nodes
+/// List active Primary Data nodes (only Primary nodes serve traffic)
 pub async fn list_data_nodes_handler(State(state): State<RouterAppState>) -> impl IntoResponse {
-    use super::routing::shard_cache::NodeState;
+    use super::routing::shard_cache::{DataNodeMode, NodeState};
 
-    let nodes = state.shard_cache.get_active_data_nodes();
+    // Only show Primary nodes - Standby nodes are cold backups and don't serve traffic
+    let nodes = state.shard_cache.get_active_primary_nodes();
 
     let node_list: Vec<_> = nodes
         .iter()
@@ -335,6 +336,10 @@ pub async fn list_data_nodes_handler(State(state): State<RouterAppState>) -> imp
                     NodeState::Retiring => "retiring",
                     NodeState::Drained => "drained",
                 },
+                "mode": match n.mode {
+                    DataNodeMode::Primary => "primary",
+                    DataNodeMode::Standby => "standby",
+                },
                 "load_score": n.load_score,
             })
         })
@@ -345,12 +350,15 @@ pub async fn list_data_nodes_handler(State(state): State<RouterAppState>) -> imp
 
 /// Stats handler - aggregate stats from data nodes
 pub async fn stats_handler(State(state): State<RouterAppState>) -> impl IntoResponse {
-    let nodes = state.shard_cache.get_active_data_nodes();
+    let primary_nodes = state.shard_cache.get_active_primary_nodes();
+    let all_nodes = state.shard_cache.get_active_data_nodes();
 
     let stats = serde_json::json!({
         "node_type": "router",
         "node_id": state.router_config.node_id,
-        "active_data_nodes": nodes.len(),
+        "active_primary_nodes": primary_nodes.len(),
+        "active_standby_nodes": all_nodes.len() - primary_nodes.len(),
+        "active_data_nodes": all_nodes.len(),
         "meta_connected": state.is_meta_connected(),
         "queries_routed": 0,  // TODO: Add query counter
         "writes_routed": 0,   // TODO: Add write counter
@@ -386,12 +394,12 @@ pub async fn flush_handler(State(state): State<RouterAppState>) -> impl IntoResp
 // Schema/Table Handlers (forwarded to Data nodes)
 // ============================================================================
 
-/// List tables - broadcast to all nodes and combine results
+/// List tables - broadcast to Primary nodes and combine results
 pub async fn list_tables_handler(
     Path(db): Path<String>,
     State(state): State<RouterAppState>,
 ) -> impl IntoResponse {
-    let nodes = state.shard_cache.get_active_data_nodes();
+    let nodes = state.shard_cache.get_active_primary_nodes();
     if nodes.is_empty() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -432,12 +440,12 @@ pub async fn list_tables_handler(
     (StatusCode::OK, Json(response))
 }
 
-/// List schemas - broadcast to all nodes and combine results
+/// List schemas - broadcast to Primary nodes and combine results
 pub async fn list_schemas_handler(
     Path(db): Path<String>,
     State(state): State<RouterAppState>,
 ) -> impl IntoResponse {
-    let nodes = state.shard_cache.get_active_data_nodes();
+    let nodes = state.shard_cache.get_active_primary_nodes();
     if nodes.is_empty() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -478,12 +486,12 @@ pub async fn list_schemas_handler(
     (StatusCode::OK, Json(response))
 }
 
-/// List tables in a specific schema - broadcast to all nodes and combine results
+/// List tables in a specific schema - broadcast to Primary nodes and combine results
 pub async fn list_schema_tables_handler(
     Path((db, schema)): Path<(String, String)>,
     State(state): State<RouterAppState>,
 ) -> impl IntoResponse {
-    let nodes = state.shard_cache.get_active_data_nodes();
+    let nodes = state.shard_cache.get_active_primary_nodes();
     if nodes.is_empty() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -529,12 +537,12 @@ pub async fn list_schema_tables_handler(
     (StatusCode::OK, Json(response))
 }
 
-/// Get table schema - try nodes until one succeeds (not all nodes have all tables)
+/// Get table schema - try Primary nodes until one succeeds (not all nodes have all tables)
 pub async fn schema_handler(
     Path((db, schema, table)): Path<(String, String, String)>,
     State(state): State<RouterAppState>,
 ) -> impl IntoResponse {
-    let nodes = state.shard_cache.get_active_data_nodes();
+    let nodes = state.shard_cache.get_active_primary_nodes();
     if nodes.is_empty() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -565,12 +573,12 @@ pub async fn schema_handler(
 // Partition Handlers (forwarded to Data nodes)
 // ============================================================================
 
-/// List partitions - broadcast to all nodes and combine results
+/// List partitions - broadcast to Primary nodes and combine results
 pub async fn list_partitions_handler(
     Path((catalog, schema, table)): Path<(String, String, String)>,
     State(state): State<RouterAppState>,
 ) -> impl IntoResponse {
-    let nodes = state.shard_cache.get_active_data_nodes();
+    let nodes = state.shard_cache.get_active_primary_nodes();
     if nodes.is_empty() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -646,9 +654,9 @@ pub async fn list_partitions_handler(
 // Memory/Stats Handlers (aggregated from Data nodes)
 // ============================================================================
 
-/// Memory stats - aggregate from all data nodes
+/// Memory stats - aggregate from Primary data nodes (Standby nodes don't serve traffic)
 pub async fn memory_handler(State(state): State<RouterAppState>) -> impl IntoResponse {
-    let nodes = state.shard_cache.get_active_data_nodes();
+    let nodes = state.shard_cache.get_active_primary_nodes();
     if nodes.is_empty() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,

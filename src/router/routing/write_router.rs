@@ -483,9 +483,10 @@ impl WriteRouter {
         ))
     }
 
-    /// Broadcast flush command to all active data nodes
+    /// Broadcast flush command to all active Primary data nodes
+    /// (Standby nodes are cold backups and don't have in-memory data to flush)
     pub async fn broadcast_flush(&self) -> Result<usize, String> {
-        let nodes = self.shard_cache.get_active_data_nodes();
+        let nodes = self.shard_cache.get_active_primary_nodes();
         if nodes.is_empty() {
             return Err("No active data nodes".to_string());
         }
