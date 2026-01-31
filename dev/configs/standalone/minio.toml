@@ -12,7 +12,7 @@ mysql_enabled = true
 [storage]
 data_dir = "./dev/data/standalone"
 backend = "minio"
-bucket = "mynadb"
+bucket = "mynadb-standalone"
 region = "us-east-1"
 access_key = "minioadmin"
 secret_key = "minioadmin"
