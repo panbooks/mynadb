@@ -16,7 +16,7 @@ meta_request_timeout_ms = 30000
 [storage]
 backend = "minio"
 data_dir = "./dev/data/cluster/data1"
-bucket = "mynadb"
+bucket = "mynadb-cluster"
 region = "us-east-1"
 access_key = "minioadmin"
 secret_key = "minioadmin"
