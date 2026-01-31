@@ -429,12 +429,36 @@ impl QueryEngine {
         schema_name: &str,
         table_name: &str,
     ) -> Result<(), String> {
+        // For object storage with memtable data, always re-register to include fresh writes
+        // This is needed because the table might have been registered with stale/empty data
+        let is_object_storage = self
+            .storage
+            .as_ref()
+            .map(|s| !s.is_local())
+            .unwrap_or(false);
+
+        let has_memtable_data = self
+            .write_cache
+            .as_ref()
+            .map(|c| c.has_cached_data(catalog_name, schema_name, table_name))
+            .unwrap_or(false);
+
         // Check if table is already registered in DataFusion
         if let Some(catalog) = self.ctx.catalog(catalog_name) {
             if let Some(schema) = catalog.schema(schema_name) {
                 if schema.table_exist(table_name) {
-                    // Table already registered, skip
-                    return Ok(());
+                    // For object storage with memtable data, re-register to include fresh writes
+                    if is_object_storage && has_memtable_data {
+                        debug!(
+                            "Re-registering {}.{}.{} to include memtable data",
+                            catalog_name, schema_name, table_name
+                        );
+                        // Deregister the old table first
+                        let _ = schema.deregister_table(table_name);
+                    } else {
+                        // Table already registered and no new memtable data, skip
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -485,10 +509,20 @@ impl QueryEngine {
             )
         };
 
+        // For object storage with memtable data, use memtable-only registration
+        // (fresh writes go to memtable before flush, parquet files don't exist yet)
+        if is_object_storage && has_memtable_data {
+            debug!(
+                "Object storage: using memtable for {}.{}.{}",
+                catalog_name, schema_name, table_name
+            );
+            return self
+                .register_memtable_only(catalog_name, schema_name, table_name)
+                .await;
+        }
+
         // For local storage, check if path exists
-        let path_exists = if self.storage.is_none()
-            || self.storage.as_ref().map(|s| s.is_local()).unwrap_or(true)
-        {
+        let path_exists = if self.storage.is_none() || !is_object_storage {
             std::path::Path::new(&table_path).exists()
         } else {
             true
@@ -520,18 +554,14 @@ impl QueryEngine {
             }
 
             // Discover partitions
-            let partitions = if self.storage.is_none()
-                || self.storage.as_ref().map(|s| s.is_local()).unwrap_or(true)
-            {
+            let partitions = if self.storage.is_none() || !is_object_storage {
                 self.discover_table_partitions(&table_path)?
             } else {
                 // For object storage, assume partitioned
                 Vec::new()
             };
 
-            let has_partitions = if self.storage.is_none()
-                || self.storage.as_ref().map(|s| s.is_local()).unwrap_or(true)
-            {
+            let has_partitions = if self.storage.is_none() || !is_object_storage {
                 !partitions.is_empty()
             } else {
                 true
@@ -560,10 +590,33 @@ impl QueryEngine {
         self.ensure_schema_in_catalog(catalog_name, schema_name)
             .await?;
 
-        if has_partitions {
-            // Register partitioned table using ListingTable API
+        // Try to register parquet table
+        let parquet_result = if has_partitions {
             self.register_partitioned_table(catalog_name, schema_name, table_name, &table_url)
-                .await?;
+                .await
+        } else {
+            self.register_simple_table(catalog_name, schema_name, table_name, &table_url)
+                .await
+        };
+
+        // If parquet registration fails (no files), try memtable-only for object storage
+        if parquet_result.is_err() {
+            if let Some(ref cache) = self.write_cache {
+                if cache.has_cached_data(catalog_name, schema_name, table_name) {
+                    debug!(
+                        "Parquet registration failed, falling back to memtable for {}.{}.{}",
+                        catalog_name, schema_name, table_name
+                    );
+                    return self
+                        .register_memtable_only(catalog_name, schema_name, table_name)
+                        .await;
+                }
+            }
+            // No memtable data either, return the original error
+            return parquet_result;
+        }
+
+        if has_partitions {
             debug!(
                 "Registered partitioned table: {}.{}.{} ({} partitions)",
                 catalog_name,
@@ -572,9 +625,6 @@ impl QueryEngine {
                 partitions.len()
             );
         } else {
-            // No partitions, use standard registration
-            self.register_simple_table(catalog_name, schema_name, table_name, &table_url)
-                .await?;
             debug!(
                 "Registered non-partitioned table: {}.{}.{}",
                 catalog_name, schema_name, table_name
@@ -1653,6 +1703,7 @@ impl QueryEngine {
     // ========================================================================
 
     /// List all registered tables across all catalogs
+    /// Note: This includes tables registered by queries even if they have no data
     pub async fn list_tables(&self) -> Vec<String> {
         let mut all_tables = Vec::new();
 
@@ -1671,6 +1722,94 @@ impl QueryEngine {
 
         all_tables.sort();
         all_tables
+    }
+
+    /// List tables in a catalog that have actual data (from storage or cache)
+    /// This is more expensive than list_tables() but only returns tables with data
+    pub async fn list_tables_with_data(&self, catalog_name: &str) -> Vec<String> {
+        let mut tables: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // Get tables from in-memory cache
+        if let Some(ref cache) = self.write_cache {
+            for (schema, table) in cache.list_cached_tables_in_catalog(catalog_name) {
+                tables.insert(format!("{}.{}.{}", catalog_name, schema, table));
+            }
+        }
+
+        // Get tables from storage
+        if let Some(ref storage) = self.storage {
+            // Build prefix based on whether we have node_id
+            let prefix = if let Some(ref cache) = self.write_cache {
+                format!("{}/{}/", cache.node_id(), catalog_name)
+            } else {
+                format!("{}/", catalog_name)
+            };
+
+            // List files from storage
+            if let Ok(files) = storage.list(&prefix).await {
+                for file in files {
+                    // Extract schema/table from path like: {schema}/{table}/date=YYYY-MM-DD/file.parquet
+                    let relative = file.strip_prefix(&prefix).unwrap_or(&file);
+                    let parts: Vec<&str> = relative.split('/').collect();
+                    if parts.len() >= 2 {
+                        let schema_name = parts[0];
+                        let table_name = parts[1];
+                        if !schema_name.is_empty()
+                            && !table_name.is_empty()
+                            && !schema_name.starts_with('.')
+                            && !table_name.starts_with('.')
+                            && !table_name.starts_with("date=")
+                        {
+                            tables.insert(format!(
+                                "{}.{}.{}",
+                                catalog_name, schema_name, table_name
+                            ));
+                        }
+                    }
+                }
+            }
+        } else {
+            // Local filesystem
+            let catalog_path = std::path::Path::new(&self.data_dir).join(catalog_name);
+            let schema_entries = match std::fs::read_dir(&catalog_path) {
+                Ok(entries) => entries,
+                Err(_) => return Vec::new(),
+            };
+
+            for schema_entry in schema_entries.flatten() {
+                let schema_path = schema_entry.path();
+                if !schema_path.is_dir() {
+                    continue;
+                }
+
+                let schema_name = match schema_entry.file_name().to_str() {
+                    Some(name) if !name.starts_with('.') => name.to_string(),
+                    _ => continue,
+                };
+
+                let table_entries = match std::fs::read_dir(&schema_path) {
+                    Ok(entries) => entries,
+                    Err(_) => continue,
+                };
+
+                for table_entry in table_entries.flatten() {
+                    if !table_entry.path().is_dir() {
+                        continue;
+                    }
+
+                    let table_name = match table_entry.file_name().to_str() {
+                        Some(name) if !name.starts_with('.') => name.to_string(),
+                        _ => continue,
+                    };
+
+                    tables.insert(format!("{}.{}.{}", catalog_name, schema_name, table_name));
+                }
+            }
+        }
+
+        let mut result: Vec<String> = tables.into_iter().collect();
+        result.sort();
+        result
     }
 
     /// Get schema for a table (supports both qualified "db.table" and unqualified "table")
