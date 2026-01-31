@@ -10,7 +10,7 @@ mysql_enabled = true
 
 [router.meta]
 # Meta service endpoints
-endpoints = ["127.0.0.1:7100", "127.0.0.1:7101", "127.0.0.1:7102"]
+endpoints = ["127.0.0.1:6000", "127.0.0.1:6100", "127.0.0.1:6200"]
 connect_timeout_ms = 5000
 request_timeout_ms = 30000
 

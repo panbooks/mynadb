@@ -3,12 +3,14 @@
 
 [data]
 node_id = "data-1"
-advertise_addr = "127.0.0.1:7200"
-grpc_port = 7200
-http_port = 7210
+advertise_addr = "127.0.0.1:5003"
+grpc_port = 5003
+http_port = 5000
+flight_port = 5001
+mysql_port = 5002
 
 # Meta service endpoints
-meta_endpoints = ["127.0.0.1:7100", "127.0.0.1:7101", "127.0.0.1:7102"]
+meta_endpoints = ["127.0.0.1:6000", "127.0.0.1:6100", "127.0.0.1:6200"]
 meta_connect_timeout_ms = 5000
 meta_request_timeout_ms = 30000
 

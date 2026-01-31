@@ -1,10 +1,11 @@
 # Data Node 3 - Cold Standby testing
 [data]
 node_id = "data-3"
-advertise_addr = "127.0.0.1:7202"
-grpc_port = 7202
-http_port = 7212
-meta_endpoints = ["127.0.0.1:7100"]
+advertise_addr = "127.0.0.1:5203"
+grpc_port = 5203
+http_port = 5200
+flight_port = 5201
+meta_endpoints = ["127.0.0.1:6000"]
 meta_connect_timeout_ms = 5000
 meta_request_timeout_ms = 30000
 

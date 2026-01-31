@@ -3,11 +3,11 @@
 
 [meta]
 node_id = 2
-bind_addr = "0.0.0.0:7101"
-advertise_addr = "127.0.0.1:7101"
+bind_addr = "0.0.0.0:6100"
+advertise_addr = "127.0.0.1:6100"
 data_dir = "./dev/data/coldstandby/meta2"
-http_port = 9101
-peers = ["127.0.0.1:7100", "127.0.0.1:7102"]
+http_port = 6100
+peers = ["127.0.0.1:6000", "127.0.0.1:6200"]
 
 [meta.raft]
 heartbeat_interval_ms = 150

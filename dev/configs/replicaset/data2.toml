@@ -1,19 +1,15 @@
 # MynaDB Data Node 2 - Zone B
 # Warm standby replication enabled
 
-[server]
-http_host = "0.0.0.0"
-http_port = 7020
-flight_host = "0.0.0.0"
-flight_port = 7021
-
 [data]
 node_id = "data-2"
-advertise_addr = "127.0.0.1:7201"
-grpc_port = 7201
+advertise_addr = "127.0.0.1:5103"
+grpc_port = 5103
+http_port = 5100
+flight_port = 5101
 
 # Meta service endpoints
-meta_endpoints = ["127.0.0.1:7100", "127.0.0.1:7101", "127.0.0.1:7102"]
+meta_endpoints = ["127.0.0.1:6000", "127.0.0.1:6100", "127.0.0.1:6200"]
 meta_connect_timeout_ms = 5000
 meta_request_timeout_ms = 30000
 

@@ -1,5 +1,4 @@
-# MynaDB Standalone Configuration
-# Single-node mode with all services
+# MynaDB Standalone Configuration - MinIO Storage
 
 [server]
 http_host = "0.0.0.0"
@@ -11,8 +10,8 @@ mysql_port = 7002
 mysql_enabled = true
 
 [storage]
-backend = "minio"
 data_dir = "./dev/data/standalone"
+backend = "minio"
 bucket = "mynadb"
 region = "us-east-1"
 access_key = "minioadmin"
@@ -31,9 +30,7 @@ flush_interval_secs = 60
 max_size_mb = 2048
 
 [wal]
-enabled = true
-sync_on_write = false
-rotate_size_mb = 128
+enabled = false
 
 [query_cache]
 enabled = true
