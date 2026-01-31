@@ -136,20 +136,14 @@ pub async fn process_write_impl(
 // Schema/Table Operations
 // ============================================================================
 
-/// List tables in a database
+/// List tables in a database that have actual data
 pub async fn list_tables_impl(
     query_engine: &QueryEngine,
     db: &str,
 ) -> Result<serde_json::Value, String> {
-    if let Err(e) = query_engine.ensure_database_registered(db).await {
-        return Err(format!("Error registering database: {}", e));
-    }
-
-    let tables = query_engine.list_tables().await;
-    let db_tables: Vec<String> = tables
-        .into_iter()
-        .filter(|t| t.starts_with(&format!("{}.", db)))
-        .collect();
+    // Use list_tables_with_data which checks storage and cache for actual data
+    // instead of list_tables which returns all registered tables (including empty ones)
+    let db_tables = query_engine.list_tables_with_data(db).await;
 
     Ok(serde_json::json!({
         "database": db,
