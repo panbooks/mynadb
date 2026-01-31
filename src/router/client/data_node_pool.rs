@@ -132,6 +132,20 @@ impl DataNodePool {
             .unwrap_or(true) // Allow if no circuit breaker exists
     }
 
+    /// Check if a node is fully reachable (has address AND circuit breaker allows)
+    pub fn is_node_reachable(&self, node_id: &str) -> bool {
+        self.has_node(node_id) && self.is_node_available(node_id)
+    }
+
+    /// Get all node IDs that are currently reachable
+    pub fn get_reachable_node_ids(&self) -> Vec<String> {
+        self.addresses
+            .iter()
+            .filter(|entry| self.is_node_available(entry.key()))
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
+
     /// Get circuit breaker for a node (for external recording)
     pub fn get_circuit_breaker(&self, node_id: &str) -> Option<Arc<CircuitBreaker>> {
         self.circuit_breakers.get(node_id).map(|cb| cb.clone())
