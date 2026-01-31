@@ -1872,17 +1872,18 @@ impl MetaStateMachine {
     }
 
     /// Get partition count per node for load balancing
+    ///
+    /// Only counts LEADER partitions, not standbys. This ensures proper
+    /// load distribution: a node with 0 leaders should be preferred over
+    /// a node with 1 leader, even if the first node has 1 standby.
     fn get_partition_counts_per_node(&self) -> std::collections::HashMap<String, usize> {
         let replicas = self.list_replicas();
         let mut counts = std::collections::HashMap::new();
 
         for replica in replicas {
-            // Count leader
+            // Only count leader partitions for load balancing.
+            // Standbys are passive and don't affect write load.
             *counts.entry(replica.leader_node_id.clone()).or_insert(0) += 1;
-            // Count standbys
-            for standby_id in &replica.standby_node_ids {
-                *counts.entry(standby_id.clone()).or_insert(0) += 1;
-            }
         }
 
         counts

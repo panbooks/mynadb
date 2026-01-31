@@ -14,7 +14,7 @@ use crate::router::routing::CacheInvalidationHandler;
 use crate::router::state::RouterAppState;
 use std::sync::Arc;
 use tonic::transport::Server;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Macro for welcome messages
 macro_rules! welcome {
@@ -86,6 +86,26 @@ pub async fn start(config_path: &str) {
         ..Default::default()
     };
     cache_handler.start(subscriber_config);
+
+    // Re-sync from Meta to catch any nodes that registered between
+    // init_from_meta() and start(). This handles the race condition
+    // where data nodes register after the router's initial fetch.
+    if let Some(ref meta_client) = state.meta_client {
+        tokio::spawn({
+            let meta_client = Arc::clone(meta_client);
+            let cache_handler_for_resync = CacheInvalidationHandler::new(
+                Arc::clone(&state.shard_cache),
+                Arc::clone(&state.data_node_pool),
+            );
+            async move {
+                // Wait a short time for any pending registrations
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                if let Err(e) = cache_handler_for_resync.resync_from_meta(&meta_client).await {
+                    warn!("Failed to resync from Meta: {}", e);
+                }
+            }
+        });
+    }
 
     // Build HTTP API
     let app = router_api::build_router(state.clone());

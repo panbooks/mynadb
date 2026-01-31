@@ -261,34 +261,44 @@ impl ShardCache {
     }
 
     /// Get all active Data nodes
+    /// Get all active data nodes, sorted by node_id for consistent routing.
     pub fn get_active_data_nodes(&self) -> Vec<DataNodeInfo> {
-        self.data_nodes
+        let mut nodes: Vec<_> = self
+            .data_nodes
             .read()
             .values()
             .filter(|n| n.state == NodeState::Active)
             .cloned()
-            .collect()
+            .collect();
+        nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+        nodes
     }
 
     /// Get all data nodes that can serve reads (Active or Retiring)
     ///
     /// Retiring nodes still have data in memtable and should serve queries
     /// until the memtable is flushed and they transition to Drained.
+    /// Returns nodes sorted by node_id for consistent routing.
     pub fn get_queryable_data_nodes(&self) -> Vec<DataNodeInfo> {
-        self.data_nodes
+        let mut nodes: Vec<_> = self
+            .data_nodes
             .read()
             .values()
             .filter(|n| n.state == NodeState::Active || n.state == NodeState::Retiring)
             .cloned()
-            .collect()
+            .collect();
+        nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+        nodes
     }
 
     /// Get all queryable PRIMARY Data nodes (for query routing)
     ///
     /// Includes Active and Retiring Primary nodes. Retiring nodes
     /// may have unflushed memtable data that should still be queryable.
+    /// Returns nodes sorted by node_id for consistent routing.
     pub fn get_queryable_primary_nodes(&self) -> Vec<DataNodeInfo> {
-        self.data_nodes
+        let mut nodes: Vec<_> = self
+            .data_nodes
             .read()
             .values()
             .filter(|n| {
@@ -296,32 +306,42 @@ impl ShardCache {
                     && n.mode == DataNodeMode::Primary
             })
             .cloned()
-            .collect()
+            .collect();
+        nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+        nodes
     }
 
     /// Get all active PRIMARY Data nodes (for query routing)
     ///
     /// In Cold Standby architecture, only Primary nodes should serve queries.
     /// Standby nodes are cold backups that only receive replication.
+    /// Returns nodes sorted by node_id for consistent hash-based routing.
     pub fn get_active_primary_nodes(&self) -> Vec<DataNodeInfo> {
-        self.data_nodes
+        let mut nodes: Vec<_> = self
+            .data_nodes
             .read()
             .values()
             .filter(|n| n.state == NodeState::Active && n.mode == DataNodeMode::Primary)
             .cloned()
-            .collect()
+            .collect();
+        nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+        nodes
     }
 
     /// Get all active STANDBY Data nodes
     ///
     /// Standby nodes only receive replication and are promoted on Primary failure.
+    /// Returns nodes sorted by node_id for consistent routing.
     pub fn get_active_standby_nodes(&self) -> Vec<DataNodeInfo> {
-        self.data_nodes
+        let mut nodes: Vec<_> = self
+            .data_nodes
             .read()
             .values()
             .filter(|n| n.state == NodeState::Active && n.mode == DataNodeMode::Standby)
             .cloned()
-            .collect()
+            .collect();
+        nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+        nodes
     }
 
     /// Update the list of Data nodes (replaces all)
@@ -412,7 +432,12 @@ impl ShardCache {
         if !primary_nodes.is_empty() {
             let hash = self.hash_partition_key(key);
             let idx = (hash as usize) % primary_nodes.len();
-            return Some(primary_nodes[idx].clone());
+            let selected = &primary_nodes[idx];
+            info!(
+                "Hash routing: partition={} hash={} num_nodes={} idx={} -> {}",
+                partition_key, hash, primary_nodes.len(), idx, selected.node_id
+            );
+            return Some(selected.clone());
         }
 
         // Fall back to all active nodes if no Primary nodes

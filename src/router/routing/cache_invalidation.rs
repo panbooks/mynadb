@@ -6,6 +6,7 @@ use super::shard_cache::{DataNodeInfo, DataNodeMode, NodeState, PartitionKey, Sh
 use crate::meta::client::{EventSubscriber, MetaClient, MetaEvent, SubscriberConfig};
 use crate::meta::types::{EventType, NodeRole, NodeState as MetaNodeState};
 use crate::router::client::DataNodePool;
+use dashmap::DashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -21,6 +22,10 @@ pub struct CacheInvalidationHandler {
     event_rx: Option<mpsc::Receiver<MetaEvent>>,
     /// Event subscriber
     subscriber: Option<EventSubscriber>,
+    /// Nodes that were active when init_from_meta was called.
+    /// Used to filter out stale NodeLeft events that would incorrectly
+    /// remove nodes that are currently active according to Meta.
+    initial_node_ids: Arc<DashSet<String>>,
 }
 
 impl CacheInvalidationHandler {
@@ -30,6 +35,7 @@ impl CacheInvalidationHandler {
             data_node_pool,
             event_rx: None,
             subscriber: None,
+            initial_node_ids: Arc::new(DashSet::new()),
         }
     }
 
@@ -71,16 +77,19 @@ impl CacheInvalidationHandler {
                 // Update shard cache for routing
                 self.shard_cache.update_data_nodes(data_nodes);
 
-                // Also add nodes to connection pool
+                // Also add nodes to connection pool and record initial node IDs
                 for node in &nodes {
                     self.data_node_pool
                         .add_node(&node.node_id, &node.advertise_addr);
+                    // Record this node as initially active.
+                    self.initial_node_ids.insert(node.node_id.clone());
                 }
 
                 // Skip historical events by setting a high sequence number.
-                // We've just gotten the current state from Meta, so we only need
-                // to process NEW events going forward. This prevents replaying
-                // old NodeLeft events that would incorrectly remove current nodes.
+                // This prevents replaying old NodeLeft events. The race condition
+                // where a node registers AFTER this init is handled by:
+                // 1. The node will send NodeJoined events which we'll process
+                // 2. We do a re-sync in start() to catch any missed nodes
                 self.shard_cache.set_last_event_seq(u64::MAX / 2);
 
                 info!(
@@ -123,11 +132,56 @@ impl CacheInvalidationHandler {
         // Spawn the event processing loop
         let shard_cache = Arc::clone(&self.shard_cache);
         let data_node_pool = Arc::clone(&self.data_node_pool);
+        let initial_node_ids = Arc::clone(&self.initial_node_ids);
         if let Some(rx) = self.event_rx.take() {
             tokio::spawn(async move {
-                Self::process_events(rx, shard_cache, data_node_pool).await;
+                Self::process_events(rx, shard_cache, data_node_pool, initial_node_ids).await;
             });
         }
+    }
+
+    /// Re-sync nodes from Meta to handle race conditions
+    ///
+    /// This should be called after start() with a short delay to catch any nodes
+    /// that registered between init_from_meta() and start(). It's safe to call
+    /// this multiple times - it will only ADD nodes, not remove them.
+    pub async fn resync_from_meta(&self, meta_client: &MetaClient) -> Result<(), String> {
+        let nodes = meta_client
+            .list_nodes(Some(NodeRole::Data), Some(MetaNodeState::Active))
+            .await?;
+
+        if nodes.is_empty() {
+            return Ok(());
+        }
+
+        let mut added = 0;
+        for node in &nodes {
+            // Check if node is already in shard cache
+            if self.shard_cache.get_data_node(&node.node_id).is_none() {
+                // Add missing node
+                self.shard_cache.upsert_data_node(DataNodeInfo {
+                    node_id: node.node_id.clone(),
+                    grpc_addr: node.advertise_addr.clone(),
+                    state: NodeState::Active,
+                    load_score: 0.5,
+                    mode: DataNodeMode::Primary,
+                });
+                self.data_node_pool
+                    .add_node(&node.node_id, &node.advertise_addr);
+                self.initial_node_ids.insert(node.node_id.clone());
+                added += 1;
+            }
+        }
+
+        if added > 0 {
+            info!(
+                "Resync added {} missing data nodes from Meta (total now: {})",
+                added,
+                self.shard_cache.get_active_data_nodes().len()
+            );
+        }
+
+        Ok(())
     }
 
     /// Process events from the Meta service
@@ -135,6 +189,7 @@ impl CacheInvalidationHandler {
         mut event_rx: mpsc::Receiver<MetaEvent>,
         shard_cache: Arc<ShardCache>,
         data_node_pool: Arc<DataNodePool>,
+        initial_node_ids: Arc<DashSet<String>>,
     ) {
         info!("Starting cache invalidation event processor");
 
@@ -150,10 +205,10 @@ impl CacheInvalidationHandler {
             // Handle event based on type
             match event.event_type {
                 EventType::NodeJoined => {
-                    Self::handle_node_joined(&shard_cache, &data_node_pool, &event);
+                    Self::handle_node_joined(&shard_cache, &data_node_pool, &initial_node_ids, &event);
                 }
                 EventType::NodeLeft => {
-                    Self::handle_node_left(&shard_cache, &data_node_pool, &event);
+                    Self::handle_node_left(&shard_cache, &data_node_pool, &initial_node_ids, &event);
                 }
                 EventType::NodeStateChanged => {
                     Self::handle_node_updated(&shard_cache, &data_node_pool, &event);
@@ -198,6 +253,7 @@ impl CacheInvalidationHandler {
     fn handle_node_joined(
         shard_cache: &ShardCache,
         data_node_pool: &DataNodePool,
+        initial_node_ids: &DashSet<String>,
         event: &MetaEvent,
     ) {
         if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
@@ -218,6 +274,10 @@ impl CacheInvalidationHandler {
 
                 // Also add to connection pool
                 data_node_pool.add_node(node_id, grpc_addr);
+
+                // Add to initial set if not already there - this ensures we track ALL nodes
+                // that have been seen as active, protecting them from stale NodeLeft events
+                initial_node_ids.insert(node_id.to_string());
             }
         }
     }
@@ -226,12 +286,23 @@ impl CacheInvalidationHandler {
     fn handle_node_left(
         shard_cache: &ShardCache,
         data_node_pool: &DataNodePool,
+        initial_node_ids: &DashSet<String>,
         event: &MetaEvent,
     ) {
         if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
             let node_id = payload["node_id"].as_str().unwrap_or_default();
 
             if !node_id.is_empty() {
+                // Check if this is a stale event for a node that was active when we initialized.
+                // If so, skip it - the node is still active according to Meta.
+                if initial_node_ids.contains(node_id) {
+                    debug!(
+                        "Ignoring stale NodeLeft for {} (node was active during init)",
+                        node_id
+                    );
+                    return;
+                }
+
                 info!("Node left: {}", node_id);
 
                 // Remove from shard cache
