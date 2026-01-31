@@ -8,6 +8,7 @@
 //! data_nodes (single source of truth). This prevents stale state issues when
 //! node health changes.
 
+use crate::meta::types::DataNodeMode;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::collections::hash_map::DefaultHasher;
@@ -15,16 +16,6 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
-
-/// Data node operational mode (Cold Standby Architecture)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DataNodeMode {
-    /// Active: serves writes and queries
-    #[default]
-    Primary,
-    /// Cold backup: only receives replication, never serves queries
-    Standby,
-}
 
 /// Data node information
 #[derive(Debug, Clone)]
