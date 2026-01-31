@@ -121,6 +121,26 @@ fn convert_data_type(dt: &arrow::datatypes::DataType) -> arrow::datatypes::DataT
     }
 }
 
+/// RAII guard for tracking in-flight queries
+/// Decrements the counter when dropped, ensuring cleanup on all exit paths
+struct InFlightQueryGuard {
+    counter: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl InFlightQueryGuard {
+    fn new(counter: Arc<std::sync::atomic::AtomicU64>) -> Self {
+        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self { counter }
+    }
+}
+
+impl Drop for InFlightQueryGuard {
+    fn drop(&mut self) {
+        self.counter
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Data Node Flight service
 pub struct DataNodeFlightService {
     /// Data cache for writes
@@ -162,6 +182,9 @@ pub struct DataNodeFlightService {
     /// Flag indicating if node is retiring (scale-in in progress)
     /// When true, new writes are rejected to allow memtable flush
     is_retiring: Option<Arc<std::sync::atomic::AtomicBool>>,
+
+    /// Counter for in-flight queries (for graceful drain during scale-in)
+    in_flight_queries: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl DataNodeFlightService {
@@ -185,6 +208,7 @@ impl DataNodeFlightService {
             replica_cache: Arc::new(DashMap::new()),
             db_manager: None,
             is_retiring: None,
+            in_flight_queries: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -195,12 +219,37 @@ impl DataNodeFlightService {
         self
     }
 
+    /// Set the in-flight queries counter (shared with HTTP API for status reporting)
+    pub fn with_in_flight_queries(
+        mut self,
+        counter: Arc<std::sync::atomic::AtomicU64>,
+    ) -> Self {
+        self.in_flight_queries = counter;
+        self
+    }
+
     /// Check if the node is currently retiring
     fn is_node_retiring(&self) -> bool {
         self.is_retiring
             .as_ref()
             .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
             .unwrap_or(false)
+    }
+
+    /// Get the count of in-flight queries
+    pub fn in_flight_query_count(&self) -> u64 {
+        self.in_flight_queries
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Get the in-flight queries counter (for sharing with HTTP API)
+    pub fn in_flight_queries(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        Arc::clone(&self.in_flight_queries)
+    }
+
+    /// Check if the node is ready for shutdown (no in-flight queries, retiring)
+    pub fn is_ready_for_shutdown(&self) -> bool {
+        self.is_node_retiring() && self.in_flight_query_count() == 0
     }
 
     /// Set the database manager for partition operations
@@ -880,6 +929,10 @@ impl FlightService for DataNodeFlightService {
         // Parse query ticket
         let ticket: QueryTicket = serde_json::from_slice(&ticket_data.ticket)
             .map_err(|e| Status::invalid_argument(format!("Invalid query ticket: {}", e)))?;
+
+        // Track in-flight queries for graceful shutdown during scale-in
+        // The guard decrements the counter when the function returns
+        let _query_guard = InFlightQueryGuard::new(Arc::clone(&self.in_flight_queries));
 
         // Log query details (file-based routing shows file count, broadcast shows none)
         if let Some(ref files) = ticket.file_paths {
