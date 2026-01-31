@@ -3,11 +3,14 @@
 
 [meta]
 node_id = 3
-bind_addr = "0.0.0.0:6200"
-advertise_addr = "127.0.0.1:6200"
-data_dir = "./dev/data/coldstandby/meta3"
+# HTTP port for health checks and management API (base + 0)
 http_port = 6200
-peers = ["127.0.0.1:6000", "127.0.0.1:6100"]
+# Address to bind the gRPC server (base + 1)
+bind_addr = "0.0.0.0:6201"
+advertise_addr = "127.0.0.1:6201"
+data_dir = "./dev/data/coldstandby/meta3"
+# Initial cluster peers (other meta nodes - gRPC ports)
+peers = ["127.0.0.1:6001", "127.0.0.1:6101"]
 
 [meta.raft]
 heartbeat_interval_ms = 150

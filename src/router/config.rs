@@ -193,7 +193,7 @@ impl Default for RouterConfig {
             http_port: default_http_port(),
             flight_port: default_flight_port(),
             mysql_port: default_mysql_port(),
-            mysql_enabled: false,
+            mysql_enabled: true,
             meta: MetaClientConfig::default(),
             routing: RoutingConfig::default(),
             query: QueryConfig::default(),

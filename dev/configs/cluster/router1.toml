@@ -6,11 +6,10 @@ node_id = "router-1"
 http_port = 7000
 flight_port = 7001
 mysql_port = 7002
-mysql_enabled = true
 
 [router.meta]
-# Meta service endpoints
-endpoints = ["127.0.0.1:6000", "127.0.0.1:6100", "127.0.0.1:6200"]
+# Meta service endpoints (gRPC ports)
+endpoints = ["127.0.0.1:6001", "127.0.0.1:6101", "127.0.0.1:6201"]
 connect_timeout_ms = 5000
 request_timeout_ms = 30000
 

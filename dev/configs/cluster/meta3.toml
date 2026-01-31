@@ -5,19 +5,20 @@
 # Unique node ID within the Raft cluster (1, 2, 3)
 node_id = 3
 
-# Address to bind the gRPC server
-bind_addr = "0.0.0.0:6200"
+# HTTP port for health checks and management API (base + 0)
+http_port = 6200
+
+# Address to bind the gRPC server (base + 1)
+bind_addr = "0.0.0.0:6201"
 
 # Address advertised to other nodes for Raft communication
-advertise_addr = "127.0.0.1:6200"
-
-http_port = 6201
+advertise_addr = "127.0.0.1:6201"
 
 # Directory for sled database and Raft logs
 data_dir = "./dev/data/cluster/meta3"
 
-# Initial cluster peers (other meta nodes)
-peers = ["127.0.0.1:6000", "127.0.0.1:6100"]
+# Initial cluster peers (other meta nodes - gRPC ports)
+peers = ["127.0.0.1:6001", "127.0.0.1:6101"]
 
 [meta.raft]
 heartbeat_interval_ms = 150
