@@ -1826,29 +1826,63 @@ impl QueryEngine {
 
     /// List all schemas (services) in a catalog
     pub async fn list_schemas(&self, catalog_name: &str) -> Result<Vec<String>, String> {
-        let catalog_path = format!("{}/{}", self.data_dir, catalog_name);
+        let mut schemas_set: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        if !std::path::Path::new(&catalog_path).exists() {
-            return Ok(Vec::new());
+        // Get schemas from in-memory cache
+        if let Some(ref cache) = self.write_cache {
+            for (schema, _table) in cache.list_cached_tables_in_catalog(catalog_name) {
+                schemas_set.insert(schema);
+            }
         }
 
-        let entries = std::fs::read_dir(&catalog_path)
-            .map_err(|e| format!("Failed to read catalog directory: {}", e))?;
+        // Get schemas from storage
+        if let Some(ref storage) = self.storage {
+            // Build prefix based on whether we have node_id
+            let prefix = if let Some(ref cache) = self.write_cache {
+                format!("{}/{}/", cache.node_id(), catalog_name)
+            } else {
+                format!("{}/", catalog_name)
+            };
 
-        let mut schemas = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-            let path = entry.path();
+            // List files from storage and extract schemas
+            if let Ok(files) = storage.list(&prefix).await {
+                for file in files {
+                    // Extract schema from path like: {schema}/{table}/date=YYYY-MM-DD/file.parquet
+                    let relative = file.strip_prefix(&prefix).unwrap_or(&file);
+                    let parts: Vec<&str> = relative.split('/').collect();
+                    if !parts.is_empty() {
+                        let schema_name = parts[0];
+                        if !schema_name.is_empty()
+                            && !schema_name.starts_with('.')
+                            && schema_name != "_system"
+                            && schema_name != "_wal"
+                        {
+                            schemas_set.insert(schema_name.to_string());
+                        }
+                    }
+                }
+            }
+        } else {
+            // Fallback to local filesystem for standalone mode
+            let catalog_path = format!("{}/{}", self.data_dir, catalog_name);
 
-            if path.is_dir() {
-                if let Some(schema_name) = path.file_name().and_then(|s| s.to_str()) {
-                    if !schema_name.starts_with('.') && schema_name != "_system" {
-                        schemas.push(schema_name.to_string());
+            if std::path::Path::new(&catalog_path).exists() {
+                if let Ok(entries) = std::fs::read_dir(&catalog_path) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            if let Some(schema_name) = path.file_name().and_then(|s| s.to_str()) {
+                                if !schema_name.starts_with('.') && schema_name != "_system" {
+                                    schemas_set.insert(schema_name.to_string());
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
+        let mut schemas: Vec<String> = schemas_set.into_iter().collect();
         schemas.sort();
         Ok(schemas)
     }
@@ -1859,29 +1893,64 @@ impl QueryEngine {
         catalog_name: &str,
         schema_name: &str,
     ) -> Result<Vec<String>, String> {
-        let schema_path = format!("{}/{}/{}", self.data_dir, catalog_name, schema_name);
+        let mut tables_set: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        if !std::path::Path::new(&schema_path).exists() {
-            return Ok(Vec::new());
+        // Get tables from in-memory cache
+        if let Some(ref cache) = self.write_cache {
+            for (schema, table) in cache.list_cached_tables_in_catalog(catalog_name) {
+                if schema == schema_name {
+                    tables_set.insert(table);
+                }
+            }
         }
 
-        let entries = std::fs::read_dir(&schema_path)
-            .map_err(|e| format!("Failed to read schema directory: {}", e))?;
+        // Get tables from storage
+        if let Some(ref storage) = self.storage {
+            // Build prefix based on whether we have node_id
+            let prefix = if let Some(ref cache) = self.write_cache {
+                format!("{}/{}/{}/", cache.node_id(), catalog_name, schema_name)
+            } else {
+                format!("{}/{}/", catalog_name, schema_name)
+            };
 
-        let mut tables = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-            let path = entry.path();
+            // List files from storage and extract table names
+            if let Ok(files) = storage.list(&prefix).await {
+                for file in files {
+                    // Extract table from path like: {table}/date=YYYY-MM-DD/file.parquet
+                    let relative = file.strip_prefix(&prefix).unwrap_or(&file);
+                    let parts: Vec<&str> = relative.split('/').collect();
+                    if !parts.is_empty() {
+                        let table_name = parts[0];
+                        if !table_name.is_empty()
+                            && !table_name.starts_with('.')
+                            && !table_name.starts_with("date=")
+                        {
+                            tables_set.insert(table_name.to_string());
+                        }
+                    }
+                }
+            }
+        } else {
+            // Fallback to local filesystem for standalone mode
+            let schema_path = format!("{}/{}/{}", self.data_dir, catalog_name, schema_name);
 
-            if path.is_dir() {
-                if let Some(table_name) = path.file_name().and_then(|s| s.to_str()) {
-                    if !table_name.starts_with('.') {
-                        tables.push(table_name.to_string());
+            if std::path::Path::new(&schema_path).exists() {
+                if let Ok(entries) = std::fs::read_dir(&schema_path) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            if let Some(table_name) = path.file_name().and_then(|s| s.to_str()) {
+                                if !table_name.starts_with('.') {
+                                    tables_set.insert(table_name.to_string());
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
+        let mut tables: Vec<String> = tables_set.into_iter().collect();
         tables.sort();
         Ok(tables)
     }

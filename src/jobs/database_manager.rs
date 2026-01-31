@@ -21,9 +21,10 @@ pub struct TableConfig {
 
 pub struct DatabaseManager {
     data_dir: String,
-    /// Storage backend (for future S3 support)
-    #[allow(dead_code)]
+    /// Storage backend (for S3/MinIO support)
     storage: Option<Arc<Storage>>,
+    /// Node ID for cluster mode (used as prefix in storage paths)
+    node_id: Option<String>,
 }
 
 impl DatabaseManager {
@@ -31,6 +32,7 @@ impl DatabaseManager {
         DatabaseManager {
             data_dir: data_dir.to_string(),
             storage: None,
+            node_id: None,
         }
     }
 
@@ -38,6 +40,19 @@ impl DatabaseManager {
         DatabaseManager {
             data_dir: data_dir.to_string(),
             storage: Some(storage),
+            node_id: None,
+        }
+    }
+
+    pub fn with_storage_and_node_id(
+        data_dir: &str,
+        storage: Arc<Storage>,
+        node_id: &str,
+    ) -> Self {
+        DatabaseManager {
+            data_dir: data_dir.to_string(),
+            storage: Some(storage),
+            node_id: Some(node_id.to_string()),
         }
     }
 
@@ -259,6 +274,71 @@ impl DatabaseManager {
 
         partitions.sort_by(|a, b| b.date.cmp(&a.date)); // Sort by date, newest first
         Ok(partitions)
+    }
+
+    /// Discover all date partitions for a table using object storage
+    pub async fn discover_table_partitions_async(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+    ) -> Result<Vec<PartitionInfo>, String> {
+        // If storage is available, use it
+        if let Some(storage) = &self.storage {
+            // Build prefix with node_id if in cluster mode
+            let table_prefix = if let Some(ref node_id) = self.node_id {
+                format!("{}/{}/{}/{}", node_id, catalog_name, schema_name, table_name)
+            } else {
+                format!("{}/{}/{}", catalog_name, schema_name, table_name)
+            };
+            let partition_dirs = storage.list_prefixes(&table_prefix).await?;
+
+            let mut partitions = Vec::new();
+            for dir_name in partition_dirs {
+                // Check for Hive-style partition format: date=YYYY-MM-DD
+                if dir_name.starts_with("date=") {
+                    let date_str = dir_name.strip_prefix("date=").unwrap_or(&dir_name);
+
+                    // List files in partition to get count and size
+                    let partition_prefix = if let Some(ref node_id) = self.node_id {
+                        format!(
+                            "{}/{}/{}/{}/{}",
+                            node_id, catalog_name, schema_name, table_name, dir_name
+                        )
+                    } else {
+                        format!("{}/{}/{}/{}", catalog_name, schema_name, table_name, dir_name)
+                    };
+                    let files = storage.list(&partition_prefix).await.unwrap_or_default();
+
+                    let mut file_count = 0;
+                    let mut total_size = 0u64;
+                    for file in &files {
+                        if file.ends_with(".parquet") {
+                            file_count += 1;
+                            if let Ok(size) = storage.size(file).await {
+                                total_size += size;
+                            }
+                        }
+                    }
+
+                    partitions.push(PartitionInfo {
+                        catalog: catalog_name.to_string(),
+                        schema: schema_name.to_string(),
+                        table: table_name.to_string(),
+                        partition: dir_name.to_string(),
+                        date: date_str.to_string(),
+                        file_count,
+                        total_size_bytes: total_size,
+                    });
+                }
+            }
+
+            partitions.sort_by(|a, b| b.date.cmp(&a.date)); // Sort by date, newest first
+            return Ok(partitions);
+        }
+
+        // Fallback to local filesystem
+        self.discover_table_partitions(catalog_name, schema_name, table_name)
     }
 
     /// Count files and calculate total size in a partition directory

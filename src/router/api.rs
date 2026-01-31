@@ -534,29 +534,33 @@ pub async fn list_schema_tables_handler(
     (StatusCode::OK, Json(response))
 }
 
-/// Get table schema - forward to any single node
+/// Get table schema - try nodes until one succeeds (not all nodes have all tables)
 pub async fn schema_handler(
     Path((db, table)): Path<(String, String)>,
     State(state): State<RouterAppState>,
 ) -> impl IntoResponse {
-    let node = match state.shard_cache.get_any_active_node() {
-        Some(n) => n,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "No active data nodes".to_string(),
-            )
-        }
-    };
-
-    match state
-        .data_node_pool
-        .get_table_schema(&node.node_id, &db, &table)
-        .await
-    {
-        Ok(schema) => (StatusCode::OK, schema),
-        Err(e) => (StatusCode::NOT_FOUND, e),
+    let nodes = state.shard_cache.get_active_data_nodes();
+    if nodes.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "No active data nodes".to_string(),
+        );
     }
+
+    // Try each node until one succeeds (table might only be on some nodes)
+    let mut last_error = String::new();
+    for node in &nodes {
+        match state
+            .data_node_pool
+            .get_table_schema(&node.node_id, &db, &table)
+            .await
+        {
+            Ok(schema) => return (StatusCode::OK, schema),
+            Err(e) => last_error = e,
+        }
+    }
+
+    (StatusCode::NOT_FOUND, last_error)
 }
 
 // ============================================================================
