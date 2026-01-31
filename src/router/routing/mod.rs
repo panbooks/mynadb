@@ -9,7 +9,6 @@ pub mod shard_cache;
 pub mod write_router;
 
 pub use cache_invalidation::CacheInvalidationHandler;
-pub use health_checker::{HealthCheckConfig, HealthChecker};
 pub use query_coordinator::QueryCoordinator;
 pub use shard_cache::ShardCache;
 pub use write_router::WriteRouter;

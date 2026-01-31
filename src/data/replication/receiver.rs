@@ -8,7 +8,7 @@
 //! - Reports sync status to Meta for failover decisions
 //! - Verifies CRC32 checksums to detect data corruption
 
-use super::types::{compute_checksum, verify_checksum, ReplicateResponse};
+use super::types::{compute_checksum, ReplicateResponse};
 use crate::storage::cache::DataCache;
 use arrow::array::RecordBatch;
 use parking_lot::RwLock;

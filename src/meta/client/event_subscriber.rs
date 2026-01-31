@@ -5,13 +5,11 @@
 
 use crate::meta::proto;
 use crate::meta::types::EventType;
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
-use tonic::transport::Channel;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Event from the Meta service
 #[derive(Debug, Clone)]

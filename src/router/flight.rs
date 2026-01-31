@@ -10,7 +10,6 @@ use arrow_flight::{
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
 };
 use futures::{stream, stream::BoxStream, StreamExt, TryStreamExt};
-use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status, Streaming};

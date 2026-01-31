@@ -116,7 +116,6 @@ impl HealthChecker {
 
             for node in nodes {
                 let pool = Arc::clone(&pool);
-                let shard_cache = Arc::clone(&shard_cache);
                 let timeout = config.timeout;
 
                 let future = async move {

@@ -7,7 +7,6 @@
 use super::common;
 use crate::config::Config;
 use crate::jobs::{compactor, database_manager, retention_manager};
-use crate::query::catalog;
 use crate::services::{api, auth};
 use crate::storage::cache;
 use axum::routing::{delete, get, post};

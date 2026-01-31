@@ -17,7 +17,7 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::transport::Channel;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 /// Network factory that creates connections to peers
 #[derive(Clone)]

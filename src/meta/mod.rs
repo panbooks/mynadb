@@ -35,8 +35,6 @@ pub mod replica_assigner;
 pub mod service;
 pub mod types;
 
-pub use config::{MetaConfig, ReplicationAssignmentConfig};
-pub use replica_assigner::ReplicaAssigner;
 pub use types::*;
 
 // Re-export generated protobuf types

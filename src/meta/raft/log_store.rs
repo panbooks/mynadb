@@ -550,11 +550,7 @@ mod tests {
 
         // Append entries with actual commands
         let entries = vec![
-            create_normal_entry(
-                1,
-                1,
-                MetaCommand::RegisterFiles { files: vec![] },
-            ),
+            create_normal_entry(1, 1, MetaCommand::RegisterFiles { files: vec![] }),
             create_normal_entry(
                 2,
                 1,
@@ -765,7 +761,10 @@ mod tests {
         let mut reader = store.get_log_reader().await;
 
         // Read specific range
-        let subset = reader.try_get_log_entries(1_000_000..1_000_002).await.unwrap();
+        let subset = reader
+            .try_get_log_entries(1_000_000..1_000_002)
+            .await
+            .unwrap();
         assert_eq!(subset.len(), 2);
 
         // Read all
@@ -783,8 +782,18 @@ mod tests {
 
         // Create a membership entry
         let mut nodes: BTreeMap<NodeId, openraft::BasicNode> = BTreeMap::new();
-        nodes.insert(1, openraft::BasicNode { addr: "127.0.0.1:6000".to_string() });
-        nodes.insert(2, openraft::BasicNode { addr: "127.0.0.1:6100".to_string() });
+        nodes.insert(
+            1,
+            openraft::BasicNode {
+                addr: "127.0.0.1:6000".to_string(),
+            },
+        );
+        nodes.insert(
+            2,
+            openraft::BasicNode {
+                addr: "127.0.0.1:6100".to_string(),
+            },
+        );
 
         let membership = Membership::new(vec![vec![1, 2].into_iter().collect()], nodes);
 

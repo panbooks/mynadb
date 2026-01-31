@@ -4,11 +4,10 @@ use crate::meta::proto;
 use crate::meta::types::*;
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tonic::transport::{Channel, Endpoint};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Convert proto DataNodeMode to internal DataNodeMode
 fn convert_proto_mode(proto_mode: i32) -> Option<DataNodeMode> {
@@ -150,6 +149,9 @@ impl MetaClient {
     ///
     /// This is a convenience method that creates a MetaClient and verifies
     /// connectivity by establishing a connection.
+    ///
+    /// Note: This generates a random client ID. For Data/Router nodes that need
+    /// to maintain leases with heartbeats, use `connect_with_node_id` instead.
     pub async fn connect(endpoints: &[String]) -> Result<Self, String> {
         let config = MetaClientConfig {
             endpoints: endpoints.to_vec(),
@@ -163,6 +165,26 @@ impl MetaClient {
                 .next()
                 .unwrap_or("unknown")
         );
+        let client = Self::new(config, node_id);
+
+        // Verify connectivity
+        client.get_client().await?;
+
+        Ok(client)
+    }
+
+    /// Create and connect to Meta service with a specific node_id
+    ///
+    /// Use this for Data/Router nodes that register with Meta and maintain
+    /// leases via heartbeats. The node_id must match what was used in registration.
+    pub async fn connect_with_node_id(
+        endpoints: &[String],
+        node_id: String,
+    ) -> Result<Self, String> {
+        let config = MetaClientConfig {
+            endpoints: endpoints.to_vec(),
+            ..Default::default()
+        };
         let client = Self::new(config, node_id);
 
         // Verify connectivity
