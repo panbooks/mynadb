@@ -64,12 +64,17 @@ impl MetaNode {
         let network_for_management = MetaNetworkFactory::new();
 
         // Add peers to both network instances
-        for (i, peer_addr) in config.peers.iter().enumerate() {
-            let peer_id = (i + 1) as u64;
-            if peer_id != node_id {
-                network_for_raft.add_peer(peer_id, peer_addr.clone());
-                network_for_management.add_peer(peer_id, peer_addr.clone());
+        // The peers config contains addresses for OTHER nodes (excluding self).
+        // We map each peer to consecutive node IDs, skipping our own node_id.
+        let mut peer_id = 0u64;
+        for peer_addr in config.peers.iter() {
+            peer_id += 1;
+            // Skip our own node_id
+            if peer_id == node_id {
+                peer_id += 1;
             }
+            network_for_raft.add_peer(peer_id, peer_addr.clone());
+            network_for_management.add_peer(peer_id, peer_addr.clone());
         }
 
         // Create Raft configuration
