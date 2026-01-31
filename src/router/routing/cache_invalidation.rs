@@ -342,7 +342,7 @@ impl CacheInvalidationHandler {
                 .as_str()
                 .or_else(|| payload["state"].as_str())
                 .unwrap_or("active");
-            let grpc_addr = payload["grpc_addr"].as_str().unwrap_or_default();
+            let grpc_addr_from_event = payload["grpc_addr"].as_str().unwrap_or_default();
 
             if !node_id.is_empty() {
                 let state = match state_str.to_lowercase().as_str() {
@@ -369,9 +369,22 @@ impl CacheInvalidationHandler {
                     debug!("Node updated: {} -> {:?}", node_id, state);
                 }
 
+                // Get existing node info to preserve grpc_addr and mode if not in event
+                let existing_node = shard_cache.get_data_node(node_id);
+
+                // Preserve existing grpc_addr if event doesn't include it
+                let grpc_addr = if !grpc_addr_from_event.is_empty() {
+                    grpc_addr_from_event.to_string()
+                } else {
+                    existing_node
+                        .as_ref()
+                        .map(|n| n.grpc_addr.clone())
+                        .unwrap_or_default()
+                };
+
                 // Preserve existing mode or extract from payload
-                let existing_mode = shard_cache
-                    .get_data_node(node_id)
+                let mode = existing_node
+                    .as_ref()
                     .map(|n| n.mode)
                     .unwrap_or_else(|| {
                         // Try to get mode from payload
@@ -381,18 +394,25 @@ impl CacheInvalidationHandler {
                         }
                     });
 
-                // Update shard cache
-                shard_cache.upsert_data_node(DataNodeInfo {
-                    node_id: node_id.to_string(),
-                    grpc_addr: grpc_addr.to_string(),
-                    state,
-                    load_score: 0.5,
-                    mode: existing_mode,
-                });
-
-                // Also update in connection pool (address may have changed)
+                // Only update if we have a valid grpc_addr (either from event or existing)
                 if !grpc_addr.is_empty() {
-                    data_node_pool.add_node(node_id, grpc_addr);
+                    shard_cache.upsert_data_node(DataNodeInfo {
+                        node_id: node_id.to_string(),
+                        grpc_addr: grpc_addr.clone(),
+                        state,
+                        load_score: 0.5,
+                        mode,
+                    });
+
+                    // Also update in connection pool (if address changed)
+                    if !grpc_addr_from_event.is_empty() {
+                        data_node_pool.add_node(node_id, &grpc_addr);
+                    }
+                } else {
+                    warn!(
+                        "Cannot update node {} state to {:?}: no grpc_addr available",
+                        node_id, state
+                    );
                 }
             }
         }
