@@ -1,5 +1,7 @@
 # MynaDB Standalone Development Environment
-# Single-node mode with all services
+# Single-node mode with local filesystem storage (default)
+#
+# For MinIO storage, use: Procfile.standalone-minio
 #
 # Port assignments:
 #   HTTP:   7000

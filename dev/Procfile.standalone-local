@@ -1,0 +1,11 @@
+# MynaDB Standalone Development Environment - Local Storage
+# Single-node mode with local filesystem storage
+#
+# Port assignments:
+#   HTTP:   7000
+#   Flight: 7001
+#   MySQL:  7002
+#
+# Start with: goreman -f dev/Procfile.standalone-local start
+
+mynadb: ./target/debug/mynadb -c ./dev/configs/standalone/local.toml standalone
