@@ -516,6 +516,85 @@ impl DataNodePool {
         self.do_action(node_id, "FLUSH", b"").await?;
         Ok(())
     }
+
+    // ========================================================================
+    // Schema/Table Operations
+    // ========================================================================
+
+    /// List tables in a database
+    pub async fn list_tables(&self, node_id: &str, db: &str) -> Result<serde_json::Value, String> {
+        let body = serde_json::json!({"db": db}).to_string().into_bytes();
+        let result = self.do_action(node_id, "LIST_TABLES", &body).await?;
+        serde_json::from_slice(&result).map_err(|e| format!("JSON parse error: {}", e))
+    }
+
+    /// List schemas in a database
+    pub async fn list_schemas(&self, node_id: &str, db: &str) -> Result<serde_json::Value, String> {
+        let body = serde_json::json!({"db": db}).to_string().into_bytes();
+        let result = self.do_action(node_id, "LIST_SCHEMAS", &body).await?;
+        serde_json::from_slice(&result).map_err(|e| format!("JSON parse error: {}", e))
+    }
+
+    /// List tables in a specific schema
+    pub async fn list_schema_tables(
+        &self,
+        node_id: &str,
+        db: &str,
+        schema: &str,
+    ) -> Result<serde_json::Value, String> {
+        let body = serde_json::json!({"db": db, "schema": schema})
+            .to_string()
+            .into_bytes();
+        let result = self.do_action(node_id, "LIST_SCHEMA_TABLES", &body).await?;
+        serde_json::from_slice(&result).map_err(|e| format!("JSON parse error: {}", e))
+    }
+
+    /// Get table schema
+    pub async fn get_table_schema(
+        &self,
+        node_id: &str,
+        db: &str,
+        table: &str,
+    ) -> Result<String, String> {
+        let body = serde_json::json!({"db": db, "table": table})
+            .to_string()
+            .into_bytes();
+        let result = self.do_action(node_id, "GET_TABLE_SCHEMA", &body).await?;
+        String::from_utf8(result).map_err(|e| format!("UTF-8 error: {}", e))
+    }
+
+    // ========================================================================
+    // Memory/Stats Operations
+    // ========================================================================
+
+    /// Get memory statistics from a node
+    pub async fn get_memory_stats(&self, node_id: &str) -> Result<serde_json::Value, String> {
+        let result = self.do_action(node_id, "MEMORY_STATS", b"").await?;
+        serde_json::from_slice(&result).map_err(|e| format!("JSON parse error: {}", e))
+    }
+
+    // ========================================================================
+    // Partition Operations
+    // ========================================================================
+
+    /// List partitions for a table
+    pub async fn list_partitions(
+        &self,
+        node_id: &str,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<serde_json::Value, String> {
+        let body = serde_json::json!({
+            "catalog": catalog,
+            "schema": schema,
+            "table": table
+        })
+        .to_string()
+        .into_bytes();
+        let result = self.do_action(node_id, "LIST_PARTITIONS", &body).await?;
+        serde_json::from_slice(&result).map_err(|e| format!("JSON parse error: {}", e))
+    }
 }
 
 /// Pool statistics

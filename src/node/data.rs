@@ -225,6 +225,13 @@ pub async fn start(config_path: &str) {
     let meta_client_for_events = meta_client.clone();
     let meta_client_for_http = meta_client.clone();
 
+    // Initialize database manager for partition operations
+    let db_manager = Arc::new(crate::jobs::database_manager::DatabaseManager::with_storage(
+        &config.storage.data_dir,
+        storage.clone(),
+    ));
+    let db_manager_for_http = db_manager.clone();
+
     // Clone components for HTTP API (before they're moved to Flight service)
     let data_cache_for_http = data_cache.clone();
     let query_engine_for_http = query_engine.clone();
@@ -238,7 +245,8 @@ pub async fn start(config_path: &str) {
         meta_client,
         config.schema.clone(),
         data_config.node_id.clone(),
-    );
+    )
+    .with_db_manager(db_manager);
 
     // Add parquet cache if available
     if let Some(ref cache) = parquet_cache {
@@ -435,8 +443,8 @@ pub async fn start(config_path: &str) {
             query_engine: Some(query_engine_for_http),
             config: Some(config_for_http),
             wal: wal_for_http,
-            compactor: None,  // Compaction handled by leader node in cluster mode
-            db_manager: None, // TODO: Initialize if needed for partition management
+            compactor: None, // Compaction handled by leader node in cluster mode
+            db_manager: Some(db_manager_for_http),
         };
         tokio::spawn(async move {
             if let Err(e) = start_http_server("0.0.0.0", http_port, http_state).await {
