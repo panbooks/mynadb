@@ -393,13 +393,19 @@ impl QueryCoordinator {
                 );
             }
 
-            // Create query futures for reachable nodes
+            // Create query futures for reachable nodes with retry on failure
+            let all_reachable: Vec<String> = reachable_nodes.clone();
             for (node_id, file_paths) in reachable_node_files {
                 let pool = Arc::clone(&self.data_node_pool);
                 let node_id_clone = node_id.clone();
                 let sql = plan.sql.clone();
                 let catalog = plan.catalog.clone();
                 let files = file_paths;
+                let fallback_nodes: Vec<String> = all_reachable
+                    .iter()
+                    .filter(|n| *n != &node_id)
+                    .cloned()
+                    .collect();
 
                 let future: QueryFuture = Box::pin(async move {
                     debug!(
@@ -409,7 +415,7 @@ impl QueryCoordinator {
                         sql
                     );
 
-                    // Execute query with explicit file list (node reads only its own files)
+                    // Execute query with explicit file list
                     match pool
                         .query_with_files(&node_id_clone, &catalog, &sql, files.clone())
                         .await
@@ -425,8 +431,59 @@ impl QueryCoordinator {
                             Ok(batches)
                         }
                         Err(e) => {
-                            error!("Query failed on {}: {}", node_id_clone, e);
-                            Err(format!("Failed to query {}: {}", node_id_clone, e))
+                            // Check if this is a connection error (node down)
+                            let is_connection_error = e.contains("connect error")
+                                || e.contains("Unavailable")
+                                || e.contains("Unknown data node")
+                                || e.contains("circuit breaker");
+
+                            if is_connection_error && !fallback_nodes.is_empty() {
+                                // Try fallback nodes (any node can read any file from object storage)
+                                warn!(
+                                    "Node {} unreachable, retrying {} files on fallback nodes",
+                                    node_id_clone,
+                                    files.len()
+                                );
+
+                                for fallback_node in &fallback_nodes {
+                                    debug!("Retrying query on fallback node {}", fallback_node);
+                                    match pool
+                                        .query_with_files(fallback_node, &catalog, &sql, files.clone())
+                                        .await
+                                    {
+                                        Ok(batches) => {
+                                            let total_rows: usize =
+                                                batches.iter().map(|b| b.num_rows()).sum();
+                                            info!(
+                                                "Fallback query succeeded on {}: {} rows",
+                                                fallback_node, total_rows
+                                            );
+                                            return Ok(batches);
+                                        }
+                                        Err(fallback_err) => {
+                                            warn!(
+                                                "Fallback query on {} also failed: {}",
+                                                fallback_node, fallback_err
+                                            );
+                                            continue;
+                                        }
+                                    }
+                                }
+                                // All fallbacks failed
+                                error!(
+                                    "Query failed on {} and all fallback nodes: {}",
+                                    node_id_clone, e
+                                );
+                                Err(format!(
+                                    "Failed to query {} (and {} fallbacks): {}",
+                                    node_id_clone,
+                                    fallback_nodes.len(),
+                                    e
+                                ))
+                            } else {
+                                error!("Query failed on {}: {}", node_id_clone, e);
+                                Err(format!("Failed to query {}: {}", node_id_clone, e))
+                            }
                         }
                     }
                 });
