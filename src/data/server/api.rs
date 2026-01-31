@@ -153,56 +153,56 @@ pub fn build_router(state: DataNodeState) -> Router {
         .route("/retire/status", get(retire_status))
         .route("/retire/cancel", post(cancel_retire))
         // Query endpoints
-        .route("/query/{db}", get(query_handler))
-        .route("/query/{db}", post(query_handler_post))
-        .route("/explain/{db}", get(explain_handler))
-        .route("/explain/{db}", post(explain_handler_post))
-        .route("/analyze/{db}", get(analyze_handler))
-        .route("/analyze/{db}", post(analyze_handler_post))
+        .route("/query/:db", get(query_handler))
+        .route("/query/:db", post(query_handler_post))
+        .route("/explain/:db", get(explain_handler))
+        .route("/explain/:db", post(explain_handler_post))
+        .route("/analyze/:db", get(analyze_handler))
+        .route("/analyze/:db", post(analyze_handler_post))
         // Write endpoints
-        .route("/write/{db}", post(write_handler))
+        .route("/write/:db", post(write_handler))
         .route("/write", post(write_handler_query_param))
         // Schema/Table endpoints (shorthand)
-        .route("/tables/{db}", get(list_tables_handler))
-        .route("/schemas/{db}", get(list_schemas_handler))
+        .route("/tables/:db", get(list_tables_handler))
+        .route("/schemas/:db", get(list_schemas_handler))
         // Schema/Table endpoints (full path)
-        .route("/databases/{db}/schemas", get(list_schemas_handler))
+        .route("/databases/:db/schemas", get(list_schemas_handler))
         .route(
-            "/databases/{db}/schemas/{schema}/tables",
+            "/databases/:db/schemas/:schema/tables",
             get(list_schema_tables_handler),
         )
-        .route("/schema/{db}/{table}", get(schema_handler))
+        .route("/schema/:db/:table", get(schema_handler))
         // Cache management
         .route("/flush", post(flush_handler))
         .route("/memory", get(memory_handler))
         .route("/cache/stats", get(query_cache_stats_handler))
         .route("/cache/clear", post(clear_cache_handler))
-        .route("/cache/prewarm/{catalog}", post(prewarm_cache_handler))
+        .route("/cache/prewarm/:catalog", post(prewarm_cache_handler))
         .route(
-            "/cache/prewarm/{catalog}/{schema}/{table}",
+            "/cache/prewarm/:catalog/:schema/:table",
             post(prewarm_table_cache_handler),
         )
         // Compaction endpoints
-        .route("/compact/{catalog}", post(compact_handler))
+        .route("/compact/:catalog", post(compact_handler))
         .route(
-            "/compact/{catalog}/{schema}/{table}",
+            "/compact/:catalog/:schema/:table",
             post(compact_table_handler),
         )
         .route(
-            "/compact/{catalog}/{schema}/{table}/{date}",
+            "/compact/:catalog/:schema/:table/:date",
             post(compact_partition_handler),
         )
         // Partition management
         .route(
-            "/partitions/{catalog}/{schema}/{table}",
+            "/partitions/:catalog/:schema/:table",
             get(list_partitions_handler),
         )
         .route(
-            "/partitions/{catalog}/{schema}/{table}/{date}",
+            "/partitions/:catalog/:schema/:table/:date",
             delete(delete_partition_handler),
         )
         .route(
-            "/retention/{catalog}/{schema}/{table}",
+            "/retention/:catalog/:schema/:table",
             post(delete_old_partitions_handler),
         )
         .with_state(state)
