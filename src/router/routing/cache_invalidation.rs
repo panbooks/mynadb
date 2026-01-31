@@ -2,11 +2,9 @@
 //!
 //! Subscribes to Meta service events and updates the Router's ShardCache accordingly.
 
-use super::shard_cache::{DataNodeInfo, DataNodeMode, NodeState, PartitionKey, ShardCache};
+use super::shard_cache::{DataNodeInfo, NodeState, PartitionKey, ShardCache};
 use crate::meta::client::{EventSubscriber, MetaClient, MetaEvent, SubscriberConfig};
-use crate::meta::types::{
-    DataNodeMode as MetaDataNodeMode, EventType, NodeRole, NodeState as MetaNodeState,
-};
+use crate::meta::types::{DataNodeMode, EventType, NodeRole, NodeState as MetaNodeState};
 use crate::router::client::DataNodePool;
 use dashmap::DashSet;
 use std::sync::Arc;
@@ -70,7 +68,7 @@ impl CacheInvalidationHandler {
                         grpc_addr: n.advertise_addr.clone(),
                         state: NodeState::Active,
                         load_score: 0.5,
-                        mode: convert_node_mode(n.mode),
+                        mode: n.mode.unwrap_or_default(),
                     })
                     .collect();
 
@@ -166,7 +164,7 @@ impl CacheInvalidationHandler {
                     grpc_addr: node.advertise_addr.clone(),
                     state: NodeState::Active,
                     load_score: 0.5,
-                    mode: convert_node_mode(node.mode),
+                    mode: node.mode.unwrap_or_default(),
                 });
                 self.data_node_pool
                     .add_node(&node.node_id, &node.advertise_addr);
@@ -541,13 +539,5 @@ impl CacheInvalidationHandler {
                 shard_cache.update_node_mode(node_id, mode);
             }
         }
-    }
-}
-
-/// Convert meta's DataNodeMode to router's DataNodeMode
-fn convert_node_mode(mode: Option<MetaDataNodeMode>) -> DataNodeMode {
-    match mode {
-        Some(MetaDataNodeMode::Standby) => DataNodeMode::Standby,
-        Some(MetaDataNodeMode::Primary) | None => DataNodeMode::Primary,
     }
 }
