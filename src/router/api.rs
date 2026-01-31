@@ -88,6 +88,22 @@ pub fn build_router(state: RouterAppState) -> Router {
         // Query endpoint - distributed query via Data nodes
         .route("/query/:db", get(query_handler))
         .route("/query/:db", post(query_handler_post))
+        // Schema/Table endpoints (forwarded to Data nodes)
+        .route("/tables/:db", get(list_tables_handler))
+        .route("/schemas/:db", get(list_schemas_handler))
+        .route("/databases/:db/schemas", get(list_schemas_handler))
+        .route(
+            "/databases/:db/schemas/:schema/tables",
+            get(list_schema_tables_handler),
+        )
+        .route("/schema/:db/:table", get(schema_handler))
+        // Partition endpoint (forwarded to Data nodes)
+        .route(
+            "/partitions/:catalog/:schema/:table",
+            get(list_partitions_handler),
+        )
+        // Memory stats (aggregated from all Data nodes)
+        .route("/memory", get(memory_handler))
         // Router-specific endpoints
         .route("/router/status", get(router_status_handler))
         .route("/router/nodes", get(list_data_nodes_handler))
@@ -103,15 +119,27 @@ pub fn build_router(state: RouterAppState) -> Router {
 /// Home page
 pub async fn home() -> &'static str {
     "MynaDB Router Node\n\n\
-     Endpoints:\n\
-       POST /write/:db          - Write data (InfluxDB line protocol)\n\
-       GET/POST /query/:db      - Execute SQL query\n\
-       GET /health              - Health check\n\
-       GET /version             - Version info\n\
-       GET /stats               - Router statistics\n\
-       POST /flush              - Flush all data nodes\n\
-       GET /router/status       - Router status\n\
-       GET /router/nodes        - List data nodes\n"
+     Basic Endpoints:\n\
+       GET  /health              - Health check\n\
+       GET  /version             - Version info\n\n\
+     Write/Query Endpoints:\n\
+       POST /write/:db           - Write data (InfluxDB line protocol)\n\
+       GET/POST /query/:db       - Execute SQL query\n\n\
+     Schema/Table Endpoints:\n\
+       GET  /tables/:db          - List tables in database\n\
+       GET  /schemas/:db         - List schemas in database\n\
+       GET  /databases/:db/schemas - List schemas\n\
+       GET  /databases/:db/schemas/:schema/tables - List tables in schema\n\
+       GET  /schema/:db/:table   - Get table schema\n\n\
+     Partition Endpoints:\n\
+       GET  /partitions/:catalog/:schema/:table - List partitions\n\n\
+     Memory/Stats Endpoints:\n\
+       GET  /memory              - Memory statistics (aggregated)\n\
+       GET  /stats               - Router statistics\n\n\
+     Management Endpoints:\n\
+       POST /flush               - Flush all data nodes\n\
+       GET  /router/status       - Router status\n\
+       GET  /router/nodes        - List data nodes\n"
 }
 
 /// Health check
@@ -357,4 +385,320 @@ pub async fn flush_handler(State(state): State<RouterAppState>) -> impl IntoResp
             (StatusCode::INTERNAL_SERVER_ERROR, Json(response))
         }
     }
+}
+
+// ============================================================================
+// Schema/Table Handlers (forwarded to Data nodes)
+// ============================================================================
+
+/// List tables - broadcast to all nodes and combine results
+pub async fn list_tables_handler(
+    Path(db): Path<String>,
+    State(state): State<RouterAppState>,
+) -> impl IntoResponse {
+    let nodes = state.shard_cache.get_active_data_nodes();
+    if nodes.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "No active data nodes"})),
+        );
+    }
+
+    // Collect tables from all nodes and deduplicate
+    let mut all_tables = std::collections::HashSet::new();
+    let mut errors = Vec::new();
+
+    for node in &nodes {
+        match state.data_node_pool.list_tables(&node.node_id, &db).await {
+            Ok(result) => {
+                if let Some(tables) = result["tables"].as_array() {
+                    for table in tables {
+                        if let Some(t) = table.as_str() {
+                            all_tables.insert(t.to_string());
+                        }
+                    }
+                }
+            }
+            Err(e) => errors.push(format!("{}: {}", node.node_id, e)),
+        }
+    }
+
+    let mut tables: Vec<String> = all_tables.into_iter().collect();
+    tables.sort();
+
+    let response = serde_json::json!({
+        "database": db,
+        "tables": tables,
+        "count": tables.len(),
+        "nodes_queried": nodes.len(),
+        "errors": if errors.is_empty() { None } else { Some(errors) }
+    });
+
+    (StatusCode::OK, Json(response))
+}
+
+/// List schemas - broadcast to all nodes and combine results
+pub async fn list_schemas_handler(
+    Path(db): Path<String>,
+    State(state): State<RouterAppState>,
+) -> impl IntoResponse {
+    let nodes = state.shard_cache.get_active_data_nodes();
+    if nodes.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "No active data nodes"})),
+        );
+    }
+
+    // Collect schemas from all nodes and deduplicate
+    let mut all_schemas = std::collections::HashSet::new();
+    let mut errors = Vec::new();
+
+    for node in &nodes {
+        match state.data_node_pool.list_schemas(&node.node_id, &db).await {
+            Ok(result) => {
+                if let Some(schemas) = result["schemas"].as_array() {
+                    for schema in schemas {
+                        if let Some(s) = schema.as_str() {
+                            all_schemas.insert(s.to_string());
+                        }
+                    }
+                }
+            }
+            Err(e) => errors.push(format!("{}: {}", node.node_id, e)),
+        }
+    }
+
+    let mut schemas: Vec<String> = all_schemas.into_iter().collect();
+    schemas.sort();
+
+    let response = serde_json::json!({
+        "database": db,
+        "schemas": schemas,
+        "count": schemas.len(),
+        "nodes_queried": nodes.len(),
+        "errors": if errors.is_empty() { None } else { Some(errors) }
+    });
+
+    (StatusCode::OK, Json(response))
+}
+
+/// List tables in a specific schema - broadcast to all nodes and combine results
+pub async fn list_schema_tables_handler(
+    Path((db, schema)): Path<(String, String)>,
+    State(state): State<RouterAppState>,
+) -> impl IntoResponse {
+    let nodes = state.shard_cache.get_active_data_nodes();
+    if nodes.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "No active data nodes"})),
+        );
+    }
+
+    // Collect tables from all nodes and deduplicate
+    let mut all_tables = std::collections::HashSet::new();
+    let mut errors = Vec::new();
+
+    for node in &nodes {
+        match state
+            .data_node_pool
+            .list_schema_tables(&node.node_id, &db, &schema)
+            .await
+        {
+            Ok(result) => {
+                if let Some(tables) = result["tables"].as_array() {
+                    for table in tables {
+                        if let Some(t) = table.as_str() {
+                            all_tables.insert(t.to_string());
+                        }
+                    }
+                }
+            }
+            Err(e) => errors.push(format!("{}: {}", node.node_id, e)),
+        }
+    }
+
+    let mut tables: Vec<String> = all_tables.into_iter().collect();
+    tables.sort();
+
+    let response = serde_json::json!({
+        "database": db,
+        "schema": schema,
+        "tables": tables,
+        "count": tables.len(),
+        "nodes_queried": nodes.len(),
+        "errors": if errors.is_empty() { None } else { Some(errors) }
+    });
+
+    (StatusCode::OK, Json(response))
+}
+
+/// Get table schema - forward to any single node
+pub async fn schema_handler(
+    Path((db, table)): Path<(String, String)>,
+    State(state): State<RouterAppState>,
+) -> impl IntoResponse {
+    let node = match state.shard_cache.get_any_active_node() {
+        Some(n) => n,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "No active data nodes".to_string(),
+            )
+        }
+    };
+
+    match state
+        .data_node_pool
+        .get_table_schema(&node.node_id, &db, &table)
+        .await
+    {
+        Ok(schema) => (StatusCode::OK, schema),
+        Err(e) => (StatusCode::NOT_FOUND, e),
+    }
+}
+
+// ============================================================================
+// Partition Handlers (forwarded to Data nodes)
+// ============================================================================
+
+/// List partitions - broadcast to all nodes and combine results
+pub async fn list_partitions_handler(
+    Path((catalog, schema, table)): Path<(String, String, String)>,
+    State(state): State<RouterAppState>,
+) -> impl IntoResponse {
+    let nodes = state.shard_cache.get_active_data_nodes();
+    if nodes.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "No active data nodes"})),
+        );
+    }
+
+    // Collect partitions from all nodes and combine
+    // Use a map to deduplicate by partition name while keeping the richest info
+    let mut partition_map: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
+    let mut errors = Vec::new();
+
+    for node in &nodes {
+        match state
+            .data_node_pool
+            .list_partitions(&node.node_id, &catalog, &schema, &table)
+            .await
+        {
+            Ok(result) => {
+                if let Some(partitions) = result["partitions"].as_array() {
+                    for partition in partitions {
+                        if let Some(part_name) = partition["partition"].as_str() {
+                            // If this partition already exists, merge file_count and size
+                            if let Some(existing) = partition_map.get_mut(part_name) {
+                                let existing_count =
+                                    existing["file_count"].as_u64().unwrap_or(0);
+                                let new_count = partition["file_count"].as_u64().unwrap_or(0);
+                                let existing_size = existing["size_mb"].as_f64().unwrap_or(0.0);
+                                let new_size = partition["size_mb"].as_f64().unwrap_or(0.0);
+                                existing["file_count"] =
+                                    serde_json::json!(existing_count + new_count);
+                                existing["size_mb"] =
+                                    serde_json::json!(existing_size + new_size);
+                            } else {
+                                partition_map.insert(part_name.to_string(), partition.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => errors.push(format!("{}: {}", node.node_id, e)),
+        }
+    }
+
+    let mut partitions: Vec<serde_json::Value> = partition_map.into_values().collect();
+    partitions.sort_by(|a, b| {
+        let a_part = a["partition"].as_str().unwrap_or("");
+        let b_part = b["partition"].as_str().unwrap_or("");
+        a_part.cmp(b_part)
+    });
+
+    let total_size: f64 = partitions
+        .iter()
+        .map(|p| p["size_mb"].as_f64().unwrap_or(0.0))
+        .sum();
+
+    let response = serde_json::json!({
+        "catalog": catalog,
+        "schema": schema,
+        "table": table,
+        "partitions": partitions,
+        "count": partitions.len(),
+        "total_size_mb": total_size,
+        "nodes_queried": nodes.len(),
+        "errors": if errors.is_empty() { None } else { Some(errors) }
+    });
+
+    (StatusCode::OK, Json(response))
+}
+
+// ============================================================================
+// Memory/Stats Handlers (aggregated from Data nodes)
+// ============================================================================
+
+/// Memory stats - aggregate from all data nodes
+pub async fn memory_handler(State(state): State<RouterAppState>) -> impl IntoResponse {
+    let nodes = state.shard_cache.get_active_data_nodes();
+    if nodes.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "No active data nodes"})),
+        );
+    }
+
+    let mut node_results = Vec::new();
+    let mut total_size: u64 = 0;
+    let mut total_max_size: u64 = 0;
+    let mut total_rows: u64 = 0;
+    let mut total_tables: u64 = 0;
+
+    for node in &nodes {
+        match state.data_node_pool.get_memory_stats(&node.node_id).await {
+            Ok(stats) => {
+                let size = stats["size_bytes"].as_u64().unwrap_or(0);
+                let max_size = stats["max_size_bytes"].as_u64().unwrap_or(0);
+                let rows = stats["total_rows"].as_u64().unwrap_or(0);
+                let tables = stats["num_tables"].as_u64().unwrap_or(0);
+
+                total_size += size;
+                total_max_size += max_size;
+                total_rows += rows;
+                total_tables += tables;
+
+                node_results.push(serde_json::json!({
+                    "node_id": node.node_id,
+                    "size_bytes": size,
+                    "max_size_bytes": max_size,
+                    "total_rows": rows,
+                    "num_tables": tables
+                }));
+            }
+            Err(e) => {
+                node_results.push(serde_json::json!({
+                    "node_id": node.node_id,
+                    "error": e
+                }));
+            }
+        }
+    }
+
+    let response = serde_json::json!({
+        "aggregate": {
+            "total_size_bytes": total_size,
+            "total_max_size_bytes": total_max_size,
+            "total_rows": total_rows,
+            "total_tables": total_tables
+        },
+        "nodes": node_results
+    });
+
+    (StatusCode::OK, Json(response))
 }

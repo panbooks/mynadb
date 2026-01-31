@@ -155,6 +155,9 @@ pub struct DataNodeFlightService {
     /// Cached partition replicas (partition_key -> PartitionReplica)
     /// Updated via Meta event subscription for efficient replication routing
     replica_cache: Arc<DashMap<String, PartitionReplica>>,
+
+    /// Database manager for partition operations
+    db_manager: Option<Arc<crate::jobs::database_manager::DatabaseManager>>,
 }
 
 impl DataNodeFlightService {
@@ -176,7 +179,17 @@ impl DataNodeFlightService {
             parquet_cache: None,
             replication_manager: None,
             replica_cache: Arc::new(DashMap::new()),
+            db_manager: None,
         }
+    }
+
+    /// Set the database manager for partition operations
+    pub fn with_db_manager(
+        mut self,
+        db_manager: Arc<crate::jobs::database_manager::DatabaseManager>,
+    ) -> Self {
+        self.db_manager = Some(db_manager);
+        self
     }
 
     /// Get a reference to the replica cache for external event subscription
@@ -1109,6 +1122,137 @@ impl FlightService for DataNodeFlightService {
                 };
                 let output = stream::once(async { Ok(result) });
                 Ok(Response::new(Box::pin(output)))
+            }
+            "LIST_TABLES" => {
+                #[derive(Deserialize)]
+                struct Req {
+                    db: String,
+                }
+                let req: Req = serde_json::from_slice(&action.body)
+                    .map_err(|e| Status::invalid_argument(format!("Invalid request: {}", e)))?;
+
+                match crate::services::shared::list_tables_impl(&self.query_engine, &req.db).await {
+                    Ok(json) => {
+                        let result = arrow_flight::Result {
+                            body: serde_json::to_vec(&json).unwrap_or_default().into(),
+                        };
+                        Ok(Response::new(Box::pin(stream::once(async { Ok(result) }))))
+                    }
+                    Err(e) => Err(Status::internal(e)),
+                }
+            }
+            "LIST_SCHEMAS" => {
+                #[derive(Deserialize)]
+                struct Req {
+                    db: String,
+                }
+                let req: Req = serde_json::from_slice(&action.body)
+                    .map_err(|e| Status::invalid_argument(format!("Invalid request: {}", e)))?;
+
+                match crate::services::shared::list_schemas_impl(&self.query_engine, &req.db).await
+                {
+                    Ok(json) => {
+                        let result = arrow_flight::Result {
+                            body: serde_json::to_vec(&json).unwrap_or_default().into(),
+                        };
+                        Ok(Response::new(Box::pin(stream::once(async { Ok(result) }))))
+                    }
+                    Err(e) => Err(Status::internal(e)),
+                }
+            }
+            "LIST_SCHEMA_TABLES" => {
+                #[derive(Deserialize)]
+                struct Req {
+                    db: String,
+                    schema: String,
+                }
+                let req: Req = serde_json::from_slice(&action.body)
+                    .map_err(|e| Status::invalid_argument(format!("Invalid request: {}", e)))?;
+
+                match crate::services::shared::list_schema_tables_impl(
+                    &self.query_engine,
+                    &req.db,
+                    &req.schema,
+                )
+                .await
+                {
+                    Ok(json) => {
+                        let result = arrow_flight::Result {
+                            body: serde_json::to_vec(&json).unwrap_or_default().into(),
+                        };
+                        Ok(Response::new(Box::pin(stream::once(async { Ok(result) }))))
+                    }
+                    Err(e) => Err(Status::internal(e)),
+                }
+            }
+            "GET_TABLE_SCHEMA" => {
+                #[derive(Deserialize)]
+                struct Req {
+                    db: String,
+                    table: String,
+                }
+                let req: Req = serde_json::from_slice(&action.body)
+                    .map_err(|e| Status::invalid_argument(format!("Invalid request: {}", e)))?;
+
+                match crate::services::shared::get_table_schema_impl(
+                    &self.query_engine,
+                    &req.db,
+                    &req.table,
+                )
+                .await
+                {
+                    Ok(schema_str) => {
+                        let result = arrow_flight::Result {
+                            body: schema_str.into_bytes().into(),
+                        };
+                        Ok(Response::new(Box::pin(stream::once(async { Ok(result) }))))
+                    }
+                    Err(e) => Err(Status::internal(e)),
+                }
+            }
+            "MEMORY_STATS" => {
+                let cache_stats = self.cache.stats().await;
+                let response_json = serde_json::json!({
+                    "node_id": self.node_id,
+                    "size_bytes": cache_stats.size_bytes,
+                    "max_size_bytes": cache_stats.max_size_bytes,
+                    "total_rows": cache_stats.total_rows,
+                    "num_tables": cache_stats.num_measurements,
+                });
+                let result = arrow_flight::Result {
+                    body: serde_json::to_vec(&response_json).unwrap_or_default().into(),
+                };
+                Ok(Response::new(Box::pin(stream::once(async { Ok(result) }))))
+            }
+            "LIST_PARTITIONS" => {
+                #[derive(Deserialize)]
+                struct Req {
+                    catalog: String,
+                    schema: String,
+                    table: String,
+                }
+                let req: Req = serde_json::from_slice(&action.body)
+                    .map_err(|e| Status::invalid_argument(format!("Invalid request: {}", e)))?;
+
+                match &self.db_manager {
+                    Some(dm) => {
+                        match crate::services::shared::list_partitions_impl(
+                            dm,
+                            &req.catalog,
+                            &req.schema,
+                            &req.table,
+                        ) {
+                            Ok(json) => {
+                                let result = arrow_flight::Result {
+                                    body: serde_json::to_vec(&json).unwrap_or_default().into(),
+                                };
+                                Ok(Response::new(Box::pin(stream::once(async { Ok(result) }))))
+                            }
+                            Err(e) => Err(Status::internal(e)),
+                        }
+                    }
+                    None => Err(Status::unavailable("Database manager not available")),
+                }
             }
             _ => Err(Status::unimplemented(format!(
                 "Action '{}' not implemented",

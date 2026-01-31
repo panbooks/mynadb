@@ -274,6 +274,18 @@ impl ShardCache {
         nodes
     }
 
+    /// Get any active node (for metadata queries that any node can answer)
+    ///
+    /// Returns the first active node, or None if no nodes are available.
+    /// Used for schema/table queries where any node has the same metadata.
+    pub fn get_any_active_node(&self) -> Option<DataNodeInfo> {
+        self.data_nodes
+            .read()
+            .values()
+            .find(|n| n.state == NodeState::Active)
+            .cloned()
+    }
+
     /// Get all data nodes that can serve reads (Active or Retiring)
     ///
     /// Retiring nodes still have data in memtable and should serve queries
