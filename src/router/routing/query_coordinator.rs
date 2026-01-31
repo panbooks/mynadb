@@ -346,12 +346,60 @@ impl QueryCoordinator {
 
         // Use file-based routing if available (optimal for distributed parallel queries)
         if let Some(ref node_files) = plan.node_files {
+            // Pre-check node availability and redistribute files from unavailable nodes
+            let reachable_nodes = self.data_node_pool.get_reachable_node_ids();
+            if reachable_nodes.is_empty() {
+                return (
+                    Vec::new(),
+                    vec!["No reachable data nodes available".to_string()],
+                );
+            }
+
+            // Separate files into reachable and unreachable node assignments
+            let mut reachable_node_files: HashMap<String, Vec<String>> = HashMap::new();
+            let mut orphaned_files: Vec<String> = Vec::new();
+
             for (node_id, file_paths) in node_files {
+                if self.data_node_pool.is_node_reachable(node_id) {
+                    reachable_node_files
+                        .entry(node_id.clone())
+                        .or_default()
+                        .extend(file_paths.clone());
+                } else {
+                    // Node is unavailable (scaled in or circuit breaker open)
+                    warn!(
+                        "Node {} is unavailable, redistributing {} files to other nodes",
+                        node_id,
+                        file_paths.len()
+                    );
+                    orphaned_files.extend(file_paths.clone());
+                }
+            }
+
+            // Redistribute orphaned files to reachable nodes (round-robin)
+            if !orphaned_files.is_empty() {
+                let reachable_list: Vec<_> = reachable_nodes.iter().collect();
+                for (i, file) in orphaned_files.iter().enumerate() {
+                    let target_node = &reachable_list[i % reachable_list.len()];
+                    reachable_node_files
+                        .entry((*target_node).clone())
+                        .or_default()
+                        .push(file.clone());
+                }
+                info!(
+                    "Redistributed {} orphaned files to {} reachable nodes",
+                    orphaned_files.len(),
+                    reachable_list.len()
+                );
+            }
+
+            // Create query futures for reachable nodes
+            for (node_id, file_paths) in reachable_node_files {
                 let pool = Arc::clone(&self.data_node_pool);
                 let node_id_clone = node_id.clone();
                 let sql = plan.sql.clone();
                 let catalog = plan.catalog.clone();
-                let files = file_paths.clone();
+                let files = file_paths;
 
                 let future: QueryFuture = Box::pin(async move {
                     debug!(
@@ -363,7 +411,7 @@ impl QueryCoordinator {
 
                     // Execute query with explicit file list (node reads only its own files)
                     match pool
-                        .query_with_files(&node_id_clone, &catalog, &sql, files)
+                        .query_with_files(&node_id_clone, &catalog, &sql, files.clone())
                         .await
                     {
                         Ok(batches) => {
