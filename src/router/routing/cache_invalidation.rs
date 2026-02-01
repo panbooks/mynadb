@@ -240,6 +240,23 @@ impl CacheInvalidationHandler {
                 EventType::DataNodeModeChanged => {
                     Self::handle_data_node_mode_changed(&shard_cache, &event);
                 }
+                EventType::FlushForRecovery => {
+                    // Recovery event: Standby needs to flush crashed Primary's data
+                    // Router doesn't need to act on this - it's handled by Data nodes
+                    debug!("FlushForRecovery event received");
+                }
+                EventType::PartitionUnprotected => {
+                    // Recovery event: Partition has no Standby backup
+                    // Router could potentially route differently for degraded partitions
+                    if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
+                        warn!(
+                            "Partition {} on Primary {} is UNPROTECTED: {}",
+                            payload.get("partition_key").and_then(|v| v.as_str()).unwrap_or("?"),
+                            payload.get("primary_id").and_then(|v| v.as_str()).unwrap_or("?"),
+                            payload.get("reason").and_then(|v| v.as_str()).unwrap_or("unknown")
+                        );
+                    }
+                }
                 EventType::Unknown => {
                     debug!("Unknown event type");
                 }

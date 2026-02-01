@@ -716,6 +716,18 @@ pub enum EventType {
     /// Published when a Standby node is promoted to Primary.
     /// Payload contains: {"node_id": "...", "old_mode": "Standby", "new_mode": "Primary"}
     DataNodeModeChanged = 12,
+
+    /// Standby needs to flush data for crashed Primary (Recovery)
+    ///
+    /// Published when a Primary crashes and its Standby needs to flush replicated data.
+    /// Payload: {"standby_id": "...", "crashed_primary_id": "..."}
+    FlushForRecovery = 13,
+
+    /// Partition marked as unprotected (no Standby backup)
+    ///
+    /// Published when a partition loses its Standby and no spare is available.
+    /// Payload: {"partition_key": "...", "primary_id": "...", "reason": "..."}
+    PartitionUnprotected = 14,
 }
 
 impl From<i32> for EventType {
@@ -733,6 +745,8 @@ impl From<i32> for EventType {
             10 => EventType::ReplicaPromoted,
             11 => EventType::ReplicaStateChanged,
             12 => EventType::DataNodeModeChanged,
+            13 => EventType::FlushForRecovery,
+            14 => EventType::PartitionUnprotected,
             _ => EventType::Unknown,
         }
     }
@@ -963,6 +977,53 @@ pub enum MetaCommand {
     RemoveStandbyFromReplicas {
         standby_node_id: String,
     },
+
+    // Recovery operations (failover without promotion)
+
+    /// Trigger Standby to flush a crashed Primary's replicated data
+    ///
+    /// When a Primary crashes with promote_standby=false:
+    /// 1. Find Standby backing the crashed Primary
+    /// 2. Standby flushes all replicated memtable data to Parquet
+    /// 3. This ensures no data loss before partition redistribution
+    TriggerStandbyFlush {
+        standby_id: String,
+        crashed_primary_id: String,
+    },
+
+    /// Assign a spare Standby to back specific Primaries
+    ///
+    /// When an active Standby crashes:
+    /// 1. Find spare Standby from pool
+    /// 2. Assign it to back the affected Primaries
+    /// 3. Start replication from Primaries to new Standby
+    AssignStandbyToPrimaries {
+        standby_id: String,
+        primary_ids: Vec<String>,
+    },
+
+    /// Mark a partition as unprotected (no Standby backup)
+    ///
+    /// Used when:
+    /// - A Standby crashes and no spare is available
+    /// - Primary has no replication target
+    /// - Emits warning based on unprotected_write_policy
+    MarkPartitionUnprotected {
+        partition_key: String,
+        primary_id: String,
+        reason: String,
+    },
+
+    /// Redistribute partitions from a crashed Primary to remaining Primaries
+    ///
+    /// Called during Primary crash recovery (promote_standby=false):
+    /// 1. Get all partitions owned by crashed Primary
+    /// 2. Distribute evenly to remaining active Primaries
+    /// 3. Update replica assignments
+    RedistributePartitions {
+        crashed_primary_id: String,
+        target_primaries: Vec<String>,
+    },
 }
 
 /// Response from applying a MetaCommand
@@ -1087,6 +1148,36 @@ pub enum MetaResponse {
     ScaleInRecommended {
         recommendation: ScaleInRecommendation,
     },
+
+    // Recovery responses
+
+    /// Standby flush triggered for crashed Primary
+    StandbyFlushTriggered {
+        standby_id: String,
+        crashed_primary_id: String,
+    },
+
+    /// Spare Standby assigned to Primaries
+    StandbyAssignedToPrimaries {
+        standby_id: String,
+        primary_ids: Vec<String>,
+    },
+
+    /// Partition marked as unprotected (no Standby)
+    PartitionMarkedUnprotected {
+        partition_key: String,
+        primary_id: String,
+    },
+
+    /// Partitions redistributed from crashed Primary
+    PartitionsRedistributed {
+        crashed_primary_id: String,
+        partitions_count: usize,
+        target_primaries: Vec<String>,
+    },
+
+    /// No spare Standby available
+    NoSpareStandbyAvailable,
 
     Error {
         message: String,
