@@ -1,6 +1,6 @@
 [package]
 name = "mynadb"
-version = "0.2.8"
+version = "0.1.0"
 edition = "2021"
 description = "mynadb, the voice of your machines"
 

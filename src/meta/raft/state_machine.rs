@@ -3208,10 +3208,9 @@ mod tests {
         let nodes = sm2.list_nodes(None, None);
         assert_eq!(nodes.len(), 3);
 
-        // Verify lock state (lock might be expired or present)
+        // Verify lock state - lock should exist after restore
         let lock = sm2.get_lock("test-lock");
-        // Lock should exist (we just restored)
-        assert!(lock.is_some() || true); // Lock might have expired
+        assert!(lock.is_some(), "Lock should exist after snapshot restore");
     }
 
     // ============================================================================
@@ -3245,12 +3244,16 @@ mod tests {
 
         match renew_response {
             MetaResponse::Error { message } => {
-                assert!(message.contains("not found") || message.contains("mismatch") || true);
+                assert!(
+                    message.contains("not found") || message.contains("mismatch"),
+                    "Expected 'not found' or 'mismatch' error, got: {}",
+                    message
+                );
             }
             MetaResponse::LockRenewed { .. } => {
                 panic!("Should not renew with wrong token");
             }
-            _ => {}
+            _ => panic!("Expected Error response"),
         }
     }
 
