@@ -525,38 +525,22 @@ impl MetaStateMachine {
             }
         }
 
-        // Cold Standby Architecture: If a PRIMARY Data node left, promote a STANDBY node
-        if self.standby_config.enabled && self.standby_config.auto_promote {
-            if let Some(ref node_info) = info {
-                if node_info.role == NodeRole::Data && node_info.mode == Some(DataNodeMode::Primary)
-                {
-                    // Find an available Standby node to promote
-                    if let Some(standby) = self.select_standby_to_promote(node_id) {
-                        info!(
-                            "Cold Standby: Primary node {} left, promoting Standby {} to Primary",
-                            node_id, standby.node_id
-                        );
-                        self.promote_data_node(&standby.node_id, Some(node_id));
-                    } else {
-                        info!(
-                            "Cold Standby: Primary node {} left, no Standby available to promote",
-                            node_id
-                        );
-                    }
-                }
-            }
-        }
+        // Cold Standby Architecture: Primary crash handled by RecoveryManager
+        // No automatic promotion - RecoveryManager uses flush-and-redistribute strategy
+        // which prevents avalanche failures by not overloading remaining nodes.
 
-        // Automatic failover: Promote standbys for partitions where this node was leader
-        // This enables zero-downtime failover when combined with Router's instant standby routing
-        let replicas_to_failover = self.get_replicas_by_leader(node_id);
-        for replica in replicas_to_failover {
-            info!(
-                "Auto-failover: Node {} was leader for partition {}, promoting standby",
-                node_id, replica.partition_key
-            );
-            // Promote the first available standby
-            self.promote_standby(&replica.partition_key);
+        // Legacy ISR mode: Automatic failover for partitions where this node was leader
+        // Only applies when cold standby architecture is disabled
+        if !self.standby_config.enabled {
+            let replicas_to_failover = self.get_replicas_by_leader(node_id);
+            for replica in replicas_to_failover {
+                info!(
+                    "Auto-failover: Node {} was leader for partition {}, promoting standby",
+                    node_id, replica.partition_key
+                );
+                // Promote the first available standby
+                self.promote_standby(&replica.partition_key);
+            }
         }
 
         // Publish event
