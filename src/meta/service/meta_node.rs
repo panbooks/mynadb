@@ -604,6 +604,65 @@ impl MetaNode {
         self.state_machine.apply_command(cmd)
     }
 
+    /// Apply a command through Raft and return the MetaResponse
+    ///
+    /// This is a public wrapper for internal modules that need direct
+    /// access to the MetaResponse (e.g., scale_in executor).
+    pub async fn apply_command_direct(&self, cmd: MetaCommand) -> Result<MetaResponse, String> {
+        let result = self.raft.client_write(cmd.clone()).await;
+
+        match result {
+            Ok(response) => Ok(response.data),
+            Err(e) => {
+                // Handle ForwardToLeader
+                if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
+                    if let Some(leader_id) = forward.leader_id {
+                        debug!("Forwarding command to leader node {}", leader_id);
+                        return self.forward_command_to_leader_direct(leader_id, cmd).await;
+                    }
+                }
+                Err(format!("Raft error: {}", e))
+            }
+        }
+    }
+
+    /// Forward a command to leader and return the direct response
+    async fn forward_command_to_leader_direct(
+        &self,
+        leader_id: NodeId,
+        cmd: MetaCommand,
+    ) -> Result<MetaResponse, String> {
+        let channel = self
+            .network
+            .get_channel_to(leader_id)
+            .await
+            .map_err(|e| format!("Failed to connect to leader {}: {}", leader_id, e))?;
+
+        let mut client = proto::raft_internal_client::RaftInternalClient::new(channel);
+
+        let command_data =
+            bincode::serialize(&cmd).map_err(|e| format!("Failed to serialize command: {}", e))?;
+
+        let request = tonic::Request::new(proto::ForwardCommandRequest { command_data });
+
+        let response = client
+            .forward_command(request)
+            .await
+            .map_err(|e| format!("Forward to leader failed: {}", e))?
+            .into_inner();
+
+        if response.success {
+            if !response.response_data.is_empty() {
+                bincode::deserialize(&response.response_data)
+                    .map_err(|e| format!("Failed to deserialize response: {}", e))
+            } else {
+                Ok(MetaResponse::Success)
+            }
+        } else {
+            Err(response.error)
+        }
+    }
+
     // ========================================================================
     // Read Operations (direct from state machine)
     // ========================================================================

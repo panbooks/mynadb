@@ -23,6 +23,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use super::meta_node::MetaNode;
+use crate::meta::scale_in::{
+    ScaleInConfig, ScaleInManager, ScaleInPlan, ScaleInPlanRequest, ScaleInResult, ScaleInStrategy,
+};
 use crate::meta::types::NodeState;
 
 /// Meta node HTTP state
@@ -68,6 +71,9 @@ pub fn build_router(state: MetaHttpState) -> Router {
         .route("/nodes/:node_id/retire/cancel", post(cancel_retire))
         .route("/cluster/scale-in/recommend", get(recommend_scale_in))
         .route("/cluster/scale-in/execute", post(execute_scale_in))
+        // Enhanced scale-in endpoints with Golden Rule enforcement
+        .route("/cluster/scale-in/plan", post(plan_scale_in))
+        .route("/cluster/scale-in/execute-plan", post(execute_scale_in_plan))
         .with_state(state)
 }
 
@@ -86,7 +92,9 @@ async fn home() -> &'static str {
        GET  /nodes/{node_id}/retire/status - Get retirement progress\n\
        POST /nodes/{node_id}/retire/cancel - Cancel retirement\n\
        GET  /cluster/scale-in/recommend  - Get recommended nodes\n\
-       POST /cluster/scale-in/execute    - Batch retire multiple nodes\n\n\
+       POST /cluster/scale-in/execute    - Batch retire multiple nodes\n\
+       POST /cluster/scale-in/plan       - Generate scale-in plan (supports dry_run)\n\
+       POST /cluster/scale-in/execute-plan - Execute with Golden Rule enforcement\n\n\
      Primary protocol: gRPC\n"
 }
 
@@ -665,6 +673,323 @@ async fn execute_scale_in(
             errors,
         }),
     )
+}
+
+// ========================================================================
+// Enhanced Scale-In API (with Golden Rule enforcement)
+// ========================================================================
+
+/// Request to generate a scale-in plan
+#[derive(Deserialize)]
+pub struct PlanScaleInRequest {
+    /// Total number of nodes to remove (simplest option, Ratio-Preserving)
+    ///
+    /// Auto-calculates primaries/standbys based on ratio.
+    /// Constraint: actual_ratio <= config_ratio (each Standby backs AT MOST `ratio` Primaries)
+    ///
+    /// Priority: reduce_primaries/reduce_standbys > reduce_num
+    #[serde(default)]
+    pub reduce_num: usize,
+
+    /// Number of Primary nodes to remove (takes priority over reduce_num)
+    #[serde(default)]
+    pub reduce_primaries: usize,
+
+    /// Number of Standby nodes to remove (takes priority over reduce_num)
+    #[serde(default)]
+    pub reduce_standbys: usize,
+
+    /// Strategy: "least_loaded" (default), "first_in", "last_in", "ha_unit"
+    #[serde(default)]
+    pub strategy: Option<String>,
+
+    /// Whether this is a dry-run (no changes, just preview)
+    #[serde(default)]
+    pub dry_run: bool,
+
+    /// Force flush memtables before retirement
+    #[serde(default = "default_true")]
+    pub force_flush: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Scale-in plan response
+#[derive(Serialize)]
+pub struct PlanScaleInResponse {
+    pub success: bool,
+    pub plan_id: String,
+    pub dry_run: bool,
+    pub phases: Vec<PhaseInfo>,
+    pub primaries_to_retire: Vec<String>,
+    pub standbys_to_retire: Vec<String>,
+    pub partitions_to_migrate: usize,
+    pub warnings: Vec<String>,
+    pub final_state: FinalStateInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct PhaseInfo {
+    pub phase_number: u8,
+    pub phase_type: String,
+    pub description: String,
+    pub affected_nodes: Vec<String>,
+    pub operations_count: usize,
+}
+
+#[derive(Serialize)]
+pub struct FinalStateInfo {
+    pub primary_count: usize,
+    pub standby_count: usize,
+    pub ratio_maintained: bool,
+    pub total_partitions: usize,
+}
+
+/// Generate a detailed scale-in plan
+///
+/// This endpoint generates a plan that follows the Golden Rule:
+/// 1. Never retire a Standby while it backs up active Primaries
+/// 2. Never retire a Primary while it owns partitions
+///
+/// Use `dry_run=true` to preview without executing.
+async fn plan_scale_in(
+    State(state): State<MetaHttpState>,
+    Json(request): Json<PlanScaleInRequest>,
+) -> impl IntoResponse {
+    // Parse strategy
+    let strategy = match request.strategy.as_deref() {
+        Some("least_loaded") | None => ScaleInStrategy::LeastLoaded,
+        Some("first_in") => ScaleInStrategy::FirstIn,
+        Some("last_in") => ScaleInStrategy::LastIn,
+        Some("ha_unit") => ScaleInStrategy::HAUnit,
+        Some(other) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(PlanScaleInResponse {
+                    success: false,
+                    plan_id: String::new(),
+                    dry_run: request.dry_run,
+                    phases: vec![],
+                    primaries_to_retire: vec![],
+                    standbys_to_retire: vec![],
+                    partitions_to_migrate: 0,
+                    warnings: vec![],
+                    final_state: FinalStateInfo {
+                        primary_count: 0,
+                        standby_count: 0,
+                        ratio_maintained: false,
+                        total_partitions: 0,
+                    },
+                    error: Some(format!("Invalid strategy: {}. Valid options: least_loaded, first_in, last_in, ha_unit", other)),
+                }),
+            );
+        }
+    };
+
+    // Create scale-in manager
+    let config = ScaleInConfig {
+        force_flush: request.force_flush,
+        strategy,
+        ..ScaleInConfig::default()
+    };
+    let manager = ScaleInManager::new(state.meta_node.clone(), config);
+
+    // Create plan request
+    let plan_request = ScaleInPlanRequest {
+        reduce_num: request.reduce_num,
+        reduce_primaries: request.reduce_primaries,
+        reduce_standbys: request.reduce_standbys,
+        strategy,
+        dry_run: request.dry_run,
+        force_flush: request.force_flush,
+    };
+
+    // Generate plan
+    match manager.plan(plan_request).await {
+        Ok(plan) => {
+            let phases: Vec<PhaseInfo> = plan
+                .phases
+                .iter()
+                .map(|p| PhaseInfo {
+                    phase_number: p.phase_number,
+                    phase_type: p.phase_type.to_string(),
+                    description: p.description.clone(),
+                    affected_nodes: p.affected_nodes.clone(),
+                    operations_count: p.operations.len(),
+                })
+                .collect();
+
+            (
+                StatusCode::OK,
+                Json(PlanScaleInResponse {
+                    success: true,
+                    plan_id: plan.plan_id,
+                    dry_run: plan.dry_run,
+                    phases,
+                    primaries_to_retire: plan.primaries_to_retire,
+                    standbys_to_retire: plan.standbys_to_retire,
+                    partitions_to_migrate: plan.migrations.len(),
+                    warnings: plan.warnings,
+                    final_state: FinalStateInfo {
+                        primary_count: plan.final_state.primary_count,
+                        standby_count: plan.final_state.standby_count,
+                        ratio_maintained: plan.final_state.ratio_maintained,
+                        total_partitions: plan.final_state.total_partitions,
+                    },
+                    error: None,
+                }),
+            )
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(PlanScaleInResponse {
+                success: false,
+                plan_id: String::new(),
+                dry_run: request.dry_run,
+                phases: vec![],
+                primaries_to_retire: vec![],
+                standbys_to_retire: vec![],
+                partitions_to_migrate: 0,
+                warnings: vec![],
+                final_state: FinalStateInfo {
+                    primary_count: 0,
+                    standby_count: 0,
+                    ratio_maintained: false,
+                    total_partitions: 0,
+                },
+                error: Some(e.to_string()),
+            }),
+        ),
+    }
+}
+
+/// Request to execute a scale-in plan
+#[derive(Deserialize)]
+pub struct ExecutePlanRequest {
+    /// Total number of nodes to remove (simplest option)
+    #[serde(default)]
+    pub reduce_num: usize,
+
+    /// Number of Primary nodes to remove (takes priority over reduce_num)
+    #[serde(default)]
+    pub reduce_primaries: usize,
+
+    /// Number of Standby nodes to remove (takes priority over reduce_num)
+    #[serde(default)]
+    pub reduce_standbys: usize,
+
+    /// Strategy: "least_loaded" (default), "first_in", "last_in", "ha_unit"
+    #[serde(default)]
+    pub strategy: Option<String>,
+
+    /// Force flush memtables before retirement
+    #[serde(default = "default_true")]
+    pub force_flush: bool,
+}
+
+/// Scale-in execution response
+#[derive(Serialize)]
+pub struct ExecutePlanResponse {
+    pub success: bool,
+    pub plan_id: String,
+    pub primaries_retired: Vec<String>,
+    pub standbys_retired: Vec<String>,
+    pub partitions_migrated: usize,
+    pub duration_ms: u64,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// Execute a scale-in plan with Golden Rule enforcement
+///
+/// This endpoint:
+/// 1. Generates a validated plan following the Golden Rule
+/// 2. Executes the plan in three phases:
+///    - Phase 1: Migrate partitions from target Primaries
+///    - Phase 2: Retire empty Primaries (Standbys still protect cluster)
+///    - Phase 3: Retire orphaned Standbys
+async fn execute_scale_in_plan(
+    State(state): State<MetaHttpState>,
+    Json(request): Json<ExecutePlanRequest>,
+) -> impl IntoResponse {
+    // Parse strategy
+    let strategy = match request.strategy.as_deref() {
+        Some("least_loaded") | None => ScaleInStrategy::LeastLoaded,
+        Some("first_in") => ScaleInStrategy::FirstIn,
+        Some("last_in") => ScaleInStrategy::LastIn,
+        Some("ha_unit") => ScaleInStrategy::HAUnit,
+        Some(other) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ExecutePlanResponse {
+                    success: false,
+                    plan_id: String::new(),
+                    primaries_retired: vec![],
+                    standbys_retired: vec![],
+                    partitions_migrated: 0,
+                    duration_ms: 0,
+                    errors: vec![format!("Invalid strategy: {}. Valid options: least_loaded, first_in, last_in, ha_unit", other)],
+                    warnings: vec![],
+                }),
+            );
+        }
+    };
+
+    // Create scale-in manager
+    let config = ScaleInConfig {
+        force_flush: request.force_flush,
+        strategy,
+        ..ScaleInConfig::default()
+    };
+    let manager = ScaleInManager::new(state.meta_node.clone(), config);
+
+    // Create plan request
+    let plan_request = ScaleInPlanRequest {
+        reduce_num: request.reduce_num,
+        reduce_primaries: request.reduce_primaries,
+        reduce_standbys: request.reduce_standbys,
+        strategy,
+        dry_run: false,
+        force_flush: request.force_flush,
+    };
+
+    // Execute scale-in (plan + execute)
+    match manager.scale_in(plan_request).await {
+        Ok(result) => (
+            if result.success {
+                StatusCode::OK
+            } else {
+                StatusCode::MULTI_STATUS
+            },
+            Json(ExecutePlanResponse {
+                success: result.success,
+                plan_id: result.plan_id,
+                primaries_retired: result.primaries_retired,
+                standbys_retired: result.standbys_retired,
+                partitions_migrated: result.partitions_migrated,
+                duration_ms: result.duration_ms,
+                errors: result.errors,
+                warnings: result.warnings,
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ExecutePlanResponse {
+                success: false,
+                plan_id: String::new(),
+                primaries_retired: vec![],
+                standbys_retired: vec![],
+                partitions_migrated: 0,
+                duration_ms: 0,
+                errors: vec![e.to_string()],
+                warnings: vec![],
+            }),
+        ),
+    }
 }
 
 /// Start HTTP server for Meta node

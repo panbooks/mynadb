@@ -32,6 +32,7 @@ pub mod client;
 pub mod config;
 pub mod raft;
 pub mod replica_assigner;
+pub mod scale_in;
 pub mod service;
 pub mod types;
 
