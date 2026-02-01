@@ -346,17 +346,27 @@ impl MetaStateMachine {
 
         // Cold Standby Architecture: Auto-assign mode for Data nodes
         if info.role == NodeRole::Data && info.mode.is_none() {
-            // Count current Primary and Standby nodes
-            let (primary_count, standby_count) = self.count_data_nodes_by_mode();
+            // Check if node already exists (re-registration after restart)
+            let existing_mode = self.get_node(&info.node_id).and_then(|n| n.mode);
 
-            // Determine mode based on ratio (returns Primary if standby disabled)
-            let assigned_mode = self.standby_config.mode_for_new_node(primary_count, standby_count);
-            info.mode = Some(assigned_mode);
+            if let Some(mode) = existing_mode {
+                // Preserve existing mode on re-registration
+                info.mode = Some(mode);
+                info!(
+                    "Preserved existing mode {} for re-registering Data node {}",
+                    mode, info.node_id
+                );
+            } else {
+                // New node: assign mode based on ratio
+                let (primary_count, standby_count) = self.count_data_nodes_by_mode();
+                let assigned_mode = self.standby_config.mode_for_new_node(primary_count, standby_count);
+                info.mode = Some(assigned_mode);
 
-            info!(
-                "Auto-assigned mode {} to Data node {} (primaries={}, standbys={})",
-                assigned_mode, info.node_id, primary_count, standby_count
-            );
+                info!(
+                    "Auto-assigned mode {} to new Data node {} (primaries={}, standbys={})",
+                    assigned_mode, info.node_id, primary_count, standby_count
+                );
+            }
         }
 
         // Create lease
@@ -2933,6 +2943,61 @@ mod tests {
         let stored = sm.get_node("data-1");
         assert!(stored.is_some());
         assert_eq!(stored.unwrap().advertise_addr, "127.0.0.1:5000");
+    }
+
+    #[test]
+    fn test_state_machine_reregister_preserves_mode() {
+        use crate::meta::config::StandbyConfig;
+        use crate::meta::types::DataNodeMode;
+
+        // Create state machine with standby enabled
+        let standby_config = StandbyConfig {
+            enabled: true,
+            primary_standby_ratio: 2,
+            min_primary_nodes: 2,
+            ..Default::default()
+        };
+        let dir = tempdir().unwrap();
+        let db = sled::open(dir.path()).unwrap();
+        let sm = MetaStateMachine::new(db, standby_config);
+
+        // Register first two nodes as Primary (min_primary_nodes=2)
+        for i in 1..=2 {
+            let info = create_test_node_info(&format!("data-{}", i), NodeRole::Data);
+            sm.apply_command(MetaCommand::RegisterNode {
+                info,
+                lease_id: 0,
+                lease_ttl_ms: 30000,
+            });
+        }
+
+        // Third node should be Standby
+        let info3 = create_test_node_info("data-3", NodeRole::Data);
+        sm.apply_command(MetaCommand::RegisterNode {
+            info: info3,
+            lease_id: 0,
+            lease_ttl_ms: 30000,
+        });
+
+        let stored = sm.get_node("data-3").unwrap();
+        assert_eq!(stored.mode, Some(DataNodeMode::Standby));
+
+        // Now re-register data-3 (simulating restart)
+        // Even though cluster state might suggest Primary, mode should be preserved
+        let info3_restart = create_test_node_info("data-3", NodeRole::Data);
+        sm.apply_command(MetaCommand::RegisterNode {
+            info: info3_restart,
+            lease_id: 0,
+            lease_ttl_ms: 30000,
+        });
+
+        // Mode should still be Standby (preserved from original registration)
+        let stored_after = sm.get_node("data-3").unwrap();
+        assert_eq!(
+            stored_after.mode,
+            Some(DataNodeMode::Standby),
+            "Mode should be preserved on re-registration"
+        );
     }
 
     #[test]
