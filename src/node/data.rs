@@ -237,6 +237,7 @@ pub async fn start(config_path: &str) {
 
     // Clone components for HTTP API (before they're moved to Flight service)
     let data_cache_for_http = data_cache.clone();
+    let data_cache_for_shutdown = data_cache.clone();
     let query_engine_for_http = query_engine.clone();
     let config_for_http = config.clone();
     let wal_for_http = wal.clone();
@@ -482,6 +483,31 @@ pub async fn start(config_path: &str) {
 
         // Signal heartbeat loop to stop
         shutdown_flag_clone.store(true, Ordering::SeqCst);
+
+        // Flush memtable data to disk before shutdown
+        // This ensures no data loss on graceful shutdown
+        let cache_stats = data_cache_for_shutdown.stats().await;
+        if cache_stats.total_rows > 0 {
+            info!(
+                "Shutdown: flushing {} rows from memtable to disk...",
+                cache_stats.total_rows
+            );
+            let flush_start = Instant::now();
+            match data_cache_for_shutdown.flush().await {
+                Ok(files_written) => {
+                    info!(
+                        "Shutdown: flushed {} files in {:?}",
+                        files_written.len(),
+                        flush_start.elapsed()
+                    );
+                }
+                Err(e) => {
+                    error!("Shutdown: failed to flush memtable: {}", e);
+                }
+            }
+        } else {
+            info!("Shutdown: memtable empty, no flush needed");
+        }
 
         // Deregister from Meta service
         if let Some(ref client) = shutdown_meta_client {

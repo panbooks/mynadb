@@ -3,6 +3,10 @@
 //! This is the default mode when running `mynadb` or `mynadb standalone`.
 //! It runs all components (HTTP, Flight, MySQL, WAL, compaction, retention)
 //! in a single process with no cluster coordination.
+//!
+//! Usage:
+//! - `mynadb` or `mynadb standalone` - Start in standalone mode
+//! - `mynadb stop` or `mynadb standalone stop` - Stop a running instance
 
 use super::common;
 use crate::config::Config;
@@ -10,7 +14,10 @@ use crate::jobs::{compactor, database_manager, retention_manager};
 use crate::services::{api, auth};
 use crate::storage::cache;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, error, info, warn};
+
+const NODE_TYPE: &str = "standalone";
 
 /// Macro for welcome messages (prints to stdout with colored output)
 macro_rules! welcome {
@@ -32,6 +39,12 @@ pub async fn run(config_path: &str) {
 
     // Create data directory
     std::fs::create_dir_all(&config.storage.data_dir).expect("Failed to create data directory");
+
+    // Write PID file for stop command
+    if let Err(e) = common::write_pid_file(&config.storage.data_dir, NODE_TYPE) {
+        error!("Failed to write PID file: {}", e);
+        std::process::exit(1);
+    }
 
     // Initialize storage backend
     let storage = common::init_storage(&config);
@@ -128,6 +141,10 @@ pub async fn run(config_path: &str) {
     // Initialize file cache (only for object storage backends)
     let file_cache = common::init_file_cache(&config, &storage).await;
 
+    // Clone cache and data_dir for shutdown handler
+    let cache_for_shutdown = cache.clone();
+    let data_dir_for_shutdown = config.storage.data_dir.clone();
+
     // Build application state
     let state = api::AppState {
         cache,
@@ -181,7 +198,7 @@ pub async fn run(config_path: &str) {
     welcome!("  HTTP server started successfully!");
     welcome!("===============================================");
 
-    // Wait for servers
+    // Wait for servers or shutdown signal
     tokio::select! {
         _ = flight_handle => {
             error!("Flight server stopped unexpectedly");
@@ -197,6 +214,39 @@ pub async fn run(config_path: &str) {
             }
         } => {
             error!("MySQL server stopped unexpectedly");
+        },
+        _ = tokio::signal::ctrl_c() => {
+            info!("Received shutdown signal, cleaning up...");
+
+            // Flush memtable data to disk before shutdown
+            // This ensures no data loss on graceful shutdown
+            let cache_stats = cache_for_shutdown.stats().await;
+            if cache_stats.total_rows > 0 {
+                info!(
+                    "Shutdown: flushing {} rows from memtable to disk...",
+                    cache_stats.total_rows
+                );
+                let flush_start = Instant::now();
+                match cache_for_shutdown.flush().await {
+                    Ok(files_written) => {
+                        info!(
+                            "Shutdown: flushed {} files in {:?}",
+                            files_written.len(),
+                            flush_start.elapsed()
+                        );
+                    }
+                    Err(e) => {
+                        error!("Shutdown: failed to flush memtable: {}", e);
+                    }
+                }
+            } else {
+                info!("Shutdown: memtable empty, no flush needed");
+            }
+
+            // Remove PID file
+            common::remove_pid_file(&data_dir_for_shutdown, NODE_TYPE);
+
+            info!("Shutdown complete");
         },
     }
 }
@@ -371,5 +421,14 @@ fn start_wal_cleanup_task(wal: &Arc<crate::storage::wal::Wal>, config: &Config) 
             }
         }
     });
+}
+
+/// Stop a running standalone instance
+///
+/// Sends SIGTERM to the running process, which triggers the graceful shutdown
+/// handler that flushes memtable data before exiting.
+pub fn stop(config_path: &str) {
+    let config = Config::load_or_default(config_path);
+    common::stop_node(&config.storage.data_dir, NODE_TYPE);
 }
 
