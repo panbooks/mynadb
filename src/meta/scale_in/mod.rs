@@ -1,0 +1,245 @@
+//! Scale-In Module for Zero-Downtime Cluster Shrinking
+//!
+//! This module implements safe, zero-downtime scale-in operations for MynaDB clusters
+//! using the Cold Standby architecture (2:1 Primary:Standby ratio).
+//!
+//! # Golden Rule
+//!
+//! The scale-in process follows two critical rules to ensure zero data loss:
+//!
+//! 1. **NEVER retire a Standby while it still backs up active Primaries**
+//!    - If a Standby is retired and its Primary crashes, data loss occurs
+//!
+//! 2. **NEVER retire a Primary while it still owns partitions**
+//!    - Partitions must be drained before a Primary can be safely removed
+//!
+//! # Three-Phase Execution
+//!
+//! ```text
+//! Phase 1: Partition Migration
+//! ├── Move partitions from target Primaries to remaining Primaries
+//! ├── Standbys continue backing up all Primaries (HA maintained)
+//! └── Target Primaries become empty (no partitions)
+//!
+//! Phase 2: Retire Empty Primaries
+//! ├── Mark empty Primaries as Retiring → Drained
+//! ├── Standbys still exist as safety net
+//! └── If any remaining Primary crashes, Standby can still take over
+//!
+//! Phase 3: Retire Orphaned Standbys
+//! ├── Only retire Standbys whose Primaries are already removed
+//! └── No risk: these Standbys have no Primaries to back up
+//! ```
+//!
+//! # HA Unit Concept
+//!
+//! With 2:1 ratio, every 2 Primaries share 1 Standby:
+//!
+//! ```text
+//! HA Unit:  [Primary A] ←→ [Standby X] ←→ [Primary B]
+//!                            (backs up both)
+//! ```
+//!
+//! Scale-in by HA units ensures the ratio is maintained.
+
+pub mod executor;
+pub mod planner;
+pub mod types;
+pub mod validator;
+
+pub use executor::ScaleInExecutor;
+pub use planner::ScaleInPlanner;
+pub use types::*;
+pub use validator::ScaleInValidator;
+
+use crate::meta::service::MetaNode;
+use crate::meta::types::{DataNodeMode, NodeInfo, NodeRole, NodeState, ScaleInRecommendation};
+use std::sync::Arc;
+use tracing::{debug, error, info, warn};
+
+/// Manager for orchestrating scale-in operations
+///
+/// Coordinates the planner, validator, and executor to safely reduce cluster size.
+pub struct ScaleInManager {
+    /// Reference to the MetaNode for cluster operations
+    meta_node: Arc<MetaNode>,
+    /// Configuration for scale-in behavior
+    config: ScaleInConfig,
+}
+
+impl ScaleInManager {
+    /// Create a new scale-in manager
+    pub fn new(meta_node: Arc<MetaNode>, config: ScaleInConfig) -> Self {
+        Self { meta_node, config }
+    }
+
+    /// Generate a scale-in plan
+    ///
+    /// Returns a detailed plan showing what will happen during scale-in.
+    /// Use `dry_run=true` to preview without executing.
+    pub async fn plan(&self, request: ScaleInPlanRequest) -> Result<ScaleInPlan, ScaleInError> {
+        info!(
+            "Planning scale-in: {} primaries, {} standbys requested",
+            request.reduce_primaries, request.reduce_standbys
+        );
+
+        // Get current cluster state
+        let cluster_state = self.get_cluster_state().await?;
+
+        // Generate plan
+        let planner = ScaleInPlanner::new(self.config.clone());
+        let plan = planner.generate_plan(&cluster_state, &request)?;
+
+        // Validate plan
+        let validator = ScaleInValidator::new(self.config.clone());
+        validator.validate(&plan, &cluster_state)?;
+
+        info!(
+            "Scale-in plan generated: {} phases, {} primaries, {} standbys to retire",
+            plan.phases.len(),
+            plan.primaries_to_retire.len(),
+            plan.standbys_to_retire.len()
+        );
+
+        Ok(plan)
+    }
+
+    /// Execute a scale-in plan
+    ///
+    /// This performs the actual scale-in operation in the correct phase order.
+    pub async fn execute(&self, plan: &ScaleInPlan) -> Result<ScaleInResult, ScaleInError> {
+        info!("Executing scale-in plan: {}", plan.plan_id);
+
+        let executor = ScaleInExecutor::new(self.meta_node.clone(), self.config.clone());
+        let result = executor.execute(plan).await?;
+
+        info!(
+            "Scale-in completed: {} primaries retired, {} standbys retired",
+            result.primaries_retired.len(),
+            result.standbys_retired.len()
+        );
+
+        Ok(result)
+    }
+
+    /// Perform a complete scale-in operation (plan + execute)
+    ///
+    /// Convenience method that plans and executes in one call.
+    pub async fn scale_in(
+        &self,
+        request: ScaleInPlanRequest,
+    ) -> Result<ScaleInResult, ScaleInError> {
+        // Plan
+        let plan = self.plan(request).await?;
+
+        // Execute
+        self.execute(&plan).await
+    }
+
+    /// Get current cluster state for planning
+    async fn get_cluster_state(&self) -> Result<ClusterState, ScaleInError> {
+        let sm = self.meta_node.state_machine();
+
+        // Get all active data nodes
+        let all_nodes = sm.list_nodes(Some(NodeRole::Data), None);
+
+        let primaries: Vec<_> = all_nodes
+            .iter()
+            .filter(|n| n.mode == Some(DataNodeMode::Primary) && n.state == NodeState::Active)
+            .cloned()
+            .collect();
+
+        let standbys: Vec<_> = all_nodes
+            .iter()
+            .filter(|n| n.mode == Some(DataNodeMode::Standby) && n.state == NodeState::Active)
+            .cloned()
+            .collect();
+
+        let retiring: Vec<_> = all_nodes
+            .iter()
+            .filter(|n| n.state == NodeState::Retiring)
+            .cloned()
+            .collect();
+
+        // Get partition assignments
+        let replicas = sm.list_replicas();
+        let mut partition_assignments = std::collections::HashMap::new();
+
+        for replica in &replicas {
+            partition_assignments.insert(
+                replica.partition_key.clone(),
+                PartitionAssignment {
+                    partition_key: replica.partition_key.clone(),
+                    leader_node_id: replica.leader_node_id.clone(),
+                    standby_node_ids: replica.standby_node_ids.clone(),
+                },
+            );
+        }
+
+        // Count partitions per node
+        let mut partitions_per_node = std::collections::HashMap::new();
+        for replica in &replicas {
+            *partitions_per_node
+                .entry(replica.leader_node_id.clone())
+                .or_insert(0) += 1;
+        }
+
+        Ok(ClusterState {
+            primaries,
+            standbys,
+            retiring,
+            partition_assignments,
+            partitions_per_node,
+            primary_standby_ratio: self.config.primary_standby_ratio,
+        })
+    }
+
+    /// Get a recommendation for scale-in (alias for compatibility)
+    pub async fn recommend(
+        &self,
+        reduce_primaries: usize,
+        reduce_standbys: usize,
+    ) -> Result<ScaleInRecommendation, ScaleInError> {
+        self.meta_node
+            .recommend_scale_in(reduce_primaries, reduce_standbys)
+            .await
+            .map_err(ScaleInError::MetaError)
+    }
+
+    /// Get the status of an ongoing scale-in operation
+    pub async fn get_status(&self, plan_id: &str) -> Result<ScaleInStatus, ScaleInError> {
+        // For now, return a basic status based on cluster state
+        let sm = self.meta_node.state_machine();
+        let retiring_nodes = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Retiring));
+        let drained_nodes = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Drained));
+
+        let phase = if retiring_nodes.is_empty() && drained_nodes.is_empty() {
+            ScaleInPhaseType::Completed
+        } else if !retiring_nodes.is_empty() {
+            ScaleInPhaseType::RetirePrimaries
+        } else {
+            ScaleInPhaseType::Completed
+        };
+
+        Ok(ScaleInStatus {
+            plan_id: plan_id.to_string(),
+            phase,
+            progress_percent: if retiring_nodes.is_empty() { 100 } else { 50 },
+            nodes_remaining: retiring_nodes.len(),
+            estimated_completion_secs: 0,
+            errors: Vec::new(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scale_in_config_default() {
+        let config = ScaleInConfig::default();
+        assert_eq!(config.primary_standby_ratio, 2);
+        assert_eq!(config.min_primaries, 1);
+    }
+}
