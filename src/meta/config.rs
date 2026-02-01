@@ -447,27 +447,74 @@ impl Default for StandbyConfig {
 }
 
 impl StandbyConfig {
+    /// Calculate required Standbys for a given total node count
+    ///
+    /// Uses the same formula as scale-in to ensure ratio constraint:
+    /// `standbys = ceil(total / (ratio + 1))`
+    ///
+    /// This guarantees: `primaries / standbys <= ratio` (no overload)
+    ///
+    /// Example (ratio=2, unit_size=3):
+    ///   3 nodes → ceil(3/3) = 1S, 2P (ratio=2.0)
+    ///   4 nodes → ceil(4/3) = 2S, 2P (ratio=1.0)
+    ///   5 nodes → ceil(5/3) = 2S, 3P (ratio=1.5)
+    ///   6 nodes → ceil(6/3) = 2S, 4P (ratio=2.0)
+    ///   7 nodes → ceil(7/3) = 3S, 4P (ratio=1.3)
+    pub fn required_standbys_for_total(&self, total_nodes: usize) -> usize {
+        if !self.enabled || total_nodes == 0 {
+            return 0;
+        }
+        let unit_size = self.primary_standby_ratio as usize + 1;
+        total_nodes.div_ceil(unit_size)
+    }
+
+    /// Calculate Primaries for a given total node count
+    ///
+    /// Primaries = total - required_standbys
+    pub fn required_primaries_for_total(&self, total_nodes: usize) -> usize {
+        if !self.enabled || total_nodes == 0 {
+            return total_nodes; // All primaries if disabled
+        }
+        let standbys = self.required_standbys_for_total(total_nodes);
+        total_nodes.saturating_sub(standbys)
+    }
+
     /// Calculate how many Standby nodes should exist for given Primary count
     ///
-    /// Returns the target number of Standby nodes based on the ratio.
-    /// Example: with ratio=2 and 4 Primaries, target is 2 Standbys.
+    /// Returns the target number of Standby nodes based on the ratio plus spare pool.
+    /// Uses ceiling division to ensure `actual_ratio <= configured_ratio`.
+    ///
+    /// Formula: target = ceil(primaries / ratio) + spare_standbys
     pub fn target_standby_count(&self, primary_count: usize) -> usize {
         if !self.enabled || primary_count < self.min_primary_nodes {
             return 0;
         }
-        // Round down: 5 Primaries with ratio=2 → 2 Standbys
-        primary_count / self.primary_standby_ratio as usize
+        // Active standbys needed to maintain ratio
+        let active_standbys = primary_count.div_ceil(self.primary_standby_ratio as usize);
+        // Add spare pool
+        active_standbys + self.spare_standbys as usize
     }
 
     /// Determine mode for a new node based on current cluster state
     ///
-    /// Returns Primary if:
-    /// - Standby architecture is disabled
-    /// - Not enough Primaries yet
-    /// - Already have enough Standbys for the ratio
+    /// Uses the same ratio logic as scale-in to ensure consistency:
+    /// - Calculate required standbys for (total + 1) nodes
+    /// - If current standbys < required, assign Standby
+    /// - Otherwise, assign Primary
     ///
-    /// Returns Standby if:
-    /// - Have enough Primaries and need more Standbys for ratio
+    /// This guarantees: after adding node, `primaries / standbys <= ratio`
+    ///
+    /// Example (ratio=2, min_primary=2):
+    /// ```text
+    /// Join 1: 0P,0S → Primary (need min primaries)
+    /// Join 2: 1P,0S → Primary (need min primaries)
+    /// Join 3: 2P,0S → Standby (need ceil(3/3)=1S, have 0)
+    /// Join 4: 2P,1S → Standby (need ceil(4/3)=2S, have 1)
+    /// Join 5: 2P,2S → Primary (need ceil(5/3)=2S, have 2 ✓)
+    /// Join 6: 3P,2S → Primary (need ceil(6/3)=2S, have 2 ✓)
+    /// Join 7: 4P,2S → Standby (need ceil(7/3)=3S, have 2)
+    /// Join 8: 4P,3S → Primary (need ceil(8/3)=3S, have 3 ✓)
+    /// ```
     pub fn mode_for_new_node(
         &self,
         current_primary_count: usize,
@@ -484,8 +531,20 @@ impl StandbyConfig {
             return DataNodeMode::Primary;
         }
 
-        // Calculate target Standby count for current Primary count
-        let target_standbys = self.target_standby_count(current_primary_count);
+        // Calculate total after adding this node
+        let new_total = current_primary_count + current_standby_count + 1;
+
+        // Calculate required standbys for the new total (same formula as scale-in)
+        let required_standbys = self.required_standbys_for_total(new_total);
+
+        // Add spare requirement if we have enough primaries
+        let spare_requirement = if current_primary_count >= self.min_primary_nodes * 2 {
+            self.spare_standbys as usize
+        } else {
+            0
+        };
+
+        let target_standbys = required_standbys + spare_requirement;
 
         if current_standby_count < target_standbys {
             DataNodeMode::Standby
@@ -732,23 +791,157 @@ mod tests {
     }
 
     #[test]
-    fn test_standby_config_target_standby_count() {
+    fn test_required_standbys_for_total() {
+        let config = StandbyConfig {
+            enabled: true,
+            primary_standby_ratio: 2, // unit_size = 3
+            ..Default::default()
+        };
+
+        // Same formula as scale-in: ceil(total / (ratio + 1))
+        assert_eq!(config.required_standbys_for_total(0), 0);
+        assert_eq!(config.required_standbys_for_total(1), 1); // ceil(1/3) = 1
+        assert_eq!(config.required_standbys_for_total(2), 1); // ceil(2/3) = 1
+        assert_eq!(config.required_standbys_for_total(3), 1); // ceil(3/3) = 1
+        assert_eq!(config.required_standbys_for_total(4), 2); // ceil(4/3) = 2
+        assert_eq!(config.required_standbys_for_total(5), 2); // ceil(5/3) = 2
+        assert_eq!(config.required_standbys_for_total(6), 2); // ceil(6/3) = 2
+        assert_eq!(config.required_standbys_for_total(7), 3); // ceil(7/3) = 3
+    }
+
+    #[test]
+    fn test_required_primaries_for_total() {
+        let config = StandbyConfig {
+            enabled: true,
+            primary_standby_ratio: 2,
+            ..Default::default()
+        };
+
+        // primaries = total - standbys
+        assert_eq!(config.required_primaries_for_total(3), 2); // 3 - 1 = 2
+        assert_eq!(config.required_primaries_for_total(4), 2); // 4 - 2 = 2
+        assert_eq!(config.required_primaries_for_total(5), 3); // 5 - 2 = 3
+        assert_eq!(config.required_primaries_for_total(6), 4); // 6 - 2 = 4
+        assert_eq!(config.required_primaries_for_total(7), 4); // 7 - 3 = 4
+    }
+
+    #[test]
+    fn test_ratio_preserved() {
+        let config = StandbyConfig {
+            enabled: true,
+            primary_standby_ratio: 2,
+            ..Default::default()
+        };
+
+        // Verify ratio <= configured for all totals
+        for total in 1..20 {
+            let s = config.required_standbys_for_total(total);
+            let p = config.required_primaries_for_total(total);
+            assert_eq!(p + s, total);
+            if s > 0 {
+                let actual_ratio = p as f64 / s as f64;
+                assert!(
+                    actual_ratio <= 2.0,
+                    "total={}, p={}, s={}, ratio={:.2}",
+                    total, p, s, actual_ratio
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_mode_for_new_node_ratio_preserved() {
+        use crate::meta::types::DataNodeMode;
+
         let config = StandbyConfig {
             enabled: true,
             primary_standby_ratio: 2,
             min_primary_nodes: 2,
+            spare_standbys: 0,
+            auto_assign_mode: true,
             ..Default::default()
         };
 
-        // Not enough primaries
-        assert_eq!(config.target_standby_count(1), 0);
+        // Simulate scale-out and verify ratio never exceeds configured
+        let mut p = 0usize;
+        let mut s = 0usize;
 
-        // At min primaries
-        assert_eq!(config.target_standby_count(2), 1);
+        for _ in 0..20 {
+            let mode = config.mode_for_new_node(p, s);
+            match mode {
+                DataNodeMode::Primary => p += 1,
+                DataNodeMode::Standby => s += 1,
+            }
 
-        // More primaries
-        assert_eq!(config.target_standby_count(4), 2);
-        assert_eq!(config.target_standby_count(5), 2); // Rounds down
-        assert_eq!(config.target_standby_count(6), 3);
+            // After adding, check ratio
+            if s > 0 && p >= config.min_primary_nodes {
+                let actual_ratio = p as f64 / s as f64;
+                assert!(
+                    actual_ratio <= 2.0,
+                    "After {} nodes: {}P, {}S, ratio={:.2}",
+                    p + s, p, s, actual_ratio
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_mode_for_new_node_sequence() {
+        use crate::meta::types::DataNodeMode;
+
+        let config = StandbyConfig {
+            enabled: true,
+            primary_standby_ratio: 2,
+            min_primary_nodes: 2,
+            spare_standbys: 0,
+            auto_assign_mode: true,
+            ..Default::default()
+        };
+
+        // Expected sequence based on unit_size=3:
+        // Join 1: 0P,0S → Primary (need min)
+        // Join 2: 1P,0S → Primary (need min)
+        // Join 3: 2P,0S → Standby (need ceil(3/3)=1S, have 0)
+        // Join 4: 2P,1S → Standby (need ceil(4/3)=2S, have 1)
+        // Join 5: 2P,2S → Primary (need ceil(5/3)=2S, have 2 ✓)
+        // Join 6: 3P,2S → Primary (need ceil(6/3)=2S, have 2 ✓)
+        // Join 7: 4P,2S → Standby (need ceil(7/3)=3S, have 2)
+        // Join 8: 4P,3S → Primary (need ceil(8/3)=3S, have 3 ✓)
+
+        assert_eq!(config.mode_for_new_node(0, 0), DataNodeMode::Primary);
+        assert_eq!(config.mode_for_new_node(1, 0), DataNodeMode::Primary);
+        assert_eq!(config.mode_for_new_node(2, 0), DataNodeMode::Standby);
+        assert_eq!(config.mode_for_new_node(2, 1), DataNodeMode::Standby);
+        assert_eq!(config.mode_for_new_node(2, 2), DataNodeMode::Primary);
+        assert_eq!(config.mode_for_new_node(3, 2), DataNodeMode::Primary);
+        assert_eq!(config.mode_for_new_node(4, 2), DataNodeMode::Standby);
+        assert_eq!(config.mode_for_new_node(4, 3), DataNodeMode::Primary);
+    }
+
+    #[test]
+    fn test_mode_for_new_node_with_spare() {
+        use crate::meta::types::DataNodeMode;
+
+        let config = StandbyConfig {
+            enabled: true,
+            primary_standby_ratio: 2,
+            min_primary_nodes: 2,
+            spare_standbys: 1, // 1 spare, kicks in at 4+ primaries
+            auto_assign_mode: true,
+            ..Default::default()
+        };
+
+        // First 8 nodes same as no-spare (spare kicks in at min_primary*2=4 primaries)
+        assert_eq!(config.mode_for_new_node(0, 0), DataNodeMode::Primary);
+        assert_eq!(config.mode_for_new_node(1, 0), DataNodeMode::Primary);
+        assert_eq!(config.mode_for_new_node(2, 0), DataNodeMode::Standby);
+        assert_eq!(config.mode_for_new_node(2, 1), DataNodeMode::Standby);
+        assert_eq!(config.mode_for_new_node(2, 2), DataNodeMode::Primary);
+        assert_eq!(config.mode_for_new_node(3, 2), DataNodeMode::Primary);
+
+        // At 4P, spare kicks in: need ceil(7/3)=3 + 1 spare = 4S
+        assert_eq!(config.mode_for_new_node(4, 2), DataNodeMode::Standby); // need 4S, have 2
+        assert_eq!(config.mode_for_new_node(4, 3), DataNodeMode::Standby); // need 4S, have 3
+        assert_eq!(config.mode_for_new_node(4, 4), DataNodeMode::Primary); // need 4S, have 4 ✓
     }
 }

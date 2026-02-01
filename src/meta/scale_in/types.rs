@@ -177,9 +177,12 @@ impl ScaleInPlanRequest {
 
         // Calculate FINAL state using ceiling division for standbys
         // This ensures actual_ratio <= config_ratio (Standbys not overloaded)
-        // ceil(a/b) = (a + b - 1) / b
+        //
+        // Same formula as StandbyConfig::required_standbys_for_total():
+        //   standbys = ceil(total / (ratio + 1))
+        //   primaries = total - standbys
         let unit_size = ratio + 1;
-        let final_standbys = (remaining + unit_size - 1) / unit_size;
+        let final_standbys = remaining.div_ceil(unit_size);
         let final_primaries = remaining.saturating_sub(final_standbys);
 
         // Calculate how many to remove
