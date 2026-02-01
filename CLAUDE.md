@@ -46,6 +46,13 @@ cargo fmt
 src/
 ├── main.rs          # Entry point, server initialization
 ├── config.rs        # Configuration structs and loading
+├── aggregates/      # Continuous Aggregates - materialized views with auto-refresh
+│   ├── config.rs        # Feature configuration
+│   ├── definition.rs    # Aggregate definition with builder pattern
+│   ├── job.rs           # Background refresh job
+│   ├── query_rewriter.rs # Automatic query rewriting
+│   ├── storage.rs       # Definition persistence
+│   └── types.rs         # Core types (state, watermark, results)
 ├── services/        # API Layer - HTTP, Flight, MySQL, auth
 ├── storage/         # Write Path - line protocol, cache, WAL, parquet
 ├── query/           # Read Path - DataFusion integration, optimizers
@@ -66,6 +73,7 @@ src/
 
 | Directory | Key Files | Purpose |
 |-----------|-----------|---------|
+| `aggregates/` | `definition.rs`, `job.rs`, `query_rewriter.rs` | Continuous aggregates (materialized views) |
 | `services/` | `api.rs`, `flight_service.rs`, `mysql_service.rs` | External interfaces (REST, gRPC, MySQL wire) |
 | `storage/` | `cache.rs`, `wal.rs`, `line_protocol.rs`, `parquet_writer.rs` | Write path, data persistence |
 | `query/` | `query_engine.rs`, `executor.rs` | SQL execution, DataFusion integration |
@@ -92,6 +100,7 @@ src/
 | Time series utility | `query/timeseries/` |
 | Query/metadata cache | `query/cache/` |
 | Background task | `jobs/` |
+| Continuous aggregate | `aggregates/` |
 | Configuration option | `config.rs` |
 | Cluster coordination | `cluster/` |
 
@@ -196,6 +205,12 @@ interval_secs = 3600
 enabled = false
 username = "admin"
 password = "secret"
+
+[continuous_aggregates]
+enabled = false              # Enable continuous aggregates feature
+refresh_check_interval_secs = 60
+max_concurrent_refreshes = 4
+query_rewriting_enabled = true
 
 [logging]
 level = "info"
