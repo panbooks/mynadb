@@ -722,12 +722,6 @@ pub enum EventType {
     /// Published when a Primary crashes and its Standby needs to flush replicated data.
     /// Payload: {"standby_id": "...", "crashed_primary_id": "..."}
     FlushForRecovery = 13,
-
-    /// Partition marked as unprotected (no Standby backup)
-    ///
-    /// Published when a partition loses its Standby and no spare is available.
-    /// Payload: {"partition_key": "...", "primary_id": "...", "reason": "..."}
-    PartitionUnprotected = 14,
 }
 
 impl From<i32> for EventType {
@@ -746,7 +740,6 @@ impl From<i32> for EventType {
             11 => EventType::ReplicaStateChanged,
             12 => EventType::DataNodeModeChanged,
             13 => EventType::FlushForRecovery,
-            14 => EventType::PartitionUnprotected,
             _ => EventType::Unknown,
         }
     }

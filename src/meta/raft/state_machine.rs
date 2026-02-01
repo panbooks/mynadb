@@ -1911,25 +1911,10 @@ impl MetaStateMachine {
         primary_id: &str,
         reason: &str,
     ) -> MetaResponse {
+        // Log warning - no event needed, just internal tracking
         warn!(
             "Recovery: Partition {} on Primary {} is now UNPROTECTED: {}",
             partition_key, primary_id, reason
-        );
-
-        // Publish warning event
-        let payload = serde_json::json!({
-            "partition_key": partition_key,
-            "primary_id": primary_id,
-            "reason": reason,
-            "status": "unprotected",
-            "timestamp": current_timestamp_ms(),
-        });
-
-        self.publish_event(
-            "recovery",
-            EventType::PartitionUnprotected,
-            serde_json::to_vec(&payload).unwrap_or_default(),
-            "meta",
         );
 
         MetaResponse::PartitionMarkedUnprotected {

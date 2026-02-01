@@ -238,6 +238,7 @@ pub async fn start(config_path: &str) {
     // Clone components for HTTP API (before they're moved to Flight service)
     let data_cache_for_http = data_cache.clone();
     let data_cache_for_shutdown = data_cache.clone();
+    let data_cache_for_recovery = data_cache.clone();
     let query_engine_for_http = query_engine.clone();
     let config_for_http = config.clone();
     let wal_for_http = wal.clone();
@@ -346,18 +347,19 @@ pub async fn start(config_path: &str) {
         );
     }
 
-    // Subscribe to replica events from Meta for cache invalidation
-    // This keeps replica_cache updated when partitions are assigned/promoted
+    // Subscribe to replica and recovery events from Meta
+    // This keeps replica_cache updated and handles recovery flush triggers
     if let Some(ref client) = meta_client_for_events {
         use crate::meta::types::{EventType, PartitionReplica};
 
         let replica_cache = flight_service.replica_cache();
         let node_id = data_config.node_id.clone();
         let meta_client_for_sub = Arc::clone(client);
+        let data_cache_for_sub = data_cache_for_recovery;
 
         tokio::spawn(async move {
-            // Subscribe to replica-related events
-            let topics = vec!["replicas".to_string()];
+            // Subscribe to replica and recovery events
+            let topics = vec!["replicas".to_string(), "recovery".to_string()];
             let mut retry_count: u32 = 0;
             const MAX_RETRY_DELAY_SECS: u64 = 30;
 
@@ -365,7 +367,7 @@ pub async fn start(config_path: &str) {
                 match meta_client_for_sub.subscribe(topics.clone(), 0).await {
                     Ok(mut rx) => {
                         retry_count = 0; // Reset on successful connection
-                        info!("Subscribed to replica events from Meta");
+                        info!("Subscribed to replica and recovery events from Meta");
 
                         while let Some(event) = rx.recv().await {
                             match event.event_type {
@@ -421,15 +423,57 @@ pub async fn start(config_path: &str) {
                                         }
                                     }
                                 }
+                                EventType::FlushForRecovery => {
+                                    // Recovery event: Standby needs to flush crashed Primary's data
+                                    if let Ok(payload) =
+                                        serde_json::from_slice::<serde_json::Value>(&event.payload)
+                                    {
+                                        let standby_id = payload
+                                            .get("standby_id")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        let crashed_primary_id = payload
+                                            .get("crashed_primary_id")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+
+                                        // Only process if this event is for us
+                                        if standby_id == node_id {
+                                            warn!(
+                                                "RECOVERY: Received flush trigger for crashed Primary {}. Flushing all data...",
+                                                crashed_primary_id
+                                            );
+
+                                            // Trigger immediate flush of all cached data
+                                            match data_cache_for_sub.flush().await {
+                                                Ok(results) => {
+                                                    let total_files = results.len();
+                                                    let total_rows: u64 =
+                                                        results.iter().map(|r| r.row_count).sum();
+                                                    info!(
+                                                        "RECOVERY: Flush complete for crashed Primary {}. Wrote {} files, {} rows",
+                                                        crashed_primary_id, total_files, total_rows
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    error!(
+                                                        "RECOVERY: Flush failed for crashed Primary {}: {}",
+                                                        crashed_primary_id, e
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 _ => {}
                             }
                         }
-                        warn!("Replica event subscription ended, reconnecting...");
+                        warn!("Event subscription ended, reconnecting...");
                     }
                     Err(e) => {
                         let delay = std::cmp::min(1 << retry_count, MAX_RETRY_DELAY_SECS);
                         warn!(
-                            "Failed to subscribe to replica events: {}. Retrying in {}s...",
+                            "Failed to subscribe to events: {}. Retrying in {}s...",
                             e, delay
                         );
                         tokio::time::sleep(Duration::from_secs(delay)).await;
