@@ -346,22 +346,17 @@ impl MetaStateMachine {
 
         // Cold Standby Architecture: Auto-assign mode for Data nodes
         if info.role == NodeRole::Data && info.mode.is_none() {
-            if self.standby_config.enabled && self.standby_config.auto_assign_mode {
-                // Count current Primary and Standby nodes
-                let (primary_count, standby_count) = self.count_data_nodes_by_mode();
+            // Count current Primary and Standby nodes
+            let (primary_count, standby_count) = self.count_data_nodes_by_mode();
 
-                // Determine mode based on ratio
-                let assigned_mode = self.standby_config.mode_for_new_node(primary_count, standby_count);
-                info.mode = Some(assigned_mode);
+            // Determine mode based on ratio (returns Primary if standby disabled)
+            let assigned_mode = self.standby_config.mode_for_new_node(primary_count, standby_count);
+            info.mode = Some(assigned_mode);
 
-                info!(
-                    "Auto-assigned mode {} to Data node {} (primaries={}, standbys={})",
-                    assigned_mode, info.node_id, primary_count, standby_count
-                );
-            } else {
-                // Default to Primary if standby architecture is disabled
-                info.mode = Some(DataNodeMode::Primary);
-            }
+            info!(
+                "Auto-assigned mode {} to Data node {} (primaries={}, standbys={})",
+                assigned_mode, info.node_id, primary_count, standby_count
+            );
         }
 
         // Create lease
