@@ -76,18 +76,51 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
             last_heartbeat: info.last_heartbeat,
             labels: info.labels,
             mode: convert_proto_mode(info.mode),
+            // Node-level standby pairing - assigned by state machine during registration
+            backing_standby: None,
+            backed_primaries: vec![],
         };
 
+        let node_id = info.node_id.clone();
         match self.node.register_node(node_info, req.lease_ttl_ms).await {
-            Ok(lease_id) => Ok(Response::new(proto::RegisterNodeResponse {
-                success: true,
-                error: String::new(),
-                lease_id,
-            })),
+            Ok(lease_id) => {
+                // Get the updated node info to retrieve backing_standby assignment
+                let (assigned_mode, backing_standby_id, backing_standby_addr) =
+                    if let Some(node) = self.node.get_node(&node_id).await {
+                        let mode = node.mode.map(|m| m as i32).unwrap_or(0);
+                        let standby_id = node.backing_standby.clone().unwrap_or_default();
+
+                        // Get the standby's flight address if assigned
+                        let standby_addr = if !standby_id.is_empty() {
+                            if let Some(standby) = self.node.get_node(&standby_id).await {
+                                standby.flight_addr.unwrap_or_default()
+                            } else {
+                                String::new()
+                            }
+                        } else {
+                            String::new()
+                        };
+                        (mode, standby_id, standby_addr)
+                    } else {
+                        (0, String::new(), String::new())
+                    };
+
+                Ok(Response::new(proto::RegisterNodeResponse {
+                    success: true,
+                    error: String::new(),
+                    lease_id,
+                    assigned_mode,
+                    backing_standby_id,
+                    backing_standby_addr,
+                }))
+            }
             Err(e) => Ok(Response::new(proto::RegisterNodeResponse {
                 success: false,
                 error: e,
                 lease_id: 0,
+                assigned_mode: 0,
+                backing_standby_id: String::new(),
+                backing_standby_addr: String::new(),
             })),
         }
     }

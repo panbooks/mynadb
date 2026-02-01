@@ -185,6 +185,13 @@ pub struct DataNodeFlightService {
 
     /// Counter for in-flight queries (for graceful drain during scale-in)
     in_flight_queries: Arc<std::sync::atomic::AtomicU64>,
+
+    /// Node-level standby assignment (cached from Meta)
+    ///
+    /// For Primary nodes: the Standby that backs this node.
+    /// ALL data is replicated to this single Standby (not per-partition).
+    /// Refreshed from Meta when None or on cache miss.
+    backing_standby_cache: Arc<RwLock<Option<(String, String)>>>, // (node_id, flight_addr)
 }
 
 impl DataNodeFlightService {
@@ -209,6 +216,7 @@ impl DataNodeFlightService {
             db_manager: None,
             is_retiring: None,
             in_flight_queries: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            backing_standby_cache: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -278,120 +286,44 @@ impl DataNodeFlightService {
         self
     }
 
-    /// Get standbys for a specific partition from cached PartitionReplica info
+    /// Set the backing standby for node-level replication
     ///
-    /// This is the partition-aware replacement for the old brute-force get_standbys().
-    /// Instead of replicating to ALL data nodes, we only replicate to the assigned standbys.
-    ///
-    /// Returns list of (node_id, flight_addr) pairs for the partition's standby nodes.
-    async fn get_standbys_for_partition(&self, partition_key: &str) -> Vec<(String, String)> {
-        let meta_client = match &self.meta_client {
-            Some(c) => c,
-            None => return Vec::new(),
-        };
-
-        // 1. Check local cache first for fast path
-        if let Some(replica) = self.replica_cache.get(partition_key) {
-            // Only replicate if we are the leader
-            if replica.leader_node_id != self.node_id {
-                debug!(
-                    "Not leader for partition {} (leader={}), skipping replication",
-                    partition_key, replica.leader_node_id
-                );
-                return Vec::new();
-            }
-
-            // Get flight addresses for standby nodes
-            return self.get_node_addresses(&replica.standby_node_ids).await;
+    /// This is called during initialization with the standby info received
+    /// from Meta during node registration. All data from this Primary will
+    /// replicate to this single Standby.
+    pub fn with_backing_standby(self, standby_id: String, standby_addr: String) -> Self {
+        // Initialize the cache synchronously since we have the tokio runtime
+        let cache = Arc::clone(&self.backing_standby_cache);
+        // Use try_write to avoid blocking - this is called during initialization
+        if let Ok(mut guard) = cache.try_write() {
+            *guard = Some((standby_id.clone(), standby_addr.clone()));
+            tracing::info!(
+                "Initialized backing standby cache: {} at {}",
+                standby_id,
+                standby_addr
+            );
         }
-
-        // 2. Cache miss - query Meta and cache result
-        match meta_client.get_partition_replica(partition_key).await {
-            Ok(Some(replica)) => {
-                // Only replicate if we are the leader
-                if replica.leader_node_id != self.node_id {
-                    debug!(
-                        "Not leader for partition {} (leader={}), skipping replication",
-                        partition_key, replica.leader_node_id
-                    );
-                    self.replica_cache
-                        .insert(partition_key.to_string(), replica);
-                    return Vec::new();
-                }
-
-                let standbys = self.get_node_addresses(&replica.standby_node_ids).await;
-                self.replica_cache
-                    .insert(partition_key.to_string(), replica);
-                standbys
-            }
-            Ok(None) => {
-                // No replica assignment exists - trigger auto-assignment
-                debug!(
-                    "No replica for partition {}, triggering auto-assignment",
-                    partition_key
-                );
-                match meta_client.auto_assign_replica(partition_key).await {
-                    Ok(replica) => {
-                        // Check if we were assigned as leader
-                        if replica.leader_node_id != self.node_id {
-                            debug!(
-                                "Auto-assigned as standby for partition {} (leader={})",
-                                partition_key, replica.leader_node_id
-                            );
-                            self.replica_cache
-                                .insert(partition_key.to_string(), replica);
-                            return Vec::new();
-                        }
-
-                        let standbys = self.get_node_addresses(&replica.standby_node_ids).await;
-                        self.replica_cache
-                            .insert(partition_key.to_string(), replica);
-                        standbys
-                    }
-                    Err(e) => {
-                        warn!("Failed to auto-assign replica for {}: {}", partition_key, e);
-                        Vec::new()
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to get replica from Meta for {}: {}. Skipping replication.",
-                    partition_key, e
-                );
-                Vec::new()
-            }
-        }
+        self
     }
 
-    /// Helper: Get flight addresses for node IDs
-    async fn get_node_addresses(&self, node_ids: &[String]) -> Vec<(String, String)> {
-        if node_ids.is_empty() {
-            return Vec::new();
-        }
+    /// Get the backing standby for this node (node-level replication)
+    ///
+    /// In node-level standby architecture, each Primary is paired with a single Standby
+    /// at registration time. ALL data from this Primary replicates to that one Standby,
+    /// regardless of partition. This simplifies recovery and guarantees data completeness.
+    ///
+    /// The backing standby is set during node registration via `with_backing_standby()`.
+    /// Returns None if no standby was assigned (Standby nodes or Primaries waiting for pairing).
+    async fn get_backing_standby(&self) -> Option<(String, String)> {
+        let cache = self.backing_standby_cache.read().await;
+        cache.clone()
+    }
 
-        if let Some(ref meta_client) = self.meta_client {
-            match meta_client
-                .list_nodes(Some(NodeRole::Data), Some(NodeState::Active))
-                .await
-            {
-                Ok(nodes) => node_ids
-                    .iter()
-                    .filter_map(|id| {
-                        nodes
-                            .iter()
-                            .find(|n| &n.node_id == id)
-                            .and_then(|n| n.flight_addr.clone().map(|addr| (id.clone(), addr)))
-                    })
-                    .collect(),
-                Err(e) => {
-                    warn!("Failed to get node addresses from Meta: {}", e);
-                    Vec::new()
-                }
-            }
-        } else {
-            Vec::new()
-        }
+    /// Invalidate the cached backing standby (call when node topology changes)
+    pub async fn invalidate_backing_standby_cache(&self) {
+        let mut cache = self.backing_standby_cache.write().await;
+        *cache = None;
+        debug!("Invalidated backing standby cache for {}", self.node_id);
     }
 
     /// Create a FlightServiceServer from this service
@@ -521,7 +453,8 @@ impl DataNodeFlightService {
             }
         }
 
-        // Replicate to partition-specific standbys if enabled
+        // Replicate to node-level backing standby if enabled
+        // In node-level architecture, ALL data from this Primary goes to ONE Standby
         if let Some(ref replication_manager) = self.replication_manager {
             let partition_key = format!(
                 "{}/{}/{}/date={}",
@@ -531,9 +464,10 @@ impl DataNodeFlightService {
                 crate::storage::line_protocol::format_date32_as_string(ticket.date)
             );
 
-            // Use partition-aware standby lookup (not brute-force ALL nodes)
-            let standbys = self.get_standbys_for_partition(&partition_key).await;
-            if !standbys.is_empty() {
+            // Node-level standby lookup (not partition-level)
+            // This guarantees all data from this Primary goes to the same Standby
+            if let Some(standby) = self.get_backing_standby().await {
+                let standbys = vec![standby.clone()];
                 for batch in batches_for_replication {
                     replication_manager.replicate_to_standbys(
                         &partition_key,
@@ -547,10 +481,8 @@ impl DataNodeFlightService {
                 }
 
                 debug!(
-                    "Replicated {} rows to {} assigned standbys for partition {}",
-                    total_rows,
-                    standbys.len(),
-                    partition_key
+                    "Replicated {} rows to backing standby {} for {}/{}/{}",
+                    total_rows, standby.0, ticket.catalog, ticket.schema, ticket.table
                 );
             }
         }

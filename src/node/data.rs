@@ -101,6 +101,10 @@ pub async fn start(config_path: &str) {
     let lease_id = Arc::new(AtomicU64::new(0));
     let shutdown_flag = Arc::new(AtomicBool::new(false));
 
+    // Store backing_standby info from registration for flight_service
+    // This enables node-level replication where all data goes to one Standby
+    let mut backing_standby_info: Option<(String, String)> = None;
+
     if let Some(ref client) = meta_client {
         // Register with Meta service (retry with exponential backoff)
         // This handles the case where data nodes start before Raft leader is elected
@@ -119,17 +123,31 @@ pub async fn start(config_path: &str) {
                 last_heartbeat: current_timestamp_ms(),
                 labels: HashMap::new(),
                 mode: None, // Mode auto-assigned by Meta based on standby ratio
+                // Node-level standby pairing - assigned by Meta during registration
+                backing_standby: None,
+                backed_primaries: vec![],
             };
 
             // Register with 10 second lease TTL (faster failure detection)
             match client.register_node(node_info, 10000).await {
-                Ok(id) => {
+                Ok(result) => {
                     info!(
-                        "Registered with Meta service, lease_id={} (attempt {})",
-                        id,
+                        "Registered with Meta service, lease_id={}, mode={:?}, backing_standby={:?} (attempt {})",
+                        result.lease_id,
+                        result.assigned_mode,
+                        result.backing_standby.as_ref().map(|(id, _)| id),
                         attempt + 1
                     );
-                    lease_id.store(id, Ordering::SeqCst);
+                    lease_id.store(result.lease_id, Ordering::SeqCst);
+
+                    // Store backing_standby info for flight service
+                    if let Some((standby_id, standby_addr)) = result.backing_standby {
+                        info!(
+                            "Node-level standby: This Primary is backed by {} at {}",
+                            standby_id, standby_addr
+                        );
+                        backing_standby_info = Some((standby_id, standby_addr));
+                    }
 
                     // Start heartbeat loop
                     let client_clone = Arc::clone(client);
@@ -311,6 +329,11 @@ pub async fn start(config_path: &str) {
     // Add replication manager to flight service if enabled
     if let Some(ref repl_manager) = replication_manager {
         flight_service = flight_service.with_replication_manager(Arc::clone(repl_manager));
+    }
+
+    // Set backing standby for node-level replication
+    if let Some((standby_id, standby_addr)) = backing_standby_info {
+        flight_service = flight_service.with_backing_standby(standby_id, standby_addr);
     }
 
     // Clone for reporting task

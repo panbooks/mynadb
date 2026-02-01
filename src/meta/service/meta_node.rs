@@ -1607,6 +1607,8 @@ mod tests {
             last_heartbeat: 1000,
             labels: std::collections::HashMap::new(),
             mode: Some(DataNodeMode::Primary),
+            backing_standby: None,
+            backed_primaries: vec![],
         };
 
         let key = format!("{}{}", keys::PREFIX_NODE, node_info.node_id);
@@ -1664,6 +1666,8 @@ mod tests {
             last_heartbeat: 2000,
             labels: std::collections::HashMap::new(),
             mode: Some(DataNodeMode::Primary),
+            backing_standby: None,
+            backed_primaries: vec![],
         };
 
         // Apply command through original state machine (simulating Raft apply)
@@ -1711,6 +1715,8 @@ mod tests {
             last_heartbeat: 3000,
             labels: std::collections::HashMap::new(),
             mode: Some(DataNodeMode::Standby),
+            backing_standby: None,
+            backed_primaries: vec![],
         };
 
         let cmd = MetaCommand::RegisterNode {

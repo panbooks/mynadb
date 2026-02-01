@@ -176,6 +176,28 @@ pub struct NodeInfo {
     /// expects a fixed structure. JSON handles it fine but bincode doesn't.
     #[serde(default)]
     pub mode: Option<DataNodeMode>,
+
+    // ===== Node-Level Standby Pairing =====
+    //
+    // Each Primary is paired with a specific Standby at registration time.
+    // All data from the Primary replicates to its assigned Standby.
+    // This ensures complete data recovery on Primary crash.
+
+    /// For Primary nodes: The Standby node that backs this Primary.
+    ///
+    /// All data written to this Primary is replicated to this Standby.
+    /// On Primary crash, this Standby has a complete copy of the data.
+    /// None if no Standby is available yet (queued for pairing).
+    #[serde(default)]
+    pub backing_standby: Option<String>,
+
+    /// For Standby nodes: List of Primary nodes this Standby backs.
+    ///
+    /// Based on the primary_standby_ratio (e.g., 2:1 means 2 Primaries per Standby).
+    /// This Standby receives replication from all listed Primaries.
+    /// Empty for Primary nodes.
+    #[serde(default)]
+    pub backed_primaries: Vec<String>,
 }
 
 impl NodeInfo {
@@ -192,7 +214,9 @@ impl NodeInfo {
             registered_at: now,
             last_heartbeat: now,
             labels: HashMap::new(),
-            mode: None, // Auto-assigned by Meta for Data nodes
+            mode: None,              // Auto-assigned by Meta for Data nodes
+            backing_standby: None,   // Assigned when Standby becomes available
+            backed_primaries: vec![], // Populated when Standby is assigned Primaries
         }
     }
 
