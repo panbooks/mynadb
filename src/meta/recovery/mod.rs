@@ -284,9 +284,89 @@ impl RecoveryManager {
             }
         }
 
-        // Step 3: No spare available - mark Primaries as unprotected
+        // Step 3: No spare available - try flexible assignment if enabled
+        if !self.config.ratio_guarantee {
+            info!(
+                "Recovery: No spare available, trying flexible assignment (max_ratio={})",
+                self.config.max_primary_standby_ratio
+            );
+
+            // Find Standbys with capacity
+            let standbys_with_capacity = self.find_standbys_with_capacity(standby_id);
+
+            if !standbys_with_capacity.is_empty() {
+                // Distribute affected Primaries to available Standbys
+                let (assigned, unassigned) = self
+                    .distribute_to_available_standbys(&affected_primaries, &standbys_with_capacity)
+                    .await;
+
+                // Remove crashed Standby from assignments
+                self.remove_standby_from_assignments(standby_id).await;
+
+                let duration_ms = start.elapsed().as_millis() as u64;
+
+                if unassigned.is_empty() {
+                    // All Primaries reassigned successfully
+                    info!(
+                        "Recovery: Flexible assignment successful. {} Primaries redistributed to existing Standbys.",
+                        assigned.len()
+                    );
+
+                    return Ok(RecoveryResult {
+                        crashed_node_id: standby_id.to_string(),
+                        success: true,
+                        action: RecoveryAction::StandbyRecovery {
+                            crashed_standby_id: standby_id.to_string(),
+                            affected_primaries: affected_primaries.clone(),
+                            spare_standby_id: None,
+                        },
+                        partitions_redistributed: vec![],
+                        new_primary_assignments: vec![],
+                        spare_assigned: None,
+                        unprotected_primaries: vec![],
+                        duration_ms,
+                        warnings: vec![format!(
+                            "Flexible assignment: {} Primaries redistributed to existing Standbys (may be overloaded)",
+                            assigned.len()
+                        )],
+                    });
+                } else {
+                    // Partial assignment - some Primaries still unprotected
+                    warn!(
+                        "Recovery: Partial flexible assignment. {} assigned, {} unprotected: {:?}",
+                        assigned.len(),
+                        unassigned.len(),
+                        unassigned
+                    );
+
+                    // Publish warning for unprotected ones
+                    self.publish_unprotected_warning(&unassigned).await;
+
+                    return Ok(RecoveryResult {
+                        crashed_node_id: standby_id.to_string(),
+                        success: true,
+                        action: RecoveryAction::StandbyRecovery {
+                            crashed_standby_id: standby_id.to_string(),
+                            affected_primaries: affected_primaries.clone(),
+                            spare_standby_id: None,
+                        },
+                        partitions_redistributed: vec![],
+                        new_primary_assignments: vec![],
+                        spare_assigned: None,
+                        unprotected_primaries: unassigned,
+                        duration_ms,
+                        warnings: vec![format!(
+                            "Partial flexible assignment: {} Primaries redistributed, some at capacity",
+                            assigned.len()
+                        )],
+                    });
+                }
+            }
+        }
+
+        // Step 4: No spare and no flexible assignment - mark all as unprotected
         warn!(
-            "Recovery: No spare Standby available. {} Primaries left unprotected: {:?}",
+            "Recovery: No spare Standby available and no capacity for flexible assignment. {} Primaries left unprotected: {:?}",
             affected_primaries.len(),
             affected_primaries
         );
@@ -512,6 +592,128 @@ impl RecoveryManager {
         }
 
         None
+    }
+
+    /// Find Standbys with capacity to take more Primaries (flexible assignment)
+    ///
+    /// Returns a list of (standby_id, available_capacity) sorted by capacity descending.
+    fn find_standbys_with_capacity(&self, exclude_standby: &str) -> Vec<(String, usize)> {
+        let sm = self.meta_node.state_machine();
+        let max_ratio = self.config.max_primary_standby_ratio as usize;
+
+        // Get all active Standby nodes (excluding the crashed one)
+        let standbys = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
+        let standby_nodes: Vec<_> = standbys
+            .iter()
+            .filter(|n| {
+                n.mode == Some(DataNodeMode::Standby) && n.node_id != exclude_standby
+            })
+            .collect();
+
+        // Count how many Primaries each Standby is backing
+        let replicas = sm.list_replicas();
+        let mut standby_load: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+
+        for replica in &replicas {
+            for standby_id in &replica.standby_node_ids {
+                *standby_load.entry(standby_id.clone()).or_insert(0) += 1;
+            }
+        }
+
+        // Find Standbys with available capacity
+        let mut standbys_with_capacity: Vec<(String, usize)> = Vec::new();
+
+        for standby in standby_nodes {
+            let current_load = standby_load.get(&standby.node_id).copied().unwrap_or(0);
+            if current_load < max_ratio {
+                let available = max_ratio - current_load;
+                standbys_with_capacity.push((standby.node_id.clone(), available));
+            }
+        }
+
+        // Sort by available capacity descending (prefer Standbys with more capacity)
+        standbys_with_capacity.sort_by(|a, b| b.1.cmp(&a.1));
+
+        debug!(
+            "Recovery: Found {} Standbys with capacity: {:?}",
+            standbys_with_capacity.len(),
+            standbys_with_capacity
+        );
+
+        standbys_with_capacity
+    }
+
+    /// Distribute affected Primaries to available Standbys (flexible assignment)
+    ///
+    /// Returns (assigned_primaries, unassigned_primaries)
+    async fn distribute_to_available_standbys(
+        &self,
+        affected_primaries: &[String],
+        standbys_with_capacity: &[(String, usize)],
+    ) -> (Vec<String>, Vec<String>) {
+        let mut assigned = Vec::new();
+        let mut unassigned = Vec::new();
+
+        // Track remaining capacity for each Standby
+        let mut remaining_capacity: std::collections::HashMap<String, usize> =
+            standbys_with_capacity.iter().cloned().collect();
+
+        for primary_id in affected_primaries {
+            // Find a Standby with remaining capacity
+            let mut assigned_to = None;
+
+            for (standby_id, _) in standbys_with_capacity {
+                if let Some(capacity) = remaining_capacity.get_mut(standby_id) {
+                    if *capacity > 0 {
+                        assigned_to = Some(standby_id.clone());
+                        *capacity -= 1;
+                        break;
+                    }
+                }
+            }
+
+            if let Some(standby_id) = assigned_to {
+                // Assign this Primary to the Standby
+                info!(
+                    "Recovery: Flexible assignment - assigning Primary {} to Standby {}",
+                    primary_id, standby_id
+                );
+
+                let cmd = MetaCommand::AssignStandbyToPrimaries {
+                    standby_id: standby_id.clone(),
+                    primary_ids: vec![primary_id.clone()],
+                };
+
+                match self.meta_node.apply_command_direct(cmd).await {
+                    Ok(_) => {
+                        assigned.push(primary_id.clone());
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Recovery: Failed to assign Primary {} to Standby {}: {}",
+                            primary_id, standby_id, e
+                        );
+                        unassigned.push(primary_id.clone());
+                    }
+                }
+            } else {
+                // No Standby with remaining capacity
+                warn!(
+                    "Recovery: No Standby with remaining capacity for Primary {}",
+                    primary_id
+                );
+                unassigned.push(primary_id.clone());
+            }
+        }
+
+        info!(
+            "Recovery: Flexible assignment complete. {} assigned, {} unassigned",
+            assigned.len(),
+            unassigned.len()
+        );
+
+        (assigned, unassigned)
     }
 
     /// Check if a node was a spare Standby

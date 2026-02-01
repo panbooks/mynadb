@@ -292,6 +292,32 @@ pub struct FailoverConfig {
     /// Timeout for partition redistribution (seconds)
     #[serde(default = "default_redistribute_timeout_secs")]
     pub redistribute_timeout_secs: u64,
+
+    /// Strictly guarantee the configured Primary:Standby ratio
+    ///
+    /// When true (strict mode):
+    /// - Only use spare pool for Standby replacement
+    /// - If no spare, leave Primaries unprotected
+    /// - No risk of Standby overload
+    ///
+    /// When false (flexible mode):
+    /// - First try spare pool
+    /// - Then try existing Standbys with capacity (up to max_primary_standby_ratio)
+    /// - More Primaries protected, but Standbys may be overloaded
+    #[serde(default = "default_ratio_guarantee")]
+    pub ratio_guarantee: bool,
+
+    /// Maximum Primaries a single Standby can back (flexible mode only)
+    ///
+    /// Only used when ratio_guarantee=false.
+    /// Prevents excessive Standby overload by capping how many Primaries
+    /// a single Standby can back.
+    ///
+    /// Example: If configured ratio is 2 and max is 3:
+    /// - Normal: Each Standby backs 2 Primaries
+    /// - After failure: Standby can back up to 3 Primaries (50% overload)
+    #[serde(default = "default_max_primary_standby_ratio")]
+    pub max_primary_standby_ratio: u32,
 }
 
 fn default_promote_standby() -> bool {
@@ -322,6 +348,14 @@ fn default_redistribute_timeout_secs() -> u64 {
     300 // 5 minutes
 }
 
+fn default_ratio_guarantee() -> bool {
+    true // Strict mode by default (safer)
+}
+
+fn default_max_primary_standby_ratio() -> u32 {
+    3 // Allow up to 3 Primaries per Standby in flexible mode
+}
+
 impl Default for FailoverConfig {
     fn default() -> Self {
         Self {
@@ -332,6 +366,8 @@ impl Default for FailoverConfig {
             unprotected_write_policy: default_unprotected_write_policy(),
             flush_timeout_secs: default_flush_timeout_secs(),
             redistribute_timeout_secs: default_redistribute_timeout_secs(),
+            ratio_guarantee: default_ratio_guarantee(),
+            max_primary_standby_ratio: default_max_primary_standby_ratio(),
         }
     }
 }
@@ -633,5 +669,103 @@ impl MetaConfig {
     /// Get the Raft log path
     pub fn raft_log_path(&self) -> std::path::PathBuf {
         std::path::Path::new(&self.data_dir).join("raft")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_failover_config_defaults() {
+        let config = FailoverConfig::default();
+
+        // Verify default values
+        assert!(!config.promote_standby); // Don't promote by default
+        assert!(config.flush_on_primary_crash);
+        assert_eq!(config.spare_standbys, 0);
+        assert!(config.auto_assign_spare);
+        assert_eq!(config.unprotected_write_policy, "warn");
+        assert_eq!(config.flush_timeout_secs, 60);
+        assert_eq!(config.redistribute_timeout_secs, 300);
+
+        // New flexible assignment fields
+        assert!(config.ratio_guarantee); // Strict mode by default
+        assert_eq!(config.max_primary_standby_ratio, 3);
+    }
+
+    #[test]
+    fn test_failover_config_strict_mode() {
+        // Strict mode: ratio_guarantee=true
+        // Should only use spare pool, never overload existing Standbys
+        let config = FailoverConfig {
+            ratio_guarantee: true,
+            max_primary_standby_ratio: 3, // Ignored in strict mode
+            ..Default::default()
+        };
+
+        assert!(config.ratio_guarantee);
+        // In strict mode, max_primary_standby_ratio doesn't matter
+        // but it's still stored for potential mode switch
+        assert_eq!(config.max_primary_standby_ratio, 3);
+    }
+
+    #[test]
+    fn test_failover_config_flexible_mode() {
+        // Flexible mode: ratio_guarantee=false
+        // Can use existing Standbys up to max_primary_standby_ratio
+        let config = FailoverConfig {
+            ratio_guarantee: false,
+            max_primary_standby_ratio: 4, // Allow 4:1 overload
+            ..Default::default()
+        };
+
+        assert!(!config.ratio_guarantee);
+        assert_eq!(config.max_primary_standby_ratio, 4);
+    }
+
+    #[test]
+    fn test_failover_config_serde() {
+        // Test that config can be serialized and deserialized
+        let toml_str = r#"
+            promote_standby = false
+            flush_on_primary_crash = true
+            spare_standbys = 2
+            auto_assign_spare = true
+            unprotected_write_policy = "reject"
+            flush_timeout_secs = 120
+            redistribute_timeout_secs = 600
+            ratio_guarantee = false
+            max_primary_standby_ratio = 4
+        "#;
+
+        let config: FailoverConfig = toml::from_str(toml_str).unwrap();
+
+        assert!(!config.promote_standby);
+        assert!(config.flush_on_primary_crash);
+        assert_eq!(config.spare_standbys, 2);
+        assert_eq!(config.unprotected_write_policy, "reject");
+        assert_eq!(config.flush_timeout_secs, 120);
+        assert_eq!(config.redistribute_timeout_secs, 600);
+        assert!(!config.ratio_guarantee);
+        assert_eq!(config.max_primary_standby_ratio, 4);
+    }
+
+    #[test]
+    fn test_failover_config_partial_serde() {
+        // Test that missing fields use defaults
+        let toml_str = r#"
+            spare_standbys = 1
+        "#;
+
+        let config: FailoverConfig = toml::from_str(toml_str).unwrap();
+
+        // Explicit value
+        assert_eq!(config.spare_standbys, 1);
+
+        // Defaults
+        assert!(!config.promote_standby);
+        assert!(config.ratio_guarantee);
+        assert_eq!(config.max_primary_standby_ratio, 3);
     }
 }
