@@ -275,6 +275,85 @@ impl Default for ReplicationConfig {
     }
 }
 
+/// FlushCheckpoint message sent from Primary to Standby after flush
+///
+/// When Primary flushes data to Parquet, it sends this message to all Standbys.
+/// Standbys should clear their cache for all batches with seq <= flushed_seq.
+/// This ensures Standby cache stays synchronized with Primary's persistent state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlushCheckpoint {
+    /// Source node ID (Primary that flushed)
+    pub source_node_id: String,
+    /// Partition key this checkpoint applies to (or empty for all partitions)
+    pub partition_key: Option<String>,
+    /// Highest sequence number that was flushed to Parquet
+    /// Standby should clear cache for all seq <= this value
+    pub flushed_seq: u64,
+    /// Timestamp when the flush occurred (ms since epoch)
+    pub timestamp: i64,
+    /// Number of files written in this flush (for metrics)
+    pub files_written: u32,
+    /// Number of rows flushed (for metrics)
+    pub rows_flushed: u64,
+}
+
+impl FlushCheckpoint {
+    pub fn new(source_node_id: String, flushed_seq: u64) -> Self {
+        Self {
+            source_node_id,
+            partition_key: None,
+            flushed_seq,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            files_written: 0,
+            rows_flushed: 0,
+        }
+    }
+
+    pub fn with_metrics(
+        source_node_id: String,
+        flushed_seq: u64,
+        files_written: u32,
+        rows_flushed: u64,
+    ) -> Self {
+        Self {
+            source_node_id,
+            partition_key: None,
+            flushed_seq,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            files_written,
+            rows_flushed,
+        }
+    }
+
+    pub fn for_partition(
+        source_node_id: String,
+        partition_key: String,
+        flushed_seq: u64,
+    ) -> Self {
+        Self {
+            source_node_id,
+            partition_key: Some(partition_key),
+            flushed_seq,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            files_written: 0,
+            rows_flushed: 0,
+        }
+    }
+}
+
+/// Response from Standby after receiving FlushCheckpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlushCheckpointResponse {
+    /// Standby node ID
+    pub standby_node_id: String,
+    /// Acknowledged flushed sequence
+    pub acked_seq: u64,
+    /// Number of bytes cleared from cache
+    pub bytes_cleared: u64,
+    /// Any error message (empty if success)
+    pub error: Option<String>,
+}
+
 impl From<&crate::data::config::ReplicationConfig> for ReplicationConfig {
     fn from(config: &crate::data::config::ReplicationConfig) -> Self {
         let mode = match config.mode.as_str() {
@@ -345,5 +424,136 @@ mod tests {
         assert_eq!(config.max_batch_size, 1000);
         assert_eq!(config.ack_timeout_ms, 5000);
         assert_eq!(config.max_lag_alert_ms, 10000);
+    }
+
+    // =========================================================================
+    // FlushCheckpoint Tests
+    // =========================================================================
+
+    #[test]
+    fn test_flush_checkpoint_new() {
+        let checkpoint = FlushCheckpoint::new("node-1".to_string(), 100);
+
+        assert_eq!(checkpoint.source_node_id, "node-1");
+        assert_eq!(checkpoint.flushed_seq, 100);
+        assert!(checkpoint.partition_key.is_none());
+        assert_eq!(checkpoint.files_written, 0);
+        assert_eq!(checkpoint.rows_flushed, 0);
+        assert!(checkpoint.timestamp > 0);
+    }
+
+    #[test]
+    fn test_flush_checkpoint_with_metrics() {
+        let checkpoint =
+            FlushCheckpoint::with_metrics("node-1".to_string(), 200, 5, 10000);
+
+        assert_eq!(checkpoint.source_node_id, "node-1");
+        assert_eq!(checkpoint.flushed_seq, 200);
+        assert_eq!(checkpoint.files_written, 5);
+        assert_eq!(checkpoint.rows_flushed, 10000);
+        assert!(checkpoint.partition_key.is_none());
+    }
+
+    #[test]
+    fn test_flush_checkpoint_for_partition() {
+        let checkpoint = FlushCheckpoint::for_partition(
+            "node-1".to_string(),
+            "db/schema/table/date=2024-01-15".to_string(),
+            300,
+        );
+
+        assert_eq!(checkpoint.source_node_id, "node-1");
+        assert_eq!(checkpoint.flushed_seq, 300);
+        assert_eq!(
+            checkpoint.partition_key,
+            Some("db/schema/table/date=2024-01-15".to_string())
+        );
+    }
+
+    #[test]
+    fn test_flush_checkpoint_serialization() {
+        let checkpoint = FlushCheckpoint::with_metrics("node-1".to_string(), 100, 3, 5000);
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&checkpoint).unwrap();
+        assert!(json.contains("\"source_node_id\":\"node-1\""));
+        assert!(json.contains("\"flushed_seq\":100"));
+        assert!(json.contains("\"files_written\":3"));
+        assert!(json.contains("\"rows_flushed\":5000"));
+
+        // Deserialize back
+        let deserialized: FlushCheckpoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.source_node_id, checkpoint.source_node_id);
+        assert_eq!(deserialized.flushed_seq, checkpoint.flushed_seq);
+        assert_eq!(deserialized.files_written, checkpoint.files_written);
+        assert_eq!(deserialized.rows_flushed, checkpoint.rows_flushed);
+    }
+
+    #[test]
+    fn test_flush_checkpoint_edge_case_zero_seq() {
+        // Edge case: flushed_seq=0 is valid (first flush)
+        let checkpoint = FlushCheckpoint::new("node-1".to_string(), 0);
+        assert_eq!(checkpoint.flushed_seq, 0);
+
+        let json = serde_json::to_string(&checkpoint).unwrap();
+        let deserialized: FlushCheckpoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.flushed_seq, 0);
+    }
+
+    #[test]
+    fn test_flush_checkpoint_edge_case_max_seq() {
+        // Edge case: maximum u64 value
+        let checkpoint = FlushCheckpoint::new("node-1".to_string(), u64::MAX);
+        assert_eq!(checkpoint.flushed_seq, u64::MAX);
+
+        let json = serde_json::to_string(&checkpoint).unwrap();
+        let deserialized: FlushCheckpoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.flushed_seq, u64::MAX);
+    }
+
+    #[test]
+    fn test_flush_checkpoint_response_success() {
+        let response = FlushCheckpointResponse {
+            standby_node_id: "standby-1".to_string(),
+            acked_seq: 100,
+            bytes_cleared: 1024 * 1024,
+            error: None,
+        };
+
+        assert_eq!(response.standby_node_id, "standby-1");
+        assert_eq!(response.acked_seq, 100);
+        assert_eq!(response.bytes_cleared, 1024 * 1024);
+        assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn test_flush_checkpoint_response_with_error() {
+        let response = FlushCheckpointResponse {
+            standby_node_id: "standby-1".to_string(),
+            acked_seq: 50, // Partially acked
+            bytes_cleared: 0,
+            error: Some("Cache full, cannot process checkpoint".to_string()),
+        };
+
+        assert!(response.error.is_some());
+        assert!(response.error.unwrap().contains("Cache full"));
+    }
+
+    #[test]
+    fn test_flush_checkpoint_response_serialization() {
+        let response = FlushCheckpointResponse {
+            standby_node_id: "standby-1".to_string(),
+            acked_seq: 100,
+            bytes_cleared: 2048,
+            error: None,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: FlushCheckpointResponse = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.standby_node_id, response.standby_node_id);
+        assert_eq!(deserialized.acked_seq, response.acked_seq);
+        assert_eq!(deserialized.bytes_cleared, response.bytes_cleared);
+        assert_eq!(deserialized.error, response.error);
     }
 }

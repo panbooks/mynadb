@@ -9,7 +9,10 @@
 //! - Reports replication lag to Meta for monitoring
 //! - Handles reconnection on failure
 
-use super::types::{compute_checksum, ReplicateResponse, ReplicationConfig, ReplicationEntry};
+use super::types::{
+    compute_checksum, FlushCheckpoint, FlushCheckpointResponse, ReplicateResponse,
+    ReplicationConfig, ReplicationEntry,
+};
 use arrow::array::RecordBatch;
 use arrow_flight::{
     encode::FlightDataEncoderBuilder, flight_service_client::FlightServiceClient, FlightData,
@@ -303,6 +306,51 @@ impl ReplicationStream {
 
         Ok(channel)
     }
+
+    /// Send a FlushCheckpoint to this standby (immediate, not buffered)
+    ///
+    /// This is sent after a successful flush to notify the standby to clear its cache
+    /// for all entries with seq <= flushed_seq.
+    pub async fn send_flush_checkpoint(
+        &self,
+        checkpoint: &FlushCheckpoint,
+    ) -> Result<FlushCheckpointResponse, String> {
+        let channel = self.ensure_connected().await?;
+        let mut client = FlightServiceClient::new(channel);
+
+        // Encode checkpoint as a DoAction request
+        let action_body =
+            serde_json::to_vec(checkpoint).map_err(|e| format!("Serialize error: {}", e))?;
+
+        let action = arrow_flight::Action {
+            r#type: "flush_checkpoint".to_string(),
+            body: action_body.into(),
+        };
+
+        match client.do_action(action).await {
+            Ok(response) => {
+                let mut result_stream = response.into_inner();
+                if let Some(result) = result_stream.next().await {
+                    match result {
+                        Ok(action_result) => {
+                            serde_json::from_slice::<FlushCheckpointResponse>(&action_result.body)
+                                .map_err(|e| format!("Deserialize response error: {}", e))
+                        }
+                        Err(e) => Err(format!("Action result error: {}", e)),
+                    }
+                } else {
+                    // No response, assume success with default response
+                    Ok(FlushCheckpointResponse {
+                        standby_node_id: self.standby_node_id.clone(),
+                        acked_seq: checkpoint.flushed_seq,
+                        bytes_cleared: 0,
+                        error: None,
+                    })
+                }
+            }
+            Err(e) => Err(format!("DoAction failed: {}", e)),
+        }
+    }
 }
 
 /// Manager for multiple replication streams (one per partition-standby pair)
@@ -313,8 +361,11 @@ pub struct ReplicationManager {
     config: ReplicationConfig,
     /// Local node ID
     node_id: String,
-    /// Global sequence counter
+    /// Global sequence counter for replication entries
     seq_counter: AtomicU64,
+    /// Last sequence number that was flushed to Parquet
+    /// Used for sending FlushCheckpoint to standbys
+    last_flushed_seq: AtomicU64,
 }
 
 impl ReplicationManager {
@@ -324,7 +375,30 @@ impl ReplicationManager {
             config,
             node_id,
             seq_counter: AtomicU64::new(0),
+            last_flushed_seq: AtomicU64::new(0),
         }
+    }
+
+    /// Get the current sequence counter value (next seq to be assigned)
+    pub fn current_seq(&self) -> u64 {
+        self.seq_counter.load(Ordering::Relaxed)
+    }
+
+    /// Record a flush operation with the sequence number up to which data was flushed
+    ///
+    /// This should be called after a successful flush to Parquet.
+    /// The flushed_seq represents the highest sequence number that was persisted.
+    pub fn record_flush(&self, flushed_seq: u64) {
+        self.last_flushed_seq.store(flushed_seq, Ordering::SeqCst);
+        debug!(
+            "Recorded flush checkpoint: seq {} for node {}",
+            flushed_seq, self.node_id
+        );
+    }
+
+    /// Get the last flushed sequence number
+    pub fn last_flushed_seq(&self) -> u64 {
+        self.last_flushed_seq.load(Ordering::Relaxed)
     }
 
     /// Get or create a replication stream for a partition-standby pair
@@ -433,6 +507,69 @@ impl ReplicationManager {
             max_lag_ms,
             in_sync_count,
         }
+    }
+
+    /// Broadcast a FlushCheckpoint to all connected standbys
+    ///
+    /// This is called after a successful flush to notify all standbys to clear their cache.
+    /// Returns the number of standbys successfully notified.
+    pub async fn broadcast_flush_checkpoint(&self, checkpoint: FlushCheckpoint) -> usize {
+        let streams: Vec<Arc<ReplicationStream>> =
+            self.streams.read().values().cloned().collect();
+
+        if streams.is_empty() {
+            debug!("No standbys to broadcast flush checkpoint to");
+            return 0;
+        }
+
+        info!(
+            "Broadcasting flush checkpoint (seq={}) to {} standby(s)",
+            checkpoint.flushed_seq,
+            streams.len()
+        );
+
+        let mut success_count = 0;
+
+        // Send to all standbys concurrently
+        let futures: Vec<_> = streams
+            .iter()
+            .map(|stream| stream.send_flush_checkpoint(&checkpoint))
+            .collect();
+
+        let results = futures::future::join_all(futures).await;
+
+        for (stream, result) in streams.iter().zip(results) {
+            match result {
+                Ok(response) => {
+                    if response.error.is_none() {
+                        debug!(
+                            "Standby {} acked flush checkpoint seq={}, cleared {} bytes",
+                            response.standby_node_id, response.acked_seq, response.bytes_cleared
+                        );
+                        success_count += 1;
+                    } else {
+                        warn!(
+                            "Standby {} returned error for flush checkpoint: {:?}",
+                            response.standby_node_id, response.error
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to send flush checkpoint to standby {}: {}",
+                        stream.standby_node_id, e
+                    );
+                }
+            }
+        }
+
+        info!(
+            "Flush checkpoint broadcast complete: {}/{} standbys notified",
+            success_count,
+            streams.len()
+        );
+
+        success_count
     }
 
     /// Get per-partition replication stats for reporting to Meta

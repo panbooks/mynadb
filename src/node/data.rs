@@ -202,22 +202,61 @@ pub async fn start(config_path: &str) {
         parquet_cache.clone(),
     );
 
+    // Initialize replication manager if enabled (BEFORE background flush setup)
+    // This allows the flush callback to broadcast FlushCheckpoint to standbys
+    let replication_manager: Option<Arc<crate::data::replication::ReplicationManager>> =
+        if data_config.replication.enabled {
+            use crate::data::replication::{
+                ReplicationConfig as ReplicationTypesConfig, ReplicationManager,
+            };
+
+            let replication_config = ReplicationTypesConfig::from(&data_config.replication);
+            let replication_manager = Arc::new(ReplicationManager::new(
+                data_config.node_id.clone(),
+                replication_config,
+            ));
+
+            info!(
+                "Replication enabled: mode={}, batch_interval={}ms",
+                data_config.replication.mode, data_config.replication.batch_interval_ms
+            );
+
+            Some(replication_manager)
+        } else {
+            None
+        };
+
     // Start background flush with appropriate registration
     // Must be done AFTER query_engine is created so we can refresh tables after flush
-    if let Some(ref client) = meta_client {
-        // With Meta: Register files AND refresh query engine tables
-        common::start_background_flush_with_meta_and_query_engine(
-            (*data_cache).clone(),
-            config.cache.flush_interval_secs,
-            Arc::clone(client),
-            query_engine.clone(),
-            data_config.node_id.clone(),
-        );
-    } else {
-        // Without Meta: Simple flush without registration
-        (*data_cache)
-            .clone()
-            .start_background_flush(config.cache.flush_interval_secs);
+    match (&meta_client, &replication_manager) {
+        (Some(client), Some(repl_manager)) => {
+            // With Meta AND replication: Register files, refresh tables, AND broadcast FlushCheckpoint
+            common::start_background_flush_with_replication(
+                (*data_cache).clone(),
+                config.cache.flush_interval_secs,
+                Arc::clone(client),
+                query_engine.clone(),
+                Arc::clone(repl_manager),
+                data_config.node_id.clone(),
+            );
+            info!("Background flush enabled with replication checkpoint broadcast");
+        }
+        (Some(client), None) => {
+            // With Meta but no replication: Register files AND refresh query engine tables
+            common::start_background_flush_with_meta_and_query_engine(
+                (*data_cache).clone(),
+                config.cache.flush_interval_secs,
+                Arc::clone(client),
+                query_engine.clone(),
+                data_config.node_id.clone(),
+            );
+        }
+        (None, _) => {
+            // Without Meta: Simple flush without registration
+            (*data_cache)
+                .clone()
+                .start_background_flush(config.cache.flush_interval_secs);
+        }
     }
 
     // Clone meta_client before moving to FlightService (needed for shutdown, event subscription, and HTTP API)
@@ -269,30 +308,13 @@ pub async fn start(config_path: &str) {
         flight_service = flight_service.with_parquet_cache(cache.clone());
     }
 
-    // Initialize replication manager if enabled
-    let replication_manager_for_reporting: Option<
-        Arc<crate::data::replication::ReplicationManager>,
-    > = if data_config.replication.enabled {
-        use crate::data::replication::{
-            ReplicationConfig as ReplicationTypesConfig, ReplicationManager,
-        };
+    // Add replication manager to flight service if enabled
+    if let Some(ref repl_manager) = replication_manager {
+        flight_service = flight_service.with_replication_manager(Arc::clone(repl_manager));
+    }
 
-        let replication_config = ReplicationTypesConfig::from(&data_config.replication);
-        let replication_manager = Arc::new(ReplicationManager::new(
-            data_config.node_id.clone(),
-            replication_config,
-        ));
-
-        flight_service = flight_service.with_replication_manager(Arc::clone(&replication_manager));
-        info!(
-            "Replication enabled: mode={}, batch_interval={}ms",
-            data_config.replication.mode, data_config.replication.batch_interval_ms
-        );
-
-        Some(replication_manager)
-    } else {
-        None
-    };
+    // Clone for reporting task
+    let replication_manager_for_reporting = replication_manager;
 
     // Start replication state reporting task if both replication and Meta are available
     if let (Some(ref client), Some(ref repl_manager)) =
