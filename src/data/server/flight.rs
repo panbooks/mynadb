@@ -777,14 +777,18 @@ impl DataNodeFlightService {
                 continue;
             }
 
-            // Use add_batch_standby which doesn't trigger flush
+            // Use add_batch_standby_with_seq to store with sequence number
+            // The seq is used for FlushCheckpoint synchronization:
+            // When Primary flushes, it sends checkpoint with flushed_seq,
+            // and Standby clears all batches with seq <= flushed_seq
             match self
                 .cache
-                .add_batch_standby(
+                .add_batch_standby_with_seq(
                     &ticket.catalog,
                     &ticket.schema,
                     &ticket.table,
                     ticket.date,
+                    ticket.seq,
                     batch,
                 )
                 .await
@@ -1338,6 +1342,43 @@ impl FlightService for DataNodeFlightService {
                     }
                     None => Err(Status::unavailable("Database manager not available")),
                 }
+            }
+            "flush_checkpoint" => {
+                // Handle FlushCheckpoint from Primary - Standby clears cache for flushed sequences
+                use crate::data::replication::types::{FlushCheckpoint, FlushCheckpointResponse};
+
+                let checkpoint: FlushCheckpoint = serde_json::from_slice(&action.body)
+                    .map_err(|e| {
+                        Status::invalid_argument(format!("Invalid FlushCheckpoint: {}", e))
+                    })?;
+
+                info!(
+                    "Received flush checkpoint from {}: seq={}, files={}, rows={}",
+                    checkpoint.source_node_id,
+                    checkpoint.flushed_seq,
+                    checkpoint.files_written,
+                    checkpoint.rows_flushed
+                );
+
+                // Clear cache for all batches with seq <= flushed_seq
+                let bytes_cleared = self.cache.clear_up_to_seq(checkpoint.flushed_seq) as u64;
+
+                info!(
+                    "Cleared {} bytes from Standby cache (seq <= {})",
+                    bytes_cleared, checkpoint.flushed_seq
+                );
+
+                let response = FlushCheckpointResponse {
+                    standby_node_id: self.node_id.clone(),
+                    acked_seq: checkpoint.flushed_seq,
+                    bytes_cleared,
+                    error: None,
+                };
+
+                let result = arrow_flight::Result {
+                    body: serde_json::to_vec(&response).unwrap_or_default().into(),
+                };
+                Ok(Response::new(Box::pin(stream::once(async { Ok(result) }))))
             }
             _ => Err(Status::unimplemented(format!(
                 "Action '{}' not implemented",

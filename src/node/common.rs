@@ -480,6 +480,126 @@ pub fn start_background_flush_with_meta_and_query_engine(
     );
 }
 
+/// Start background flush with Meta file registration, QueryEngine refresh, AND FlushCheckpoint broadcast
+///
+/// This version is for Primary nodes with replication enabled. After each flush:
+/// 1. Register files with Meta service
+/// 2. Refresh QueryEngine table registrations
+/// 3. Broadcast FlushCheckpoint to all Standby nodes
+pub fn start_background_flush_with_replication(
+    cache: cache::DataCache,
+    interval_secs: u64,
+    meta_client: Arc<crate::meta::client::MetaClient>,
+    query_engine: Arc<query_engine::QueryEngine>,
+    replication_manager: Arc<crate::data::replication::ReplicationManager>,
+    node_id: String,
+) {
+    use crate::data::replication::types::FlushCheckpoint;
+
+    let meta_for_flush = meta_client;
+    let qe_for_flush = query_engine;
+    let repl_for_flush = replication_manager;
+    let node_id_for_flush = node_id;
+
+    cache.start_background_flush_with_callback(
+        interval_secs,
+        Some(move |files: Vec<parquet_writer::FileWriteResult>| {
+            let client = meta_for_flush.clone();
+            let qe = qe_for_flush.clone();
+            let repl_manager = repl_for_flush.clone();
+            let node_id = node_id_for_flush.clone();
+
+            tokio::spawn(async move {
+                if files.is_empty() {
+                    return;
+                }
+
+                // Get the current sequence number BEFORE processing
+                // This represents the highest seq that was included in this flush
+                let flushed_seq = repl_manager.current_seq();
+                let total_rows: u64 = files.iter().map(|f| f.row_count).sum();
+                let files_count = files.len() as u32;
+
+                // Track unique tables that were flushed
+                let mut flushed_tables: HashSet<(String, String, String)> = HashSet::new();
+
+                // Convert FileWriteResult to Meta FileInfo with created_by
+                let meta_files: Vec<crate::meta::types::FileInfo> = files
+                    .iter()
+                    .map(|file| {
+                        // Track this table for later refresh
+                        flushed_tables.insert((
+                            file.catalog.clone(),
+                            file.schema.clone(),
+                            file.table.clone(),
+                        ));
+
+                        crate::meta::types::FileInfo {
+                            path: file.path.clone(),
+                            catalog: file.catalog.clone(),
+                            schema: file.schema.clone(),
+                            table: file.table.clone(),
+                            partition: file.partition_key.clone(),
+                            level: file.level,
+                            size_bytes: file.size_bytes,
+                            row_count: file.row_count,
+                            min_time: 0,
+                            max_time: 0,
+                            created_at: crate::meta::current_timestamp_ms(),
+                            created_by: node_id.clone(),
+                        }
+                    })
+                    .collect();
+
+                // Register files with Meta service
+                match client.register_files(meta_files).await {
+                    Ok(seq) => {
+                        info!(
+                            "Registered {} files with Meta (seq={}), created_by={}",
+                            files_count, seq, node_id
+                        );
+                    }
+                    Err(e) => {
+                        warn!("Failed to register files with Meta: {}", e);
+                    }
+                }
+
+                // CRITICAL: Refresh QueryEngine table registrations for all flushed tables
+                // This ensures DataFusion can find the new Parquet files
+                for (catalog, schema, table) in &flushed_tables {
+                    debug!(
+                        "Refreshing table after flush: {}.{}.{}",
+                        catalog, schema, table
+                    );
+                    qe.refresh_table_after_flush(catalog, schema, table);
+                }
+
+                // Record the flush and broadcast FlushCheckpoint to all standbys
+                repl_manager.record_flush(flushed_seq);
+
+                let checkpoint = FlushCheckpoint::with_metrics(
+                    node_id.clone(),
+                    flushed_seq,
+                    files_count,
+                    total_rows,
+                );
+
+                let notified = repl_manager.broadcast_flush_checkpoint(checkpoint).await;
+
+                if !flushed_tables.is_empty() {
+                    info!(
+                        "Background flush complete: {} files, {} tables refreshed, {} standbys notified (seq={})",
+                        files_count,
+                        flushed_tables.len(),
+                        notified,
+                        flushed_seq
+                    );
+                }
+            });
+        }),
+    );
+}
+
 /// Start Arrow Flight server
 pub async fn start_flight_server(
     addr: &str,
