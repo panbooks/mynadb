@@ -139,13 +139,6 @@ pub struct ReplicationAssignmentConfig {
     #[serde(default = "default_lease_ttl_secs")]
     pub lease_ttl_secs: u64,
 
-    /// Enable automatic standby promotion on leader failure
-    ///
-    /// When enabled, Meta will automatically promote a standby to leader
-    /// when the current leader's lease expires.
-    #[serde(default = "default_auto_promote")]
-    pub auto_promote: bool,
-
     /// Load balancing strategy for leader assignment
     ///
     /// - "least_loaded": Assign to node with fewest partitions (default)
@@ -175,10 +168,6 @@ fn default_lease_ttl_secs() -> u64 {
     10
 }
 
-fn default_auto_promote() -> bool {
-    true
-}
-
 fn default_load_balance_strategy() -> String {
     "least_loaded".to_string()
 }
@@ -191,7 +180,6 @@ impl Default for ReplicationAssignmentConfig {
             zone_aware: default_zone_aware(),
             min_nodes_for_replication: default_min_nodes_for_replication(),
             lease_ttl_secs: default_lease_ttl_secs(),
-            auto_promote: default_auto_promote(),
             load_balance_strategy: default_load_balance_strategy(),
         }
     }
@@ -222,58 +210,25 @@ impl ReplicationAssignmentConfig {
 ///
 /// # Primary Crash Handling
 ///
-/// ```text
-/// Traditional (promote_standby=true):
-///   P1 crashes → S1 promoted to Primary
-///   Result: 6P + 2S (ratio 3:1) - Risk of avalanche!
-///
-/// New Strategy (promote_standby=false):
-///   P1 crashes → S1 flushes P1's data → Partitions → P2-P6
-///   Result: 5P + 3S (ratio 1.67:1) - SAFE
-/// ```
+/// When a Primary crashes:
+/// 1. Related Standby flushes the crashed Primary's replicated data
+/// 2. Partitions are redistributed to remaining Primaries
+/// 3. Result: N-1 Primaries, same Standbys (ratio improves)
 ///
 /// # Standby Crash Handling
 ///
 /// When a Standby crashes:
 /// 1. Try to assign a spare Standby from pool (if available)
-/// 2. If no spare, leave Primary unprotected (with warning)
+/// 2. If no spare, try flexible assignment to existing Standbys (if enabled)
+/// 3. If still no coverage, leave Primary unprotected (with warning)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FailoverConfig {
-    /// Promote Standby to Primary on Primary failure
-    ///
-    /// When false (recommended):
-    /// - Standby flushes crashed Primary's data
-    /// - Partitions redistributed to remaining Primaries
-    /// - Result: N-1 Primaries, same Standbys (ratio improves)
-    ///
-    /// When true (legacy):
-    /// - Standby promoted to Primary
-    /// - Result: Same Primaries, N-1 Standbys (ratio worsens)
-    #[serde(default = "default_promote_standby")]
-    pub promote_standby: bool,
-
     /// Trigger Standby to flush when Primary crashes
     ///
     /// Ensures no data loss by having Standby write all
     /// replicated data to Parquet before redistribution.
     #[serde(default = "default_flush_on_primary_crash")]
     pub flush_on_primary_crash: bool,
-
-    /// Number of spare Standbys to maintain in pool
-    ///
-    /// Spare Standbys are idle nodes ready to replace failed Standbys.
-    /// When an active Standby fails, a spare is automatically assigned.
-    ///
-    /// Recommended: 1-2 for production clusters
-    #[serde(default = "default_spare_standbys")]
-    pub spare_standbys: u32,
-
-    /// Auto-assign spare Standby when active Standby fails
-    ///
-    /// When true, Meta automatically assigns a spare to replace failed Standby.
-    /// When false, replacement must be triggered manually.
-    #[serde(default = "default_auto_assign_spare")]
-    pub auto_assign_spare: bool,
 
     /// Policy for writes to unprotected partitions (no Standby)
     ///
@@ -292,47 +247,9 @@ pub struct FailoverConfig {
     /// Timeout for partition redistribution (seconds)
     #[serde(default = "default_redistribute_timeout_secs")]
     pub redistribute_timeout_secs: u64,
-
-    /// Strictly guarantee the configured Primary:Standby ratio
-    ///
-    /// When true (strict mode):
-    /// - Only use spare pool for Standby replacement
-    /// - If no spare, leave Primaries unprotected
-    /// - No risk of Standby overload
-    ///
-    /// When false (flexible mode):
-    /// - First try spare pool
-    /// - Then try existing Standbys with capacity (up to max_primary_standby_ratio)
-    /// - More Primaries protected, but Standbys may be overloaded
-    #[serde(default = "default_ratio_guarantee")]
-    pub ratio_guarantee: bool,
-
-    /// Maximum Primaries a single Standby can back (flexible mode only)
-    ///
-    /// Only used when ratio_guarantee=false.
-    /// Prevents excessive Standby overload by capping how many Primaries
-    /// a single Standby can back.
-    ///
-    /// Example: If configured ratio is 2 and max is 3:
-    /// - Normal: Each Standby backs 2 Primaries
-    /// - After failure: Standby can back up to 3 Primaries (50% overload)
-    #[serde(default = "default_max_primary_standby_ratio")]
-    pub max_primary_standby_ratio: u32,
-}
-
-fn default_promote_standby() -> bool {
-    false // Don't promote, use redistribute strategy
 }
 
 fn default_flush_on_primary_crash() -> bool {
-    true
-}
-
-fn default_spare_standbys() -> u32 {
-    0 // No spares by default, user should configure
-}
-
-fn default_auto_assign_spare() -> bool {
     true
 }
 
@@ -348,26 +265,13 @@ fn default_redistribute_timeout_secs() -> u64 {
     300 // 5 minutes
 }
 
-fn default_ratio_guarantee() -> bool {
-    true // Strict mode by default (safer)
-}
-
-fn default_max_primary_standby_ratio() -> u32 {
-    3 // Allow up to 3 Primaries per Standby in flexible mode
-}
-
 impl Default for FailoverConfig {
     fn default() -> Self {
         Self {
-            promote_standby: default_promote_standby(),
             flush_on_primary_crash: default_flush_on_primary_crash(),
-            spare_standbys: default_spare_standbys(),
-            auto_assign_spare: default_auto_assign_spare(),
             unprotected_write_policy: default_unprotected_write_policy(),
             flush_timeout_secs: default_flush_timeout_secs(),
             redistribute_timeout_secs: default_redistribute_timeout_secs(),
-            ratio_guarantee: default_ratio_guarantee(),
-            max_primary_standby_ratio: default_max_primary_standby_ratio(),
         }
     }
 }
@@ -420,7 +324,7 @@ impl FailoverConfig {
 /// enabled = true
 /// primary_standby_ratio = 2    # 2 Primaries per 1 Standby
 /// auto_assign_mode = true
-/// auto_promote = true
+/// spare_standbys = 1           # Keep 1 spare for quick replacement
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StandbyConfig {
@@ -429,7 +333,7 @@ pub struct StandbyConfig {
     /// When enabled:
     /// - Data nodes are assigned as Primary or Standby on registration
     /// - Standby nodes only receive replication, never serve queries
-    /// - On Primary failure, a Standby is promoted to Primary
+    /// - On Primary failure, Standby flushes data, partitions redistributed
     ///
     /// When disabled:
     /// - All Data nodes are Primary (legacy ISR-like behavior)
@@ -457,20 +361,47 @@ pub struct StandbyConfig {
     #[serde(default = "default_standby_auto_assign_mode")]
     pub auto_assign_mode: bool,
 
-    /// Auto-promote Standby to Primary on failure
-    ///
-    /// When enabled, Meta automatically promotes a Standby to Primary
-    /// when a Primary node's lease expires (node failure).
-    /// When disabled, promotion must be triggered manually via API.
-    #[serde(default = "default_standby_auto_promote")]
-    pub auto_promote: bool,
-
     /// Minimum Primary nodes before assigning Standbys
     ///
     /// Ensures cluster has minimum compute capacity before allocating
     /// cold standby nodes. If fewer nodes available, all become Primary.
     #[serde(default = "default_min_primary_nodes")]
     pub min_primary_nodes: usize,
+
+    /// Number of spare Standbys to maintain in pool
+    ///
+    /// Spare Standbys are idle nodes ready to replace failed Standbys.
+    /// When an active Standby fails, a spare is automatically assigned.
+    ///
+    /// Recommended: 1-2 for production clusters
+    #[serde(default = "default_spare_standbys")]
+    pub spare_standbys: u32,
+
+    /// Strictly guarantee the configured Primary:Standby ratio
+    ///
+    /// When true (strict mode):
+    /// - Only use spare pool for Standby replacement
+    /// - If no spare, leave Primaries unprotected
+    /// - No risk of Standby overload
+    ///
+    /// When false (flexible mode):
+    /// - First try spare pool
+    /// - Then try existing Standbys with capacity (up to max_primary_standby_ratio)
+    /// - More Primaries protected, but Standbys may be overloaded
+    #[serde(default = "default_ratio_guarantee")]
+    pub ratio_guarantee: bool,
+
+    /// Maximum Primaries a single Standby can back (flexible mode only)
+    ///
+    /// Only used when ratio_guarantee=false.
+    /// Prevents excessive Standby overload by capping how many Primaries
+    /// a single Standby can back.
+    ///
+    /// Example: If configured ratio is 2 and max is 3:
+    /// - Normal: Each Standby backs 2 Primaries
+    /// - After failure: Standby can back up to 3 Primaries (50% overload)
+    #[serde(default = "default_max_primary_standby_ratio")]
+    pub max_primary_standby_ratio: u32,
 }
 
 fn default_standby_enabled() -> bool {
@@ -485,12 +416,20 @@ fn default_standby_auto_assign_mode() -> bool {
     true
 }
 
-fn default_standby_auto_promote() -> bool {
-    true
-}
-
 fn default_min_primary_nodes() -> usize {
     2 // At least 2 Primary nodes before assigning Standbys
+}
+
+fn default_spare_standbys() -> u32 {
+    0 // No spares by default, user should configure
+}
+
+fn default_ratio_guarantee() -> bool {
+    true // Strict mode by default (safer)
+}
+
+fn default_max_primary_standby_ratio() -> u32 {
+    3 // Allow up to 3 Primaries per Standby in flexible mode
 }
 
 impl Default for StandbyConfig {
@@ -499,8 +438,10 @@ impl Default for StandbyConfig {
             enabled: default_standby_enabled(),
             primary_standby_ratio: default_primary_standby_ratio(),
             auto_assign_mode: default_standby_auto_assign_mode(),
-            auto_promote: default_standby_auto_promote(),
             min_primary_nodes: default_min_primary_nodes(),
+            spare_standbys: default_spare_standbys(),
+            ratio_guarantee: default_ratio_guarantee(),
+            max_primary_standby_ratio: default_max_primary_standby_ratio(),
         }
     }
 }
@@ -681,40 +622,65 @@ mod tests {
         let config = FailoverConfig::default();
 
         // Verify default values
-        assert!(!config.promote_standby); // Don't promote by default
         assert!(config.flush_on_primary_crash);
-        assert_eq!(config.spare_standbys, 0);
-        assert!(config.auto_assign_spare);
         assert_eq!(config.unprotected_write_policy, "warn");
         assert_eq!(config.flush_timeout_secs, 60);
         assert_eq!(config.redistribute_timeout_secs, 300);
+    }
 
-        // New flexible assignment fields
+    #[test]
+    fn test_failover_config_serde() {
+        // Test that config can be serialized and deserialized
+        let toml_str = r#"
+            flush_on_primary_crash = true
+            unprotected_write_policy = "reject"
+            flush_timeout_secs = 120
+            redistribute_timeout_secs = 600
+        "#;
+
+        let config: FailoverConfig = toml::from_str(toml_str).unwrap();
+
+        assert!(config.flush_on_primary_crash);
+        assert_eq!(config.unprotected_write_policy, "reject");
+        assert_eq!(config.flush_timeout_secs, 120);
+        assert_eq!(config.redistribute_timeout_secs, 600);
+    }
+
+    #[test]
+    fn test_standby_config_defaults() {
+        let config = StandbyConfig::default();
+
+        // Core settings
+        assert!(!config.enabled); // Disabled by default
+        assert_eq!(config.primary_standby_ratio, 2);
+        assert!(config.auto_assign_mode);
+        assert_eq!(config.min_primary_nodes, 2);
+
+        // Spare and flexible assignment settings
+        assert_eq!(config.spare_standbys, 0);
         assert!(config.ratio_guarantee); // Strict mode by default
         assert_eq!(config.max_primary_standby_ratio, 3);
     }
 
     #[test]
-    fn test_failover_config_strict_mode() {
+    fn test_standby_config_strict_mode() {
         // Strict mode: ratio_guarantee=true
         // Should only use spare pool, never overload existing Standbys
-        let config = FailoverConfig {
+        let config = StandbyConfig {
             ratio_guarantee: true,
             max_primary_standby_ratio: 3, // Ignored in strict mode
             ..Default::default()
         };
 
         assert!(config.ratio_guarantee);
-        // In strict mode, max_primary_standby_ratio doesn't matter
-        // but it's still stored for potential mode switch
         assert_eq!(config.max_primary_standby_ratio, 3);
     }
 
     #[test]
-    fn test_failover_config_flexible_mode() {
+    fn test_standby_config_flexible_mode() {
         // Flexible mode: ratio_guarantee=false
         // Can use existing Standbys up to max_primary_standby_ratio
-        let config = FailoverConfig {
+        let config = StandbyConfig {
             ratio_guarantee: false,
             max_primary_standby_ratio: 4, // Allow 4:1 overload
             ..Default::default()
@@ -725,47 +691,64 @@ mod tests {
     }
 
     #[test]
-    fn test_failover_config_serde() {
-        // Test that config can be serialized and deserialized
+    fn test_standby_config_serde() {
         let toml_str = r#"
-            promote_standby = false
-            flush_on_primary_crash = true
+            enabled = true
+            primary_standby_ratio = 3
+            auto_assign_mode = true
+            min_primary_nodes = 4
             spare_standbys = 2
-            auto_assign_spare = true
-            unprotected_write_policy = "reject"
-            flush_timeout_secs = 120
-            redistribute_timeout_secs = 600
             ratio_guarantee = false
-            max_primary_standby_ratio = 4
+            max_primary_standby_ratio = 5
         "#;
 
-        let config: FailoverConfig = toml::from_str(toml_str).unwrap();
+        let config: StandbyConfig = toml::from_str(toml_str).unwrap();
 
-        assert!(!config.promote_standby);
-        assert!(config.flush_on_primary_crash);
+        assert!(config.enabled);
+        assert_eq!(config.primary_standby_ratio, 3);
+        assert!(config.auto_assign_mode);
+        assert_eq!(config.min_primary_nodes, 4);
         assert_eq!(config.spare_standbys, 2);
-        assert_eq!(config.unprotected_write_policy, "reject");
-        assert_eq!(config.flush_timeout_secs, 120);
-        assert_eq!(config.redistribute_timeout_secs, 600);
         assert!(!config.ratio_guarantee);
-        assert_eq!(config.max_primary_standby_ratio, 4);
+        assert_eq!(config.max_primary_standby_ratio, 5);
     }
 
     #[test]
-    fn test_failover_config_partial_serde() {
+    fn test_standby_config_partial_serde() {
         // Test that missing fields use defaults
         let toml_str = r#"
             spare_standbys = 1
         "#;
 
-        let config: FailoverConfig = toml::from_str(toml_str).unwrap();
+        let config: StandbyConfig = toml::from_str(toml_str).unwrap();
 
         // Explicit value
         assert_eq!(config.spare_standbys, 1);
 
         // Defaults
-        assert!(!config.promote_standby);
+        assert!(!config.enabled);
         assert!(config.ratio_guarantee);
         assert_eq!(config.max_primary_standby_ratio, 3);
+    }
+
+    #[test]
+    fn test_standby_config_target_standby_count() {
+        let config = StandbyConfig {
+            enabled: true,
+            primary_standby_ratio: 2,
+            min_primary_nodes: 2,
+            ..Default::default()
+        };
+
+        // Not enough primaries
+        assert_eq!(config.target_standby_count(1), 0);
+
+        // At min primaries
+        assert_eq!(config.target_standby_count(2), 1);
+
+        // More primaries
+        assert_eq!(config.target_standby_count(4), 2);
+        assert_eq!(config.target_standby_count(5), 2); // Rounds down
+        assert_eq!(config.target_standby_count(6), 3);
     }
 }

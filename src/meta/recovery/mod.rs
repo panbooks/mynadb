@@ -4,7 +4,7 @@
 //!
 //! # Recovery Strategies
 //!
-//! ## Primary Crash (promote_standby=false)
+//! ## Primary Crash
 //!
 //! ```text
 //! 1. Detect Primary crash (lease expired)
@@ -27,7 +27,7 @@ pub mod types;
 
 pub use types::*;
 
-use crate::meta::config::FailoverConfig;
+use crate::meta::config::{FailoverConfig, StandbyConfig};
 use crate::meta::service::MetaNode;
 use crate::meta::types::{
     DataNodeMode, MetaCommand, NodeRole, NodeState,
@@ -42,13 +42,22 @@ use tracing::{debug, error, info, warn};
 /// Coordinates recovery operations when Primary or Standby nodes fail.
 pub struct RecoveryManager {
     meta_node: Arc<MetaNode>,
-    config: FailoverConfig,
+    failover_config: FailoverConfig,
+    standby_config: StandbyConfig,
 }
 
 impl RecoveryManager {
     /// Create a new RecoveryManager
-    pub fn new(meta_node: Arc<MetaNode>, config: FailoverConfig) -> Self {
-        Self { meta_node, config }
+    pub fn new(
+        meta_node: Arc<MetaNode>,
+        failover_config: FailoverConfig,
+        standby_config: StandbyConfig,
+    ) -> Self {
+        Self {
+            meta_node,
+            failover_config,
+            standby_config,
+        }
     }
 
     /// Handle a node crash
@@ -165,7 +174,7 @@ impl RecoveryManager {
         );
 
         // Step 3: Trigger Standby to flush Primary's data
-        if self.config.flush_on_primary_crash {
+        if self.failover_config.flush_on_primary_crash {
             info!("Recovery: Triggering Standby {} to flush Primary {} data", standby_id, primary_id);
             self.trigger_standby_flush(&standby_id, primary_id).await?;
         }
@@ -251,44 +260,42 @@ impl RecoveryManager {
         );
 
         // Step 2: Try to find a spare Standby
-        if self.config.auto_assign_spare {
-            if let Some(spare_id) = self.find_spare_standby() {
-                info!(
-                    "Recovery: Found spare Standby {}, assigning to affected Primaries",
-                    spare_id
-                );
+        if let Some(spare_id) = self.find_spare_standby() {
+            info!(
+                "Recovery: Found spare Standby {}, assigning to affected Primaries",
+                spare_id
+            );
 
-                // Assign spare to affected Primaries
-                match self
-                    .assign_spare_to_primaries(&spare_id, &affected_primaries)
-                    .await
-                {
-                    Ok(()) => {
-                        let duration_ms = start.elapsed().as_millis() as u64;
-                        info!(
-                            "Recovery: Standby {} recovery completed in {}ms. Spare {} assigned.",
-                            standby_id, duration_ms, spare_id
-                        );
+            // Assign spare to affected Primaries
+            match self
+                .assign_spare_to_primaries(&spare_id, &affected_primaries)
+                .await
+            {
+                Ok(()) => {
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    info!(
+                        "Recovery: Standby {} recovery completed in {}ms. Spare {} assigned.",
+                        standby_id, duration_ms, spare_id
+                    );
 
-                        return Ok(RecoveryResult::standby_recovery_with_spare(
-                            standby_id.to_string(),
-                            affected_primaries,
-                            spare_id,
-                            duration_ms,
-                        ));
-                    }
-                    Err(e) => {
-                        warn!("Recovery: Failed to assign spare: {}. Primaries unprotected.", e);
-                    }
+                    return Ok(RecoveryResult::standby_recovery_with_spare(
+                        standby_id.to_string(),
+                        affected_primaries,
+                        spare_id,
+                        duration_ms,
+                    ));
+                }
+                Err(e) => {
+                    warn!("Recovery: Failed to assign spare: {}. Primaries unprotected.", e);
                 }
             }
         }
 
         // Step 3: No spare available - try flexible assignment if enabled
-        if !self.config.ratio_guarantee {
+        if !self.standby_config.ratio_guarantee {
             info!(
                 "Recovery: No spare available, trying flexible assignment (max_ratio={})",
-                self.config.max_primary_standby_ratio
+                self.standby_config.max_primary_standby_ratio
             );
 
             // Find Standbys with capacity
@@ -470,7 +477,7 @@ impl RecoveryManager {
         standby_id: &str,
         primary_id: &str,
     ) -> Result<(), RecoveryError> {
-        let timeout = Duration::from_secs(self.config.flush_timeout_secs);
+        let timeout = Duration::from_secs(self.failover_config.flush_timeout_secs);
         let start = Instant::now();
 
         // Poll for flush completion
@@ -484,7 +491,7 @@ impl RecoveryManager {
         if start.elapsed() > timeout {
             return Err(RecoveryError::FlushTimeout {
                 standby_id: standby_id.to_string(),
-                timeout_secs: self.config.flush_timeout_secs,
+                timeout_secs: self.failover_config.flush_timeout_secs,
             });
         }
 
@@ -599,7 +606,7 @@ impl RecoveryManager {
     /// Returns a list of (standby_id, available_capacity) sorted by capacity descending.
     fn find_standbys_with_capacity(&self, exclude_standby: &str) -> Vec<(String, usize)> {
         let sm = self.meta_node.state_machine();
-        let max_ratio = self.config.max_primary_standby_ratio as usize;
+        let max_ratio = self.standby_config.max_primary_standby_ratio as usize;
 
         // Get all active Standby nodes (excluding the crashed one)
         let standbys = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
