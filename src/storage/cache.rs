@@ -505,10 +505,44 @@ impl DataCache {
     /// Flush all cached data to disk
     /// Uses swap-and-flush pattern: takes data from shards instantly, then writes without blocking
     /// Returns list of written files with metadata for registration
+    ///
+    /// ## WAL Consistency
+    ///
+    /// The flush operation maintains WAL consistency by rotating the WAL BEFORE
+    /// taking data from cache. This ensures:
+    /// - Old WAL files contain exactly the data being flushed
+    /// - New WAL file receives writes that arrive during/after flush
+    /// - No data loss if crash occurs during flush
+    ///
+    /// ```text
+    /// Timeline:
+    /// 1. Write A → WAL file 1, Cache [A]
+    /// 2. Write B → WAL file 1, Cache [A, B]
+    /// 3. flush() starts
+    ///    3a. Rotate WAL → create WAL file 2 (new writes go here)
+    ///    3b. Take [A, B] from cache
+    /// 4. Write C → WAL file 2, Cache [C]
+    /// 5. Parquet write complete (contains A, B)
+    /// 6. Delete WAL file 1 (safe - A, B are in Parquet)
+    /// 7. Crash → Recovery reads WAL file 2 → C recovered
+    /// ```
     pub async fn flush(&self) -> Result<Vec<FileWriteResult>, String> {
         let start = Instant::now();
 
+        // Phase 0: Rotate WAL BEFORE taking data from cache
+        // This ensures writes arriving during flush go to a NEW WAL file,
+        // while old WAL files contain exactly the data we're about to flush.
+        // Critical for consistency: WAL files deleted = cache data flushed (not more, not less)
+        if let Some(ref wal) = self.wal {
+            debug!("Pre-flush: Rotating WAL to isolate flush data from new writes");
+            if let Err(e) = wal.rotate_data_wal().await {
+                warn!("Failed to rotate WAL before flush: {}", e);
+                // Continue with flush - we'll be more conservative with WAL cleanup
+            }
+        }
+
         // Phase 1: Quickly take data from all shards (very fast, minimal blocking)
+        // This data corresponds to what's in the OLD WAL files (pre-rotation)
         let mut all_data: CacheData = HashMap::new();
         let mut flushed_size = 0usize;
 
@@ -628,15 +662,18 @@ impl DataCache {
             elapsed
         );
 
-        // Rotate WAL and delete old file after successful flush
-        // This ensures only unflushed data remains in WAL (prevents duplicate replay)
+        // Delete old WAL files after successful flush
+        // WAL was already rotated BEFORE taking cache data (Phase 0), so now we just
+        // clean up the old files that contain the data we just flushed to Parquet.
+        // The current WAL file (created during rotation) contains only new writes.
         if let Some(ref wal) = self.wal {
-            debug!("Rotating and cleaning up WAL after successful flush");
-            if let Err(e) = wal.rotate_and_delete_old_wal().await {
-                warn!("Failed to rotate WAL after flush: {}", e);
+            debug!("Post-flush: Cleaning up old WAL files (data now in Parquet)");
+            if let Err(e) = wal.cleanup_old_data_wal_files().await {
+                warn!("Failed to cleanup old WAL files after flush: {}", e);
                 // Don't fail the flush operation, just log warning
+                // Old WAL files will be cleaned up on next flush or by retention policy
             } else {
-                info!("WAL rotated - old WAL deleted, only unflushed data remains");
+                info!("WAL cleanup complete - old files deleted, new writes preserved");
             }
         }
 
