@@ -322,12 +322,15 @@ impl FailoverConfig {
 /// ```toml
 /// [meta.standby]
 /// enabled = true
-/// primary_standby_ratio = 2    # 2 Primaries per 1 Standby
-/// auto_assign_mode = true
-/// spare_standbys = 1           # Keep 1 spare for quick replacement
+/// primary_standby_ratio = 2      # 2 Primaries per 1 Standby
+/// min_primary_nodes = 2          # Need 2 Primaries before assigning Standbys
+/// spare_standbys = 1             # Keep 1 spare for quick replacement
+/// min_primaries_for_spare = 4    # Spare kicks in after 4 Primaries
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StandbyConfig {
+    // ===== Core Settings =====
+
     /// Enable cold standby architecture
     ///
     /// When enabled:
@@ -353,13 +356,7 @@ pub struct StandbyConfig {
     #[serde(default = "default_primary_standby_ratio")]
     pub primary_standby_ratio: u32,
 
-    /// Auto-assign mode when Data nodes register
-    ///
-    /// When enabled, Meta automatically assigns Primary or Standby mode
-    /// to new Data nodes based on the current ratio.
-    /// When disabled, all new nodes default to Primary.
-    #[serde(default = "default_standby_auto_assign_mode")]
-    pub auto_assign_mode: bool,
+    // ===== Node Requirements =====
 
     /// Minimum Primary nodes before assigning Standbys
     ///
@@ -367,6 +364,19 @@ pub struct StandbyConfig {
     /// cold standby nodes. If fewer nodes available, all become Primary.
     #[serde(default = "default_min_primary_nodes")]
     pub min_primary_nodes: usize,
+
+    /// Minimum Primary nodes before assigning spare Standbys
+    ///
+    /// Spare Standbys are only assigned after the cluster has at least
+    /// this many Primaries. Prevents wasting resources on small clusters.
+    ///
+    /// Example: With min_primaries_for_spare=4 and spare_standbys=1:
+    /// - 2P cluster: No spare assigned yet
+    /// - 4P cluster: Spare Standby assigned
+    #[serde(default = "default_min_primaries_for_spare")]
+    pub min_primaries_for_spare: usize,
+
+    // ===== Spare Pool Settings =====
 
     /// Number of spare Standbys to maintain in pool
     ///
@@ -376,6 +386,8 @@ pub struct StandbyConfig {
     /// Recommended: 1-2 for production clusters
     #[serde(default = "default_spare_standbys")]
     pub spare_standbys: u32,
+
+    // ===== Failover Settings =====
 
     /// Strictly guarantee the configured Primary:Standby ratio
     ///
@@ -412,12 +424,12 @@ fn default_primary_standby_ratio() -> u32 {
     2 // 2:1 ratio (2 Primaries per 1 Standby)
 }
 
-fn default_standby_auto_assign_mode() -> bool {
-    true
-}
-
 fn default_min_primary_nodes() -> usize {
     2 // At least 2 Primary nodes before assigning Standbys
+}
+
+fn default_min_primaries_for_spare() -> usize {
+    4 // Spare kicks in after 4 Primaries
 }
 
 fn default_spare_standbys() -> u32 {
@@ -437,8 +449,8 @@ impl Default for StandbyConfig {
         Self {
             enabled: default_standby_enabled(),
             primary_standby_ratio: default_primary_standby_ratio(),
-            auto_assign_mode: default_standby_auto_assign_mode(),
             min_primary_nodes: default_min_primary_nodes(),
+            min_primaries_for_spare: default_min_primaries_for_spare(),
             spare_standbys: default_spare_standbys(),
             ratio_guarantee: default_ratio_guarantee(),
             max_primary_standby_ratio: default_max_primary_standby_ratio(),
@@ -522,7 +534,7 @@ impl StandbyConfig {
     ) -> super::types::DataNodeMode {
         use super::types::DataNodeMode;
 
-        if !self.enabled || !self.auto_assign_mode {
+        if !self.enabled {
             return DataNodeMode::Primary;
         }
 
@@ -538,7 +550,7 @@ impl StandbyConfig {
         let required_standbys = self.required_standbys_for_total(new_total);
 
         // Add spare requirement if we have enough primaries
-        let spare_requirement = if current_primary_count >= self.min_primary_nodes * 2 {
+        let spare_requirement = if current_primary_count >= self.min_primaries_for_spare {
             self.spare_standbys as usize
         } else {
             0
@@ -712,8 +724,8 @@ mod tests {
         // Core settings
         assert!(!config.enabled); // Disabled by default
         assert_eq!(config.primary_standby_ratio, 2);
-        assert!(config.auto_assign_mode);
         assert_eq!(config.min_primary_nodes, 2);
+        assert_eq!(config.min_primaries_for_spare, 4);
 
         // Spare and flexible assignment settings
         assert_eq!(config.spare_standbys, 0);
@@ -754,8 +766,8 @@ mod tests {
         let toml_str = r#"
             enabled = true
             primary_standby_ratio = 3
-            auto_assign_mode = true
             min_primary_nodes = 4
+            min_primaries_for_spare = 6
             spare_standbys = 2
             ratio_guarantee = false
             max_primary_standby_ratio = 5
@@ -765,8 +777,8 @@ mod tests {
 
         assert!(config.enabled);
         assert_eq!(config.primary_standby_ratio, 3);
-        assert!(config.auto_assign_mode);
         assert_eq!(config.min_primary_nodes, 4);
+        assert_eq!(config.min_primaries_for_spare, 6);
         assert_eq!(config.spare_standbys, 2);
         assert!(!config.ratio_guarantee);
         assert_eq!(config.max_primary_standby_ratio, 5);
@@ -858,7 +870,6 @@ mod tests {
             primary_standby_ratio: 2,
             min_primary_nodes: 2,
             spare_standbys: 0,
-            auto_assign_mode: true,
             ..Default::default()
         };
 
@@ -894,7 +905,6 @@ mod tests {
             primary_standby_ratio: 2,
             min_primary_nodes: 2,
             spare_standbys: 0,
-            auto_assign_mode: true,
             ..Default::default()
         };
 
@@ -926,12 +936,12 @@ mod tests {
             enabled: true,
             primary_standby_ratio: 2,
             min_primary_nodes: 2,
-            spare_standbys: 1, // 1 spare, kicks in at 4+ primaries
-            auto_assign_mode: true,
+            min_primaries_for_spare: 4, // Spare kicks in at 4+ primaries
+            spare_standbys: 1,
             ..Default::default()
         };
 
-        // First 8 nodes same as no-spare (spare kicks in at min_primary*2=4 primaries)
+        // First 6 nodes same as no-spare (spare kicks in at 4 primaries)
         assert_eq!(config.mode_for_new_node(0, 0), DataNodeMode::Primary);
         assert_eq!(config.mode_for_new_node(1, 0), DataNodeMode::Primary);
         assert_eq!(config.mode_for_new_node(2, 0), DataNodeMode::Standby);
