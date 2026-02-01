@@ -298,6 +298,44 @@ impl RecoveryResult {
             warnings: vec!["No spare Standby available. Primaries left unprotected.".to_string()],
         }
     }
+
+    /// Create a Standby recovery result with flexible assignment
+    ///
+    /// Some Primaries may be assigned to existing Standbys with capacity,
+    /// while others may be left unprotected if no capacity available.
+    pub fn standby_recovery_flexible(
+        crashed_standby_id: String,
+        affected_primaries: Vec<String>,
+        assigned_primaries: Vec<String>,
+        unprotected_primaries: Vec<String>,
+        duration_ms: u64,
+    ) -> Self {
+        let warnings = if unprotected_primaries.is_empty() {
+            vec![]
+        } else {
+            vec![format!(
+                "Flexible assignment: {} Primaries assigned to existing Standbys, {} left unprotected",
+                assigned_primaries.len(),
+                unprotected_primaries.len()
+            )]
+        };
+
+        Self {
+            crashed_node_id: crashed_standby_id.clone(),
+            success: true,
+            action: RecoveryAction::StandbyRecovery {
+                crashed_standby_id,
+                affected_primaries,
+                spare_standby_id: None, // No single spare, using flexible assignment
+            },
+            partitions_redistributed: vec![],
+            new_primary_assignments: vec![],
+            spare_assigned: None,
+            unprotected_primaries,
+            duration_ms,
+            warnings,
+        }
+    }
 }
 
 /// Information about an unprotected partition
@@ -355,5 +393,108 @@ impl fmt::Display for ClusterHealthStatus {
             ClusterHealthStatus::Degraded => write!(f, "DEGRADED"),
             ClusterHealthStatus::Critical => write!(f, "CRITICAL"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_recovery_result_flexible_all_assigned() {
+        // All affected Primaries were successfully assigned to existing Standbys
+        let result = RecoveryResult::standby_recovery_flexible(
+            "standby-1".to_string(),
+            vec!["primary-1".to_string(), "primary-2".to_string()],
+            vec!["primary-1".to_string(), "primary-2".to_string()],
+            vec![], // No unprotected
+            100,
+        );
+
+        assert!(result.success);
+        assert!(result.unprotected_primaries.is_empty());
+        assert!(result.warnings.is_empty()); // No warnings if all assigned
+        assert!(result.spare_assigned.is_none()); // Flexible uses existing Standbys
+    }
+
+    #[test]
+    fn test_recovery_result_flexible_partial() {
+        // Some Primaries assigned, some left unprotected
+        let result = RecoveryResult::standby_recovery_flexible(
+            "standby-1".to_string(),
+            vec![
+                "primary-1".to_string(),
+                "primary-2".to_string(),
+                "primary-3".to_string(),
+            ],
+            vec!["primary-1".to_string(), "primary-2".to_string()],
+            vec!["primary-3".to_string()],
+            150,
+        );
+
+        assert!(result.success);
+        assert_eq!(result.unprotected_primaries.len(), 1);
+        assert_eq!(result.unprotected_primaries[0], "primary-3");
+        assert!(!result.warnings.is_empty());
+        assert!(result.warnings[0].contains("2 Primaries assigned"));
+        assert!(result.warnings[0].contains("1 left unprotected"));
+    }
+
+    #[test]
+    fn test_recovery_result_flexible_none_assigned() {
+        // No Standbys had capacity, all left unprotected
+        let result = RecoveryResult::standby_recovery_flexible(
+            "standby-1".to_string(),
+            vec!["primary-1".to_string(), "primary-2".to_string()],
+            vec![], // None assigned
+            vec!["primary-1".to_string(), "primary-2".to_string()],
+            50,
+        );
+
+        assert!(result.success); // Still succeeds but degraded
+        assert_eq!(result.unprotected_primaries.len(), 2);
+        assert!(!result.warnings.is_empty());
+        assert!(result.warnings[0].contains("0 Primaries assigned"));
+        assert!(result.warnings[0].contains("2 left unprotected"));
+    }
+
+    #[test]
+    fn test_recovery_error_display() {
+        let err = RecoveryError::NoSpareAvailable {
+            affected_primaries: vec!["p1".to_string(), "p2".to_string()],
+        };
+        assert!(err.to_string().contains("p1"));
+        assert!(err.to_string().contains("p2"));
+
+        let err = RecoveryError::FlushTimeout {
+            standby_id: "s1".to_string(),
+            timeout_secs: 60,
+        };
+        assert!(err.to_string().contains("s1"));
+        assert!(err.to_string().contains("60s"));
+    }
+
+    #[test]
+    fn test_cluster_protection_status_init() {
+        let status = ClusterProtectionStatus {
+            total_partitions: 10,
+            protected_partitions: 8,
+            unprotected_partitions: 2,
+            unprotected_list: vec![
+                UnprotectedPartition {
+                    partition_key: "db.schema.table:2024-01-01".to_string(),
+                    primary_id: "primary-1".to_string(),
+                    since: 1704067200,
+                    reason: "Standby crashed".to_string(),
+                },
+            ],
+            spare_standbys_available: 0,
+            status: ClusterHealthStatus::Degraded,
+        };
+
+        assert_eq!(status.protected_partitions, 8);
+        assert_eq!(status.unprotected_partitions, 2);
+        assert_eq!(status.unprotected_list.len(), 1);
+        assert_eq!(format!("{}", status.status), "DEGRADED");
     }
 }
