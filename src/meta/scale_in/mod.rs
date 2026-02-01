@@ -86,6 +86,11 @@ impl ScaleInManager {
         // Get current cluster state
         let cluster_state = self.get_cluster_state().await?;
 
+        // Pre-flight check (skip for dry-run since we're just previewing)
+        if self.config.pre_flight_check_enabled && !request.dry_run {
+            self.pre_flight_check(&cluster_state).await?;
+        }
+
         // Generate plan
         let planner = ScaleInPlanner::new(self.config.clone());
         let plan = planner.generate_plan(&cluster_state, &request)?;
@@ -102,6 +107,104 @@ impl ScaleInManager {
         );
 
         Ok(plan)
+    }
+
+    /// Pre-flight health check before scale-in
+    ///
+    /// Verifies:
+    /// 1. All nodes are healthy (recent heartbeat)
+    /// 2. All Standbys are reachable
+    /// 3. No nodes are already in Retiring/Drained state
+    /// 4. Minimum redundancy is met
+    async fn pre_flight_check(&self, cluster_state: &ClusterState) -> Result<(), ScaleInError> {
+        info!("Running pre-flight health check...");
+
+        let mut unhealthy_nodes = Vec::new();
+        let sm = self.meta_node.state_machine();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        // Check 1: Verify all Primaries are healthy
+        for primary in &cluster_state.primaries {
+            if let Some(node) = sm.get_node(&primary.node_id) {
+                let heartbeat_age = now - node.last_heartbeat;
+                if heartbeat_age > self.config.max_heartbeat_age_secs as i64 {
+                    warn!(
+                        "Primary {} heartbeat is stale: {}s old (max: {}s)",
+                        primary.node_id, heartbeat_age, self.config.max_heartbeat_age_secs
+                    );
+                    unhealthy_nodes.push(format!(
+                        "Primary {} (heartbeat {}s old)",
+                        primary.node_id, heartbeat_age
+                    ));
+                }
+            } else {
+                unhealthy_nodes.push(format!("Primary {} (not found)", primary.node_id));
+            }
+        }
+
+        // Check 2: Verify all Standbys are healthy (CRITICAL for scale-in safety)
+        for standby in &cluster_state.standbys {
+            if let Some(node) = sm.get_node(&standby.node_id) {
+                let heartbeat_age = now - node.last_heartbeat;
+                if heartbeat_age > self.config.max_heartbeat_age_secs as i64 {
+                    warn!(
+                        "Standby {} heartbeat is stale: {}s old (max: {}s)",
+                        standby.node_id, heartbeat_age, self.config.max_heartbeat_age_secs
+                    );
+                    unhealthy_nodes.push(format!(
+                        "CRITICAL: Standby {} (heartbeat {}s old)",
+                        standby.node_id, heartbeat_age
+                    ));
+                }
+            } else {
+                unhealthy_nodes.push(format!("CRITICAL: Standby {} (not found)", standby.node_id));
+            }
+        }
+
+        // Check 3: No nodes already retiring
+        if !cluster_state.retiring.is_empty() {
+            let retiring_ids: Vec<_> = cluster_state.retiring.iter().map(|n| n.node_id.clone()).collect();
+            return Err(ScaleInError::PreFlightCheckFailed {
+                reason: format!(
+                    "Cannot start new scale-in while {} nodes are already retiring",
+                    retiring_ids.len()
+                ),
+                unhealthy_nodes: retiring_ids,
+            });
+        }
+
+        // Check 4: Minimum cluster size
+        if cluster_state.primaries.is_empty() {
+            return Err(ScaleInError::PreFlightCheckFailed {
+                reason: "No active Primaries in cluster".to_string(),
+                unhealthy_nodes: vec![],
+            });
+        }
+
+        // Fail if any nodes are unhealthy
+        if !unhealthy_nodes.is_empty() {
+            error!(
+                "Pre-flight check failed: {} unhealthy nodes detected",
+                unhealthy_nodes.len()
+            );
+            return Err(ScaleInError::PreFlightCheckFailed {
+                reason: format!(
+                    "{} nodes are unhealthy. Scale-in requires all nodes to be healthy.",
+                    unhealthy_nodes.len()
+                ),
+                unhealthy_nodes,
+            });
+        }
+
+        info!(
+            "Pre-flight check passed: {} Primaries, {} Standbys all healthy",
+            cluster_state.primaries.len(),
+            cluster_state.standbys.len()
+        );
+        Ok(())
     }
 
     /// Execute a scale-in plan
