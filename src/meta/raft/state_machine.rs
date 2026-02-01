@@ -13,7 +13,7 @@ use sled::Db;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::broadcast;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Storage keys for Raft state
 mod raft_keys {
@@ -303,6 +303,28 @@ impl MetaStateMachine {
             MetaCommand::RemoveStandbyFromReplicas { standby_node_id } => {
                 self.remove_standby_from_replicas(&standby_node_id)
             }
+
+            // Recovery operations (failover without promotion)
+            MetaCommand::TriggerStandbyFlush {
+                standby_id,
+                crashed_primary_id,
+            } => self.trigger_standby_flush(&standby_id, &crashed_primary_id),
+
+            MetaCommand::AssignStandbyToPrimaries {
+                standby_id,
+                primary_ids,
+            } => self.assign_standby_to_primaries(&standby_id, &primary_ids),
+
+            MetaCommand::MarkPartitionUnprotected {
+                partition_key,
+                primary_id,
+                reason,
+            } => self.mark_partition_unprotected(&partition_key, &primary_id, &reason),
+
+            MetaCommand::RedistributePartitions {
+                crashed_primary_id,
+                target_primaries,
+            } => self.redistribute_partitions(&crashed_primary_id, &target_primaries),
         }
     }
 
@@ -1796,6 +1818,209 @@ impl MetaStateMachine {
         MetaResponse::StandbyRemovedFromReplicas {
             standby_node_id: standby_node_id.to_string(),
             partitions_affected: affected_count,
+        }
+    }
+
+    // ========================================================================
+    // Recovery Operations (failover without promotion)
+    // ========================================================================
+
+    /// Trigger Standby to flush a crashed Primary's replicated data
+    ///
+    /// This publishes an event that the Standby node subscribes to.
+    /// The Standby will then flush all replicated data to Parquet.
+    fn trigger_standby_flush(&self, standby_id: &str, crashed_primary_id: &str) -> MetaResponse {
+        info!(
+            "Recovery: Triggering Standby {} to flush data for crashed Primary {}",
+            standby_id, crashed_primary_id
+        );
+
+        // Publish event for Standby to process
+        let payload = serde_json::json!({
+            "standby_id": standby_id,
+            "crashed_primary_id": crashed_primary_id,
+            "action": "flush_for_recovery",
+            "timestamp": current_timestamp_ms(),
+        });
+
+        self.publish_event(
+            "recovery",
+            EventType::FlushForRecovery,
+            serde_json::to_vec(&payload).unwrap_or_default(),
+            "meta",
+        );
+
+        MetaResponse::StandbyFlushTriggered {
+            standby_id: standby_id.to_string(),
+            crashed_primary_id: crashed_primary_id.to_string(),
+        }
+    }
+
+    /// Assign a spare Standby to back specific Primaries
+    ///
+    /// Updates the partition replica assignments to include the new Standby.
+    fn assign_standby_to_primaries(&self, standby_id: &str, primary_ids: &[String]) -> MetaResponse {
+        info!(
+            "Recovery: Assigning spare Standby {} to Primaries: {:?}",
+            standby_id, primary_ids
+        );
+
+        let replicas = self.list_replicas();
+        let mut updated_count = 0;
+
+        for replica in replicas {
+            // Check if this partition's leader is one of the affected Primaries
+            if primary_ids.contains(&replica.leader_node_id) {
+                let storage_key = replica.storage_key();
+
+                let mut updated = replica.clone();
+                // Add the new Standby if not already present
+                if !updated.standby_node_ids.contains(&standby_id.to_string()) {
+                    updated.standby_node_ids.push(standby_id.to_string());
+
+                    let _ = self.db.insert(
+                        storage_key.as_bytes(),
+                        bincode::serialize(&updated).unwrap(),
+                    );
+
+                    updated_count += 1;
+
+                    // Publish event for replication to start
+                    let payload = serde_json::json!({
+                        "partition_key": updated.partition_key,
+                        "leader_node_id": updated.leader_node_id,
+                        "new_standby_id": standby_id,
+                        "action": "start_replication",
+                    });
+                    self.publish_event(
+                        "replicas",
+                        EventType::ReplicaStateChanged,
+                        serde_json::to_vec(&payload).unwrap_or_default(),
+                        "meta",
+                    );
+                }
+            }
+        }
+
+        info!(
+            "Recovery: Assigned Standby {} to {} partitions across {} Primaries",
+            standby_id, updated_count, primary_ids.len()
+        );
+
+        MetaResponse::StandbyAssignedToPrimaries {
+            standby_id: standby_id.to_string(),
+            primary_ids: primary_ids.to_vec(),
+        }
+    }
+
+    /// Mark a partition as unprotected (no Standby backup)
+    ///
+    /// Publishes a warning event that monitoring systems can subscribe to.
+    fn mark_partition_unprotected(
+        &self,
+        partition_key: &str,
+        primary_id: &str,
+        reason: &str,
+    ) -> MetaResponse {
+        warn!(
+            "Recovery: Partition {} on Primary {} is now UNPROTECTED: {}",
+            partition_key, primary_id, reason
+        );
+
+        // Publish warning event
+        let payload = serde_json::json!({
+            "partition_key": partition_key,
+            "primary_id": primary_id,
+            "reason": reason,
+            "status": "unprotected",
+            "timestamp": current_timestamp_ms(),
+        });
+
+        self.publish_event(
+            "recovery",
+            EventType::PartitionUnprotected,
+            serde_json::to_vec(&payload).unwrap_or_default(),
+            "meta",
+        );
+
+        MetaResponse::PartitionMarkedUnprotected {
+            partition_key: partition_key.to_string(),
+            primary_id: primary_id.to_string(),
+        }
+    }
+
+    /// Redistribute partitions from a crashed Primary to remaining Primaries
+    ///
+    /// Evenly distributes partitions across the target Primaries.
+    fn redistribute_partitions(
+        &self,
+        crashed_primary_id: &str,
+        target_primaries: &[String],
+    ) -> MetaResponse {
+        if target_primaries.is_empty() {
+            error!(
+                "Recovery: Cannot redistribute partitions - no target Primaries available"
+            );
+            return MetaResponse::Error {
+                message: "No target Primaries available for redistribution".to_string(),
+            };
+        }
+
+        info!(
+            "Recovery: Redistributing partitions from crashed Primary {} to {} targets",
+            crashed_primary_id,
+            target_primaries.len()
+        );
+
+        let replicas = self.list_replicas();
+        let mut redistributed_count = 0;
+        let num_targets = target_primaries.len();
+
+        for replica in replicas.iter() {
+            if replica.leader_node_id == crashed_primary_id {
+                let target_idx = redistributed_count % num_targets;
+                let new_leader = &target_primaries[target_idx];
+                let storage_key = replica.storage_key();
+
+                let mut updated = replica.clone();
+                let old_leader = updated.leader_node_id.clone();
+                updated.leader_node_id = new_leader.clone();
+
+                // Remove crashed Primary from standbys if present
+                updated.standby_node_ids.retain(|id| id != crashed_primary_id);
+
+                let _ = self.db.insert(
+                    storage_key.as_bytes(),
+                    bincode::serialize(&updated).unwrap(),
+                );
+
+                redistributed_count += 1;
+
+                // Publish redistribution event
+                let payload = serde_json::json!({
+                    "partition_key": updated.partition_key,
+                    "old_leader": old_leader,
+                    "new_leader": new_leader,
+                    "action": "redistributed",
+                });
+                self.publish_event(
+                    "replicas",
+                    EventType::ReplicaPromoted,
+                    serde_json::to_vec(&payload).unwrap_or_default(),
+                    "meta",
+                );
+            }
+        }
+
+        info!(
+            "Recovery: Redistributed {} partitions from {} to {:?}",
+            redistributed_count, crashed_primary_id, target_primaries
+        );
+
+        MetaResponse::PartitionsRedistributed {
+            crashed_primary_id: crashed_primary_id.to_string(),
+            partitions_count: redistributed_count,
+            target_primaries: target_primaries.to_vec(),
         }
     }
 

@@ -48,6 +48,12 @@ pub struct MetaConfig {
     /// Standbys are cold backup nodes that don't serve queries.
     #[serde(default)]
     pub standby: StandbyConfig,
+
+    /// Failover configuration
+    ///
+    /// Controls how the cluster handles node failures.
+    #[serde(default)]
+    pub failover: FailoverConfig,
 }
 
 /// Raft consensus configuration
@@ -205,6 +211,147 @@ impl ReplicationAssignmentConfig {
     /// Get lease TTL as Duration
     pub fn lease_ttl(&self) -> Duration {
         Duration::from_secs(self.lease_ttl_secs)
+    }
+}
+
+/// Failover Configuration
+///
+/// Controls how the cluster handles node failures.
+/// This implements a NO-PROMOTION strategy: when a Primary crashes,
+/// its Standby flushes data and partitions are redistributed.
+///
+/// # Primary Crash Handling
+///
+/// ```text
+/// Traditional (promote_standby=true):
+///   P1 crashes → S1 promoted to Primary
+///   Result: 6P + 2S (ratio 3:1) - Risk of avalanche!
+///
+/// New Strategy (promote_standby=false):
+///   P1 crashes → S1 flushes P1's data → Partitions → P2-P6
+///   Result: 5P + 3S (ratio 1.67:1) - SAFE
+/// ```
+///
+/// # Standby Crash Handling
+///
+/// When a Standby crashes:
+/// 1. Try to assign a spare Standby from pool (if available)
+/// 2. If no spare, leave Primary unprotected (with warning)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailoverConfig {
+    /// Promote Standby to Primary on Primary failure
+    ///
+    /// When false (recommended):
+    /// - Standby flushes crashed Primary's data
+    /// - Partitions redistributed to remaining Primaries
+    /// - Result: N-1 Primaries, same Standbys (ratio improves)
+    ///
+    /// When true (legacy):
+    /// - Standby promoted to Primary
+    /// - Result: Same Primaries, N-1 Standbys (ratio worsens)
+    #[serde(default = "default_promote_standby")]
+    pub promote_standby: bool,
+
+    /// Trigger Standby to flush when Primary crashes
+    ///
+    /// Ensures no data loss by having Standby write all
+    /// replicated data to Parquet before redistribution.
+    #[serde(default = "default_flush_on_primary_crash")]
+    pub flush_on_primary_crash: bool,
+
+    /// Number of spare Standbys to maintain in pool
+    ///
+    /// Spare Standbys are idle nodes ready to replace failed Standbys.
+    /// When an active Standby fails, a spare is automatically assigned.
+    ///
+    /// Recommended: 1-2 for production clusters
+    #[serde(default = "default_spare_standbys")]
+    pub spare_standbys: u32,
+
+    /// Auto-assign spare Standby when active Standby fails
+    ///
+    /// When true, Meta automatically assigns a spare to replace failed Standby.
+    /// When false, replacement must be triggered manually.
+    #[serde(default = "default_auto_assign_spare")]
+    pub auto_assign_spare: bool,
+
+    /// Policy for writes to unprotected partitions (no Standby)
+    ///
+    /// - "allow": Accept writes silently
+    /// - "warn": Accept writes but log warning and emit metric
+    /// - "reject": Reject writes with error
+    #[serde(default = "default_unprotected_write_policy")]
+    pub unprotected_write_policy: String,
+
+    /// Timeout for Standby flush operation (seconds)
+    ///
+    /// How long to wait for Standby to flush crashed Primary's data.
+    #[serde(default = "default_flush_timeout_secs")]
+    pub flush_timeout_secs: u64,
+
+    /// Timeout for partition redistribution (seconds)
+    #[serde(default = "default_redistribute_timeout_secs")]
+    pub redistribute_timeout_secs: u64,
+}
+
+fn default_promote_standby() -> bool {
+    false // Don't promote, use redistribute strategy
+}
+
+fn default_flush_on_primary_crash() -> bool {
+    true
+}
+
+fn default_spare_standbys() -> u32 {
+    0 // No spares by default, user should configure
+}
+
+fn default_auto_assign_spare() -> bool {
+    true
+}
+
+fn default_unprotected_write_policy() -> String {
+    "warn".to_string()
+}
+
+fn default_flush_timeout_secs() -> u64 {
+    60 // 1 minute
+}
+
+fn default_redistribute_timeout_secs() -> u64 {
+    300 // 5 minutes
+}
+
+impl Default for FailoverConfig {
+    fn default() -> Self {
+        Self {
+            promote_standby: default_promote_standby(),
+            flush_on_primary_crash: default_flush_on_primary_crash(),
+            spare_standbys: default_spare_standbys(),
+            auto_assign_spare: default_auto_assign_spare(),
+            unprotected_write_policy: default_unprotected_write_policy(),
+            flush_timeout_secs: default_flush_timeout_secs(),
+            redistribute_timeout_secs: default_redistribute_timeout_secs(),
+        }
+    }
+}
+
+/// Unprotected write policy enum for type-safe access
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnprotectedWritePolicy {
+    Allow,
+    Warn,
+    Reject,
+}
+
+impl FailoverConfig {
+    /// Parse unprotected_write_policy string to enum
+    pub fn get_unprotected_write_policy(&self) -> UnprotectedWritePolicy {
+        match self.unprotected_write_policy.to_lowercase().as_str() {
+            "allow" => UnprotectedWritePolicy::Allow,
+            "reject" => UnprotectedWritePolicy::Reject,
+            _ => UnprotectedWritePolicy::Warn, // Default to warn
+        }
     }
 }
 
@@ -437,6 +584,7 @@ impl Default for MetaConfig {
             events: EventConfig::default(),
             replication: ReplicationAssignmentConfig::default(),
             standby: StandbyConfig::default(),
+            failover: FailoverConfig::default(),
         }
     }
 }
