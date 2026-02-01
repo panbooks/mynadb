@@ -111,8 +111,10 @@ pub struct ExplainParams {
 
 #[derive(Deserialize, Default)]
 pub struct RetireRequest {
+    /// If true, skip the automatic flush on retire (default: false).
+    /// By default, retire triggers an immediate flush to accelerate draining.
     #[serde(default)]
-    pub force_flush: bool,
+    pub defer_flush: bool,
 }
 
 #[derive(Serialize)]
@@ -120,6 +122,12 @@ pub struct RetireResponse {
     pub success: bool,
     pub status: String,
     pub partitions_to_reassign: usize,
+    /// True if an immediate flush was triggered to accelerate draining
+    #[serde(default)]
+    pub flush_triggered: bool,
+    /// Number of memtable rows being flushed (0 if no flush or already empty)
+    #[serde(default)]
+    pub memtable_rows_flushing: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -330,6 +338,8 @@ async fn retire(
                 success: true,
                 status: "already_retiring".to_string(),
                 partitions_to_reassign: 0,
+                flush_triggered: false,
+                memtable_rows_flushing: 0,
                 error: None,
             }),
         );
@@ -344,6 +354,8 @@ async fn retire(
                     success: false,
                     status: "error".to_string(),
                     partitions_to_reassign: 0,
+                    flush_triggered: false,
+                    memtable_rows_flushing: 0,
                     error: Some(
                         "Meta client not available - node running in standalone mode".to_string(),
                     ),
@@ -355,22 +367,39 @@ async fn retire(
     match meta_client.start_retire(&state.node_id).await {
         Ok(partitions_to_reassign) => {
             state.is_retiring.store(true, Ordering::SeqCst);
+            let memtable_rows = state.cache.stats().await.total_rows as u64;
             *state.retire_status.write() = Some(RetireStatusDetail {
                 state: "retiring".to_string(),
                 started_at: chrono::Utc::now().timestamp_millis(),
                 partitions_to_reassign,
-                memtable_rows_remaining: state.cache.stats().await.total_rows as u64,
+                memtable_rows_remaining: memtable_rows,
             });
 
-            if request.force_flush {
+            // By default, trigger immediate flush to accelerate retire draining
+            // This avoids waiting 0-60 seconds for the background flush interval
+            let (flush_triggered, memtable_rows_flushing) = if !request.defer_flush && memtable_rows > 0 {
+                info!(
+                    "Node {} retire: triggering immediate flush of {} rows to accelerate draining",
+                    state.node_id, memtable_rows
+                );
                 if let Err(e) = state.cache.flush().await {
-                    tracing::warn!("Error during force flush: {}", e);
+                    tracing::warn!("Error during retire flush: {}", e);
                 }
-            }
+                (true, memtable_rows)
+            } else if request.defer_flush && memtable_rows > 0 {
+                debug!(
+                    "Node {} retire: deferring flush (defer_flush=true), {} rows in memtable",
+                    state.node_id, memtable_rows
+                );
+                (false, 0)
+            } else {
+                debug!("Node {} retire: memtable empty, no flush needed", state.node_id);
+                (false, 0)
+            };
 
             info!(
-                "Node {} started retirement: {} partitions to reassign",
-                state.node_id, partitions_to_reassign
+                "Node {} started retirement: {} partitions to reassign, flush_triggered={}, memtable_rows={}",
+                state.node_id, partitions_to_reassign, flush_triggered, memtable_rows_flushing
             );
 
             (
@@ -379,6 +408,8 @@ async fn retire(
                     success: true,
                     status: "retiring".to_string(),
                     partitions_to_reassign,
+                    flush_triggered,
+                    memtable_rows_flushing,
                     error: None,
                 }),
             )
@@ -389,6 +420,8 @@ async fn retire(
                 success: false,
                 status: "error".to_string(),
                 partitions_to_reassign: 0,
+                flush_triggered: false,
+                memtable_rows_flushing: 0,
                 error: Some(e),
             }),
         ),
@@ -473,6 +506,8 @@ async fn cancel_retire(State(state): State<DataNodeState>) -> impl IntoResponse 
                 success: true,
                 status: "not_retiring".to_string(),
                 partitions_to_reassign: 0,
+                flush_triggered: false,
+                memtable_rows_flushing: 0,
                 error: None,
             }),
         );
@@ -487,6 +522,8 @@ async fn cancel_retire(State(state): State<DataNodeState>) -> impl IntoResponse 
                     success: false,
                     status: "error".to_string(),
                     partitions_to_reassign: 0,
+                    flush_triggered: false,
+                    memtable_rows_flushing: 0,
                     error: Some("Meta client not available".to_string()),
                 }),
             );
@@ -504,6 +541,8 @@ async fn cancel_retire(State(state): State<DataNodeState>) -> impl IntoResponse 
                     success: true,
                     status: "active".to_string(),
                     partitions_to_reassign: 0,
+                    flush_triggered: false,
+                    memtable_rows_flushing: 0,
                     error: None,
                 }),
             )
@@ -514,6 +553,8 @@ async fn cancel_retire(State(state): State<DataNodeState>) -> impl IntoResponse 
                 success: false,
                 status: "error".to_string(),
                 partitions_to_reassign: 0,
+                flush_triggered: false,
+                memtable_rows_flushing: 0,
                 error: Some(e),
             }),
         ),

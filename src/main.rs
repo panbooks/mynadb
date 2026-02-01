@@ -5,6 +5,7 @@
 //!
 //! Usage:
 //! - `mynadb` or `mynadb standalone` - Run in standalone mode (default)
+//! - `mynadb stop` or `mynadb standalone stop` - Stop a running standalone instance
 //! - `mynadb meta start|stop` - Meta node (Raft-based metadata service)
 //! - `mynadb router start|stop` - Router node (client protocols + routing)
 //! - `mynadb data start|stop` - Data node (storage + query execution)
@@ -74,7 +75,13 @@ struct Cli {
 enum Commands {
     /// Run in standalone mode (all-in-one, no cluster)
     /// This is the default if no subcommand is specified
-    Standalone,
+    Standalone {
+        #[command(subcommand)]
+        action: Option<StandaloneAction>,
+    },
+
+    /// Stop a running standalone instance (shortcut for `standalone stop`)
+    Stop,
 
     /// Meta node operations (Raft-based metadata service)
     Meta {
@@ -98,6 +105,13 @@ enum Commands {
     Version,
 }
 
+/// Standalone mode actions
+#[derive(Subcommand, Debug, Clone)]
+enum StandaloneAction {
+    /// Stop a running standalone instance (sends SIGTERM, flushes data)
+    Stop,
+}
+
 /// Node start/stop actions
 #[derive(Subcommand, Debug, Clone)]
 enum NodeAction {
@@ -116,9 +130,17 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        // No subcommand or explicit standalone
-        None | Some(Commands::Standalone) => {
+        // No subcommand or explicit standalone (run)
+        None | Some(Commands::Standalone { action: None }) => {
             node::standalone::run(&cli.config).await;
+        }
+
+        // Standalone stop
+        Some(Commands::Standalone {
+            action: Some(StandaloneAction::Stop),
+        })
+        | Some(Commands::Stop) => {
+            node::standalone::stop(&cli.config);
         }
 
         // Meta node
