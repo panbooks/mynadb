@@ -4,6 +4,7 @@
 //! The main binary uses these modules via `mod` declarations in main.rs.
 
 // Internal modules
+pub mod aggregates;
 pub mod config;
 pub mod data;
 pub mod jobs;

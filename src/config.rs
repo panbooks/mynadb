@@ -30,6 +30,9 @@ pub struct Config {
     pub wal: WalConfig,
     #[serde(default)]
     pub auth: AuthConfig,
+    /// Continuous aggregates configuration (materialized views with auto-refresh)
+    #[serde(default)]
+    pub continuous_aggregates: crate::aggregates::ContinuousAggregateConfig,
     /// Meta node configuration (for --role meta)
     #[serde(default)]
     pub meta: Option<crate::meta::config::MetaConfig>,
@@ -809,6 +812,7 @@ impl Default for Config {
             retention: RetentionConfig::default(),
             wal: WalConfig::default(),
             auth: AuthConfig::default(),
+            continuous_aggregates: crate::aggregates::ContinuousAggregateConfig::default(),
             meta: None,
             router: None,
             data: None,
