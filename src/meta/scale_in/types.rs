@@ -31,6 +31,18 @@ pub struct ScaleInConfig {
 
     /// Strategy for selecting nodes to retire
     pub strategy: ScaleInStrategy,
+
+    /// Enable pre-flight health check before scale-in
+    pub pre_flight_check_enabled: bool,
+
+    /// Check interval for Standby health during execution (milliseconds)
+    pub health_check_interval_ms: u64,
+
+    /// Maximum allowed heartbeat age before considering a node unhealthy (seconds)
+    pub max_heartbeat_age_secs: u64,
+
+    /// Whether to abort scale-in if Standby becomes unhealthy
+    pub abort_on_standby_failure: bool,
 }
 
 impl Default for ScaleInConfig {
@@ -39,10 +51,14 @@ impl Default for ScaleInConfig {
             primary_standby_ratio: 2,
             min_primaries: 1,
             min_standbys: 0,
-            migration_timeout_secs: 300, // 5 minutes
-            flush_timeout_secs: 60,      // 1 minute
+            migration_timeout_secs: 300,      // 5 minutes
+            flush_timeout_secs: 60,           // 1 minute
             force_flush: true,
             strategy: ScaleInStrategy::LeastLoaded,
+            pre_flight_check_enabled: true,
+            health_check_interval_ms: 1000,   // 1 second
+            max_heartbeat_age_secs: 30,       // 30 seconds
+            abort_on_standby_failure: true,
         }
     }
 }
@@ -491,6 +507,26 @@ pub enum ScaleInError {
 
     /// Meta service error
     MetaError(String),
+
+    /// Pre-flight check failed - cluster not ready for scale-in
+    PreFlightCheckFailed {
+        reason: String,
+        unhealthy_nodes: Vec<String>,
+    },
+
+    /// Safety net lost - Standby became unhealthy during scale-in
+    SafetyNetLost {
+        primary_id: String,
+        standby_id: String,
+        reason: String,
+    },
+
+    /// Scale-in aborted due to node failure
+    Aborted {
+        reason: String,
+        phase: String,
+        completed_actions: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for ScaleInError {
@@ -521,6 +557,38 @@ impl std::fmt::Display for ScaleInError {
                 timeout_secs,
             } => write!(f, "Timeout ({} secs) during: {}", timeout_secs, operation),
             Self::MetaError(msg) => write!(f, "Meta error: {}", msg),
+            Self::PreFlightCheckFailed {
+                reason,
+                unhealthy_nodes,
+            } => {
+                write!(
+                    f,
+                    "Pre-flight check failed: {}. Unhealthy nodes: {:?}",
+                    reason, unhealthy_nodes
+                )
+            }
+            Self::SafetyNetLost {
+                primary_id,
+                standby_id,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "Safety net lost: Standby {} backing Primary {} is unhealthy: {}",
+                    standby_id, primary_id, reason
+                )
+            }
+            Self::Aborted {
+                reason,
+                phase,
+                completed_actions,
+            } => {
+                write!(
+                    f,
+                    "Scale-in aborted during {}: {}. Completed: {:?}",
+                    phase, reason, completed_actions
+                )
+            }
         }
     }
 }

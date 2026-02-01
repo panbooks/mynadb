@@ -40,9 +40,10 @@
 use super::types::*;
 use super::validator::ScaleInValidator;
 use crate::meta::service::MetaNode;
-use crate::meta::types::{MetaCommand, NodeRole, NodeState};
+use crate::meta::types::{DataNodeMode, MetaCommand, NodeRole, NodeState};
+use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
 /// Executor for scale-in plans
@@ -61,6 +62,93 @@ impl ScaleInExecutor {
             config,
             validator,
         }
+    }
+
+    /// Check health of Standbys that back up the retiring Primaries
+    ///
+    /// This is CRITICAL during Phase 1 and Phase 2 when Primaries are being
+    /// drained or retired. If a Standby fails during this time, we lose our
+    /// safety net.
+    fn check_standby_health(
+        &self,
+        retiring_primaries: &[String],
+    ) -> Result<(), ScaleInError> {
+        let sm = self.meta_node.state_machine();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        // Get all Standbys that back up the retiring Primaries
+        let replicas = sm.list_replicas();
+        let mut critical_standbys: HashSet<String> = HashSet::new();
+
+        for replica in &replicas {
+            if retiring_primaries.contains(&replica.leader_node_id) {
+                for standby_id in &replica.standby_node_ids {
+                    critical_standbys.insert(standby_id.clone());
+                }
+            }
+        }
+
+        // Check health of each critical Standby
+        for standby_id in &critical_standbys {
+            if let Some(node) = sm.get_node(standby_id) {
+                // Check heartbeat age
+                let heartbeat_age = now - node.last_heartbeat;
+                if heartbeat_age > self.config.max_heartbeat_age_secs as i64 {
+                    error!(
+                        "SAFETY NET LOST: Standby {} heartbeat is stale ({}s old)",
+                        standby_id, heartbeat_age
+                    );
+
+                    // Find which Primary this Standby was backing
+                    let backed_primaries: Vec<_> = replicas
+                        .iter()
+                        .filter(|r| {
+                            r.standby_node_ids.contains(standby_id)
+                                && retiring_primaries.contains(&r.leader_node_id)
+                        })
+                        .map(|r| r.leader_node_id.clone())
+                        .collect();
+
+                    return Err(ScaleInError::SafetyNetLost {
+                        primary_id: backed_primaries.first().cloned().unwrap_or_default(),
+                        standby_id: standby_id.clone(),
+                        reason: format!(
+                            "Heartbeat stale ({}s > max {}s). Backed Primaries: {:?}",
+                            heartbeat_age, self.config.max_heartbeat_age_secs, backed_primaries
+                        ),
+                    });
+                }
+
+                // Check node state
+                if node.state != NodeState::Active {
+                    error!(
+                        "SAFETY NET LOST: Standby {} is not active (state: {:?})",
+                        standby_id, node.state
+                    );
+                    return Err(ScaleInError::SafetyNetLost {
+                        primary_id: String::new(),
+                        standby_id: standby_id.clone(),
+                        reason: format!("Standby state is {:?}, not Active", node.state),
+                    });
+                }
+            } else {
+                error!("SAFETY NET LOST: Standby {} not found in cluster", standby_id);
+                return Err(ScaleInError::SafetyNetLost {
+                    primary_id: String::new(),
+                    standby_id: standby_id.clone(),
+                    reason: "Standby node not found".to_string(),
+                });
+            }
+        }
+
+        debug!(
+            "Standby health check passed: {} critical Standbys healthy",
+            critical_standbys.len()
+        );
+        Ok(())
     }
 
     /// Execute a scale-in plan
@@ -83,10 +171,24 @@ impl ScaleInExecutor {
         }
 
         let mut errors = Vec::new();
-        let mut warnings = Vec::new();
+        let warnings = Vec::new();
         let mut primaries_retired = Vec::new();
         let mut standbys_retired = Vec::new();
         let mut partitions_migrated = 0;
+        let mut completed_actions = Vec::new();
+
+        // Initial Standby health check before starting
+        if self.config.abort_on_standby_failure {
+            info!("Performing initial Standby health check...");
+            if let Err(e) = self.check_standby_health(&plan.primaries_to_retire) {
+                error!("Initial Standby health check failed: {}", e);
+                return Err(ScaleInError::Aborted {
+                    reason: format!("Pre-execution health check failed: {}", e),
+                    phase: "Pre-execution".to_string(),
+                    completed_actions: vec![],
+                });
+            }
+        }
 
         // Execute phases in order
         for phase in &plan.phases {
@@ -97,24 +199,40 @@ impl ScaleInExecutor {
 
             match phase.phase_type {
                 ScaleInPhaseType::MigratePartitions => {
-                    match self.execute_migration_phase(phase).await {
+                    match self
+                        .execute_migration_phase(phase, &plan.primaries_to_retire)
+                        .await
+                    {
                         Ok(count) => {
                             partitions_migrated = count;
+                            completed_actions.push(format!("Migrated {} partitions", count));
                             info!("Phase 1 complete: {} partitions migrated", count);
                         }
                         Err(e) => {
                             error!("Phase 1 failed: {}", e);
                             errors.push(format!("Migration phase failed: {}", e));
-                            // Continue with other phases? For now, abort
+
+                            // Check if this was a safety net failure
+                            if matches!(e, ScaleInError::SafetyNetLost { .. }) {
+                                return Err(ScaleInError::Aborted {
+                                    reason: e.to_string(),
+                                    phase: "MigratePartitions".to_string(),
+                                    completed_actions,
+                                });
+                            }
                             break;
                         }
                     }
                 }
 
                 ScaleInPhaseType::RetirePrimaries => {
-                    match self.execute_retire_primaries_phase(phase).await {
+                    match self
+                        .execute_retire_primaries_phase(phase, &plan.primaries_to_retire)
+                        .await
+                    {
                         Ok(retired) => {
-                            primaries_retired = retired;
+                            primaries_retired = retired.clone();
+                            completed_actions.push(format!("Retired {} primaries", retired.len()));
                             info!(
                                 "Phase 2 complete: {} primaries retired",
                                 primaries_retired.len()
@@ -123,15 +241,25 @@ impl ScaleInExecutor {
                         Err(e) => {
                             error!("Phase 2 failed: {}", e);
                             errors.push(format!("Primary retirement phase failed: {}", e));
+
+                            if matches!(e, ScaleInError::SafetyNetLost { .. }) {
+                                return Err(ScaleInError::Aborted {
+                                    reason: e.to_string(),
+                                    phase: "RetirePrimaries".to_string(),
+                                    completed_actions,
+                                });
+                            }
                             break;
                         }
                     }
                 }
 
                 ScaleInPhaseType::RetireStandbys => {
+                    // No Standby health check needed in Phase 3 - Primaries already safe
                     match self.execute_retire_standbys_phase(phase).await {
                         Ok(retired) => {
-                            standbys_retired = retired;
+                            standbys_retired = retired.clone();
+                            completed_actions.push(format!("Retired {} standbys", retired.len()));
                             info!(
                                 "Phase 3 complete: {} standbys retired",
                                 standbys_retired.len()
@@ -179,22 +307,35 @@ impl ScaleInExecutor {
     }
 
     /// Execute Phase 1: Partition Migration
+    ///
+    /// During migration, we continuously check Standby health because:
+    /// - Retiring Primaries still own partitions being migrated
+    /// - If a Standby fails, those partitions lose their backup
     async fn execute_migration_phase(
         &self,
         phase: &ScaleInPhase,
+        retiring_primaries: &[String],
     ) -> Result<usize, ScaleInError> {
         let mut migrated_count = 0;
+        let total_operations = phase.operations.len();
+        let _check_interval = self.config.health_check_interval_ms;
 
-        for operation in &phase.operations {
+        for (i, operation) in phase.operations.iter().enumerate() {
             if let ScaleInOperation::MigratePartition {
                 partition_key,
                 from_node,
                 to_node,
             } = operation
             {
+                // Periodic Standby health check during migration
+                if self.config.abort_on_standby_failure && i % 5 == 0 {
+                    debug!("Health check during migration ({}/{})", i + 1, total_operations);
+                    self.check_standby_health(retiring_primaries)?;
+                }
+
                 debug!(
-                    "Migrating partition {} from {} to {}",
-                    partition_key, from_node, to_node
+                    "Migrating partition {} from {} to {} ({}/{})",
+                    partition_key, from_node, to_node, i + 1, total_operations
                 );
 
                 match self
@@ -217,18 +358,48 @@ impl ScaleInExecutor {
             }
         }
 
+        // Final health check after all migrations
+        if self.config.abort_on_standby_failure {
+            debug!("Final health check after migration phase");
+            self.check_standby_health(retiring_primaries)?;
+        }
+
         Ok(migrated_count)
     }
 
     /// Execute Phase 2: Retire Primaries
+    ///
+    /// During primary retirement, Standbys are CRITICAL as safety net.
+    /// If remaining Primaries crash during this phase, Standbys must take over.
     async fn execute_retire_primaries_phase(
         &self,
         phase: &ScaleInPhase,
+        all_retiring_primaries: &[String],
     ) -> Result<Vec<String>, ScaleInError> {
-        let mut retired = Vec::new();
+        let mut retired: Vec<String> = Vec::new();
 
-        for node_id in &phase.affected_nodes {
-            info!("Retiring Primary node: {}", node_id);
+        for (i, node_id) in phase.affected_nodes.iter().enumerate() {
+            info!(
+                "Retiring Primary node: {} ({}/{})",
+                node_id,
+                i + 1,
+                phase.affected_nodes.len()
+            );
+
+            // Health check before each Primary retirement
+            // This ensures Standbys are still healthy to protect remaining cluster
+            if self.config.abort_on_standby_failure {
+                // Check Standbys for primaries not yet retired
+                let remaining: Vec<_> = all_retiring_primaries
+                    .iter()
+                    .filter(|p| !retired.contains(p))
+                    .cloned()
+                    .collect();
+                if !remaining.is_empty() {
+                    debug!("Health check before retiring {}", node_id);
+                    self.check_standby_health(&remaining)?;
+                }
+            }
 
             // Step 1: Trigger flush (if force_flush enabled)
             if self.config.force_flush {
@@ -258,10 +429,18 @@ impl ScaleInExecutor {
             }
 
             // Step 3: Wait for drain (optional, with timeout)
+            // During wait, periodically check Standby health
             if let Err(e) = self
-                .wait_for_drain(node_id, self.config.migration_timeout_secs)
+                .wait_for_drain_with_health_check(
+                    node_id,
+                    self.config.migration_timeout_secs,
+                    all_retiring_primaries,
+                )
                 .await
             {
+                if matches!(e, ScaleInError::SafetyNetLost { .. }) {
+                    return Err(e);
+                }
                 warn!("Timeout waiting for drain of {}: {}", node_id, e);
                 // Continue anyway - the node will complete drain eventually
             }
@@ -338,10 +517,31 @@ impl ScaleInExecutor {
 
     /// Wait for a node to finish draining
     async fn wait_for_drain(&self, node_id: &str, timeout_secs: u64) -> Result<(), ScaleInError> {
+        self.wait_for_drain_with_health_check(node_id, timeout_secs, &[]).await
+    }
+
+    /// Wait for a node to finish draining with periodic Standby health checks
+    async fn wait_for_drain_with_health_check(
+        &self,
+        node_id: &str,
+        timeout_secs: u64,
+        retiring_primaries: &[String],
+    ) -> Result<(), ScaleInError> {
         let start = Instant::now();
         let timeout = Duration::from_secs(timeout_secs);
+        let health_check_interval = Duration::from_millis(self.config.health_check_interval_ms);
+        let mut last_health_check = Instant::now();
 
         loop {
+            // Periodic Standby health check during wait
+            if self.config.abort_on_standby_failure
+                && !retiring_primaries.is_empty()
+                && last_health_check.elapsed() > health_check_interval
+            {
+                self.check_standby_health(retiring_primaries)?;
+                last_health_check = Instant::now();
+            }
+
             // Check node state
             let sm = self.meta_node.state_machine();
             if let Some(node) = sm.get_node(node_id) {
