@@ -18,6 +18,7 @@ use std::time::Instant;
 use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, error, info, warn};
 
+use crate::meta::client::MetaClient;
 use crate::query::catalog::{FileInfo, SharedMetadataManager};
 use crate::services::rate_limiter::RateLimiter;
 use crate::storage::storage::Storage;
@@ -45,10 +46,45 @@ const CARDINALITY_SAMPLE_SIZE: usize = 100_000;
 /// Threshold for "high cardinality" - tags with more distinct values are sorted last
 const HIGH_CARDINALITY_THRESHOLD: usize = 1000;
 
+// Distributed lock constants
+/// TTL for compaction locks in milliseconds (5 minutes)
+/// Compaction can take a while for large partitions, so we use a longer TTL.
+/// Lock is released immediately on completion/failure via RAII guard.
+const COMPACTION_LOCK_TTL_MS: u64 = 300_000;
+
 /// Type alias for compaction locks map
 /// Key: (catalog, schema, table, date_partition)
 type CompactionLocks =
     Arc<RwLock<HashMap<(String, String, String, String), Arc<tokio::sync::Mutex<()>>>>>;
+
+/// RAII guard for distributed compaction locks - releases lock on drop
+///
+/// In cluster mode, this prevents multiple nodes from compacting the same partition
+/// simultaneously. The lock is released when compaction completes (success or failure).
+struct DistributedLockGuard {
+    meta_client: Option<Arc<MetaClient>>,
+    lock_key: String,
+    fencing_token: u64,
+}
+
+impl Drop for DistributedLockGuard {
+    fn drop(&mut self) {
+        if let Some(ref mc) = self.meta_client {
+            let mc = mc.clone();
+            let lock_key = self.lock_key.clone();
+            let token = self.fencing_token;
+            // Spawn async task to release lock (can't await in drop)
+            tokio::spawn(async move {
+                if let Err(e) = mc.unlock(&lock_key, token).await {
+                    // Not critical - lock will expire via TTL
+                    debug!("Failed to release compaction lock {}: {}", lock_key, e);
+                } else {
+                    debug!("Released compaction lock {}", lock_key);
+                }
+            });
+        }
+    }
+}
 
 /// Compactor is responsible for merging small Parquet files into larger ones
 /// using a leveled compaction strategy (similar to LSM-tree)
@@ -69,6 +105,10 @@ pub struct Compactor {
     write_rate_limiter: Option<Arc<RateLimiter>>,
     /// Metadata manager for updating file registry after compaction
     metadata_manager: Option<SharedMetadataManager>,
+    /// Meta client for distributed locks (cluster mode only)
+    /// When set, compaction acquires a distributed lock to prevent multiple nodes
+    /// from compacting the same partition simultaneously.
+    meta_client: Option<Arc<MetaClient>>,
 }
 
 #[derive(Debug, Clone)]
@@ -278,7 +318,18 @@ impl Compactor {
             read_rate_limiter,
             write_rate_limiter,
             metadata_manager,
+            meta_client: None,
         }
+    }
+
+    /// Set the Meta client for distributed locking in cluster mode
+    ///
+    /// When MetaClient is set, the compactor will acquire a distributed lock
+    /// before compacting each partition to prevent multiple nodes from
+    /// compacting the same partition simultaneously.
+    pub fn with_meta_client(mut self, meta_client: Arc<MetaClient>) -> Self {
+        self.meta_client = Some(meta_client);
+        self
     }
 
     /// Get or create a lock for a specific catalog/schema/table/partition tuple
@@ -753,6 +804,43 @@ impl Compactor {
             None
         };
 
+        // Try to acquire distributed lock for cluster mode
+        // Uses same lock key format as LSM compaction to ensure mutual exclusion
+        let lock_key = format!("/compaction/{}/{}/{}/{}", catalog, schema, table, partition_name);
+        let _distributed_lock_guard: Option<DistributedLockGuard> = if let Some(ref mc) = self.meta_client {
+            match mc.try_lock(&lock_key, COMPACTION_LOCK_TTL_MS).await {
+                Ok(Some(token)) => {
+                    debug!(
+                        "Acquired distributed lock for full compaction {}/{}/{}/{} (token={})",
+                        catalog, schema, table, partition_name, token
+                    );
+                    Some(DistributedLockGuard {
+                        meta_client: Some(mc.clone()),
+                        lock_key: lock_key.clone(),
+                        fencing_token: token,
+                    })
+                }
+                Ok(None) => {
+                    // Lock held by another node - skip this partition
+                    debug!(
+                        "Skipping full compaction for {}/{}/{}/{}: partition locked by another node",
+                        catalog, schema, table, partition_name
+                    );
+                    return Ok(None);
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to acquire distributed lock for full compaction {}/{}/{}/{}: {}. \
+                         Proceeding with local-only lock.",
+                        catalog, schema, table, partition_name, e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let start = Instant::now();
 
         // List all parquet files with their sizes
@@ -1010,6 +1098,49 @@ impl Compactor {
                     .map_err(|e| format!("Failed to acquire semaphore: {}", e))?,
             )
         } else {
+            None
+        };
+
+        // Try to acquire distributed lock for cluster mode
+        // This prevents multiple nodes from compacting the same partition simultaneously
+        // Lock key format: /compaction/{catalog}/{schema}/{table}/{partition}
+        let lock_key = format!("/compaction/{}/{}/{}/{}", catalog, schema, table, partition_id);
+        let _distributed_lock_guard: Option<DistributedLockGuard> = if let Some(ref mc) = self.meta_client {
+            match mc.try_lock(&lock_key, COMPACTION_LOCK_TTL_MS).await {
+                Ok(Some(token)) => {
+                    debug!(
+                        "Acquired distributed compaction lock for {}/{}/{}/{} (token={})",
+                        catalog, schema, table, partition_id, token
+                    );
+                    Some(DistributedLockGuard {
+                        meta_client: Some(mc.clone()),
+                        lock_key: lock_key.clone(),
+                        fencing_token: token,
+                    })
+                }
+                Ok(None) => {
+                    // Lock held by another node - skip this partition
+                    // Another node is already compacting it
+                    debug!(
+                        "Skipping compaction for {}/{}/{}/{}: partition locked by another node",
+                        catalog, schema, table, partition_id
+                    );
+                    return Ok(None);
+                }
+                Err(e) => {
+                    // Meta service unavailable - log warning and proceed with local-only compaction
+                    // This is a fail-open approach: better to risk duplicate work than to block
+                    // compaction entirely when meta is temporarily unavailable
+                    warn!(
+                        "Failed to acquire distributed lock for compaction {}/{}/{}/{}: {}. \
+                         Proceeding with local-only lock (potential duplicate work in cluster).",
+                        catalog, schema, table, partition_id, e
+                    );
+                    None
+                }
+            }
+        } else {
+            // Standalone mode - no distributed locking needed
             None
         };
 
