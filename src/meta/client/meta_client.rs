@@ -473,158 +473,269 @@ impl MetaClient {
     }
 
     // ========================================================================
-    // File Registry
+    // Table-Level Routing (Recommended)
     // ========================================================================
 
-    /// Register files with Meta
-    pub async fn register_files(&self, files: Vec<FileInfo>) -> Result<u64, String> {
-        let proto_files: Vec<proto::FileInfo> = files
-            .into_iter()
-            .map(|f| proto::FileInfo {
-                path: f.path,
-                catalog: f.catalog,
-                schema: f.schema,
-                table: f.table,
-                partition: f.partition,
-                level: f.level as u32,
-                size_bytes: f.size_bytes,
-                row_count: f.row_count,
-                min_time: f.min_time,
-                max_time: f.max_time,
-                created_at: f.created_at,
-                created_by: f.created_by,
-            })
-            .collect();
-
-        let request = proto::RegisterFilesRequest { files: proto_files };
-
-        let response = self
-            .with_retry("register_files", |mut client| {
-                let req = request.clone();
-                async move { client.register_files(req).await.map(|r| r.into_inner()) }
-            })
-            .await?;
-
-        if response.success {
-            Ok(response.sequence)
-        } else {
-            Err(response.error)
-        }
-    }
-
-    /// Remove files from Meta
-    pub async fn remove_files(&self, paths: Vec<String>) -> Result<u64, String> {
-        let request = proto::RemoveFilesRequest { paths };
-
-        let response = self
-            .with_retry("remove_files", |mut client| {
-                let req = request.clone();
-                async move { client.remove_files(req).await.map(|r| r.into_inner()) }
-            })
-            .await?;
-
-        if response.success {
-            Ok(response.sequence)
-        } else {
-            Err(response.error)
-        }
-    }
-
-    /// List files for a partition
-    pub async fn list_files_for_partition(
+    /// Register a new table with its owner node
+    pub async fn register_table(
         &self,
         catalog: &str,
         schema: &str,
         table: &str,
-        partition: &str,
-    ) -> Result<Vec<FileInfo>, String> {
-        let request = proto::ListFilesRequest {
+        owner_node_id: &str,
+    ) -> Result<(bool, String, u64), String> {
+        let request = proto::RegisterTableRequest {
             catalog: catalog.to_string(),
             schema: schema.to_string(),
             table: table.to_string(),
-            partition: partition.to_string(),
-            level: 0,
+            owner_node_id: owner_node_id.to_string(),
         };
 
         let response = self
-            .with_retry("list_files_for_partition", |mut client| {
+            .with_retry("register_table", |mut client| {
                 let req = request.clone();
-                async move {
-                    client
-                        .list_files_for_partition(req)
-                        .await
-                        .map(|r| r.into_inner())
-                }
+                async move { client.register_table(req).await.map(|r| r.into_inner()) }
+            })
+            .await?;
+
+        if response.success {
+            Ok((response.already_exists, response.current_owner, response.version))
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Update table statistics after flush
+    pub async fn update_table_stats(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        delta: TableStatsDelta,
+    ) -> Result<u64, String> {
+        let request = proto::UpdateTableStatsRequest {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            delta: Some(proto::TableStatsDelta {
+                partition_count_delta: delta.partition_count_delta,
+                bytes_delta: delta.bytes_delta,
+                rows_delta: delta.rows_delta,
+                files_delta: delta.files_delta,
+                newest_partition: delta.newest_partition.unwrap_or_default(),
+                min_time: delta.min_time,
+                max_time: delta.max_time,
+            }),
+        };
+
+        let response = self
+            .with_retry("update_table_stats", |mut client| {
+                let req = request.clone();
+                async move { client.update_table_stats(req).await.map(|r| r.into_inner()) }
+            })
+            .await?;
+
+        if response.success {
+            Ok(response.version)
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Reassign a table to a different owner node
+    pub async fn reassign_table(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        new_owner_node_id: &str,
+    ) -> Result<(String, String, u64), String> {
+        let request = proto::ReassignTableRequest {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            new_owner_node_id: new_owner_node_id.to_string(),
+        };
+
+        let response = self
+            .with_retry("reassign_table", |mut client| {
+                let req = request.clone();
+                async move { client.reassign_table(req).await.map(|r| r.into_inner()) }
+            })
+            .await?;
+
+        if response.success {
+            Ok((response.old_owner, response.new_owner, response.version))
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Remove a table from the registry
+    pub async fn remove_table(&self, catalog: &str, schema: &str, table: &str) -> Result<(), String> {
+        let request = proto::RemoveTableRequest {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+        };
+
+        let response = self
+            .with_retry("remove_table", |mut client| {
+                let req = request.clone();
+                async move { client.remove_table(req).await.map(|r| r.into_inner()) }
+            })
+            .await?;
+
+        if response.success {
+            Ok(())
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Get the owner node for a table (primary routing operation)
+    pub async fn get_table_owner(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<Option<TableMeta>, String> {
+        let request = proto::GetTableOwnerRequest {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+        };
+
+        let response = self
+            .with_retry("get_table_owner", |mut client| {
+                let req = request.clone();
+                async move { client.get_table_owner(req).await.map(|r| r.into_inner()) }
+            })
+            .await?;
+
+        if response.found {
+            if let Some(meta) = response.table_meta {
+                Ok(Some(TableMeta {
+                    catalog: meta.catalog,
+                    schema: meta.schema,
+                    table: meta.table,
+                    owner_node_id: meta.owner_node_id,
+                    partition_count: meta.partition_count,
+                    total_bytes: meta.total_bytes,
+                    total_rows: meta.total_rows,
+                    oldest_partition: if meta.oldest_partition.is_empty() {
+                        None
+                    } else {
+                        Some(meta.oldest_partition)
+                    },
+                    newest_partition: if meta.newest_partition.is_empty() {
+                        None
+                    } else {
+                        Some(meta.newest_partition)
+                    },
+                    min_time: meta.min_time,
+                    max_time: meta.max_time,
+                    created_at: meta.created_at,
+                    last_modified: meta.last_modified,
+                    version: meta.version,
+                }))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// List all tables owned by a specific node
+    pub async fn list_tables_for_node(&self, node_id: &str) -> Result<Vec<TableMeta>, String> {
+        let request = proto::ListTablesForNodeRequest {
+            node_id: node_id.to_string(),
+        };
+
+        let response = self
+            .with_retry("list_tables_for_node", |mut client| {
+                let req = request.clone();
+                async move { client.list_tables_for_node(req).await.map(|r| r.into_inner()) }
             })
             .await?;
 
         Ok(response
-            .files
+            .tables
             .into_iter()
-            .map(|f| FileInfo {
-                path: f.path,
-                catalog: f.catalog,
-                schema: f.schema,
-                table: f.table,
-                partition: f.partition,
-                level: f.level as u8,
-                size_bytes: f.size_bytes,
-                row_count: f.row_count,
-                min_time: f.min_time,
-                max_time: f.max_time,
-                created_at: f.created_at,
-                created_by: f.created_by,
+            .map(|meta| TableMeta {
+                catalog: meta.catalog,
+                schema: meta.schema,
+                table: meta.table,
+                owner_node_id: meta.owner_node_id,
+                partition_count: meta.partition_count,
+                total_bytes: meta.total_bytes,
+                total_rows: meta.total_rows,
+                oldest_partition: if meta.oldest_partition.is_empty() {
+                    None
+                } else {
+                    Some(meta.oldest_partition)
+                },
+                newest_partition: if meta.newest_partition.is_empty() {
+                    None
+                } else {
+                    Some(meta.newest_partition)
+                },
+                min_time: meta.min_time,
+                max_time: meta.max_time,
+                created_at: meta.created_at,
+                last_modified: meta.last_modified,
+                version: meta.version,
             })
             .collect())
     }
 
-    /// Get files for query (with time range filtering)
-    pub async fn get_files_for_query(
+    /// List tables (optionally filtered by catalog/schema)
+    pub async fn list_tables(
         &self,
-        catalog: &str,
-        tables: Vec<String>,
-        min_time: Option<i64>,
-        max_time: Option<i64>,
-    ) -> Result<(Vec<FileInfo>, Vec<String>), String> {
-        let request = proto::QueryFilesRequest {
-            catalog: catalog.to_string(),
-            tables,
-            min_time: min_time.unwrap_or(0),
-            max_time: max_time.unwrap_or(0),
+        catalog: Option<&str>,
+        schema: Option<&str>,
+    ) -> Result<Vec<TableMeta>, String> {
+        let request = proto::ListTablesRequest {
+            catalog: catalog.unwrap_or("").to_string(),
+            schema: schema.unwrap_or("").to_string(),
         };
 
         let response = self
-            .with_retry("get_files_for_query", |mut client| {
+            .with_retry("list_tables", |mut client| {
                 let req = request.clone();
-                async move {
-                    client
-                        .get_files_for_query(req)
-                        .await
-                        .map(|r| r.into_inner())
-                }
+                async move { client.list_tables(req).await.map(|r| r.into_inner()) }
             })
             .await?;
 
-        let files: Vec<FileInfo> = response
-            .files
+        Ok(response
+            .tables
             .into_iter()
-            .map(|f| FileInfo {
-                path: f.path,
-                catalog: f.catalog,
-                schema: f.schema,
-                table: f.table,
-                partition: f.partition,
-                level: f.level as u8,
-                size_bytes: f.size_bytes,
-                row_count: f.row_count,
-                min_time: f.min_time,
-                max_time: f.max_time,
-                created_at: f.created_at,
-                created_by: f.created_by,
+            .map(|meta| TableMeta {
+                catalog: meta.catalog,
+                schema: meta.schema,
+                table: meta.table,
+                owner_node_id: meta.owner_node_id,
+                partition_count: meta.partition_count,
+                total_bytes: meta.total_bytes,
+                total_rows: meta.total_rows,
+                oldest_partition: if meta.oldest_partition.is_empty() {
+                    None
+                } else {
+                    Some(meta.oldest_partition)
+                },
+                newest_partition: if meta.newest_partition.is_empty() {
+                    None
+                } else {
+                    Some(meta.newest_partition)
+                },
+                min_time: meta.min_time,
+                max_time: meta.max_time,
+                created_at: meta.created_at,
+                last_modified: meta.last_modified,
+                version: meta.version,
             })
-            .collect();
-
-        Ok((files, response.nodes))
+            .collect())
     }
 
     // ========================================================================

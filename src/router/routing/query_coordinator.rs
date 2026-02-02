@@ -2,23 +2,26 @@
 //!
 //! The QueryCoordinator is responsible for:
 //! - Parsing SQL to extract table references and time ranges
-//! - Determining which Data nodes to query based on partition pruning
+//! - Determining which Data nodes to query based on table ownership
 //! - Fan-out queries to multiple Data nodes via Arrow Flight
 //! - Aggregating results from partial queries
 //!
-//! ## Distributed Parallel Query Mode
+//! ## Table-Level Routing (RECOMMENDED)
 //!
-//! When a MetaClient is available, the QueryCoordinator uses file-based routing:
-//! 1. Query Meta for files (get_files_for_query)
-//! 2. Group files by `created_by` (node_id that wrote the file)
-//! 3. Send each node only its own files via `query_with_files`
+//! When a MetaClient is available, the QueryCoordinator uses table-level routing:
+//! 1. Extract table references from SQL
+//! 2. Look up table owner from Meta (get_table_owner)
+//! 3. Route query to the owner node
 //!
-//! This enables:
-//! - **Node affinity**: Each node reads only files it created
-//! - **Local cache hit**: Files are cached on the node that wrote them
-//! - **Parallel execution**: N nodes = N× query throughput
+//! Benefits over file-based routing:
+//! - **Single lookup**: O(1) per table vs O(N) for files
+//! - **Excellent cache locality**: All table data on one node
+//! - **600x fewer Meta entries**: 100K tables vs 60M files
+//!
+//! For multi-table queries, fan-out to each table's owner node.
+//! For single-table queries (95%+ of time-series queries), single node query.
 
-use super::shard_cache::{DataNodeInfo, ShardCache};
+use super::shard_cache::{DataNodeInfo, ShardCache, TableKey};
 use crate::meta::client::MetaClient;
 use crate::query::sql_utils::{extract_table_references, extract_time_range};
 use crate::router::client::DataNodePool;
@@ -59,7 +62,10 @@ pub struct DistributedQueryPlan {
     pub target_nodes: Vec<DataNodeInfo>,
     /// Whether results need aggregation
     pub needs_aggregation: bool,
-    /// File-based routing: node_id → file paths
+    /// Table-level routing: table → owner node_id (RECOMMENDED)
+    /// When set, routes each table's query to its owner node
+    pub table_owners: Option<HashMap<String, String>>,
+    /// File-based routing: node_id → file paths (DEPRECATED)
     /// When set, each node receives only its own files for maximum cache efficiency
     pub node_files: Option<HashMap<String, Vec<String>>>,
 }
@@ -252,13 +258,95 @@ impl QueryCoordinator {
             || sql_upper.contains(" MAX(");
 
         // Get queryable Primary data nodes (Active or Retiring)
-        // Note: We only query Primary nodes - Standby nodes are cold backups.
-        // Retiring nodes are included because they may have unflushed memtable data.
-        // Partition-level pruning would require a reverse index (table→partitions→nodes),
-        // which adds complexity. Since queries are typically fast and parallelized,
-        // the overhead of querying extra nodes is minimal compared to building/maintaining
-        // a reverse index. The time_range is used for partition pruning at the data node level.
-        let target_nodes = self.shard_cache.get_queryable_primary_nodes();
+        let all_primary_nodes = self.shard_cache.get_queryable_primary_nodes();
+
+        // ====================================================================
+        // TABLE-LEVEL ROUTING (RECOMMENDED)
+        // ====================================================================
+        // For time-series workloads:
+        // - 95% of queries access today's data (single partition)
+        // - Each table is owned by one node
+        // - Route to owner → excellent cache locality
+
+        let (table_owners, target_nodes) = if let Some(ref meta_client) = self.meta_client {
+            let mut owners: HashMap<String, String> = HashMap::new();
+            let mut nodes_to_query: HashMap<String, DataNodeInfo> = HashMap::new();
+
+            for table in &tables {
+                let table_key = TableKey::new(catalog, &table.schema, &table.table);
+
+                // First check local cache
+                if let Some(owner_id) = self.shard_cache.get_table_owner(&table_key) {
+                    if let Some(node) = self.shard_cache.get_data_node(&owner_id) {
+                        if node.state == super::shard_cache::NodeState::Active
+                            || node.state == super::shard_cache::NodeState::Retiring {
+                            owners.insert(table_key.to_path(), owner_id.clone());
+                            nodes_to_query.insert(owner_id, node);
+                            continue;
+                        }
+                    }
+                }
+
+                // Cache miss - query Meta
+                match meta_client.get_table_owner(catalog, &table.schema, &table.table).await {
+                    Ok(Some(table_meta)) => {
+                        let owner_id = table_meta.owner_node_id.clone();
+
+                        // Update local cache
+                        self.shard_cache.set_table_owner(
+                            &table_key,
+                            owner_id.clone(),
+                            table_meta.version,
+                        );
+
+                        // Check if owner is available
+                        if let Some(node) = self.shard_cache.get_data_node(&owner_id) {
+                            if node.state == super::shard_cache::NodeState::Active
+                                || node.state == super::shard_cache::NodeState::Retiring {
+                                owners.insert(table_key.to_path(), owner_id.clone());
+                                nodes_to_query.insert(owner_id, node);
+                            } else {
+                                debug!(
+                                    "Table {} owner {} is {:?}, will use fallback",
+                                    table_key.to_path(), owner_id, node.state
+                                );
+                            }
+                        } else {
+                            debug!(
+                                "Table {} owner {} not found in node list",
+                                table_key.to_path(), owner_id
+                            );
+                        }
+                    }
+                    Ok(None) => {
+                        debug!("Table {} not found in Meta, will broadcast", table_key.to_path());
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to get table owner from Meta: {}, will broadcast",
+                            e
+                        );
+                    }
+                }
+            }
+
+            if !owners.is_empty() {
+                let nodes: Vec<DataNodeInfo> = nodes_to_query.into_values().collect();
+                info!(
+                    "Table-level routing: {} tables -> {} nodes",
+                    owners.len(),
+                    nodes.len()
+                );
+                (Some(owners), nodes)
+            } else {
+                // No table owners found, fall back to broadcast
+                debug!("No table owners found, falling back to broadcast query");
+                (None, all_primary_nodes.clone())
+            }
+        } else {
+            // No MetaClient, use broadcast
+            (None, all_primary_nodes.clone())
+        };
 
         // Limit parallel fan-out
         let target_nodes: Vec<_> = target_nodes
@@ -267,61 +355,13 @@ impl QueryCoordinator {
             .collect();
 
         info!(
-            "Planned distributed query to {} nodes for catalog {}: tables={:?}, needs_aggregation={}",
+            "Planned distributed query to {} nodes for catalog {}: tables={:?}, needs_aggregation={}, table_routing={}",
             target_nodes.len(),
             catalog,
             tables,
-            needs_aggregation
+            needs_aggregation,
+            table_owners.is_some()
         );
-
-        // Try file-based routing if MetaClient is available
-        let node_files = if let Some(ref meta_client) = self.meta_client {
-            // Query Meta for files grouped by created_by (node_id)
-            let table_names: Vec<String> = tables
-                .iter()
-                .map(|t| format!("{}.{}", t.schema, t.table))
-                .collect();
-
-            let min_time = time_range.as_ref().and_then(|tr| tr.min_time);
-            let max_time = time_range.as_ref().and_then(|tr| tr.max_time);
-
-            match meta_client
-                .get_files_for_query(catalog, table_names, min_time, max_time)
-                .await
-            {
-                Ok((files, _nodes)) => {
-                    // Group files by created_by (node_id)
-                    let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
-                    for file in files {
-                        grouped
-                            .entry(file.created_by.clone())
-                            .or_default()
-                            .push(file.path.clone());
-                    }
-
-                    if !grouped.is_empty() {
-                        info!(
-                            "File-based routing: {} nodes with {} total files",
-                            grouped.len(),
-                            grouped.values().map(|v| v.len()).sum::<usize>()
-                        );
-                        Some(grouped)
-                    } else {
-                        debug!("No files found in Meta, falling back to broadcast query");
-                        None
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to get files from Meta: {}, falling back to broadcast query",
-                        e
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
 
         Ok(DistributedQueryPlan {
             sql: sql.to_string(),
@@ -330,103 +370,66 @@ impl QueryCoordinator {
             time_range,
             target_nodes,
             needs_aggregation,
-            node_files,
+            table_owners,
+            node_files: None, // Deprecated: not using file-based routing
         })
     }
 
     /// Fan-out query to target nodes via Arrow Flight and collect results
     ///
-    /// When `node_files` is available, uses file-based routing for optimal cache affinity.
-    /// Otherwise, falls back to broadcast query to all nodes.
+    /// Uses table-level routing when `table_owners` is available:
+    /// - Each table's query goes to its owner node
+    /// - Owner has all data cached locally (excellent performance)
+    ///
+    /// Falls back to broadcast query when table owners are unknown.
     async fn fan_out_query(&self, plan: &DistributedQueryPlan) -> (Vec<RecordBatch>, Vec<String>) {
         // Type alias for boxed futures (needed because different async blocks have different types)
         type QueryFuture = Pin<Box<dyn Future<Output = Result<Vec<RecordBatch>, String>> + Send>>;
 
         let mut futures: Vec<QueryFuture> = Vec::new();
 
-        // Use file-based routing if available (optimal for distributed parallel queries)
-        if let Some(ref node_files) = plan.node_files {
-            // Pre-check node availability and redistribute files from unavailable nodes
-            let reachable_nodes = self.data_node_pool.get_reachable_node_ids();
-            if reachable_nodes.is_empty() {
-                return (
-                    Vec::new(),
-                    vec!["No reachable data nodes available".to_string()],
-                );
-            }
+        // Get all reachable nodes for fallback
+        let reachable_nodes = self.data_node_pool.get_reachable_node_ids();
+        if reachable_nodes.is_empty() {
+            return (
+                Vec::new(),
+                vec!["No reachable data nodes available".to_string()],
+            );
+        }
 
-            // Separate files into reachable and unreachable node assignments
-            let mut reachable_node_files: HashMap<String, Vec<String>> = HashMap::new();
-            let mut orphaned_files: Vec<String> = Vec::new();
+        // ====================================================================
+        // TABLE-LEVEL ROUTING (RECOMMENDED)
+        // ====================================================================
+        // Route to table owner nodes directly. This provides:
+        // - Optimal cache locality (owner has all table data)
+        // - Single node for single-table queries (95% of time-series queries)
+        // - Fan-out only for multi-table joins
 
-            for (node_id, file_paths) in node_files {
-                if self.data_node_pool.is_node_reachable(node_id) {
-                    reachable_node_files
-                        .entry(node_id.clone())
-                        .or_default()
-                        .extend(file_paths.clone());
-                } else {
-                    // Node is unavailable (scaled in or circuit breaker open)
-                    warn!(
-                        "Node {} is unavailable, redistributing {} files to other nodes",
-                        node_id,
-                        file_paths.len()
-                    );
-                    orphaned_files.extend(file_paths.clone());
-                }
-            }
-
-            // Redistribute orphaned files to reachable nodes (round-robin)
-            if !orphaned_files.is_empty() {
-                let reachable_list: Vec<_> = reachable_nodes.iter().collect();
-                for (i, file) in orphaned_files.iter().enumerate() {
-                    let target_node = &reachable_list[i % reachable_list.len()];
-                    reachable_node_files
-                        .entry((*target_node).clone())
-                        .or_default()
-                        .push(file.clone());
-                }
-                info!(
-                    "Redistributed {} orphaned files to {} reachable nodes",
-                    orphaned_files.len(),
-                    reachable_list.len()
-                );
-            }
-
-            // Create query futures for reachable nodes with retry on failure
-            let all_reachable: Vec<String> = reachable_nodes.clone();
-            for (node_id, file_paths) in reachable_node_files {
+        if plan.table_owners.is_some() || !plan.target_nodes.is_empty() {
+            // Query each target node
+            for node in &plan.target_nodes {
                 let pool = Arc::clone(&self.data_node_pool);
-                let node_id_clone = node_id.clone();
+                let node_id = node.node_id.clone();
                 let sql = plan.sql.clone();
                 let catalog = plan.catalog.clone();
-                let files = file_paths;
-                let fallback_nodes: Vec<String> = all_reachable
+                let fallback_nodes: Vec<String> = reachable_nodes
                     .iter()
                     .filter(|n| *n != &node_id)
                     .cloned()
                     .collect();
 
                 let future: QueryFuture = Box::pin(async move {
-                    debug!(
-                        "Querying {} with {} files: {}",
-                        node_id_clone,
-                        files.len(),
-                        sql
-                    );
+                    debug!("Querying table owner {}: {}", node_id, sql);
 
-                    // Execute query with explicit file list
-                    match pool
-                        .query_with_files(&node_id_clone, &catalog, &sql, files.clone())
-                        .await
-                    {
+                    // Execute query via Arrow Flight DoGet
+                    match pool.query(&node_id, &catalog, &sql, None).await {
                         Ok(batches) => {
                             let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
                             debug!(
-                                "Received {} batches ({} rows) from {} (file-based)",
+                                "Received {} batches ({} rows) from {} (table-level)",
                                 batches.len(),
                                 total_rows,
-                                node_id_clone
+                                node_id
                             );
                             Ok(batches)
                         }
@@ -438,17 +441,16 @@ impl QueryCoordinator {
                                 || e.contains("circuit breaker");
 
                             if is_connection_error && !fallback_nodes.is_empty() {
-                                // Try fallback nodes (any node can read any file from object storage)
+                                // Try fallback nodes (any node can read from object storage)
                                 warn!(
-                                    "Node {} unreachable, retrying {} files on fallback nodes",
-                                    node_id_clone,
-                                    files.len()
+                                    "Table owner {} unreachable, trying fallback nodes",
+                                    node_id
                                 );
 
                                 for fallback_node in &fallback_nodes {
                                     debug!("Retrying query on fallback node {}", fallback_node);
                                     match pool
-                                        .query_with_files(fallback_node, &catalog, &sql, files.clone())
+                                        .query(fallback_node, &catalog, &sql, None)
                                         .await
                                     {
                                         Ok(batches) => {
@@ -472,50 +474,18 @@ impl QueryCoordinator {
                                 // All fallbacks failed
                                 error!(
                                     "Query failed on {} and all fallback nodes: {}",
-                                    node_id_clone, e
+                                    node_id, e
                                 );
                                 Err(format!(
                                     "Failed to query {} (and {} fallbacks): {}",
-                                    node_id_clone,
+                                    node_id,
                                     fallback_nodes.len(),
                                     e
                                 ))
                             } else {
-                                error!("Query failed on {}: {}", node_id_clone, e);
-                                Err(format!("Failed to query {}: {}", node_id_clone, e))
+                                error!("Query failed on {}: {}", node_id, e);
+                                Err(format!("Failed to query {}: {}", node_id, e))
                             }
-                        }
-                    }
-                });
-
-                futures.push(future);
-            }
-        } else {
-            // Fallback: broadcast query to all active nodes
-            for node in &plan.target_nodes {
-                let pool = Arc::clone(&self.data_node_pool);
-                let node_id = node.node_id.clone();
-                let sql = plan.sql.clone();
-                let catalog = plan.catalog.clone();
-
-                let future: QueryFuture = Box::pin(async move {
-                    debug!("Querying {} with: {}", node_id, sql);
-
-                    // Execute query via Arrow Flight DoGet (broadcast mode)
-                    match pool.query(&node_id, &catalog, &sql, None).await {
-                        Ok(batches) => {
-                            let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-                            debug!(
-                                "Received {} batches ({} rows) from {} (broadcast)",
-                                batches.len(),
-                                total_rows,
-                                node_id
-                            );
-                            Ok(batches)
-                        }
-                        Err(e) => {
-                            error!("Query failed on {}: {}", node_id, e);
-                            Err(format!("Failed to query {}: {}", node_id, e))
                         }
                     }
                 });

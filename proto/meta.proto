@@ -13,11 +13,20 @@ service MetaService {
     rpc DeregisterNode(DeregisterNodeRequest) returns (DeregisterNodeResponse);
     rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
 
-    // File registry
-    rpc RegisterFiles(RegisterFilesRequest) returns (RegisterFilesResponse);
-    rpc RemoveFiles(RemoveFilesRequest) returns (RemoveFilesResponse);
-    rpc ListFilesForPartition(ListFilesRequest) returns (ListFilesResponse);
-    rpc GetFilesForQuery(QueryFilesRequest) returns (QueryFilesResponse);
+    // =========================================================================
+    // Table-Level Routing (Recommended)
+    // =========================================================================
+    // Table-level routing is the recommended approach for cluster mode.
+    // Each table is owned by a single Data node which handles all partitions.
+    // Benefits: 600x fewer entries, excellent cache locality, simpler routing.
+
+    rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse);
+    rpc UpdateTableStats(UpdateTableStatsRequest) returns (UpdateTableStatsResponse);
+    rpc ReassignTable(ReassignTableRequest) returns (ReassignTableResponse);
+    rpc RemoveTable(RemoveTableRequest) returns (RemoveTableResponse);
+    rpc GetTableOwner(GetTableOwnerRequest) returns (GetTableOwnerResponse);
+    rpc ListTablesForNode(ListTablesForNodeRequest) returns (ListTablesForNodeResponse);
+    rpc ListTables(ListTablesRequest) returns (ListTablesResponse);
 
     // Distributed locks (atomic CAS with fencing tokens)
     rpc TryLock(TryLockRequest) returns (TryLockResponse);
@@ -158,66 +167,119 @@ message ListNodesResponse {
 }
 
 // ============================================================================
-// File Registry
+// Table-Level Routing (Recommended)
 // ============================================================================
 
-message FileInfo {
-    string path = 1;
-    string catalog = 2;
-    string schema = 3;
-    string table = 4;
-    string partition = 5;           // e.g., "date=2024-01-15"
-    uint32 level = 6;               // L0, L1, L2, etc.
-    uint64 size_bytes = 7;
-    uint64 row_count = 8;
-    int64 min_time = 9;
-    int64 max_time = 10;
-    int64 created_at = 11;
-    string created_by = 12;         // Node ID that created this file
-}
-
-message RegisterFilesRequest {
-    repeated FileInfo files = 1;
-}
-
-message RegisterFilesResponse {
-    bool success = 1;
-    string error = 2;
-    uint64 sequence = 3;            // Event sequence number for cache invalidation
-}
-
-message RemoveFilesRequest {
-    repeated string paths = 1;
-}
-
-message RemoveFilesResponse {
-    bool success = 1;
-    string error = 2;
-    uint64 sequence = 3;
-}
-
-message ListFilesRequest {
+// Table metadata for routing and statistics
+message TableMeta {
     string catalog = 1;
     string schema = 2;
     string table = 3;
-    string partition = 4;           // Optional: specific partition
-    uint32 level = 5;               // Optional: specific level (0 = all)
+    string owner_node_id = 4;           // Data node that owns all partitions
+    uint32 partition_count = 5;         // Number of date partitions
+    uint64 total_bytes = 6;             // Total storage size
+    uint64 total_rows = 7;              // Total row count
+    string oldest_partition = 8;        // e.g., "date=2024-01-01"
+    string newest_partition = 9;        // e.g., "date=2024-01-31"
+    int64 min_time = 10;                // Minimum timestamp
+    int64 max_time = 11;                // Maximum timestamp
+    int64 created_at = 12;
+    int64 last_modified = 13;
+    uint64 version = 14;                // For optimistic concurrency
 }
 
-message ListFilesResponse {
-    repeated FileInfo files = 1;
+// Statistics delta for updating table stats
+message TableStatsDelta {
+    int64 partition_count_delta = 1;    // +1 for new partition, 0 for existing
+    int64 bytes_delta = 2;              // Bytes added/removed
+    int64 rows_delta = 3;               // Rows added/removed
+    int64 files_delta = 4;              // Files added/removed
+    string newest_partition = 5;        // Update newest if newer
+    int64 min_time = 6;
+    int64 max_time = 7;
 }
 
-message QueryFilesRequest {
+message RegisterTableRequest {
     string catalog = 1;
-    repeated string tables = 2;     // "schema.table" format
-    int64 min_time = 3;             // Optional time range filter
-    int64 max_time = 4;
+    string schema = 2;
+    string table = 3;
+    string owner_node_id = 4;
 }
 
-message QueryFilesResponse {
-    repeated FileInfo files = 1;
-    repeated string nodes = 2;      // Nodes that have relevant data
+message RegisterTableResponse {
+    bool success = 1;
+    string error = 2;
+    bool already_exists = 3;            // True if table already registered
+    string current_owner = 4;           // Owner if already exists
+    uint64 version = 5;
+}
+
+message UpdateTableStatsRequest {
+    string catalog = 1;
+    string schema = 2;
+    string table = 3;
+    TableStatsDelta delta = 4;
+}
+
+message UpdateTableStatsResponse {
+    bool success = 1;
+    string error = 2;
+    uint64 version = 3;                 // New version after update
+}
+
+message ReassignTableRequest {
+    string catalog = 1;
+    string schema = 2;
+    string table = 3;
+    string new_owner_node_id = 4;
+}
+
+message ReassignTableResponse {
+    bool success = 1;
+    string error = 2;
+    string old_owner = 3;
+    string new_owner = 4;
+    uint64 version = 5;
+}
+
+message RemoveTableRequest {
+    string catalog = 1;
+    string schema = 2;
+    string table = 3;
+}
+
+message RemoveTableResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+message GetTableOwnerRequest {
+    string catalog = 1;
+    string schema = 2;
+    string table = 3;
+}
+
+message GetTableOwnerResponse {
+    bool found = 1;
+    string owner_node_id = 2;
+    TableMeta table_meta = 3;           // Full metadata if found
+}
+
+message ListTablesForNodeRequest {
+    string node_id = 1;
+}
+
+message ListTablesForNodeResponse {
+    repeated TableMeta tables = 1;
+}
+
+message ListTablesRequest {
+    string catalog = 1;                 // Optional: filter by catalog
+    string schema = 2;                  // Optional: filter by schema
+}
+
+message ListTablesResponse {
+    repeated TableMeta tables = 1;
 }
 
 // ============================================================================

@@ -193,9 +193,36 @@ impl MetaStateMachine {
                 self.update_node_state(&node_id, state)
             }
 
-            MetaCommand::RegisterFiles { files } => self.register_files(files),
+            // ================================================================
+            // Table-Level Operations (Recommended for routing)
+            // ================================================================
 
-            MetaCommand::RemoveFiles { paths } => self.remove_files(paths),
+            MetaCommand::RegisterTable {
+                catalog,
+                schema,
+                table,
+                owner_node_id,
+            } => self.register_table(&catalog, &schema, &table, &owner_node_id),
+
+            MetaCommand::UpdateTableStats {
+                catalog,
+                schema,
+                table,
+                delta,
+            } => self.update_table_stats(&catalog, &schema, &table, delta),
+
+            MetaCommand::ReassignTable {
+                catalog,
+                schema,
+                table,
+                new_owner_node_id,
+            } => self.reassign_table(&catalog, &schema, &table, &new_owner_node_id),
+
+            MetaCommand::RemoveTable {
+                catalog,
+                schema,
+                table,
+            } => self.remove_table(&catalog, &schema, &table),
 
             MetaCommand::AcquireLock {
                 key,
@@ -744,24 +771,6 @@ mod tests {
         }
     }
 
-    /// Helper to create a test FileInfo
-    fn create_test_file_info(path: &str) -> FileInfo {
-        FileInfo {
-            path: path.to_string(),
-            catalog: "testdb".to_string(),
-            schema: "default".to_string(),
-            table: "cpu".to_string(),
-            partition: "2024-01-15".to_string(),
-            level: 0,
-            size_bytes: 1024 * 1024,
-            row_count: 10000,
-            min_time: 1705276800000000000,
-            max_time: 1705363199000000000,
-            created_at: 1705363200000,
-            created_by: "node-1".to_string(),
-        }
-    }
-
     #[test]
     fn test_meta_command_serialization_register_node() {
         let info = create_test_node_info("test-node", NodeRole::Data);
@@ -810,24 +819,6 @@ mod tests {
                 assert_eq!(timestamp, 9876543210);
             }
             _ => panic!("Expected Heartbeat command"),
-        }
-    }
-
-    #[test]
-    fn test_meta_command_serialization_register_files() {
-        let cmd = MetaCommand::RegisterFiles {
-            files: vec![create_test_file_info("/data/file1.parquet")],
-        };
-
-        let serialized = bincode::serialize(&cmd).unwrap();
-        let deserialized: MetaCommand = bincode::deserialize(&serialized).unwrap();
-
-        match deserialized {
-            MetaCommand::RegisterFiles { files } => {
-                assert_eq!(files.len(), 1);
-                assert_eq!(files[0].path, "/data/file1.parquet");
-            }
-            _ => panic!("Expected RegisterFiles command"),
         }
     }
 
@@ -1157,34 +1148,6 @@ mod tests {
         });
 
         assert!(matches!(third_acquire, MetaResponse::LockAcquired { .. }));
-    }
-
-    #[test]
-    fn test_state_machine_register_files() {
-        let sm = create_test_state_machine();
-
-        let file = FileInfo {
-            path: "/data/node-1/testdb/default/cpu/date=2024-01-15/L0_001.parquet".to_string(),
-            catalog: "testdb".to_string(),
-            schema: "default".to_string(),
-            table: "cpu".to_string(),
-            partition: "2024-01-15".to_string(),
-            level: 0,
-            size_bytes: 1024 * 1024,
-            row_count: 10000,
-            min_time: 1705276800000000000,
-            max_time: 1705363199000000000,
-            created_at: 1705363200000,
-            created_by: "node-1".to_string(),
-        };
-
-        let response = sm.apply_command(MetaCommand::RegisterFiles { files: vec![file] });
-        assert!(matches!(response, MetaResponse::EventPublished { .. }));
-
-        // Verify files are stored
-        let stored_files = sm.list_files_for_partition("testdb", "default", "cpu", "2024-01-15");
-        assert_eq!(stored_files.len(), 1);
-        assert_eq!(stored_files[0].size_bytes, 1024 * 1024);
     }
 
     #[test]
