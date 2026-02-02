@@ -646,7 +646,19 @@ impl Wal {
     /// Clean up old data WAL files after recovery flush
     /// Deletes all data WAL files except the current active one
     /// Called after recovered data has been safely flushed to Parquet
+    ///
+    /// Safety: This method checks recovery_mode and skips deletion if active.
+    /// This provides defense-in-depth even though callers should ensure
+    /// recovery mode is disabled before calling this method.
     pub async fn cleanup_old_data_wal_files(&self) -> Result<(), String> {
+        // Skip deletion if in recovery mode (WAL files needed for potential re-replay)
+        // This provides defense-in-depth - callers should also ensure recovery mode
+        // is disabled, but this check prevents accidental data loss
+        if self.is_recovery_mode() {
+            debug!("Recovery mode active: skipping WAL file cleanup");
+            return Ok(());
+        }
+
         let current_filename = {
             let segment = self.data_segment.lock().await;
             segment.filename.clone()
