@@ -1001,25 +1001,8 @@ impl MetaClient {
         }
     }
 
-    /// Promote standby to leader (failover)
-    pub async fn promote_standby(&self, partition_key: &str) -> Result<(String, String), String> {
-        let request = proto::PromoteStandbyRequest {
-            partition_key: partition_key.to_string(),
-        };
-
-        let response = self
-            .with_retry("promote_standby", |mut client| {
-                let req = request.clone();
-                async move { client.promote_standby(req).await.map(|r| r.into_inner()) }
-            })
-            .await?;
-
-        if response.success {
-            Ok((response.new_leader_id, response.old_leader_id))
-        } else {
-            Err(response.error)
-        }
-    }
+    // promote_standby() removed - using No-Promotion architecture
+    // Standby nodes never promote to Primary; K8s handles node replacement
 
     /// Update replica state (called by leader to report replication progress)
     pub async fn update_replica_state(

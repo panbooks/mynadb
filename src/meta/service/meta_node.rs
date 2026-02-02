@@ -959,95 +959,9 @@ impl MetaNode {
         }
     }
 
-    /// Promote standby to leader for a partition
-    pub async fn promote_standby(&self, partition_key: &str) -> Result<(String, String), String> {
-        let cmd = MetaCommand::PromoteStandby {
-            partition_key: partition_key.to_string(),
-        };
-
-        let result = self.raft.client_write(cmd.clone()).await;
-        match result {
-            Ok(response) => match response.data {
-                MetaResponse::StandbyPromoted {
-                    new_leader_id,
-                    old_leader_id,
-                    ..
-                } => Ok((new_leader_id, old_leader_id)),
-                MetaResponse::NoStandbyAvailable { partition_key } => Err(format!(
-                    "No standby available for partition {}",
-                    partition_key
-                )),
-                MetaResponse::ReplicaNotFound { partition_key } => {
-                    Err(format!("Replica not found for partition {}", partition_key))
-                }
-                MetaResponse::Error { message } => Err(message),
-                _ => Err("Unexpected response from promote_standby".to_string()),
-            },
-            Err(e) => {
-                // Handle ForwardToLeader
-                if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
-                    if let Some(leader_id) = forward.leader_id {
-                        debug!("Forwarding promote_standby to leader node {}", leader_id);
-                        return self.forward_promote_to_leader(leader_id, cmd).await;
-                    }
-                }
-                Err(format!("Raft error: {}", e))
-            }
-        }
-    }
-
-    /// Forward promote_standby to leader
-    async fn forward_promote_to_leader(
-        &self,
-        leader_id: NodeId,
-        cmd: MetaCommand,
-    ) -> Result<(String, String), String> {
-        let channel = self
-            .network
-            .get_channel_to(leader_id)
-            .await
-            .map_err(|e| format!("Failed to connect to leader {}: {}", leader_id, e))?;
-
-        let mut client = proto::raft_internal_client::RaftInternalClient::new(channel);
-
-        let command_data =
-            bincode::serialize(&cmd).map_err(|e| format!("Failed to serialize command: {}", e))?;
-
-        let request = tonic::Request::new(proto::ForwardCommandRequest { command_data });
-
-        let response = client
-            .forward_command(request)
-            .await
-            .map_err(|e| format!("Forward to leader failed: {}", e))?
-            .into_inner();
-
-        if response.success {
-            if !response.response_data.is_empty() {
-                let meta_resp: MetaResponse = bincode::deserialize(&response.response_data)
-                    .map_err(|e| format!("Failed to deserialize response: {}", e))?;
-                match meta_resp {
-                    MetaResponse::StandbyPromoted {
-                        new_leader_id,
-                        old_leader_id,
-                        ..
-                    } => Ok((new_leader_id, old_leader_id)),
-                    MetaResponse::NoStandbyAvailable { partition_key } => Err(format!(
-                        "No standby available for partition {}",
-                        partition_key
-                    )),
-                    MetaResponse::ReplicaNotFound { partition_key } => {
-                        Err(format!("Replica not found for partition {}", partition_key))
-                    }
-                    MetaResponse::Error { message } => Err(message),
-                    _ => Err("Unexpected response".to_string()),
-                }
-            } else {
-                Err("No response data from leader".to_string())
-            }
-        } else {
-            Err(response.error)
-        }
-    }
+    // promote_standby() removed - using No-Promotion architecture
+    // forward_promote_to_leader() removed - using No-Promotion architecture
+    // Standby nodes never promote to Primary; K8s handles node replacement
 
     /// Update replica state (replication progress)
     pub async fn update_replica_state(
@@ -1073,94 +987,9 @@ impl MetaNode {
     // Data Node Mode Management (Cold Standby Architecture)
     // ========================================================================
 
-    /// Promote a Standby data node to Primary
-    ///
-    /// This is used when a Primary fails and a Standby needs to take over,
-    /// or when manually promoting a node.
-    ///
-    /// Returns (old_mode, new_mode) tuple on success.
-    pub async fn promote_data_node(
-        &self,
-        standby_node_id: &str,
-        failed_primary_id: Option<&str>,
-    ) -> Result<(DataNodeMode, DataNodeMode), String> {
-        let cmd = MetaCommand::PromoteDataNode {
-            standby_node_id: standby_node_id.to_string(),
-            failed_primary_id: failed_primary_id.map(String::from),
-        };
-
-        // Get the current mode before promotion
-        let old_mode = self
-            .state_machine
-            .get_node(standby_node_id)
-            .and_then(|n| n.mode)
-            .unwrap_or(DataNodeMode::Standby);
-
-        let result = self.raft.client_write(cmd.clone()).await;
-        match result {
-            Ok(response) => match response.data {
-                MetaResponse::DataNodeModeUpdated { mode, .. } => Ok((old_mode, mode)),
-                MetaResponse::Error { message } => Err(message),
-                _ => Err("Unexpected response from promote_data_node".to_string()),
-            },
-            Err(e) => {
-                // Handle ForwardToLeader
-                if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
-                    if let Some(leader_id) = forward.leader_id {
-                        debug!("Forwarding promote_data_node to leader node {}", leader_id);
-                        return self
-                            .forward_promote_data_node_to_leader(leader_id, cmd, old_mode)
-                            .await;
-                    }
-                }
-                Err(format!("Raft error: {}", e))
-            }
-        }
-    }
-
-    /// Forward promote_data_node to leader
-    async fn forward_promote_data_node_to_leader(
-        &self,
-        leader_id: NodeId,
-        cmd: MetaCommand,
-        old_mode: DataNodeMode,
-    ) -> Result<(DataNodeMode, DataNodeMode), String> {
-        let channel = self
-            .network
-            .get_channel_to(leader_id)
-            .await
-            .map_err(|e| format!("Failed to connect to leader {}: {}", leader_id, e))?;
-
-        let mut client = proto::raft_internal_client::RaftInternalClient::new(channel);
-
-        let command_data =
-            bincode::serialize(&cmd).map_err(|e| format!("Failed to serialize command: {}", e))?;
-
-        let request = tonic::Request::new(proto::ForwardCommandRequest { command_data });
-
-        let response = client
-            .forward_command(request)
-            .await
-            .map_err(|e| format!("Forward to leader failed: {}", e))?
-            .into_inner();
-
-        if response.success {
-            if !response.response_data.is_empty() {
-                let meta_resp: MetaResponse = bincode::deserialize(&response.response_data)
-                    .map_err(|e| format!("Failed to deserialize response: {}", e))?;
-                match meta_resp {
-                    MetaResponse::DataNodeModeUpdated { mode, .. } => Ok((old_mode, mode)),
-                    MetaResponse::Error { message } => Err(message),
-                    _ => Err("Unexpected response".to_string()),
-                }
-            } else {
-                // Default to Primary on successful promotion
-                Ok((old_mode, DataNodeMode::Primary))
-            }
-        } else {
-            Err(response.error)
-        }
-    }
+    // promote_data_node() removed - using No-Promotion architecture
+    // forward_promote_data_node_to_leader() removed - using No-Promotion architecture
+    // Standby nodes never promote to Primary; K8s handles node replacement
 
     /// Get a data node's current operational mode
     pub async fn get_data_node_mode(&self, node_id: &str) -> Result<DataNodeMode, String> {

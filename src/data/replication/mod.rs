@@ -25,14 +25,16 @@
 //! - [`StandbyReceiver`]: Standby receives and applies data
 //! - [`ReplicationManager`]: Manages multiple streams
 //!
-//! ## Failover Flow
+//! ## Failover Flow (No-Promotion Architecture)
 //!
-//! 1. Leader crashes
-//! 2. Router detects failure (write timeout)
-//! 3. Router marks leader as Suspect
-//! 4. Router routes to standby (instant failover via ShardCache)
-//! 5. Standby promotes to leader
-//! 6. Standby starts flushing to Parquet
+//! 1. Primary crashes
+//! 2. Meta detects failure (heartbeat timeout)
+//! 3. Meta sends FlushForRecovery to Standby
+//! 4. Standby flushes cached data to S3 (preserving unflushed writes)
+//! 5. K8s replaces the Primary pod
+//! 6. New Primary starts, loads state from S3
+//!
+//! Note: Standby NEVER promotes to Primary - this eliminates split-brain risk
 //!
 //! ## Configuration
 //!
