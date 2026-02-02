@@ -14,13 +14,16 @@ service MetaService {
     rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
 
     // =========================================================================
-    // Table-Level Routing (Recommended)
+    // Table-Level Routing (Multi-Node Support)
     // =========================================================================
-    // Table-level routing is the recommended approach for cluster mode.
-    // Each table is owned by a single Data node which handles all partitions.
-    // Benefits: 600x fewer entries, excellent cache locality, simpler routing.
+    // Table-level routing where tables can have multiple owner nodes for:
+    // - Write reroute: When primary fails, writes go to fallback node
+    // - Large table distribution: Future feature to spread data across nodes
+    // Queries use scatter-gather to all owner nodes for complete results.
 
     rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse);
+    rpc AddTableOwner(AddTableOwnerRequest) returns (AddTableOwnerResponse);
+    rpc RemoveTableOwner(RemoveTableOwnerRequest) returns (RemoveTableOwnerResponse);
     rpc UpdateTableStats(UpdateTableStatsRequest) returns (UpdateTableStatsResponse);
     rpc ReassignTable(ReassignTableRequest) returns (ReassignTableResponse);
     rpc RemoveTable(RemoveTableRequest) returns (RemoveTableResponse);
@@ -169,7 +172,7 @@ message TableMeta {
     string catalog = 1;
     string schema = 2;
     string table = 3;
-    string owner_node_id = 4;           // Data node that owns all partitions
+    repeated string owner_node_ids = 4; // Data nodes that own partitions (first is primary)
     uint32 partition_count = 5;         // Number of date partitions
     uint64 total_bytes = 6;             // Total storage size
     uint64 total_rows = 7;              // Total row count
@@ -204,8 +207,40 @@ message RegisterTableResponse {
     bool success = 1;
     string error = 2;
     bool already_exists = 3;            // True if table already registered
-    string current_owner = 4;           // Owner if already exists
+    string current_owner = 4;           // Primary owner if already exists
+    repeated string all_owners = 5;     // All owners (for multi-node tables)
+    uint64 version = 6;
+}
+
+// Add an additional owner to a table (for rerouted writes)
+message AddTableOwnerRequest {
+    string catalog = 1;
+    string schema = 2;
+    string table = 3;
+    string owner_node_id = 4;           // New owner to add
+}
+
+message AddTableOwnerResponse {
+    bool success = 1;
+    string error = 2;
+    bool already_owner = 3;             // True if already an owner
+    repeated string all_owners = 4;     // All owners after operation
     uint64 version = 5;
+}
+
+// Remove an owner from a table
+message RemoveTableOwnerRequest {
+    string catalog = 1;
+    string schema = 2;
+    string table = 3;
+    string owner_node_id = 4;           // Owner to remove
+}
+
+message RemoveTableOwnerResponse {
+    bool success = 1;
+    string error = 2;
+    repeated string all_owners = 3;     // Remaining owners after removal
+    uint64 version = 4;
 }
 
 message UpdateTableStatsRequest {
@@ -231,9 +266,10 @@ message ReassignTableRequest {
 message ReassignTableResponse {
     bool success = 1;
     string error = 2;
-    string old_owner = 3;
-    string new_owner = 4;
-    uint64 version = 5;
+    string old_primary = 3;             // Previous primary owner
+    string new_primary = 4;             // New primary owner
+    repeated string all_owners = 5;     // All owners after reassignment
+    uint64 version = 6;
 }
 
 message RemoveTableRequest {
@@ -255,8 +291,9 @@ message GetTableOwnerRequest {
 
 message GetTableOwnerResponse {
     bool found = 1;
-    string owner_node_id = 2;
-    TableMeta table_meta = 3;           // Full metadata if found
+    string primary_owner_id = 2;        // Primary owner for new writes
+    repeated string all_owner_ids = 3;  // All owners for scatter-gather queries
+    TableMeta table_meta = 4;           // Full metadata if found
 }
 
 message ListTablesForNodeRequest {

@@ -377,6 +377,15 @@ impl FileInfo {
 ///
 /// This design optimizes for time-series workloads where 95%+ queries
 /// access today's partition, making table-level routing optimal.
+///
+/// ## Multi-Node Ownership
+///
+/// A table can have multiple owner nodes in two scenarios:
+/// 1. **Write reroute**: When primary owner fails, writes go to fallback node
+/// 2. **Large table distribution**: Future feature to spread data across nodes
+///
+/// The `owner_node_ids` vector maintains all nodes that have data for this table.
+/// The first node is the "primary owner" (original or designated).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableMeta {
     // Identity
@@ -385,8 +394,10 @@ pub struct TableMeta {
     pub table: String,
 
     // Routing (primary purpose)
-    /// The Data node that owns all partitions for this table
-    pub owner_node_id: String,
+    /// All Data nodes that own partitions for this table.
+    /// First element is the primary owner (for new writes).
+    /// Additional elements are nodes with rerouted data or distributed partitions.
+    pub owner_node_ids: Vec<String>,
 
     // Cached statistics (updated periodically, not per-flush)
     /// Number of date partitions (e.g., 30 for a month of data)
@@ -419,7 +430,7 @@ impl TableMeta {
             catalog,
             schema,
             table,
-            owner_node_id,
+            owner_node_ids: vec![owner_node_id],
             partition_count: 0,
             total_bytes: 0,
             total_rows: 0,
@@ -431,6 +442,69 @@ impl TableMeta {
             last_modified: now,
             version: 1,
         }
+    }
+
+    /// Get the primary owner node (first in the list)
+    pub fn primary_owner(&self) -> Option<&str> {
+        self.owner_node_ids.first().map(|s| s.as_str())
+    }
+
+    /// Check if a node is an owner of this table
+    pub fn is_owner(&self, node_id: &str) -> bool {
+        self.owner_node_ids.iter().any(|id| id == node_id)
+    }
+
+    /// Add a new owner node (for rerouted writes or distribution)
+    /// Returns true if the node was added, false if already present
+    pub fn add_owner(&mut self, node_id: String) -> bool {
+        if !self.is_owner(&node_id) {
+            self.owner_node_ids.push(node_id);
+            self.last_modified = current_timestamp_ms();
+            self.version += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove an owner node (for node failure cleanup)
+    /// Returns true if the node was removed
+    pub fn remove_owner(&mut self, node_id: &str) -> bool {
+        let initial_len = self.owner_node_ids.len();
+        self.owner_node_ids.retain(|id| id != node_id);
+        if self.owner_node_ids.len() < initial_len {
+            self.last_modified = current_timestamp_ms();
+            self.version += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Set primary owner (moves to front of list)
+    pub fn set_primary_owner(&mut self, node_id: String) {
+        // Remove if already in list
+        self.owner_node_ids.retain(|id| id != &node_id);
+        // Insert at front
+        self.owner_node_ids.insert(0, node_id);
+        self.last_modified = current_timestamp_ms();
+        self.version += 1;
+    }
+
+    /// Get all owner node IDs
+    pub fn all_owners(&self) -> &[String] {
+        &self.owner_node_ids
+    }
+
+    /// Check if table has multiple owners (rerouted or distributed)
+    pub fn is_multi_owner(&self) -> bool {
+        self.owner_node_ids.len() > 1
+    }
+
+    // Legacy compatibility - returns primary owner
+    #[deprecated(note = "Use primary_owner() or all_owners() instead")]
+    pub fn owner_node_id(&self) -> &str {
+        self.primary_owner().unwrap_or("")
     }
 
     /// Generate the storage key for this table
@@ -915,6 +989,24 @@ pub enum EventType {
     /// Published when a Primary crashes and its Standby needs to flush replicated data.
     /// Payload: {"standby_id": "...", "crashed_primary_id": "..."}
     FlushForRecovery = 13,
+
+    /// Table ownership added (for rerouted writes)
+    ///
+    /// Published when a secondary owner is added to a table.
+    /// Payload: {"catalog": "...", "schema": "...", "table": "...", "added_owner": "...", "all_owners": [...]}
+    TableOwnerAdded = 14,
+
+    /// Table ownership removed
+    ///
+    /// Published when an owner is removed from a table.
+    /// Payload: {"catalog": "...", "schema": "...", "table": "...", "removed_owner": "...", "all_owners": [...]}
+    TableOwnerRemoved = 15,
+
+    /// Table primary owner reassigned
+    ///
+    /// Published when a table's primary owner changes.
+    /// Payload: {"catalog": "...", "schema": "...", "table": "...", "old_primary": "...", "new_primary": "...", "all_owners": [...]}
+    TableReassigned = 16,
 }
 
 impl From<i32> for EventType {
@@ -933,6 +1025,9 @@ impl From<i32> for EventType {
             11 => EventType::ReplicaStateChanged,
             12 => EventType::DataNodeModeChanged,
             13 => EventType::FlushForRecovery,
+            14 => EventType::TableOwnerAdded,
+            15 => EventType::TableOwnerRemoved,
+            16 => EventType::TableReassigned,
             _ => EventType::Unknown,
         }
     }
@@ -1010,6 +1105,27 @@ pub enum MetaCommand {
     /// Called when a Data node first receives data for a new table.
     /// The node that first writes to a table becomes its owner.
     RegisterTable {
+        catalog: String,
+        schema: String,
+        table: String,
+        owner_node_id: String,
+    },
+
+    /// Add an additional owner to a table (for rerouted writes)
+    ///
+    /// Called when a write is rerouted to a fallback node after primary failure.
+    /// The new node becomes a secondary owner.
+    AddTableOwner {
+        catalog: String,
+        schema: String,
+        table: String,
+        owner_node_id: String,
+    },
+
+    /// Remove an owner from a table
+    ///
+    /// Called when a node leaves the cluster or during ownership consolidation.
+    RemoveTableOwner {
         catalog: String,
         schema: String,
         table: String,
@@ -1266,6 +1382,8 @@ pub enum MetaResponse {
         schema: String,
         table: String,
         current_owner: String,
+        /// All owner nodes (for multi-node tables)
+        all_owners: Vec<String>,
     },
 
     /// Table stats updated successfully
@@ -1276,14 +1394,47 @@ pub enum MetaResponse {
         version: u64,
     },
 
-    /// Table reassigned to new owner
+    /// Table reassigned to new primary owner
     TableReassigned {
         catalog: String,
         schema: String,
         table: String,
         old_owner: String,
         new_owner: String,
+        /// All owner nodes after reassignment
+        all_owners: Vec<String>,
         version: u64,
+    },
+
+    /// Additional owner added to table (for rerouted writes)
+    TableOwnerAdded {
+        catalog: String,
+        schema: String,
+        table: String,
+        new_owner: String,
+        /// All owner nodes after addition
+        all_owners: Vec<String>,
+        version: u64,
+    },
+
+    /// Owner removed from table
+    TableOwnerRemoved {
+        catalog: String,
+        schema: String,
+        table: String,
+        removed_owner: String,
+        /// Remaining owner nodes
+        all_owners: Vec<String>,
+        version: u64,
+    },
+
+    /// Node is already an owner of the table
+    TableOwnerExists {
+        catalog: String,
+        schema: String,
+        table: String,
+        node_id: String,
+        all_owners: Vec<String>,
     },
 
     /// Table removed successfully

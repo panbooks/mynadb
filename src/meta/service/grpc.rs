@@ -224,29 +224,36 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
             .await
         {
             Ok(response) => match response {
-                MetaResponse::TableRegistered { version, .. } => {
-                    Ok(Response::new(proto::RegisterTableResponse {
-                        success: true,
-                        error: String::new(),
-                        already_exists: false,
-                        current_owner: req.owner_node_id,
-                        version,
-                    }))
-                }
-                MetaResponse::TableAlreadyExists { current_owner, .. } => {
-                    Ok(Response::new(proto::RegisterTableResponse {
-                        success: true,
-                        error: String::new(),
-                        already_exists: true,
-                        current_owner,
-                        version: 0,
-                    }))
-                }
+                MetaResponse::TableRegistered {
+                    owner_node_id,
+                    version,
+                    ..
+                } => Ok(Response::new(proto::RegisterTableResponse {
+                    success: true,
+                    error: String::new(),
+                    already_exists: false,
+                    current_owner: owner_node_id.clone(),
+                    all_owners: vec![owner_node_id],
+                    version,
+                })),
+                MetaResponse::TableAlreadyExists {
+                    current_owner,
+                    all_owners,
+                    ..
+                } => Ok(Response::new(proto::RegisterTableResponse {
+                    success: true,
+                    error: String::new(),
+                    already_exists: true,
+                    current_owner,
+                    all_owners,
+                    version: 0,
+                })),
                 _ => Ok(Response::new(proto::RegisterTableResponse {
                     success: false,
                     error: "Unexpected response".to_string(),
                     already_exists: false,
                     current_owner: String::new(),
+                    all_owners: Vec::new(),
                     version: 0,
                 })),
             },
@@ -255,6 +262,7 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
                 error: e,
                 already_exists: false,
                 current_owner: String::new(),
+                all_owners: Vec::new(),
                 version: 0,
             })),
         }
@@ -330,37 +338,42 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
                 MetaResponse::TableReassigned {
                     old_owner,
                     new_owner,
+                    all_owners,
                     version,
                     ..
                 } => Ok(Response::new(proto::ReassignTableResponse {
                     success: true,
                     error: String::new(),
-                    old_owner,
-                    new_owner,
+                    old_primary: old_owner,
+                    new_primary: new_owner,
+                    all_owners,
                     version,
                 })),
                 MetaResponse::TableNotFound { .. } => {
                     Ok(Response::new(proto::ReassignTableResponse {
                         success: false,
                         error: "Table not found".to_string(),
-                        old_owner: String::new(),
-                        new_owner: String::new(),
+                        old_primary: String::new(),
+                        new_primary: String::new(),
+                        all_owners: Vec::new(),
                         version: 0,
                     }))
                 }
                 _ => Ok(Response::new(proto::ReassignTableResponse {
                     success: false,
                     error: "Unexpected response".to_string(),
-                    old_owner: String::new(),
-                    new_owner: String::new(),
+                    old_primary: String::new(),
+                    new_primary: String::new(),
+                    all_owners: Vec::new(),
                     version: 0,
                 })),
             },
             Err(e) => Ok(Response::new(proto::ReassignTableResponse {
                 success: false,
                 error: e,
-                old_owner: String::new(),
-                new_owner: String::new(),
+                old_primary: String::new(),
+                new_primary: String::new(),
+                all_owners: Vec::new(),
                 version: 0,
             })),
         }
@@ -400,30 +413,94 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
             .await;
 
         match table_meta {
-            Some(meta) => Ok(Response::new(proto::GetTableOwnerResponse {
-                found: true,
-                owner_node_id: meta.owner_node_id.clone(),
-                table_meta: Some(proto::TableMeta {
-                    catalog: meta.catalog,
-                    schema: meta.schema,
-                    table: meta.table,
-                    owner_node_id: meta.owner_node_id,
-                    partition_count: meta.partition_count,
-                    total_bytes: meta.total_bytes,
-                    total_rows: meta.total_rows,
-                    oldest_partition: meta.oldest_partition.unwrap_or_default(),
-                    newest_partition: meta.newest_partition.unwrap_or_default(),
-                    min_time: meta.min_time,
-                    max_time: meta.max_time,
-                    created_at: meta.created_at,
-                    last_modified: meta.last_modified,
-                    version: meta.version,
-                }),
-            })),
+            Some(meta) => {
+                let primary_owner = meta.primary_owner().unwrap_or("").to_string();
+                let all_owners = meta.owner_node_ids.clone();
+                Ok(Response::new(proto::GetTableOwnerResponse {
+                    found: true,
+                    primary_owner_id: primary_owner,
+                    all_owner_ids: all_owners.clone(),
+                    table_meta: Some(proto::TableMeta {
+                        catalog: meta.catalog,
+                        schema: meta.schema,
+                        table: meta.table,
+                        owner_node_ids: all_owners,
+                        partition_count: meta.partition_count,
+                        total_bytes: meta.total_bytes,
+                        total_rows: meta.total_rows,
+                        oldest_partition: meta.oldest_partition.unwrap_or_default(),
+                        newest_partition: meta.newest_partition.unwrap_or_default(),
+                        min_time: meta.min_time,
+                        max_time: meta.max_time,
+                        created_at: meta.created_at,
+                        last_modified: meta.last_modified,
+                        version: meta.version,
+                    }),
+                }))
+            }
             None => Ok(Response::new(proto::GetTableOwnerResponse {
                 found: false,
-                owner_node_id: String::new(),
+                primary_owner_id: String::new(),
+                all_owner_ids: Vec::new(),
                 table_meta: None,
+            })),
+        }
+    }
+
+    async fn add_table_owner(
+        &self,
+        request: Request<proto::AddTableOwnerRequest>,
+    ) -> Result<Response<proto::AddTableOwnerResponse>, Status> {
+        let req = request.into_inner();
+
+        let result = self
+            .node
+            .add_table_owner(&req.catalog, &req.schema, &req.table, &req.owner_node_id)
+            .await;
+
+        match result {
+            Ok((already_owner, all_owners, version)) => {
+                Ok(Response::new(proto::AddTableOwnerResponse {
+                    success: true,
+                    error: String::new(),
+                    already_owner,
+                    all_owners,
+                    version,
+                }))
+            }
+            Err(e) => Ok(Response::new(proto::AddTableOwnerResponse {
+                success: false,
+                error: e,
+                already_owner: false,
+                all_owners: Vec::new(),
+                version: 0,
+            })),
+        }
+    }
+
+    async fn remove_table_owner(
+        &self,
+        request: Request<proto::RemoveTableOwnerRequest>,
+    ) -> Result<Response<proto::RemoveTableOwnerResponse>, Status> {
+        let req = request.into_inner();
+
+        let result = self
+            .node
+            .remove_table_owner(&req.catalog, &req.schema, &req.table, &req.owner_node_id)
+            .await;
+
+        match result {
+            Ok((all_owners, version)) => Ok(Response::new(proto::RemoveTableOwnerResponse {
+                success: true,
+                error: String::new(),
+                all_owners,
+                version,
+            })),
+            Err(e) => Ok(Response::new(proto::RemoveTableOwnerResponse {
+                success: false,
+                error: e,
+                all_owners: Vec::new(),
+                version: 0,
             })),
         }
     }
@@ -442,7 +519,7 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
                 catalog: m.catalog,
                 schema: m.schema,
                 table: m.table,
-                owner_node_id: m.owner_node_id,
+                owner_node_ids: m.owner_node_ids,
                 partition_count: m.partition_count,
                 total_bytes: m.total_bytes,
                 total_rows: m.total_rows,
@@ -483,7 +560,7 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
                 catalog: m.catalog,
                 schema: m.schema,
                 table: m.table,
-                owner_node_id: m.owner_node_id,
+                owner_node_ids: m.owner_node_ids,
                 partition_count: m.partition_count,
                 total_bytes: m.total_bytes,
                 total_rows: m.total_rows,

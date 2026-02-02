@@ -204,6 +204,20 @@ impl MetaStateMachine {
                 owner_node_id,
             } => self.register_table(&catalog, &schema, &table, &owner_node_id),
 
+            MetaCommand::AddTableOwner {
+                catalog,
+                schema,
+                table,
+                owner_node_id,
+            } => self.add_table_owner(&catalog, &schema, &table, &owner_node_id),
+
+            MetaCommand::RemoveTableOwner {
+                catalog,
+                schema,
+                table,
+                owner_node_id,
+            } => self.remove_table_owner(&catalog, &schema, &table, &owner_node_id),
+
             MetaCommand::UpdateTableStats {
                 catalog,
                 schema,
