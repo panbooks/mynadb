@@ -2,13 +2,19 @@
 //!
 //! The WriteRouter is responsible for:
 //! - Parsing line protocol to extract partition information
-//! - Selecting target Data nodes based on partition affinity
+//! - Selecting target Data nodes based on table-level affinity
 //! - Converting Points to RecordBatch for efficient transfer
 //! - Dispatching writes to Data nodes in parallel via Arrow Flight
+//!
+//! ## Table-Level Routing
+//!
+//! All partitions of a table are routed to the same Data node. This provides:
+//! - 600x fewer Meta entries (100K tables vs 60M files/partitions)
+//! - Single routing lookup per query
+//! - Excellent cache locality for hot data
 
-use super::shard_cache::{PartitionKey, ShardCache};
+use super::shard_cache::{PartitionKey, ShardCache, TableKey};
 use crate::config::SchemaConfig;
-use crate::meta::client::MetaClient;
 use crate::router::client::DataNodePool;
 use crate::storage::batch_converter::points_to_record_batch;
 use crate::storage::line_protocol::{format_date32_as_string, parse_line_protocol, Point};
@@ -35,7 +41,7 @@ pub struct WriteResult {
 
 /// Write Router for dispatching writes to Data nodes
 pub struct WriteRouter {
-    /// Shard cache for partition→node mapping
+    /// Shard cache for table→node mapping
     shard_cache: Arc<ShardCache>,
 
     /// Connection pool to Data nodes
@@ -43,9 +49,6 @@ pub struct WriteRouter {
 
     /// Schema configuration for parsing
     schema_config: SchemaConfig,
-
-    /// Meta client for replica auto-assignment
-    meta_client: Option<Arc<MetaClient>>,
 }
 
 impl WriteRouter {
@@ -58,14 +61,7 @@ impl WriteRouter {
             shard_cache,
             data_node_pool,
             schema_config,
-            meta_client: None,
         }
-    }
-
-    /// Set the Meta client for replica auto-assignment
-    pub fn with_meta_client(mut self, meta_client: Arc<MetaClient>) -> Self {
-        self.meta_client = Some(meta_client);
-        self
     }
 
     /// Route a write request to appropriate Data nodes
@@ -213,101 +209,20 @@ impl WriteRouter {
         batches
     }
 
-    /// Ensure partition has replica assignment, triggering auto-assignment if needed
-    ///
-    /// This is called before dispatching a write to ensure the partition has a
-    /// leader and standbys assigned. On first write to a new partition, this
-    /// triggers auto-assignment via Meta's ReplicaAssigner.
-    async fn ensure_replica_assignment(&self, partition_key: &PartitionKey) {
-        // Skip if no Meta client (standalone mode)
-        let meta_client = match &self.meta_client {
-            Some(c) => c,
-            None => return,
-        };
-
-        let partition_path = partition_key.to_path();
-
-        // Check if partition already has replica assignment in cache
-        if self
-            .shard_cache
-            .get_partition_replica(&partition_path)
-            .is_some()
-        {
-            return; // Already assigned
-        }
-
-        // No cached assignment - try to get from Meta or trigger auto-assignment
-        match meta_client.get_partition_replica(&partition_path).await {
-            Ok(Some(replica)) => {
-                // Found in Meta, cache it locally
-                self.shard_cache.set_partition_replica(
-                    &partition_path,
-                    replica.leader_node_id.clone(),
-                    replica.standby_node_ids.clone(),
-                );
-                debug!(
-                    "Cached existing replica for {}: leader={}",
-                    partition_path, replica.leader_node_id
-                );
-            }
-            Ok(None) => {
-                // New partition - trigger auto-assignment
-                debug!(
-                    "First write to partition {}, triggering auto-assignment",
-                    partition_path
-                );
-
-                match meta_client.auto_assign_replica(&partition_path).await {
-                    Ok(replica) => {
-                        // Cache the new assignment
-                        self.shard_cache.set_partition_replica(
-                            &partition_path,
-                            replica.leader_node_id.clone(),
-                            replica.standby_node_ids.clone(),
-                        );
-                        info!(
-                            "Auto-assigned replica for {}: leader={}, standbys={:?}",
-                            partition_path, replica.leader_node_id, replica.standby_node_ids
-                        );
-                    }
-                    Err(e) => {
-                        // Failed to assign - will fall back to hash-based routing
-                        warn!(
-                            "Failed to auto-assign replica for {}: {}. Using hash-based routing.",
-                            partition_path, e
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                // Meta unavailable - will use hash-based routing
-                warn!(
-                    "Failed to check replica for {}: {}. Using hash-based routing.",
-                    partition_path, e
-                );
-            }
-        }
-    }
-
-    /// Dispatch writes with retry and failover
+    /// Dispatch writes with retry and failover using table-level routing
     ///
     /// For each partition:
-    /// 1. Ensure replica assignment (auto-assign if first write)
-    /// 2. Select target node
-    /// 3. Try to write
-    /// 4. On failure, mark node as suspect and retry on different node
-    /// 5. Continue until success or max retries exceeded
+    /// 1. Select target node based on table ownership
+    /// 2. Try to write
+    /// 3. On failure, mark node as suspect and retry on different node
+    /// 4. Continue until success or max retries exceeded
+    ///
+    /// Table-level routing ensures all partitions of a table go to the same node.
     async fn dispatch_writes_with_retry(
         &self,
         catalog: &str,
         partition_batches: Vec<(PartitionKey, RecordBatch)>,
     ) -> (u64, u32, Vec<String>) {
-        // First, ensure all partitions have replica assignments
-        // This triggers auto-assignment for new partitions on first write
-        for (partition_key, _) in &partition_batches {
-            self.ensure_replica_assignment(partition_key).await;
-        }
-
         let mut futures = Vec::new();
 
         for (partition_key, batch) in partition_batches {
@@ -351,7 +266,7 @@ impl WriteRouter {
         (total_written, total_retries, errors)
     }
 
-    /// Write a single partition with retry logic
+    /// Write a single partition with retry logic using table-level routing
     ///
     /// Returns (rows_written, retry_count) on success
     async fn write_partition_with_retry(
@@ -362,6 +277,8 @@ impl WriteRouter {
         batch: RecordBatch,
         max_retries: u32,
     ) -> Result<(u64, u32), String> {
+        let table_key = TableKey::new(catalog, &partition_key.schema, &partition_key.table);
+        let table_path = table_key.to_path();
         let partition_path = partition_key.to_path();
         let row_count = batch.num_rows() as u64;
         let mut tried_nodes: HashSet<String> = HashSet::new();
@@ -369,11 +286,11 @@ impl WriteRouter {
         let mut retries = 0u32;
 
         for attempt in 0..=max_retries {
-            // Select target node (excluding already-tried nodes on retry)
+            // Select target node using table-level routing (excluding already-tried nodes on retry)
             let node = if attempt == 0 {
-                shard_cache.select_node_for_partition(&partition_key)
+                shard_cache.select_node_for_table(&table_key)
             } else {
-                shard_cache.select_node_for_partition_excluding(&partition_key, &tried_nodes)
+                shard_cache.select_node_for_table_excluding(&table_key, &tried_nodes)
             };
 
             let node = match node {
@@ -381,15 +298,15 @@ impl WriteRouter {
                 None => {
                     return if attempt == 0 {
                         Err(format!(
-                            "No data node available for partition {}",
-                            partition_path
+                            "No data node available for table {}",
+                            table_path
                         ))
                     } else {
                         // No more nodes to try
                         Err(format!(
-                            "All {} data nodes failed for partition {}: {}",
+                            "All {} data nodes failed for table {}: {}",
                             tried_nodes.len(),
-                            partition_path,
+                            table_path,
                             last_error
                         ))
                     };
@@ -399,18 +316,17 @@ impl WriteRouter {
             tried_nodes.insert(node.node_id.clone());
 
             debug!(
-                "Writing {} rows to {} for partition {} (attempt {})",
+                "Writing {} rows to {} for partition {} (table: {}, attempt {})",
                 row_count,
                 node.node_id,
                 partition_path,
+                table_path,
                 attempt + 1
             );
 
             // Try to write
-            // Note: fencing_token is None for now. In multi-Router deployments,
-            // acquiring a partition lock from Meta before write would prevent
-            // split-brain scenarios. Trade-off: adds latency. Current design
-            // relies on shard_cache routing writes to the same node per partition.
+            // Table-level routing ensures all partitions of a table go to the same node.
+            // Data node will register table ownership with Meta after flush.
             match pool
                 .write_batch(
                     &node.node_id,
@@ -427,8 +343,8 @@ impl WriteRouter {
                     // Success!
                     if attempt > 0 {
                         info!(
-                            "Write succeeded on retry {} (node {}) for partition {}",
-                            attempt, node.node_id, partition_path
+                            "Write succeeded on retry {} (node {}) for table {}",
+                            attempt, node.node_id, table_path
                         );
                         // Mark original failed nodes as suspect
                         for failed_node_id in tried_nodes.iter() {
@@ -449,10 +365,10 @@ impl WriteRouter {
                 }
                 Err(e) => {
                     warn!(
-                        "Write attempt {} failed for node {} partition {}: {}",
+                        "Write attempt {} failed for node {} table {}: {}",
                         attempt + 1,
                         node.node_id,
-                        partition_path,
+                        table_path,
                         e
                     );
                     last_error = e;
@@ -464,9 +380,9 @@ impl WriteRouter {
 
         // All retries exhausted
         error!(
-            "Write failed after {} attempts for partition {}: {}",
+            "Write failed after {} attempts for table {}: {}",
             max_retries + 1,
-            partition_path,
+            table_path,
             last_error
         );
 
@@ -476,9 +392,9 @@ impl WriteRouter {
         }
 
         Err(format!(
-            "Write failed after {} attempts for partition {}: {}",
+            "Write failed after {} attempts for table {}: {}",
             max_retries + 1,
-            partition_path,
+            table_path,
             last_error
         ))
     }

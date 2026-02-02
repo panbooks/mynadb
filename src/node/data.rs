@@ -345,61 +345,8 @@ pub async fn start(config_path: &str) {
         flight_service = flight_service.with_backing_standby(standby_id, standby_addr);
     }
 
-    // Clone for reporting task
-    let replication_manager_for_reporting = replication_manager;
-
-    // Start replication state reporting task if both replication and Meta are available
-    if let (Some(ref client), Some(ref repl_manager)) =
-        (&meta_client_for_events, &replication_manager_for_reporting)
-    {
-        use crate::meta::types::ReplicaState;
-
-        let meta_client_for_report = Arc::clone(client);
-        let repl_manager_for_report = Arc::clone(repl_manager);
-        let report_interval_secs = 5u64; // Report every 5 seconds
-
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(report_interval_secs));
-
-            loop {
-                interval.tick().await;
-
-                // Get per-partition stats from replication manager
-                let partition_stats = repl_manager_for_report.partition_stats();
-
-                // Report each partition's state to Meta
-                for stats in partition_stats {
-                    let state = if stats.in_sync {
-                        ReplicaState::InSync
-                    } else if stats.max_lag_ms < 10000 {
-                        ReplicaState::CatchingUp
-                    } else {
-                        ReplicaState::Offline
-                    };
-
-                    if let Err(e) = meta_client_for_report
-                        .update_replica_state(
-                            &stats.partition_key,
-                            state,
-                            stats.last_replicated_seq,
-                            stats.max_lag_ms,
-                        )
-                        .await
-                    {
-                        warn!(
-                            "Failed to report replica state for {}: {}",
-                            stats.partition_key, e
-                        );
-                    }
-                }
-            }
-        });
-
-        info!(
-            "Started replication state reporting task (every {}s)",
-            report_interval_secs
-        );
-    }
+    // Clone for event subscription task
+    let _replication_manager_for_events = replication_manager;
 
     // Subscribe to replica and recovery events from Meta
     // This keeps replica_cache updated and handles recovery flush triggers

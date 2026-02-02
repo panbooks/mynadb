@@ -73,19 +73,12 @@ impl RouterAppState {
             }
         };
 
-        // Initialize write router (with MetaClient for replica auto-assignment if available)
-        let write_router = {
-            let base = WriteRouter::new(
-                Arc::clone(&shard_cache),
-                Arc::clone(&data_node_pool),
-                config.schema.clone(),
-            );
-            if let Some(ref client) = meta_client {
-                Arc::new(base.with_meta_client(Arc::clone(client)))
-            } else {
-                Arc::new(base)
-            }
-        };
+        // Initialize write router (table-level routing)
+        let write_router = Arc::new(WriteRouter::new(
+            Arc::clone(&shard_cache),
+            Arc::clone(&data_node_pool),
+            config.schema.clone(),
+        ));
 
         // Initialize query coordinator (with MetaClient for file-based routing if available)
         let query_coordinator = if let Some(ref client) = meta_client {
