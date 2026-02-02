@@ -220,6 +220,15 @@ pub async fn start(config_path: &str) {
         parquet_cache.clone(),
     );
 
+    // WAL Recovery - replay unflushed writes before accepting new data
+    if let Some(ref wal_arc) = wal {
+        welcome!("  Replaying WAL files...");
+        common::perform_wal_recovery(wal_arc, &data_cache, &query_engine, &config).await;
+        welcome!("  WAL recovery complete");
+    } else {
+        info!("WAL disabled, skipping recovery");
+    }
+
     // Initialize replication manager if enabled (BEFORE background flush setup)
     // This allows the flush callback to broadcast FlushCheckpoint to standbys
     let replication_manager: Option<Arc<crate::data::replication::ReplicationManager>> =

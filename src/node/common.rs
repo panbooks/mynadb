@@ -4,7 +4,7 @@ use crate::config::Config;
 use crate::jobs::logger;
 use crate::query::cache::{hot_partition_cache, query_cache};
 use crate::query::{catalog, query_engine};
-use crate::services::{flight_service, mysql_service};
+use crate::services::{api, flight_service, mysql_service};
 use crate::storage::{cache, file_cache, parquet_writer, storage as storage_mod, wal};
 use std::collections::HashSet;
 use std::fs;
@@ -760,4 +760,78 @@ pub fn is_node_running(data_dir: &str, node_type: &str) -> bool {
     // Check if process exists by sending signal 0
     let result = unsafe { libc::kill(pid, 0) };
     result == 0
+}
+
+/// Perform WAL recovery by replaying unflushed writes
+/// Shared by standalone and data nodes
+pub async fn perform_wal_recovery(
+    wal: &Arc<wal::Wal>,
+    cache: &cache::DataCache,
+    query_engine: &Arc<query_engine::QueryEngine>,
+    config: &Arc<Config>,
+) {
+    info!("Starting WAL recovery - replaying unflushed writes...");
+
+    wal.set_recovery_mode(true);
+
+    let cache_for_recovery = cache.clone();
+    let query_engine_for_recovery = Arc::clone(query_engine);
+    let config_for_recovery = config.clone();
+
+    let recovered_data = wal
+        .replay_data_writes(|db, line_protocol| {
+            debug!(
+                "WAL recovery: replaying {} bytes to {}",
+                line_protocol.len(),
+                db
+            );
+
+            match tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(api::ingest_line_protocol_to_cache(
+                    db,
+                    line_protocol,
+                    &cache_for_recovery,
+                    Some(&query_engine_for_recovery),
+                    &config_for_recovery.schema,
+                ))
+            }) {
+                Ok(count) => {
+                    debug!("WAL recovery: replayed {} points to {}", count, db);
+                    Ok(())
+                }
+                Err(e) => {
+                    error!("WAL recovery failed for {}: {}", db, e);
+                    Err(e)
+                }
+            }
+        })
+        .await;
+
+    match recovered_data {
+        Ok(count) => {
+            if count > 0 {
+                info!("WAL recovery: replayed {} data write entries", count);
+
+                info!("Flushing recovered data to Parquet for durability...");
+                match cache.flush().await {
+                    Ok(files) => {
+                        info!("Recovery flush complete: {} file(s) written", files.len());
+                        wal.set_recovery_mode(false);
+                        // Note: cleanup_old_data_wal_files() is already called by cache.flush()
+                    }
+                    Err(e) => {
+                        error!("Recovery flush failed: {}", e);
+                        wal.set_recovery_mode(false);
+                    }
+                }
+            } else {
+                info!("WAL recovery: no data writes to replay");
+                wal.set_recovery_mode(false);
+            }
+        }
+        Err(e) => {
+            error!("WAL recovery failed: {}", e);
+            wal.set_recovery_mode(false);
+        }
+    }
 }

@@ -8,6 +8,12 @@ use tracing::{debug, info, warn};
 use crate::config::WalConfig;
 use crate::storage::storage::Storage;
 
+/// Checkpoint file name for tracking flush progress
+/// This file contains a single timestamp (milliseconds) marking the boundary between
+/// flushed and unflushed WAL files. During recovery, WAL files with timestamps
+/// before this checkpoint are skipped to prevent duplicate writes.
+const FLUSH_CHECKPOINT_FILE: &str = "flush_checkpoint";
+
 /// WAL entry type discriminator
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -456,133 +462,6 @@ impl Wal {
         Ok(())
     }
 
-    /// Rotate data WAL file and delete all old ones (post-flush cleanup)
-    /// This ensures only unflushed data remains in WAL directory
-    ///
-    /// IMPORTANT: This method deletes ALL old data WAL files, not just the one being rotated.
-    /// This handles high write throughput where multiple WAL files accumulate between flushes.
-    /// During recovery mode, rotation happens but deletion is skipped.
-    pub async fn rotate_and_delete_old_wal(&self) -> Result<(), String> {
-        let new_filename = self.create_new_filename("data");
-
-        // Persist current segment and rotate to new one
-        let _old_filename = {
-            let mut segment = self.data_segment.lock().await;
-
-            // Persist current buffer if not empty (and take it for rotation)
-            if !segment.is_empty() {
-                self.persist_and_take_segment(&mut segment).await?;
-            }
-
-            let old = segment.filename.clone();
-            info!("Rotating data WAL: {} -> {}", old, new_filename);
-
-            // Create new segment
-            *segment = WalSegment::new(new_filename, self.rotate_size_mb, self.buffer_entries);
-
-            old
-        };
-
-        // Skip deletion if in recovery mode (WAL files needed for potential re-replay)
-        if self.is_recovery_mode() {
-            debug!("Recovery mode active: skipping WAL file deletion after flush");
-            return Ok(());
-        }
-
-        // Now delete ALL old data WAL files (not just the one we rotated)
-        // This handles high write throughput where multiple WAL files accumulate between flushes
-        let current_filename = {
-            let segment = self.data_segment.lock().await;
-            segment.filename.clone()
-        };
-
-        let files = self.list_wal_files("data").await?;
-        let mut deleted = 0;
-
-        for file_path in files {
-            // Extract filename from path
-            let filename = file_path.split('/').last().unwrap_or(&file_path);
-
-            // Skip the current active file
-            if filename == current_filename {
-                debug!("Keeping active WAL file: {}", file_path);
-                continue;
-            }
-
-            // Delete old file (data is now flushed to Parquet)
-            match self.storage.delete(&file_path).await {
-                Ok(_) => {
-                    info!("Deleted old WAL file after flush: {}", file_path);
-                    deleted += 1;
-                }
-                Err(e) => {
-                    warn!("Failed to delete old WAL file {}: {}", file_path, e);
-                    // Don't fail - rotation succeeded, deletion is best-effort
-                }
-            }
-        }
-
-        if deleted > 0 {
-            info!("Cleaned up {} old data WAL file(s) after flush", deleted);
-        }
-
-        // Also clean up any empty WAL files immediately to prevent accumulation
-        if let Err(e) = self.cleanup_empty_files().await {
-            warn!("Failed to clean up empty WAL files: {}", e);
-            // Don't fail the rotation on cleanup error
-        }
-
-        Ok(())
-    }
-
-    /// Clean up empty WAL files (zero bytes)
-    /// Called after rotation to prevent accumulation of empty files
-    async fn cleanup_empty_files(&self) -> Result<usize, String> {
-        let mut deleted = 0;
-
-        // Get current file names to avoid deleting active files
-        let current_data_filename = {
-            let segment = self.data_segment.lock().await;
-            segment.filename.clone()
-        };
-        let current_series_filename = {
-            let segment = self.series_segment.lock().await;
-            segment.filename.clone()
-        };
-
-        let files = self.storage.list(&self.wal_dir).await?;
-
-        for file_path in files {
-            let filename = file_path.split('/').last().unwrap_or(&file_path);
-
-            // Skip if it's the current active file
-            if filename == current_data_filename || filename == current_series_filename {
-                continue;
-            }
-
-            if filename.ends_with(".wal") {
-                // Check if file is empty
-                match self.storage.size(&file_path).await {
-                    Ok(size) if size == 0 => {
-                        debug!("Deleting empty WAL file: {}", file_path);
-                        if let Err(e) = self.storage.delete(&file_path).await {
-                            warn!("Failed to delete empty WAL file {}: {}", file_path, e);
-                        } else {
-                            deleted += 1;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        if deleted > 0 {
-            debug!("Cleaned up {} empty WAL files", deleted);
-        }
-
-        Ok(deleted)
-    }
-
     /// Rotate data WAL file (public for post-flush rotation)
     pub async fn rotate_data_wal(&self) -> Result<(), String> {
         let new_filename = self.create_new_filename("data");
@@ -614,14 +493,39 @@ impl Wal {
     }
 
     /// Replay all data write entries
+    ///
+    /// This method reads the flush checkpoint to skip WAL files that have already
+    /// been flushed to Parquet. This prevents duplicate writes if a crash occurred
+    /// between Parquet write and WAL deletion.
+    ///
+    /// Checkpoint contains timestamp of current active WAL after last successful flush.
+    /// Files with timestamp < checkpoint are skipped (already in Parquet).
     pub async fn replay_data_writes<F>(&self, mut callback: F) -> Result<usize, String>
     where
         F: FnMut(&str, &str) -> Result<(), String>,
     {
+        // Read checkpoint timestamp - files older than this have been flushed to Parquet
+        let checkpoint_timestamp = self.read_flush_checkpoint().await;
+
         let files = self.list_wal_files("data").await?;
         let mut count = 0;
+        let mut skipped = 0;
 
         for file_path in files {
+            // Check if this file should be skipped based on checkpoint
+            if let Some(checkpoint_ts) = checkpoint_timestamp {
+                if let Some(file_ts) = Self::extract_wal_timestamp(&file_path) {
+                    if file_ts < checkpoint_ts {
+                        info!(
+                            "Skipping WAL file {} (timestamp {} < checkpoint {}, already flushed)",
+                            file_path, file_ts, checkpoint_ts
+                        );
+                        skipped += 1;
+                        continue;
+                    }
+                }
+            }
+
             debug!("Replaying data WAL: {}", file_path);
             count += self
                 .replay_file(&file_path, |entry| {
@@ -635,6 +539,13 @@ impl Wal {
                 .await?;
         }
 
+        if checkpoint_timestamp.is_some() {
+            info!(
+                "WAL replay complete: {} entries replayed, {} files skipped (already flushed)",
+                count, skipped
+            );
+        }
+
         // NOTE: Do NOT delete old WAL files here!
         // The replayed data is now in cache (volatile), but not yet in Parquet (durable).
         // If we crash again before flush → data would be lost.
@@ -643,11 +554,118 @@ impl Wal {
         Ok(count)
     }
 
-    /// Clean up old data WAL files after recovery flush
+    // ========================================================================
+    // Flush Checkpoint Management
+    // ========================================================================
+    // The checkpoint file stores a single timestamp marking the "flush boundary".
+    // WAL files with timestamps OLDER than this checkpoint have been flushed to
+    // Parquet and should be skipped during recovery.
+    //
+    // Checkpoint content: single timestamp in milliseconds (e.g., "1703005678000")
+    // This is the timestamp of the CURRENT ACTIVE WAL file after rotation.
+    //
+    // Flow:
+    // 1. Parquet write completes successfully
+    // 2. Write checkpoint with timestamp of current active WAL file
+    // 3. Delete old WAL files (those with timestamp < checkpoint)
+    // 4. Clear checkpoint
+    //
+    // Recovery logic:
+    // - Read checkpoint timestamp
+    // - For each WAL file, extract timestamp from filename
+    // - Skip files with timestamp < checkpoint (already flushed to Parquet)
+    // - Replay files with timestamp >= checkpoint (unflushed data)
+
+    /// Get the checkpoint file path
+    fn checkpoint_path(&self) -> String {
+        format!("{}/{}", self.wal_dir, FLUSH_CHECKPOINT_FILE)
+    }
+
+    /// Extract timestamp from WAL filename
+    /// Format: {prefix}_{timestamp_millis}_{sequence}.wal
+    /// Example: data_1703005678000_5.wal -> Some(1703005678000)
+    fn extract_wal_timestamp(filename: &str) -> Option<u128> {
+        // Get just the filename without path
+        let name = filename.split('/').last().unwrap_or(filename);
+
+        // Split by underscore: ["data", "1703005678000", "5.wal"]
+        let parts: Vec<&str> = name.split('_').collect();
+        if parts.len() >= 2 {
+            // Parse the timestamp (second part)
+            parts[1].parse::<u128>().ok()
+        } else {
+            None
+        }
+    }
+
+    /// Write flush checkpoint with timestamp of current active WAL file
+    /// All WAL files with timestamp < this value have been flushed to Parquet
+    /// This should be called BEFORE deleting the old WAL files
+    pub async fn write_flush_checkpoint(&self, checkpoint_timestamp: u128) -> Result<(), String> {
+        let checkpoint_path = self.checkpoint_path();
+        let content = checkpoint_timestamp.to_string();
+
+        self.storage
+            .put(&checkpoint_path, Bytes::from(content))
+            .await
+            .map_err(|e| format!("Failed to write flush checkpoint: {}", e))?;
+
+        debug!(
+            "Wrote flush checkpoint: {} (files older than this are flushed)",
+            checkpoint_timestamp
+        );
+        Ok(())
+    }
+
+    /// Read flush checkpoint to get the timestamp boundary
+    /// Returns None if checkpoint doesn't exist (normal for clean startups)
+    /// WAL files with timestamp < returned value should be skipped during replay
+    pub async fn read_flush_checkpoint(&self) -> Option<u128> {
+        let checkpoint_path = self.checkpoint_path();
+
+        match self.storage.get(&checkpoint_path).await {
+            Ok(content) => {
+                let content_str = String::from_utf8_lossy(&content);
+                match content_str.trim().parse::<u128>() {
+                    Ok(timestamp) => {
+                        info!(
+                            "Found flush checkpoint: {} (skipping WAL files older than this)",
+                            timestamp
+                        );
+                        Some(timestamp)
+                    }
+                    Err(e) => {
+                        warn!("Failed to parse flush checkpoint '{}': {}", content_str, e);
+                        None
+                    }
+                }
+            }
+            Err(_) => {
+                // No checkpoint file - this is normal for clean startups
+                None
+            }
+        }
+    }
+    /// Clean up old data WAL files after successful flush to Parquet
     /// Deletes all data WAL files except the current active one
-    /// Called after recovered data has been safely flushed to Parquet
     ///
-    /// Safety: This method checks recovery_mode and skips deletion if active.
+    /// ## Checkpoint-based crash safety
+    ///
+    /// This method uses a timestamp-based checkpoint file to ensure crash safety:
+    /// 1. Get timestamp of current active WAL file (the one receiving new writes)
+    /// 2. Write checkpoint with this timestamp
+    /// 3. Delete old WAL files (those with timestamp < checkpoint)
+    /// 4. Clear the checkpoint
+    ///
+    /// If crash occurs between steps 2-3: On recovery, checkpoint timestamp tells us
+    /// to skip files older than that timestamp (already in Parquet).
+    ///
+    /// If crash occurs between steps 3-4: Checkpoint is stale but harmless -
+    /// the old files are already deleted.
+    ///
+    /// ## Safety
+    ///
+    /// This method checks recovery_mode and skips deletion if active.
     /// This provides defense-in-depth even though callers should ensure
     /// recovery mode is disabled before calling this method.
     pub async fn cleanup_old_data_wal_files(&self) -> Result<(), String> {
@@ -664,20 +682,54 @@ impl Wal {
             segment.filename.clone()
         };
 
-        let files = self.list_wal_files("data").await?;
-        let mut deleted = 0;
-
-        for file_path in files {
-            let filename = file_path.split('/').last().unwrap_or(&file_path);
-
-            // Skip the current active file
-            if filename == current_filename {
-                debug!("Keeping active WAL file: {}", file_path);
-                continue;
+        // Extract timestamp from current active WAL filename
+        // This becomes our checkpoint - files older than this are flushed
+        let checkpoint_timestamp = match Self::extract_wal_timestamp(&current_filename) {
+            Some(ts) => ts,
+            None => {
+                warn!(
+                    "Could not extract timestamp from WAL filename: {}",
+                    current_filename
+                );
+                return Ok(());
             }
+        };
 
-            // Delete old replayed file (data is now safe in Parquet)
-            match self.storage.delete(&file_path).await {
+        let files = self.list_wal_files("data").await?;
+
+        // Step 1: Collect files to delete (those older than current active file)
+        let files_to_delete: Vec<String> = files
+            .into_iter()
+            .filter(|file_path| {
+                let filename = file_path.split('/').last().unwrap_or(file_path);
+                if filename == current_filename {
+                    debug!("Keeping active WAL file: {}", file_path);
+                    return false;
+                }
+
+                // Check timestamp - delete if older than checkpoint
+                if let Some(file_ts) = Self::extract_wal_timestamp(file_path) {
+                    if file_ts < checkpoint_timestamp {
+                        return true; // Delete this file
+                    }
+                }
+                false
+            })
+            .collect();
+
+        if files_to_delete.is_empty() {
+            return Ok(());
+        }
+
+        // Step 2: Write checkpoint BEFORE deleting files
+        // Checkpoint = timestamp of current active WAL
+        // Files with timestamp < checkpoint are considered flushed to Parquet
+        self.write_flush_checkpoint(checkpoint_timestamp).await?;
+
+        // Step 3: Delete the old WAL files
+        let mut deleted = 0;
+        for file_path in &files_to_delete {
+            match self.storage.delete(file_path).await {
                 Ok(_) => {
                     info!("Deleted old WAL file (data in Parquet): {}", file_path);
                     deleted += 1;
@@ -688,8 +740,16 @@ impl Wal {
             }
         }
 
+        // Note: We intentionally keep the checkpoint file - it serves as a persistent
+        // marker for any node (including this one after restart) to know which WAL
+        // files have already been flushed to Parquet. The checkpoint will be updated
+        // on the next flush cycle.
+
         if deleted > 0 {
-            info!("Cleaned up {} old WAL files after recovery", deleted);
+            info!(
+                "Cleaned up {} old WAL files (checkpoint timestamp: {})",
+                deleted, checkpoint_timestamp
+            );
         }
 
         Ok(())
