@@ -806,3 +806,326 @@ pub struct ShardCacheStats {
     pub last_event_seq: u64,
     pub distribution_config_count: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod distribution_cache_tests {
+        use super::*;
+
+        fn create_test_cache() -> ShardCache {
+            ShardCache::new()
+        }
+
+        #[test]
+        fn test_get_distribution_percent_default() {
+            let cache = create_test_cache();
+
+            // No config set, should return 0 (single node routing)
+            let percent = cache.get_distribution_percent("mydb", "metrics", "cpu");
+            assert_eq!(percent, 0);
+        }
+
+        #[test]
+        fn test_set_and_get_distribution_config_catalog() {
+            let cache = create_test_cache();
+
+            // Set catalog-level config
+            let config = DistributionConfig::new(
+                "mydb".to_string(),
+                "".to_string(),
+                "".to_string(),
+                100,
+            );
+            cache.set_distribution_config(&config);
+
+            // Should inherit catalog-level config
+            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "cpu"), 100);
+            assert_eq!(cache.get_distribution_percent("mydb", "logs", "app"), 100);
+            assert_eq!(cache.get_distribution_percent("mydb", "", ""), 100);
+
+            // Different catalog should not be affected
+            assert_eq!(cache.get_distribution_percent("other", "metrics", "cpu"), 0);
+        }
+
+        #[test]
+        fn test_set_and_get_distribution_config_schema() {
+            let cache = create_test_cache();
+
+            // Set schema-level config
+            let config = DistributionConfig::new(
+                "mydb".to_string(),
+                "metrics".to_string(),
+                "".to_string(),
+                50,
+            );
+            cache.set_distribution_config(&config);
+
+            // Should inherit schema-level config
+            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "cpu"), 50);
+            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "mem"), 50);
+
+            // Different schema should not be affected
+            assert_eq!(cache.get_distribution_percent("mydb", "logs", "app"), 0);
+        }
+
+        #[test]
+        fn test_set_and_get_distribution_config_table() {
+            let cache = create_test_cache();
+
+            // Set table-level config
+            let config = DistributionConfig::new(
+                "mydb".to_string(),
+                "metrics".to_string(),
+                "cpu".to_string(),
+                75,
+            );
+            cache.set_distribution_config(&config);
+
+            // Should match table-level config
+            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "cpu"), 75);
+
+            // Different table should not be affected
+            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "mem"), 0);
+        }
+
+        #[test]
+        fn test_hierarchical_override_table_over_schema() {
+            let cache = create_test_cache();
+
+            // Set schema-level config: 50%
+            let schema_config = DistributionConfig::new(
+                "mydb".to_string(),
+                "metrics".to_string(),
+                "".to_string(),
+                50,
+            );
+            cache.set_distribution_config(&schema_config);
+
+            // Set table-level config: 0% (override)
+            let table_config = DistributionConfig::new(
+                "mydb".to_string(),
+                "metrics".to_string(),
+                "cpu".to_string(),
+                0,
+            );
+            cache.set_distribution_config(&table_config);
+
+            // cpu table should use table-level config (0%)
+            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "cpu"), 0);
+
+            // Other tables in same schema should use schema-level config (50%)
+            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "mem"), 50);
+        }
+
+        #[test]
+        fn test_hierarchical_override_schema_over_catalog() {
+            let cache = create_test_cache();
+
+            // Set catalog-level config: 100%
+            let catalog_config = DistributionConfig::new(
+                "mydb".to_string(),
+                "".to_string(),
+                "".to_string(),
+                100,
+            );
+            cache.set_distribution_config(&catalog_config);
+
+            // Set schema-level config: 25% (override)
+            let schema_config = DistributionConfig::new(
+                "mydb".to_string(),
+                "metrics".to_string(),
+                "".to_string(),
+                25,
+            );
+            cache.set_distribution_config(&schema_config);
+
+            // metrics schema should use schema-level config (25%)
+            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "cpu"), 25);
+
+            // Other schemas should use catalog-level config (100%)
+            assert_eq!(cache.get_distribution_percent("mydb", "logs", "app"), 100);
+        }
+
+        #[test]
+        fn test_hierarchical_override_all_levels() {
+            let cache = create_test_cache();
+
+            // Set all three levels
+            let catalog_config = DistributionConfig::new(
+                "mydb".to_string(),
+                "".to_string(),
+                "".to_string(),
+                100,
+            );
+            cache.set_distribution_config(&catalog_config);
+
+            let schema_config = DistributionConfig::new(
+                "mydb".to_string(),
+                "metrics".to_string(),
+                "".to_string(),
+                50,
+            );
+            cache.set_distribution_config(&schema_config);
+
+            let table_config = DistributionConfig::new(
+                "mydb".to_string(),
+                "metrics".to_string(),
+                "cpu".to_string(),
+                0,
+            );
+            cache.set_distribution_config(&table_config);
+
+            // Table level wins
+            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "cpu"), 0);
+
+            // Schema level for other tables in metrics
+            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "mem"), 50);
+
+            // Catalog level for other schemas
+            assert_eq!(cache.get_distribution_percent("mydb", "logs", "app"), 100);
+        }
+
+        #[test]
+        fn test_is_distributed() {
+            let cache = create_test_cache();
+
+            // No config = not distributed
+            assert!(!cache.is_distributed("mydb", "metrics", "cpu"));
+
+            // Set 0% = not distributed
+            let config_0 = DistributionConfig::new(
+                "mydb".to_string(),
+                "metrics".to_string(),
+                "cpu".to_string(),
+                0,
+            );
+            cache.set_distribution_config(&config_0);
+            assert!(!cache.is_distributed("mydb", "metrics", "cpu"));
+
+            // Set 1% = distributed
+            let config_1 = DistributionConfig::new(
+                "mydb".to_string(),
+                "metrics".to_string(),
+                "mem".to_string(),
+                1,
+            );
+            cache.set_distribution_config(&config_1);
+            assert!(cache.is_distributed("mydb", "metrics", "mem"));
+
+            // Set 100% = distributed
+            let config_100 = DistributionConfig::new(
+                "mydb".to_string(),
+                "logs".to_string(),
+                "".to_string(),
+                100,
+            );
+            cache.set_distribution_config(&config_100);
+            assert!(cache.is_distributed("mydb", "logs", "app"));
+        }
+
+        #[test]
+        fn test_remove_distribution_config() {
+            let cache = create_test_cache();
+
+            // Set config
+            let config = DistributionConfig::new(
+                "mydb".to_string(),
+                "metrics".to_string(),
+                "cpu".to_string(),
+                100,
+            );
+            cache.set_distribution_config(&config);
+            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "cpu"), 100);
+
+            // Remove config
+            cache.remove_distribution_config("mydb", "metrics", "cpu");
+            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "cpu"), 0);
+        }
+
+        #[test]
+        fn test_clear_distribution_configs() {
+            let cache = create_test_cache();
+
+            // Set multiple configs
+            let config1 = DistributionConfig::new("db1".to_string(), "".to_string(), "".to_string(), 100);
+            let config2 = DistributionConfig::new("db2".to_string(), "s".to_string(), "".to_string(), 50);
+            let config3 = DistributionConfig::new("db3".to_string(), "s".to_string(), "t".to_string(), 25);
+
+            cache.set_distribution_config(&config1);
+            cache.set_distribution_config(&config2);
+            cache.set_distribution_config(&config3);
+
+            assert_eq!(cache.stats().distribution_config_count, 3);
+
+            // Clear all
+            cache.clear_distribution_configs();
+
+            assert_eq!(cache.stats().distribution_config_count, 0);
+            assert_eq!(cache.get_distribution_percent("db1", "", ""), 0);
+            assert_eq!(cache.get_distribution_percent("db2", "s", ""), 0);
+            assert_eq!(cache.get_distribution_percent("db3", "s", "t"), 0);
+        }
+
+        #[test]
+        fn test_list_distribution_configs() {
+            let cache = create_test_cache();
+
+            let config1 = DistributionConfig::new("mydb".to_string(), "".to_string(), "".to_string(), 100);
+            let config2 = DistributionConfig::new("mydb".to_string(), "metrics".to_string(), "".to_string(), 50);
+
+            cache.set_distribution_config(&config1);
+            cache.set_distribution_config(&config2);
+
+            let configs = cache.list_distribution_configs();
+            assert_eq!(configs.len(), 2);
+
+            // Check that both configs are present
+            let keys: Vec<String> = configs.iter().map(|(k, _, _)| k.clone()).collect();
+            assert!(keys.contains(&"mydb".to_string()));
+            assert!(keys.contains(&"mydb/metrics".to_string()));
+        }
+
+        #[test]
+        fn test_invalidate_distribution_configs_for_catalog() {
+            let cache = create_test_cache();
+
+            // Set configs for multiple catalogs
+            let config1 = DistributionConfig::new("mydb".to_string(), "".to_string(), "".to_string(), 100);
+            let config2 = DistributionConfig::new("mydb".to_string(), "metrics".to_string(), "".to_string(), 50);
+            let config3 = DistributionConfig::new("mydb".to_string(), "metrics".to_string(), "cpu".to_string(), 25);
+            let config4 = DistributionConfig::new("other".to_string(), "".to_string(), "".to_string(), 75);
+
+            cache.set_distribution_config(&config1);
+            cache.set_distribution_config(&config2);
+            cache.set_distribution_config(&config3);
+            cache.set_distribution_config(&config4);
+
+            assert_eq!(cache.stats().distribution_config_count, 4);
+
+            // Invalidate only mydb catalog
+            cache.invalidate_distribution_configs_for_catalog("mydb");
+
+            // Only "other" catalog should remain
+            assert_eq!(cache.stats().distribution_config_count, 1);
+            assert_eq!(cache.get_distribution_percent("mydb", "", ""), 0);
+            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "cpu"), 0);
+            assert_eq!(cache.get_distribution_percent("other", "", ""), 75);
+        }
+
+        #[test]
+        fn test_stats_includes_distribution_count() {
+            let cache = create_test_cache();
+
+            let stats = cache.stats();
+            assert_eq!(stats.distribution_config_count, 0);
+
+            let config = DistributionConfig::new("mydb".to_string(), "".to_string(), "".to_string(), 100);
+            cache.set_distribution_config(&config);
+
+            let stats = cache.stats();
+            assert_eq!(stats.distribution_config_count, 1);
+        }
+    }
+}
