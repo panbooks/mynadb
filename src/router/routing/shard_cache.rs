@@ -15,7 +15,7 @@
 //! - Single routing lookup per query
 //! - Excellent cache locality for hot data
 
-use crate::meta::types::DataNodeMode;
+use crate::meta::types::{DataNodeMode, DistributionConfig, DistributionScope};
 use crate::utils::hash::{hash_select_clone, hash_select_index};
 use dashmap::DashMap;
 use parking_lot::RwLock;
@@ -147,6 +147,18 @@ pub struct CachedTableMeta {
     pub cached_at: i64,
 }
 
+/// Cached distribution config for fast lookup
+#[derive(Debug, Clone)]
+pub struct CachedDistributionConfig {
+    /// Distribution percentage [0-100]
+    /// 0 = single node (default), 100 = all primary nodes
+    pub percent: u8,
+    /// Version for cache invalidation
+    pub version: u64,
+    /// When the config was cached
+    pub cached_at: i64,
+}
+
 impl CachedTableMeta {
     /// Get the primary owner (first in list)
     pub fn primary_owner(&self) -> Option<&str> {
@@ -171,6 +183,7 @@ impl CachedTableMeta {
 /// Lookup structure:
 /// 1. table_owners: table_path → owner_node_id
 /// 2. data_nodes: node_id → DataNodeInfo (single source of truth)
+/// 3. distribution_configs: hierarchical cache for write distribution
 ///
 /// Table-level routing provides:
 /// - 600x fewer Meta entries (100K tables vs 60M files)
@@ -186,6 +199,11 @@ pub struct ShardCache {
 
     /// Last sequence number from Meta event stream
     last_event_seq: AtomicU64,
+
+    /// Distribution configs cache
+    /// Key: "catalog" or "catalog/schema" or "catalog/schema/table"
+    /// Hierarchical lookup: table > schema > catalog
+    distribution_configs: DashMap<String, CachedDistributionConfig>,
 }
 
 impl ShardCache {
@@ -194,6 +212,7 @@ impl ShardCache {
             table_owners: DashMap::new(),
             data_nodes: RwLock::new(HashMap::new()),
             last_event_seq: AtomicU64::new(0),
+            distribution_configs: DashMap::new(),
         }
     }
 
@@ -437,6 +456,130 @@ impl ShardCache {
         hash_select_clone(key, &nodes)
     }
 
+    // ========================================================================
+    // Distribution Config Cache
+    // ========================================================================
+
+    /// Get the distribution percent for a table (hierarchical lookup)
+    ///
+    /// Lookup order: table > schema > catalog
+    /// Returns 0 (single-node routing) if no config is found.
+    ///
+    /// This is the hot-path method used by WriteRouter to determine
+    /// if writes should be distributed across multiple nodes.
+    pub fn get_distribution_percent(&self, catalog: &str, schema: &str, table: &str) -> u8 {
+        // Try table-level first (most specific)
+        let table_key = format!("{}/{}/{}", catalog, schema, table);
+        if let Some(config) = self.distribution_configs.get(&table_key) {
+            return config.percent;
+        }
+
+        // Try schema-level
+        let schema_key = format!("{}/{}", catalog, schema);
+        if let Some(config) = self.distribution_configs.get(&schema_key) {
+            return config.percent;
+        }
+
+        // Try catalog-level
+        if let Some(config) = self.distribution_configs.get(catalog) {
+            return config.percent;
+        }
+
+        // Default: single-node routing
+        0
+    }
+
+    /// Check if writes should be distributed for a table
+    ///
+    /// Returns true if percent > 0 (i.e., writes should go to multiple nodes)
+    pub fn is_distributed(&self, catalog: &str, schema: &str, table: &str) -> bool {
+        self.get_distribution_percent(catalog, schema, table) > 0
+    }
+
+    /// Set distribution config in cache
+    ///
+    /// The key format depends on scope:
+    /// - Catalog: "catalog"
+    /// - Schema: "catalog/schema"
+    /// - Table: "catalog/schema/table"
+    pub fn set_distribution_config(&self, config: &DistributionConfig) {
+        let key = match config.scope {
+            DistributionScope::Catalog => config.catalog.clone(),
+            DistributionScope::Schema => format!("{}/{}", config.catalog, config.schema),
+            DistributionScope::Table => {
+                format!("{}/{}/{}", config.catalog, config.schema, config.table)
+            }
+        };
+
+        debug!(
+            "Caching distribution config: {} -> {}% (v{})",
+            key, config.percent, config.version
+        );
+
+        self.distribution_configs.insert(
+            key,
+            CachedDistributionConfig {
+                percent: config.percent,
+                version: config.version,
+                cached_at: chrono::Utc::now().timestamp_millis(),
+            },
+        );
+    }
+
+    /// Remove distribution config from cache
+    pub fn remove_distribution_config(&self, catalog: &str, schema: &str, table: &str) {
+        let key = if !table.is_empty() {
+            format!("{}/{}/{}", catalog, schema, table)
+        } else if !schema.is_empty() {
+            format!("{}/{}", catalog, schema)
+        } else {
+            catalog.to_string()
+        };
+
+        debug!("Removing distribution config from cache: {}", key);
+        self.distribution_configs.remove(&key);
+    }
+
+    /// Invalidate all distribution configs for a catalog
+    ///
+    /// Used when a catalog-level config changes, which affects all
+    /// tables in that catalog.
+    pub fn invalidate_distribution_configs_for_catalog(&self, catalog: &str) {
+        let prefix = format!("{}/", catalog);
+        let keys_to_remove: Vec<String> = self
+            .distribution_configs
+            .iter()
+            .filter(|entry| entry.key() == catalog || entry.key().starts_with(&prefix))
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        for key in keys_to_remove {
+            self.distribution_configs.remove(&key);
+        }
+        debug!(
+            "Invalidated distribution configs for catalog: {}",
+            catalog
+        );
+    }
+
+    /// Clear all distribution configs from cache
+    pub fn clear_distribution_configs(&self) {
+        self.distribution_configs.clear();
+        info!("Cleared all distribution configs from cache");
+    }
+
+    /// Get all cached distribution configs (for debugging/stats)
+    pub fn list_distribution_configs(&self) -> Vec<(String, u8, u64)> {
+        self.distribution_configs
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.percent, entry.version))
+            .collect()
+    }
+
+    // ========================================================================
+    // Node Management
+    // ========================================================================
+
     /// Get a DataNodeInfo by node_id
     pub fn get_data_node(&self, node_id: &str) -> Option<DataNodeInfo> {
         self.data_nodes.read().get(node_id).cloned()
@@ -643,6 +786,7 @@ impl ShardCache {
                 .filter(|n| n.state == NodeState::Active)
                 .count(),
             last_event_seq: self.last_event_seq.load(Ordering::Relaxed),
+            distribution_config_count: self.distribution_configs.len(),
         }
     }
 }
@@ -660,4 +804,5 @@ pub struct ShardCacheStats {
     pub data_node_count: usize,
     pub active_node_count: usize,
     pub last_event_seq: u64,
+    pub distribution_config_count: usize,
 }

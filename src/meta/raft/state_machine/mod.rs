@@ -238,6 +238,20 @@ impl MetaStateMachine {
                 table,
             } => self.remove_table(&catalog, &schema, &table),
 
+            // Distribution config operations
+            MetaCommand::SetDistributionConfig {
+                catalog,
+                schema,
+                table,
+                percent,
+            } => self.set_distribution_config(&catalog, &schema, &table, percent),
+
+            MetaCommand::DeleteDistributionConfig {
+                catalog,
+                schema,
+                table,
+            } => self.delete_distribution_config(&catalog, &schema, &table),
+
             MetaCommand::AcquireLock {
                 key,
                 holder,

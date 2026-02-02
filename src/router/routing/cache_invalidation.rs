@@ -242,6 +242,9 @@ impl CacheInvalidationHandler {
                     // This event is never published, kept for backward compatibility
                     debug!("DataNodeModeChanged event ignored (No-Promotion architecture)");
                 }
+                EventType::DistributionConfigChanged => {
+                    Self::handle_distribution_config_changed(&shard_cache, &event);
+                }
                 _ => {
                     // FlushForRecovery handled by Data nodes directly
                     // Other events not relevant to Router
@@ -473,7 +476,7 @@ impl CacheInvalidationHandler {
     // Standby nodes never promote to Primary; K8s handles node replacement
 
     /// Handle replica state changed event
-    fn handle_replica_state_changed(shard_cache: &ShardCache, event: &MetaEvent) {
+    fn handle_replica_state_changed(_shard_cache: &ShardCache, event: &MetaEvent) {
         if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
             let partition_key = payload["partition_key"].as_str().unwrap_or_default();
             let state = payload["state"].as_str().unwrap_or("offline");
@@ -488,4 +491,63 @@ impl CacheInvalidationHandler {
 
     // handle_data_node_mode_changed() removed - No-Promotion architecture
     // Mode is set at registration time and never changes dynamically
+
+    /// Handle distribution config changed event
+    ///
+    /// Updates the local distribution config cache for fast routing lookups.
+    /// This avoids querying Meta on every write for distribution decisions.
+    fn handle_distribution_config_changed(shard_cache: &ShardCache, event: &MetaEvent) {
+        use crate::meta::types::{DistributionConfig, DistributionScope};
+
+        if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
+            let catalog = payload["catalog"].as_str().unwrap_or_default();
+            let schema = payload["schema"].as_str().unwrap_or_default();
+            let table = payload["table"].as_str().unwrap_or_default();
+            let percent = payload["percent"].as_u64().unwrap_or(0) as u8;
+            let deleted = payload["deleted"].as_bool().unwrap_or(false);
+
+            if catalog.is_empty() {
+                warn!("Distribution config event missing catalog");
+                return;
+            }
+
+            if deleted {
+                // Remove config from cache
+                info!(
+                    "Distribution config deleted: {}/{}/{} - removing from cache",
+                    catalog,
+                    if schema.is_empty() { "*" } else { schema },
+                    if table.is_empty() { "*" } else { table }
+                );
+                shard_cache.remove_distribution_config(catalog, schema, table);
+            } else {
+                // Determine scope based on which fields are set
+                let scope = if !table.is_empty() {
+                    DistributionScope::Table
+                } else if !schema.is_empty() {
+                    DistributionScope::Schema
+                } else {
+                    DistributionScope::Catalog
+                };
+
+                info!(
+                    "Distribution config changed: {}/{}/{} -> {}% ({:?})",
+                    catalog,
+                    if schema.is_empty() { "*" } else { schema },
+                    if table.is_empty() { "*" } else { table },
+                    percent,
+                    scope
+                );
+
+                // Create config and add to cache
+                let config = DistributionConfig::new(
+                    catalog.to_string(),
+                    schema.to_string(),
+                    table.to_string(),
+                    percent,
+                );
+                shard_cache.set_distribution_config(&config);
+            }
+        }
+    }
 }

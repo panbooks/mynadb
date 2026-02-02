@@ -292,7 +292,22 @@ impl QueryCoordinator {
                     Ok(Some(table_meta)) => {
                         // Get all owners for scatter-gather
                         let all_owners = table_meta.all_owners();
-                        let primary_owner = table_meta.primary_owner().unwrap_or("").to_string();
+                        let _primary_owner = table_meta.primary_owner().unwrap_or("").to_string();
+
+                        // Check if this is a distributed table (for logging)
+                        let is_distributed = self.shard_cache.is_distributed(
+                            catalog,
+                            &table.schema,
+                            &table.table,
+                        );
+                        if is_distributed || all_owners.len() > 1 {
+                            info!(
+                                "Table {} has {} owners (distributed={}) - using scatter-gather query",
+                                table_key.to_path(),
+                                all_owners.len(),
+                                is_distributed
+                            );
+                        }
 
                         // Update local cache with primary owner and all owners
                         self.shard_cache.set_table_owners(

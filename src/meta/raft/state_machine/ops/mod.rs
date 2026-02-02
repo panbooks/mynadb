@@ -3,6 +3,7 @@
 //! This module contains the implementation of MetaStateMachine operations,
 //! split into logical groups for maintainability.
 
+mod distribution;
 mod election;
 mod event;
 mod lock;
