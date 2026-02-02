@@ -26,8 +26,6 @@ pub struct DataNodeInfo {
     pub grpc_addr: String,
     /// Node state
     pub state: NodeState,
-    /// Load score for weighted routing (0.0-1.0, lower is better)
-    pub load_score: f32,
     /// Data node mode (Primary or Standby)
     ///
     /// In Cold Standby architecture:

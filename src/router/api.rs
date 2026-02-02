@@ -341,7 +341,6 @@ pub async fn list_data_nodes_handler(State(state): State<RouterAppState>) -> imp
                     DataNodeMode::Primary => "primary",
                     DataNodeMode::Standby => "standby",
                 },
-                "load_score": n.load_score,
             })
         })
         .collect();

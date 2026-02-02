@@ -67,7 +67,6 @@ impl CacheInvalidationHandler {
                         node_id: n.node_id.clone(),
                         grpc_addr: n.advertise_addr.clone(),
                         state: NodeState::Active,
-                        load_score: 0.5,
                         mode: n.mode.unwrap_or_default(),
                     })
                     .collect();
@@ -163,7 +162,6 @@ impl CacheInvalidationHandler {
                     node_id: node.node_id.clone(),
                     grpc_addr: node.advertise_addr.clone(),
                     state: NodeState::Active,
-                    load_score: 0.5,
                     mode: node.mode.unwrap_or_default(),
                 });
                 self.data_node_pool
@@ -282,7 +280,6 @@ impl CacheInvalidationHandler {
                     node_id: node_id.to_string(),
                     grpc_addr: grpc_addr.to_string(),
                     state: NodeState::Active,
-                    load_score: 0.5,
                     mode,
                 });
 
@@ -405,7 +402,6 @@ impl CacheInvalidationHandler {
                         node_id: node_id.to_string(),
                         grpc_addr: grpc_addr.clone(),
                         state,
-                        load_score: 0.5,
                         mode,
                     });
 
