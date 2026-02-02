@@ -54,6 +54,13 @@ pub struct MetaConfig {
     /// Controls how the cluster handles node failures.
     #[serde(default)]
     pub failover: FailoverConfig,
+
+    /// Table rebalancer configuration
+    ///
+    /// Periodically scans for orphaned tables (tables with no active owners)
+    /// and reassigns them to healthy nodes.
+    #[serde(default)]
+    pub rebalancer: RebalancerConfig,
 }
 
 /// Raft consensus configuration
@@ -295,6 +302,59 @@ impl FailoverConfig {
     }
 }
 
+/// Table Rebalancer Configuration
+///
+/// Periodically scans for tables with inactive owners and:
+/// 1. Removes dead owners from table ownership lists
+/// 2. Reassigns orphaned tables (no owners left) to healthy nodes
+///
+/// This runs only on the Meta leader to avoid duplicate work.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebalancerConfig {
+    /// Enable table rebalancing
+    #[serde(default = "default_rebalancer_enabled")]
+    pub enabled: bool,
+
+    /// Interval between rebalancing checks in seconds
+    #[serde(default = "default_rebalancer_interval_secs")]
+    pub interval_secs: u64,
+
+    /// Automatically remove dead owners from table ownership
+    #[serde(default = "default_rebalancer_auto_remove_dead")]
+    pub auto_remove_dead_owners: bool,
+
+    /// Automatically reassign orphaned tables to healthy nodes
+    #[serde(default = "default_rebalancer_auto_reassign")]
+    pub auto_reassign_orphans: bool,
+}
+
+fn default_rebalancer_enabled() -> bool {
+    false
+}
+
+fn default_rebalancer_interval_secs() -> u64 {
+    60 // Check every minute
+}
+
+fn default_rebalancer_auto_remove_dead() -> bool {
+    true
+}
+
+fn default_rebalancer_auto_reassign() -> bool {
+    true
+}
+
+impl Default for RebalancerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_rebalancer_enabled(),
+            interval_secs: default_rebalancer_interval_secs(),
+            auto_remove_dead_owners: default_rebalancer_auto_remove_dead(),
+            auto_reassign_orphans: default_rebalancer_auto_reassign(),
+        }
+    }
+}
+
 /// Cold Standby Architecture Configuration
 ///
 /// Controls how Data nodes are assigned as Primary (active) or Standby (cold backup).
@@ -330,7 +390,6 @@ impl FailoverConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StandbyConfig {
     // ===== Core Settings =====
-
     /// Enable cold standby architecture
     ///
     /// When enabled:
@@ -357,7 +416,6 @@ pub struct StandbyConfig {
     pub primary_standby_ratio: u32,
 
     // ===== Node Requirements =====
-
     /// Minimum Primary nodes before assigning Standbys
     ///
     /// Ensures cluster has minimum compute capacity before allocating
@@ -377,7 +435,6 @@ pub struct StandbyConfig {
     pub min_primaries_for_spare: usize,
 
     // ===== Spare Pool Settings =====
-
     /// Number of spare Standbys to maintain in pool
     ///
     /// Spare Standbys are idle nodes ready to replace failed Standbys.
@@ -388,7 +445,6 @@ pub struct StandbyConfig {
     pub spare_standbys: u32,
 
     // ===== Failover Settings =====
-
     /// Strictly guarantee the configured Primary:Standby ratio
     ///
     /// When true (strict mode):
@@ -633,6 +689,7 @@ impl Default for MetaConfig {
             replication: ReplicationAssignmentConfig::default(),
             standby: StandbyConfig::default(),
             failover: FailoverConfig::default(),
+            rebalancer: RebalancerConfig::default(),
         }
     }
 }
@@ -855,7 +912,10 @@ mod tests {
                 assert!(
                     actual_ratio <= 2.0,
                     "total={}, p={}, s={}, ratio={:.2}",
-                    total, p, s, actual_ratio
+                    total,
+                    p,
+                    s,
+                    actual_ratio
                 );
             }
         }
@@ -890,7 +950,10 @@ mod tests {
                 assert!(
                     actual_ratio <= 2.0,
                     "After {} nodes: {}P, {}S, ratio={:.2}",
-                    p + s, p, s, actual_ratio
+                    p + s,
+                    p,
+                    s,
+                    actual_ratio
                 );
             }
         }
