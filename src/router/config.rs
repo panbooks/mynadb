@@ -75,33 +75,6 @@ pub struct RoutingConfig {
     /// Data node request timeout in milliseconds
     #[serde(default = "default_data_node_request_timeout_ms")]
     pub data_node_request_timeout_ms: u64,
-
-    /// Table rebalancer configuration
-    #[serde(default)]
-    pub rebalancer: RebalancerConfig,
-}
-
-/// Table rebalancer configuration
-///
-/// Periodically scans for orphaned tables (tables with no active owners)
-/// and reassigns them to healthy nodes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RebalancerConfig {
-    /// Whether table rebalancing is enabled
-    #[serde(default = "default_rebalancer_enabled")]
-    pub enabled: bool,
-
-    /// Interval between rebalancing checks in seconds
-    #[serde(default = "default_rebalancer_interval_secs")]
-    pub interval_secs: u64,
-
-    /// Whether to automatically remove dead owners from table ownership
-    #[serde(default = "default_rebalancer_auto_remove_dead")]
-    pub auto_remove_dead_owners: bool,
-
-    /// Whether to automatically reassign orphaned tables to healthy nodes
-    #[serde(default = "default_rebalancer_auto_reassign")]
-    pub auto_reassign_orphans: bool,
 }
 
 /// Query configuration
@@ -206,22 +179,6 @@ fn default_max_parallel_fanout() -> usize {
     16
 }
 
-fn default_rebalancer_enabled() -> bool {
-    true
-}
-
-fn default_rebalancer_interval_secs() -> u64 {
-    60 // Check every minute
-}
-
-fn default_rebalancer_auto_remove_dead() -> bool {
-    true
-}
-
-fn default_rebalancer_auto_reassign() -> bool {
-    true
-}
-
 impl Default for RouterConfig {
     fn default() -> Self {
         Self {
@@ -262,18 +219,6 @@ impl Default for RoutingConfig {
             data_node_pool_size: default_data_node_pool_size(),
             data_node_connect_timeout_ms: default_data_node_connect_timeout_ms(),
             data_node_request_timeout_ms: default_data_node_request_timeout_ms(),
-            rebalancer: RebalancerConfig::default(),
-        }
-    }
-}
-
-impl Default for RebalancerConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_rebalancer_enabled(),
-            interval_secs: default_rebalancer_interval_secs(),
-            auto_remove_dead_owners: default_rebalancer_auto_remove_dead(),
-            auto_reassign_orphans: default_rebalancer_auto_reassign(),
         }
     }
 }
