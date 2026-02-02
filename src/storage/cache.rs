@@ -1399,8 +1399,12 @@ mod tests {
         shard.clear_up_to_seq(1);
 
         // The key should be completely removed (not just empty vec)
-        let data = shard.data.lock();
-        assert!(!data.contains_key(&key));
+        // Note: Check data and is_empty separately to avoid deadlock
+        // (parking_lot::Mutex is not reentrant)
+        {
+            let data = shard.data.lock();
+            assert!(!data.contains_key(&key));
+        }
         assert!(shard.is_empty());
     }
 
