@@ -116,6 +116,10 @@ message RegisterNodeResponse {
     bool success = 1;
     string error = 2;
     uint64 lease_id = 3;            // Lease ID for heartbeat renewal
+    // Node-level standby assignment (for Data nodes)
+    int32 assigned_mode = 4;        // DataNodeMode: 0=Primary, 1=Standby
+    string backing_standby_id = 5;  // For Primary: the Standby backing this node
+    string backing_standby_addr = 6; // Flight address of backing Standby
 }
 
 message HeartbeatRequest {

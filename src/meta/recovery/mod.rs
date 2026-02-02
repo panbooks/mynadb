@@ -392,22 +392,25 @@ impl RecoveryManager {
         ))
     }
 
-    /// Find the Standby that was backing a Primary
+    /// Find the Standby that was backing a Primary (node-level pairing)
+    ///
+    /// Uses the node-level `backing_standby` field for O(1) lookup.
+    /// This guarantees the Standby has ALL the Primary's data,
+    /// not just some partitions (which was a bug in partition-level assignment).
     fn find_standby_for_primary(&self, primary_id: &str) -> Result<String, RecoveryError> {
         let sm = self.meta_node.state_machine();
-        let replicas = sm.list_replicas();
 
-        // Find partitions owned by this Primary
-        for replica in &replicas {
-            if replica.leader_node_id == primary_id {
-                // Return first Standby found
-                if let Some(standby_id) = replica.standby_node_ids.first() {
-                    return Ok(standby_id.clone());
-                }
+        // O(1) lookup using node-level pairing
+        if let Some(primary_info) = sm.get_node(primary_id) {
+            if let Some(standby_id) = primary_info.backing_standby {
+                return Ok(standby_id);
             }
         }
 
-        // No Standby found - Primary was unprotected
+        // No Standby assigned - Primary was unprotected
+        // This can happen if:
+        // 1. No Standby nodes were available when Primary registered
+        // 2. The assigned Standby failed and wasn't replaced
         Err(RecoveryError::NoStandbyForPrimary {
             primary_id: primary_id.to_string(),
         })

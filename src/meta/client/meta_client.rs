@@ -27,6 +27,16 @@ fn mode_to_proto(mode: Option<DataNodeMode>) -> i32 {
     }
 }
 
+/// Result of node registration with Meta service
+#[derive(Debug, Clone)]
+pub struct NodeRegistrationResult {
+    pub lease_id: u64,
+    /// Assigned mode for Data nodes (Primary or Standby)
+    pub assigned_mode: Option<DataNodeMode>,
+    /// For Primary nodes: the Standby node backing this Primary
+    pub backing_standby: Option<(String, String)>, // (node_id, flight_addr)
+}
+
 /// Configuration for MetaClient
 #[derive(Debug, Clone)]
 pub struct MetaClientConfig {
@@ -315,7 +325,11 @@ impl MetaClient {
     // ========================================================================
 
     /// Register this node with Meta service
-    pub async fn register_node(&self, info: NodeInfo, lease_ttl_ms: u64) -> Result<u64, String> {
+    pub async fn register_node(
+        &self,
+        info: NodeInfo,
+        lease_ttl_ms: u64,
+    ) -> Result<NodeRegistrationResult, String> {
         let proto_info = proto::NodeInfo {
             node_id: info.node_id,
             role: i32::from(info.role),
@@ -342,7 +356,23 @@ impl MetaClient {
             .await?;
 
         if response.success {
-            Ok(response.lease_id)
+            let assigned_mode = if response.assigned_mode != 0 {
+                Some(DataNodeMode::from(response.assigned_mode))
+            } else {
+                None
+            };
+
+            let backing_standby = if !response.backing_standby_id.is_empty() {
+                Some((response.backing_standby_id, response.backing_standby_addr))
+            } else {
+                None
+            };
+
+            Ok(NodeRegistrationResult {
+                lease_id: response.lease_id,
+                assigned_mode,
+                backing_standby,
+            })
         } else {
             Err(response.error)
         }
@@ -434,6 +464,10 @@ impl MetaClient {
                 last_heartbeat: n.last_heartbeat,
                 labels: n.labels,
                 mode: convert_proto_mode(n.mode),
+                // Node-level standby pairing (not transmitted over gRPC for now)
+                // These are managed internally by the state machine
+                backing_standby: None,
+                backed_primaries: vec![],
             })
             .collect())
     }
