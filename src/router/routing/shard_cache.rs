@@ -16,11 +16,11 @@
 //! - Excellent cache locality for hot data
 
 use crate::meta::types::DataNodeMode;
+use crate::utils::hash::{hash_select_clone, hash_select_index};
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
 
@@ -264,10 +264,7 @@ impl ShardCache {
         // Hash-based selection among Active Primary nodes
         let primary_nodes = self.get_active_primary_nodes();
         if !primary_nodes.is_empty() {
-            let mut hasher = DefaultHasher::new();
-            key.hash(&mut hasher);
-            let hash = hasher.finish();
-            let idx = (hash as usize) % primary_nodes.len();
+            let idx = hash_select_index(key, primary_nodes.len());
             let selected = &primary_nodes[idx];
             debug!(
                 "Hash routing for table {}: -> {}",
@@ -324,11 +321,7 @@ impl ShardCache {
             .collect();
 
         if !primary_nodes.is_empty() {
-            let mut hasher = DefaultHasher::new();
-            key.hash(&mut hasher);
-            let hash = hasher.finish();
-            let idx = (hash as usize) % primary_nodes.len();
-            return Some(primary_nodes[idx].clone());
+            return hash_select_clone(key, &primary_nodes);
         }
 
         // Fall back to all active nodes if no Primary nodes available
@@ -349,11 +342,7 @@ impl ShardCache {
         }
 
         // Consistent hashing based on table key
-        let mut hasher = DefaultHasher::new();
-        key.hash(&mut hasher);
-        let hash = hasher.finish();
-        let idx = (hash as usize) % nodes.len();
-        Some(nodes[idx].clone())
+        hash_select_clone(key, &nodes)
     }
 
     /// Get a DataNodeInfo by node_id
