@@ -542,14 +542,80 @@ impl MetaClient {
         }
     }
 
-    /// Reassign a table to a different owner node
+    /// Add an additional owner to a table (for rerouted writes)
+    ///
+    /// Returns (already_owner, all_owners, version) on success.
+    /// If the table doesn't exist, it's automatically registered with this owner.
+    pub async fn add_table_owner(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        owner_node_id: &str,
+    ) -> Result<(bool, Vec<String>, u64), String> {
+        let request = proto::AddTableOwnerRequest {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            owner_node_id: owner_node_id.to_string(),
+        };
+
+        let response = self
+            .with_retry("add_table_owner", |mut client| {
+                let req = request.clone();
+                async move { client.add_table_owner(req).await.map(|r| r.into_inner()) }
+            })
+            .await?;
+
+        if response.success {
+            Ok((response.already_owner, response.all_owners, response.version))
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Remove an owner from a table
+    ///
+    /// Returns (remaining_owners, version) on success.
+    /// Used by the table rebalancer to clean up dead node ownership.
+    pub async fn remove_table_owner(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        owner_node_id: &str,
+    ) -> Result<(Vec<String>, u64), String> {
+        let request = proto::RemoveTableOwnerRequest {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            owner_node_id: owner_node_id.to_string(),
+        };
+
+        let response = self
+            .with_retry("remove_table_owner", |mut client| {
+                let req = request.clone();
+                async move { client.remove_table_owner(req).await.map(|r| r.into_inner()) }
+            })
+            .await?;
+
+        if response.success {
+            Ok((response.all_owners, response.version))
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Reassign a table to a different primary owner node
+    ///
+    /// Returns (old_primary, new_primary, all_owners, version) on success
     pub async fn reassign_table(
         &self,
         catalog: &str,
         schema: &str,
         table: &str,
         new_owner_node_id: &str,
-    ) -> Result<(String, String, u64), String> {
+    ) -> Result<(String, String, Vec<String>, u64), String> {
         let request = proto::ReassignTableRequest {
             catalog: catalog.to_string(),
             schema: schema.to_string(),
@@ -565,7 +631,12 @@ impl MetaClient {
             .await?;
 
         if response.success {
-            Ok((response.old_owner, response.new_owner, response.version))
+            Ok((
+                response.old_primary,
+                response.new_primary,
+                response.all_owners,
+                response.version,
+            ))
         } else {
             Err(response.error)
         }
@@ -619,7 +690,7 @@ impl MetaClient {
                     catalog: meta.catalog,
                     schema: meta.schema,
                     table: meta.table,
-                    owner_node_id: meta.owner_node_id,
+                    owner_node_ids: meta.owner_node_ids,
                     partition_count: meta.partition_count,
                     total_bytes: meta.total_bytes,
                     total_rows: meta.total_rows,
@@ -667,7 +738,7 @@ impl MetaClient {
                 catalog: meta.catalog,
                 schema: meta.schema,
                 table: meta.table,
-                owner_node_id: meta.owner_node_id,
+                owner_node_ids: meta.owner_node_ids,
                 partition_count: meta.partition_count,
                 total_bytes: meta.total_bytes,
                 total_rows: meta.total_rows,
@@ -715,7 +786,7 @@ impl MetaClient {
                 catalog: meta.catalog,
                 schema: meta.schema,
                 table: meta.table,
-                owner_node_id: meta.owner_node_id,
+                owner_node_ids: meta.owner_node_ids,
                 partition_count: meta.partition_count,
                 total_bytes: meta.total_bytes,
                 total_rows: meta.total_rows,

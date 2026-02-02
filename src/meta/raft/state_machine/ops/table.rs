@@ -1,12 +1,14 @@
 //! Table Operations for MetaStateMachine
 //!
 //! Implements table-level routing - the recommended approach for cluster mode.
-//! Each table is owned by a single Data node which handles all partitions.
+//! Tables can have multiple owner nodes for:
+//! - Write reroute: When primary owner fails, writes go to fallback node
+//! - Large table distribution: Future feature to spread data across nodes
 //!
 //! Key benefits over file-level routing:
 //! - 600x fewer Meta entries (100K vs 60M)
 //! - Zero daily growth (new partitions don't create entries)
-//! - Single routing lookup per query
+//! - Single routing lookup per query (scatter-gather for multi-owner)
 //! - Excellent cache locality for time-series workloads
 
 use crate::meta::types::{keys, Event, EventType, MetaResponse, TableMeta, TableStatsDelta};
@@ -22,10 +24,10 @@ impl MetaStateMachine {
     /// Register a new table with its owner node
     ///
     /// Called when a Data node first receives data for a new table.
-    /// The node that first writes to a table becomes its owner.
+    /// The node that first writes to a table becomes its primary owner.
     ///
-    /// This is idempotent - if the table already exists with the same owner,
-    /// it returns TableAlreadyExists (not an error).
+    /// This is idempotent - if the table already exists, it returns
+    /// TableAlreadyExists with all current owners.
     pub(crate) fn register_table(
         &self,
         catalog: &str,
@@ -38,15 +40,17 @@ impl MetaStateMachine {
         // Check if table already exists
         if let Ok(Some(existing)) = self.db.get(key.as_bytes()) {
             if let Ok(meta) = bincode::deserialize::<TableMeta>(&existing) {
+                let primary = meta.primary_owner().unwrap_or("").to_string();
                 debug!(
-                    "Table already exists: {}.{}.{} owned by {}",
-                    catalog, schema, table, meta.owner_node_id
+                    "Table already exists: {}.{}.{} owned by {:?} (primary: {})",
+                    catalog, schema, table, meta.owner_node_ids, primary
                 );
                 return MetaResponse::TableAlreadyExists {
                     catalog: catalog.to_string(),
                     schema: schema.to_string(),
                     table: table.to_string(),
-                    current_owner: meta.owner_node_id,
+                    current_owner: primary,
+                    all_owners: meta.owner_node_ids.clone(),
                 };
             }
         }
@@ -80,7 +84,7 @@ impl MetaStateMachine {
             "catalog": catalog,
             "schema": schema,
             "table": table,
-            "owner_node_id": owner_node_id,
+            "owner_node_ids": [owner_node_id],
         });
         let seq = self.next_sequence();
         let event = Event::new(
@@ -101,6 +105,209 @@ impl MetaStateMachine {
             table: table.to_string(),
             owner_node_id: owner_node_id.to_string(),
             version: meta.version,
+        }
+    }
+
+    /// Add an additional owner node to a table
+    ///
+    /// Called when a write is rerouted to a fallback node after primary failure.
+    /// The new node becomes a secondary owner - queries should scatter-gather
+    /// to all owners to get complete data.
+    pub(crate) fn add_table_owner(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        new_owner_node_id: &str,
+    ) -> MetaResponse {
+        let key = TableMeta::key_for(catalog, schema, table);
+
+        // Load existing table
+        let existing = match self.db.get(key.as_bytes()) {
+            Ok(Some(data)) => match bincode::deserialize::<TableMeta>(&data) {
+                Ok(meta) => meta,
+                Err(e) => {
+                    return MetaResponse::Error {
+                        message: format!("Failed to deserialize table: {}", e),
+                    }
+                }
+            },
+            Ok(None) => {
+                // Table doesn't exist - register it with this node as primary
+                return self.register_table(catalog, schema, table, new_owner_node_id);
+            }
+            Err(e) => {
+                return MetaResponse::Error {
+                    message: format!("Failed to read table: {}", e),
+                }
+            }
+        };
+
+        // Check if already an owner
+        if existing.is_owner(new_owner_node_id) {
+            return MetaResponse::TableOwnerExists {
+                catalog: catalog.to_string(),
+                schema: schema.to_string(),
+                table: table.to_string(),
+                node_id: new_owner_node_id.to_string(),
+                all_owners: existing.owner_node_ids.clone(),
+            };
+        }
+
+        // Add new owner
+        let mut updated = existing;
+        updated.add_owner(new_owner_node_id.to_string());
+
+        // Store updated table
+        if let Err(e) = self
+            .db
+            .insert(key.as_bytes(), bincode::serialize(&updated).unwrap())
+        {
+            return MetaResponse::Error {
+                message: format!("Failed to add table owner: {}", e),
+            };
+        }
+
+        info!(
+            "Table owner added: {}.{}.{} now owned by {:?}",
+            catalog, schema, table, updated.owner_node_ids
+        );
+
+        // Publish event for cache invalidation
+        let payload = serde_json::json!({
+            "catalog": catalog,
+            "schema": schema,
+            "table": table,
+            "added_owner": new_owner_node_id,
+            "all_owners": updated.owner_node_ids,
+        });
+        let seq = self.next_sequence();
+        let event = Event::new(
+            seq,
+            EventType::TableOwnerAdded,
+            format!("{}.{}.{}", catalog, schema, table),
+            serde_json::to_vec(&payload).unwrap_or_default(),
+            new_owner_node_id.to_string(),
+        );
+        let _ = self.db.insert(
+            event.storage_key().as_bytes(),
+            bincode::serialize(&event).unwrap(),
+        );
+
+        MetaResponse::TableOwnerAdded {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            new_owner: new_owner_node_id.to_string(),
+            all_owners: updated.owner_node_ids,
+            version: updated.version,
+        }
+    }
+
+    /// Remove an owner node from a table
+    ///
+    /// Called when a node leaves the cluster permanently or when consolidating
+    /// ownership after data migration.
+    pub(crate) fn remove_table_owner(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        node_id: &str,
+    ) -> MetaResponse {
+        let key = TableMeta::key_for(catalog, schema, table);
+
+        // Load existing table
+        let existing = match self.db.get(key.as_bytes()) {
+            Ok(Some(data)) => match bincode::deserialize::<TableMeta>(&data) {
+                Ok(meta) => meta,
+                Err(e) => {
+                    return MetaResponse::Error {
+                        message: format!("Failed to deserialize table: {}", e),
+                    }
+                }
+            },
+            Ok(None) => {
+                return MetaResponse::TableNotFound {
+                    catalog: catalog.to_string(),
+                    schema: schema.to_string(),
+                    table: table.to_string(),
+                }
+            }
+            Err(e) => {
+                return MetaResponse::Error {
+                    message: format!("Failed to read table: {}", e),
+                }
+            }
+        };
+
+        // Check if this is the only owner
+        if existing.owner_node_ids.len() == 1 && existing.is_owner(node_id) {
+            return MetaResponse::Error {
+                message: format!(
+                    "Cannot remove last owner {} from table {}.{}.{}",
+                    node_id, catalog, schema, table
+                ),
+            };
+        }
+
+        // Check if node is an owner
+        if !existing.is_owner(node_id) {
+            return MetaResponse::Error {
+                message: format!(
+                    "Node {} is not an owner of table {}.{}.{}",
+                    node_id, catalog, schema, table
+                ),
+            };
+        }
+
+        // Remove owner
+        let mut updated = existing;
+        updated.remove_owner(node_id);
+
+        // Store updated table
+        if let Err(e) = self
+            .db
+            .insert(key.as_bytes(), bincode::serialize(&updated).unwrap())
+        {
+            return MetaResponse::Error {
+                message: format!("Failed to remove table owner: {}", e),
+            };
+        }
+
+        info!(
+            "Table owner removed: {}.{}.{} now owned by {:?}",
+            catalog, schema, table, updated.owner_node_ids
+        );
+
+        // Publish event
+        let payload = serde_json::json!({
+            "catalog": catalog,
+            "schema": schema,
+            "table": table,
+            "removed_owner": node_id,
+            "all_owners": updated.owner_node_ids,
+        });
+        let seq = self.next_sequence();
+        let event = Event::new(
+            seq,
+            EventType::TableOwnerRemoved,
+            format!("{}.{}.{}", catalog, schema, table),
+            serde_json::to_vec(&payload).unwrap_or_default(),
+            node_id.to_string(),
+        );
+        let _ = self.db.insert(
+            event.storage_key().as_bytes(),
+            bincode::serialize(&event).unwrap(),
+        );
+
+        MetaResponse::TableOwnerRemoved {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            removed_owner: node_id.to_string(),
+            all_owners: updated.owner_node_ids,
+            version: updated.version,
         }
     }
 
@@ -168,12 +375,15 @@ impl MetaStateMachine {
         }
     }
 
-    /// Reassign a table to a different owner node
+    /// Reassign a table to a different primary owner node
     ///
     /// Used for:
     /// - Load balancing (move hot tables)
-    /// - Node failure recovery
+    /// - Node failure recovery (promote secondary to primary)
     /// - Manual rebalancing
+    ///
+    /// The new owner becomes the primary (first in owner list).
+    /// Other owners are preserved for scatter-gather queries.
     pub(crate) fn reassign_table(
         &self,
         catalog: &str,
@@ -207,13 +417,11 @@ impl MetaStateMachine {
             }
         };
 
-        let old_owner = existing.owner_node_id.clone();
+        let old_primary = existing.primary_owner().unwrap_or("").to_string();
 
-        // Update owner
+        // Set new primary owner (moves to front, adds if not present)
         let mut updated = existing;
-        updated.owner_node_id = new_owner_node_id.to_string();
-        updated.last_modified = crate::meta::types::current_timestamp_ms();
-        updated.version += 1;
+        updated.set_primary_owner(new_owner_node_id.to_string());
 
         // Store updated table
         if let Err(e) = self
@@ -226,8 +434,8 @@ impl MetaStateMachine {
         }
 
         info!(
-            "Table reassigned: {}.{}.{} {} -> {}",
-            catalog, schema, table, old_owner, new_owner_node_id
+            "Table reassigned: {}.{}.{} primary {} -> {}, all owners: {:?}",
+            catalog, schema, table, old_primary, new_owner_node_id, updated.owner_node_ids
         );
 
         // Publish event for cache invalidation
@@ -235,13 +443,14 @@ impl MetaStateMachine {
             "catalog": catalog,
             "schema": schema,
             "table": table,
-            "old_owner": old_owner,
-            "new_owner": new_owner_node_id,
+            "old_primary": old_primary,
+            "new_primary": new_owner_node_id,
+            "all_owners": updated.owner_node_ids,
         });
         let seq = self.next_sequence();
         let event = Event::new(
             seq,
-            EventType::SchemaChanged,
+            EventType::TableReassigned,
             format!("{}.{}.{}", catalog, schema, table),
             serde_json::to_vec(&payload).unwrap_or_default(),
             new_owner_node_id.to_string(),
@@ -255,8 +464,9 @@ impl MetaStateMachine {
             catalog: catalog.to_string(),
             schema: schema.to_string(),
             table: table.to_string(),
-            old_owner,
+            old_owner: old_primary,
             new_owner: new_owner_node_id.to_string(),
+            all_owners: updated.owner_node_ids,
             version: updated.version,
         }
     }
@@ -319,10 +529,10 @@ impl MetaStateMachine {
     // Table Operations (Read Path / Queries)
     // ========================================================================
 
-    /// Get the owner node for a table (primary routing operation)
+    /// Get the primary owner node for a table (for new write routing)
     ///
-    /// This is the main query for routing - O(1) hash lookup.
-    /// Returns None if table doesn't exist.
+    /// This returns the primary owner (first in list) for routing new writes.
+    /// For queries, use get_table_all_owners() to scatter-gather.
     pub fn get_table_owner(&self, catalog: &str, schema: &str, table: &str) -> Option<String> {
         let key = TableMeta::key_for(catalog, schema, table);
 
@@ -331,7 +541,23 @@ impl MetaStateMachine {
             .ok()
             .flatten()
             .and_then(|data| bincode::deserialize::<TableMeta>(&data).ok())
-            .map(|meta| meta.owner_node_id)
+            .and_then(|meta| meta.primary_owner().map(|s| s.to_string()))
+    }
+
+    /// Get all owner nodes for a table (for scatter-gather queries)
+    ///
+    /// Returns all nodes that have data for this table.
+    /// Queries should fan-out to all owners to get complete results.
+    pub fn get_table_all_owners(&self, catalog: &str, schema: &str, table: &str) -> Vec<String> {
+        let key = TableMeta::key_for(catalog, schema, table);
+
+        self.db
+            .get(key.as_bytes())
+            .ok()
+            .flatten()
+            .and_then(|data| bincode::deserialize::<TableMeta>(&data).ok())
+            .map(|meta| meta.owner_node_ids)
+            .unwrap_or_default()
     }
 
     /// Get full table metadata
@@ -345,11 +571,11 @@ impl MetaStateMachine {
             .and_then(|data| bincode::deserialize::<TableMeta>(&data).ok())
     }
 
-    /// List all tables owned by a specific node
+    /// List all tables where a node is an owner (primary or secondary)
     ///
     /// Used for:
     /// - Rebalancing decisions
-    /// - Node failure recovery
+    /// - Node failure recovery (find all tables affected)
     /// - Admin dashboards
     pub fn list_tables_for_node(&self, node_id: &str) -> Vec<TableMeta> {
         let prefix = keys::PREFIX_TABLE;
@@ -358,7 +584,27 @@ impl MetaStateMachine {
         for item in self.db.scan_prefix(prefix) {
             if let Ok((_, v)) = item {
                 if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
-                    if meta.owner_node_id == node_id {
+                    if meta.is_owner(node_id) {
+                        tables.push(meta);
+                    }
+                }
+            }
+        }
+
+        tables
+    }
+
+    /// List all tables where a node is the PRIMARY owner
+    ///
+    /// Used for counting tables assigned for writes to a node.
+    pub fn list_tables_for_primary_node(&self, node_id: &str) -> Vec<TableMeta> {
+        let prefix = keys::PREFIX_TABLE;
+        let mut tables = Vec::new();
+
+        for item in self.db.scan_prefix(prefix) {
+            if let Ok((_, v)) = item {
+                if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
+                    if meta.primary_owner() == Some(node_id) {
                         tables.push(meta);
                     }
                 }
@@ -417,6 +663,9 @@ impl MetaStateMachine {
     }
 
     /// Count tables per node (for load balancing)
+    ///
+    /// Returns counts for primary ownership only (for write distribution).
+    /// For full ownership counts including secondary owners, use count_all_table_owners().
     pub fn count_tables_per_node(&self) -> std::collections::HashMap<String, usize> {
         let prefix = keys::PREFIX_TABLE;
         let mut counts = std::collections::HashMap::new();
@@ -424,12 +673,53 @@ impl MetaStateMachine {
         for item in self.db.scan_prefix(prefix) {
             if let Ok((_, v)) = item {
                 if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
-                    *counts.entry(meta.owner_node_id).or_insert(0) += 1;
+                    if let Some(primary) = meta.primary_owner() {
+                        *counts.entry(primary.to_string()).or_insert(0) += 1;
+                    }
                 }
             }
         }
 
         counts
+    }
+
+    /// Count all table ownerships per node (including secondary owners)
+    ///
+    /// A node may appear multiple times if it's owner of multiple tables.
+    /// Secondary owners (from rerouted writes) are also counted.
+    pub fn count_all_table_owners(&self) -> std::collections::HashMap<String, usize> {
+        let prefix = keys::PREFIX_TABLE;
+        let mut counts = std::collections::HashMap::new();
+
+        for item in self.db.scan_prefix(prefix) {
+            if let Ok((_, v)) = item {
+                if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
+                    for owner in &meta.owner_node_ids {
+                        *counts.entry(owner.clone()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        counts
+    }
+
+    /// Find tables with multiple owners (for consolidation/monitoring)
+    pub fn list_multi_owner_tables(&self) -> Vec<TableMeta> {
+        let prefix = keys::PREFIX_TABLE;
+        let mut tables = Vec::new();
+
+        for item in self.db.scan_prefix(prefix) {
+            if let Ok((_, v)) = item {
+                if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
+                    if meta.is_multi_owner() {
+                        tables.push(meta);
+                    }
+                }
+            }
+        }
+
+        tables
     }
 
     /// Get total statistics across all tables

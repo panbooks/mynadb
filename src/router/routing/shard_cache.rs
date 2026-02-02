@@ -141,9 +141,27 @@ impl TableKey {
 /// Cached table metadata for routing
 #[derive(Debug, Clone)]
 pub struct CachedTableMeta {
-    pub owner_node_id: String,
+    /// All owner node IDs (first is primary)
+    pub owner_node_ids: Vec<String>,
     pub version: u64,
     pub cached_at: i64,
+}
+
+impl CachedTableMeta {
+    /// Get the primary owner (first in list)
+    pub fn primary_owner(&self) -> Option<&str> {
+        self.owner_node_ids.first().map(|s| s.as_str())
+    }
+
+    /// Get all owners
+    pub fn all_owners(&self) -> &[String] {
+        &self.owner_node_ids
+    }
+
+    /// Check if a node is an owner
+    pub fn is_owner(&self, node_id: &str) -> bool {
+        self.owner_node_ids.iter().any(|id| id == node_id)
+    }
 }
 
 /// Shard cache for table→node mapping
@@ -183,11 +201,11 @@ impl ShardCache {
     // Table-Level Routing (RECOMMENDED)
     // ========================================================================
 
-    /// Get the owner node_id for a table
+    /// Get the primary owner node_id for a table
     pub fn get_table_owner(&self, key: &TableKey) -> Option<String> {
         self.table_owners
             .get(&key.to_path())
-            .map(|v| v.owner_node_id.clone())
+            .and_then(|v| v.primary_owner().map(|s| s.to_string()))
     }
 
     /// Get cached table metadata
@@ -195,22 +213,46 @@ impl ShardCache {
         self.table_owners.get(&key.to_path()).map(|v| v.clone())
     }
 
-    /// Set the owner node_id for a table
+    /// Set a single table owner (for backward compatibility)
     pub fn set_table_owner(&self, key: &TableKey, node_id: String, version: u64) {
+        self.set_table_owners(key, vec![node_id], version);
+    }
+
+    /// Set all table owners (for multi-node tables)
+    pub fn set_table_owners(&self, key: &TableKey, owner_node_ids: Vec<String>, version: u64) {
         debug!(
-            "Setting table owner: {} -> {} (v{})",
+            "Setting table owners: {} -> {:?} (v{})",
             key.to_path(),
-            node_id,
+            owner_node_ids,
             version
         );
         self.table_owners.insert(
             key.to_path(),
             CachedTableMeta {
-                owner_node_id: node_id,
+                owner_node_ids,
                 version,
                 cached_at: chrono::Utc::now().timestamp_millis(),
             },
         );
+    }
+
+    /// Add an owner to a table (for rerouted writes)
+    pub fn add_table_owner(&self, key: &TableKey, node_id: String, version: u64) {
+        let path = key.to_path();
+        if let Some(mut entry) = self.table_owners.get_mut(&path) {
+            if !entry.is_owner(&node_id) {
+                entry.owner_node_ids.push(node_id.clone());
+                entry.version = version;
+                entry.cached_at = chrono::Utc::now().timestamp_millis();
+                debug!(
+                    "Added table owner: {} -> {:?} (v{})",
+                    path, entry.owner_node_ids, version
+                );
+            }
+        } else {
+            // Table not cached yet, add it
+            self.set_table_owners(key, vec![node_id], version);
+        }
     }
 
     /// Remove a table owner (e.g., when table is dropped)
@@ -218,25 +260,55 @@ impl ShardCache {
         self.table_owners.remove(&key.to_path());
     }
 
-    /// Remove all table ownership entries for a specific node
+    /// Get all owners for a table
+    pub fn get_table_owners(&self, key: &TableKey) -> Option<Vec<String>> {
+        self.table_owners
+            .get(&key.to_path())
+            .map(|entry| entry.owner_node_ids.clone())
+    }
+
+    /// Get primary owner for a table
+    pub fn get_table_primary_owner(&self, key: &TableKey) -> Option<String> {
+        self.table_owners
+            .get(&key.to_path())
+            .and_then(|entry| entry.primary_owner().map(|s| s.to_string()))
+    }
+
+    /// Remove a node from all table ownership entries
     /// Called when a node permanently leaves the cluster
+    ///
+    /// Returns the number of tables where this node was removed as an owner.
+    /// Tables with remaining owners are kept; tables with no owners are removed.
     pub fn remove_tables_for_node(&self, node_id: &str) -> usize {
-        let mut removed = 0;
-        self.table_owners.retain(|_, meta| {
-            if meta.owner_node_id == node_id {
-                removed += 1;
-                false
-            } else {
-                true
+        let mut affected = 0;
+        let mut tables_to_remove = Vec::new();
+
+        // First pass: remove node from owner lists
+        for mut entry in self.table_owners.iter_mut() {
+            if entry.value().is_owner(node_id) {
+                affected += 1;
+                entry.value_mut().owner_node_ids.retain(|id| id != node_id);
+
+                // If no owners left, mark for removal
+                if entry.value().owner_node_ids.is_empty() {
+                    tables_to_remove.push(entry.key().clone());
+                }
             }
-        });
-        if removed > 0 {
+        }
+
+        // Second pass: remove tables with no owners
+        for table_path in tables_to_remove {
+            self.table_owners.remove(&table_path);
+            debug!("Removed table {} with no remaining owners", table_path);
+        }
+
+        if affected > 0 {
             info!(
                 "Cleaned up {} table entries for departed node {}",
-                removed, node_id
+                affected, node_id
             );
         }
-        removed
+        affected
     }
 
     /// Select node for a table using table-level routing
@@ -278,11 +350,31 @@ impl ShardCache {
         None
     }
 
-    /// Get list of tables owned by a node
+    /// Get list of tables where a node is an owner (primary or secondary)
     pub fn get_tables_for_node(&self, node_id: &str) -> Vec<TableKey> {
         self.table_owners
             .iter()
-            .filter(|entry| entry.value().owner_node_id == node_id)
+            .filter(|entry| entry.value().is_owner(node_id))
+            .filter_map(|entry| {
+                let parts: Vec<&str> = entry.key().split('/').collect();
+                if parts.len() == 3 {
+                    Some(TableKey {
+                        catalog: parts[0].to_string(),
+                        schema: parts[1].to_string(),
+                        table: parts[2].to_string(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Get list of tables where a node is the PRIMARY owner
+    pub fn get_tables_for_primary_node(&self, node_id: &str) -> Vec<TableKey> {
+        self.table_owners
+            .iter()
+            .filter(|entry| entry.value().primary_owner() == Some(node_id))
             .filter_map(|entry| {
                 let parts: Vec<&str> = entry.key().split('/').collect();
                 if parts.len() == 3 {

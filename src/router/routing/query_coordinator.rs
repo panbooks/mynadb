@@ -290,31 +290,47 @@ impl QueryCoordinator {
                 // Cache miss - query Meta
                 match meta_client.get_table_owner(catalog, &table.schema, &table.table).await {
                     Ok(Some(table_meta)) => {
-                        let owner_id = table_meta.owner_node_id.clone();
+                        // Get all owners for scatter-gather
+                        let all_owners = table_meta.all_owners();
+                        let primary_owner = table_meta.primary_owner().unwrap_or("").to_string();
 
-                        // Update local cache
-                        self.shard_cache.set_table_owner(
+                        // Update local cache with primary owner and all owners
+                        self.shard_cache.set_table_owners(
                             &table_key,
-                            owner_id.clone(),
+                            all_owners.to_vec(),
                             table_meta.version,
                         );
 
-                        // Check if owner is available
-                        if let Some(node) = self.shard_cache.get_data_node(&owner_id) {
-                            if node.state == super::shard_cache::NodeState::Active
-                                || node.state == super::shard_cache::NodeState::Retiring {
-                                owners.insert(table_key.to_path(), owner_id.clone());
-                                nodes_to_query.insert(owner_id, node);
+                        // Add all available owners to query set for scatter-gather
+                        for owner_id in all_owners {
+                            if let Some(node) = self.shard_cache.get_data_node(owner_id) {
+                                if node.state == super::shard_cache::NodeState::Active
+                                    || node.state == super::shard_cache::NodeState::Retiring
+                                {
+                                    owners.insert(table_key.to_path(), owner_id.clone());
+                                    nodes_to_query.insert(owner_id.clone(), node);
+                                } else {
+                                    debug!(
+                                        "Table {} owner {} is {:?}, skipping",
+                                        table_key.to_path(),
+                                        owner_id,
+                                        node.state
+                                    );
+                                }
                             } else {
                                 debug!(
-                                    "Table {} owner {} is {:?}, will use fallback",
-                                    table_key.to_path(), owner_id, node.state
+                                    "Table {} owner {} not found in node list",
+                                    table_key.to_path(),
+                                    owner_id
                                 );
                             }
-                        } else {
+                        }
+
+                        // If no owners are available, log for fallback
+                        if !owners.contains_key(&table_key.to_path()) {
                             debug!(
-                                "Table {} owner {} not found in node list",
-                                table_key.to_path(), owner_id
+                                "Table {} has no available owners, will use fallback",
+                                table_key.to_path()
                             );
                         }
                     }

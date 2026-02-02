@@ -15,6 +15,7 @@
 
 use super::shard_cache::{PartitionKey, ShardCache, TableKey};
 use crate::config::SchemaConfig;
+use crate::meta::client::MetaClient;
 use crate::router::client::DataNodePool;
 use crate::storage::batch_converter::points_to_record_batch;
 use crate::storage::line_protocol::{format_date32_as_string, parse_line_protocol, Point};
@@ -49,6 +50,9 @@ pub struct WriteRouter {
 
     /// Schema configuration for parsing
     schema_config: SchemaConfig,
+
+    /// Meta client for updating table ownership after reroute
+    meta_client: Option<Arc<MetaClient>>,
 }
 
 impl WriteRouter {
@@ -61,6 +65,22 @@ impl WriteRouter {
             shard_cache,
             data_node_pool,
             schema_config,
+            meta_client: None,
+        }
+    }
+
+    /// Create a WriteRouter with MetaClient for cluster mode
+    pub fn with_meta_client(
+        shard_cache: Arc<ShardCache>,
+        data_node_pool: Arc<DataNodePool>,
+        schema_config: SchemaConfig,
+        meta_client: Arc<MetaClient>,
+    ) -> Self {
+        Self {
+            shard_cache,
+            data_node_pool,
+            schema_config,
+            meta_client: Some(meta_client),
         }
     }
 
@@ -215,7 +235,7 @@ impl WriteRouter {
     /// 1. Select target node based on table ownership
     /// 2. Try to write
     /// 3. On failure, mark node as suspect and retry on different node
-    /// 4. Continue until success or max retries exceeded
+    /// 4. On successful reroute, add new node as table owner in Meta
     ///
     /// Table-level routing ensures all partitions of a table go to the same node.
     async fn dispatch_writes_with_retry(
@@ -228,12 +248,14 @@ impl WriteRouter {
         for (partition_key, batch) in partition_batches {
             let pool = Arc::clone(&self.data_node_pool);
             let shard_cache = Arc::clone(&self.shard_cache);
+            let meta_client = self.meta_client.clone();
             let catalog = catalog.to_string();
 
             let future = async move {
                 Self::write_partition_with_retry(
                     &pool,
                     &shard_cache,
+                    meta_client.as_ref(),
                     &catalog,
                     partition_key,
                     batch,
@@ -268,10 +290,12 @@ impl WriteRouter {
 
     /// Write a single partition with retry logic using table-level routing
     ///
-    /// Returns (rows_written, retry_count) on success
+    /// Returns (rows_written, retry_count) on success.
+    /// On successful reroute, adds the new node as a table owner in Meta.
     async fn write_partition_with_retry(
         pool: &DataNodePool,
         shard_cache: &ShardCache,
+        meta_client: Option<&Arc<MetaClient>>,
         catalog: &str,
         partition_key: PartitionKey,
         batch: RecordBatch,
@@ -350,6 +374,38 @@ impl WriteRouter {
                         for failed_node_id in tried_nodes.iter() {
                             if failed_node_id != &node.node_id {
                                 shard_cache.mark_node_suspect(failed_node_id);
+                            }
+                        }
+
+                        // CRITICAL: Add rerouted node as table owner in Meta
+                        // This ensures queries will scatter-gather to all nodes with data
+                        if let Some(client) = meta_client {
+                            match client
+                                .add_table_owner(
+                                    catalog,
+                                    &partition_key.schema,
+                                    &partition_key.table,
+                                    &node.node_id,
+                                )
+                                .await
+                            {
+                                Ok((already_owner, all_owners, version)) => {
+                                    if !already_owner {
+                                        info!(
+                                            "Added rerouted node {} as owner for table {} (v{}, owners: {:?})",
+                                            node.node_id, table_path, version, all_owners
+                                        );
+                                        // Update local cache with all owners
+                                        shard_cache.set_table_owners(&table_key, all_owners, version);
+                                    }
+                                }
+                                Err(e) => {
+                                    // Log error but don't fail the write - data is already written
+                                    warn!(
+                                        "Failed to add rerouted node {} as owner for table {}: {}",
+                                        node.node_id, table_path, e
+                                    );
+                                }
                             }
                         }
                     }

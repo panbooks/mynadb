@@ -279,9 +279,90 @@ impl MetaNode {
         }
     }
 
-    /// Get the owner node for a table (primary routing operation)
+    /// Add an additional owner to a table (for rerouted writes)
+    ///
+    /// Returns (already_owner, all_owners, version) on success
+    pub async fn add_table_owner(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        owner_node_id: &str,
+    ) -> Result<(bool, Vec<String>, u64), String> {
+        let cmd = MetaCommand::AddTableOwner {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            owner_node_id: owner_node_id.to_string(),
+        };
+
+        let result = self.raft.client_write(cmd).await;
+        match result {
+            Ok(response) => match response.data {
+                MetaResponse::TableOwnerAdded {
+                    all_owners,
+                    version,
+                    ..
+                } => Ok((false, all_owners, version)),
+                MetaResponse::TableOwnerExists { all_owners, .. } => Ok((true, all_owners, 0)),
+                MetaResponse::TableRegistered {
+                    owner_node_id,
+                    version,
+                    ..
+                } => Ok((false, vec![owner_node_id], version)),
+                MetaResponse::Error { message } => Err(message),
+                _ => Err("Unexpected response".to_string()),
+            },
+            Err(e) => Err(format!("Failed to add table owner: {}", e)),
+        }
+    }
+
+    /// Remove an owner from a table
+    ///
+    /// Returns (remaining_owners, version) on success
+    pub async fn remove_table_owner(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        owner_node_id: &str,
+    ) -> Result<(Vec<String>, u64), String> {
+        let cmd = MetaCommand::RemoveTableOwner {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            owner_node_id: owner_node_id.to_string(),
+        };
+
+        let result = self.raft.client_write(cmd).await;
+        match result {
+            Ok(response) => match response.data {
+                MetaResponse::TableOwnerRemoved {
+                    all_owners,
+                    version,
+                    ..
+                } => Ok((all_owners, version)),
+                MetaResponse::Error { message } => Err(message),
+                _ => Err("Unexpected response".to_string()),
+            },
+            Err(e) => Err(format!("Failed to remove table owner: {}", e)),
+        }
+    }
+
+    /// Get the primary owner node for a table (for new write routing)
     pub async fn get_table_owner(&self, catalog: &str, schema: &str, table: &str) -> Option<String> {
         self.state_machine.get_table_owner(catalog, schema, table)
+    }
+
+    /// Get all owner nodes for a table (for scatter-gather queries)
+    pub async fn get_table_all_owners(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Vec<String> {
+        self.state_machine
+            .get_table_all_owners(catalog, schema, table)
     }
 
     /// Get full table metadata
