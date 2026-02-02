@@ -15,6 +15,7 @@ pub mod keys {
     pub const PREFIX_EVENT: &str = "/events/";
     pub const PREFIX_LEASE: &str = "/leases/";
     pub const PREFIX_REPLICA: &str = "/replicas/";
+    pub const PREFIX_DISTRIBUTION: &str = "/distribution/";
     pub const META_SEQUENCE: &str = "/meta/sequence";
     pub const META_FENCING: &str = "/meta/fencing";
 }
@@ -614,6 +615,143 @@ impl TableStatsDelta {
     }
 }
 
+// ============================================================================
+// Write Distribution Configuration
+// ============================================================================
+
+/// Scope level for distribution configuration
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum DistributionScope {
+    /// Apply to all tables in a catalog
+    Catalog = 1,
+    /// Apply to all tables in a schema
+    Schema = 2,
+    /// Apply to a specific table
+    Table = 3,
+}
+
+impl From<i32> for DistributionScope {
+    fn from(v: i32) -> Self {
+        match v {
+            1 => DistributionScope::Catalog,
+            2 => DistributionScope::Schema,
+            3 => DistributionScope::Table,
+            _ => DistributionScope::Table,
+        }
+    }
+}
+
+impl From<DistributionScope> for i32 {
+    fn from(scope: DistributionScope) -> Self {
+        scope as i32
+    }
+}
+
+/// Write distribution configuration
+///
+/// Allows distributing writes for a table across multiple primary nodes
+/// for better load balancing on high-throughput tables.
+///
+/// Configuration is hierarchical: table > schema > catalog
+/// The most specific matching config wins.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DistributionConfig {
+    /// Catalog name (required)
+    pub catalog: String,
+    /// Schema name (optional - if empty, applies to all schemas in catalog)
+    pub schema: String,
+    /// Table name (optional - if empty, applies to all tables in schema)
+    pub table: String,
+    /// Scope level (derived from catalog/schema/table presence)
+    pub scope: DistributionScope,
+    /// Distribution percentage [0-100]
+    /// - 0: No distribution, single node (default behavior)
+    /// - 50: Distribute across 50% of primary nodes
+    /// - 100: Distribute across ALL primary nodes
+    pub percent: u8,
+    /// When config was created
+    pub created_at: i64,
+    /// When config was last modified
+    pub last_modified: i64,
+    /// Version for cache invalidation
+    pub version: u64,
+}
+
+impl DistributionConfig {
+    /// Create a new distribution config
+    pub fn new(catalog: String, schema: String, table: String, percent: u8) -> Self {
+        let scope = if !table.is_empty() {
+            DistributionScope::Table
+        } else if !schema.is_empty() {
+            DistributionScope::Schema
+        } else {
+            DistributionScope::Catalog
+        };
+        let now = current_timestamp_ms();
+        Self {
+            catalog,
+            schema,
+            table,
+            scope,
+            percent: percent.min(100),
+            created_at: now,
+            last_modified: now,
+            version: 1,
+        }
+    }
+
+    /// Generate storage key for this config
+    pub fn storage_key(&self) -> String {
+        Self::key_for(&self.catalog, &self.schema, &self.table)
+    }
+
+    /// Generate storage key for a distribution config
+    pub fn key_for(catalog: &str, schema: &str, table: &str) -> String {
+        if !table.is_empty() {
+            format!("{}{}/{}/{}", keys::PREFIX_DISTRIBUTION, catalog, schema, table)
+        } else if !schema.is_empty() {
+            format!("{}{}/{}", keys::PREFIX_DISTRIBUTION, catalog, schema)
+        } else {
+            format!("{}{}", keys::PREFIX_DISTRIBUTION, catalog)
+        }
+    }
+
+    /// Generate prefix for listing all distribution configs
+    pub fn all_prefix() -> String {
+        keys::PREFIX_DISTRIBUTION.to_string()
+    }
+
+    /// Check if this config is more specific than another
+    pub fn is_more_specific_than(&self, other: &Self) -> bool {
+        (self.scope as u8) > (other.scope as u8)
+    }
+
+    /// Check if this config applies to the given table
+    pub fn applies_to(&self, catalog: &str, schema: &str, table: &str) -> bool {
+        if self.catalog != catalog {
+            return false;
+        }
+        match self.scope {
+            DistributionScope::Catalog => true,
+            DistributionScope::Schema => self.schema == schema,
+            DistributionScope::Table => self.schema == schema && self.table == table,
+        }
+    }
+
+    /// Calculate number of nodes to use based on percentage and total primary nodes
+    pub fn nodes_to_use(&self, total_primary_nodes: usize) -> usize {
+        if self.percent == 0 || total_primary_nodes == 0 {
+            1 // Single node (default)
+        } else if self.percent >= 100 {
+            total_primary_nodes
+        } else {
+            let count = (total_primary_nodes as u64 * self.percent as u64 / 100).max(1) as usize;
+            count.min(total_primary_nodes)
+        }
+    }
+}
+
 /// Lock information with fencing token
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockInfo {
@@ -1007,6 +1145,12 @@ pub enum EventType {
     /// Published when a table's primary owner changes.
     /// Payload: {"catalog": "...", "schema": "...", "table": "...", "old_primary": "...", "new_primary": "...", "all_owners": [...]}
     TableReassigned = 16,
+
+    /// Distribution config changed
+    ///
+    /// Published when write distribution config is set or deleted.
+    /// Payload: {"catalog": "...", "schema": "...", "table": "...", "percent": N, "deleted": bool}
+    DistributionConfigChanged = 17,
 }
 
 impl From<i32> for EventType {
@@ -1160,6 +1304,30 @@ pub enum MetaCommand {
     ///
     /// Called when a table is dropped or all data is deleted.
     RemoveTable {
+        catalog: String,
+        schema: String,
+        table: String,
+    },
+
+    // ========================================================================
+    // Write Distribution Configuration
+    // ========================================================================
+
+    /// Set distribution config for catalog/schema/table
+    ///
+    /// Configures how writes are distributed across primary nodes.
+    /// percent=0 means single node (default), percent=100 means all nodes.
+    SetDistributionConfig {
+        catalog: String,
+        schema: String,
+        table: String,
+        percent: u8,
+    },
+
+    /// Delete distribution config
+    ///
+    /// Removes distribution config, reverting to default (single node).
+    DeleteDistributionConfig {
         catalog: String,
         schema: String,
         table: String,
@@ -1446,6 +1614,33 @@ pub enum MetaResponse {
 
     /// Table not found
     TableNotFound {
+        catalog: String,
+        schema: String,
+        table: String,
+    },
+
+    // ========================================================================
+    // Distribution Config Responses
+    // ========================================================================
+
+    /// Distribution config set successfully
+    DistributionConfigSet {
+        catalog: String,
+        schema: String,
+        table: String,
+        percent: u8,
+        version: u64,
+    },
+
+    /// Distribution config deleted successfully
+    DistributionConfigDeleted {
+        catalog: String,
+        schema: String,
+        table: String,
+    },
+
+    /// Distribution config not found (when deleting)
+    DistributionConfigNotFound {
         catalog: String,
         schema: String,
         table: String,

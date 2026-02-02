@@ -54,6 +54,8 @@ pub struct VersionResponse {
 
 /// Build the Meta node HTTP API router
 pub fn build_router(state: MetaHttpState) -> Router {
+    use axum::routing::delete;
+
     Router::new()
         .route("/", get(home))
         .route("/health", get(health))
@@ -70,6 +72,11 @@ pub fn build_router(state: MetaHttpState) -> Router {
         // Enhanced scale-in endpoints with Golden Rule enforcement
         .route("/cluster/scale-in/plan", post(plan_scale_in))
         .route("/cluster/scale-in/execute-plan", post(execute_scale_in_plan))
+        // Distribution config endpoints
+        .route("/distribution", get(list_distribution_configs))
+        .route("/distribution/config", get(get_distribution_config))
+        .route("/distribution/config", post(set_distribution_config))
+        .route("/distribution/config", delete(delete_distribution_config))
         .with_state(state)
 }
 
@@ -89,6 +96,11 @@ async fn home() -> &'static str {
        POST /cluster/scale-in/execute    - Batch retire multiple nodes\n\
        POST /cluster/scale-in/plan       - Generate scale-in plan (supports dry_run)\n\
        POST /cluster/scale-in/execute-plan - Execute with Golden Rule enforcement\n\n\
+     Distribution Config Endpoints:\n\
+       GET  /distribution                - List all distribution configs\n\
+       GET  /distribution/config         - Get distribution config (supports effective=true)\n\
+       POST /distribution/config         - Set distribution config\n\
+       DELETE /distribution/config       - Delete distribution config\n\n\
      Primary protocol: gRPC\n"
 }
 
@@ -876,6 +888,319 @@ async fn execute_scale_in_plan(
             }),
         ),
     }
+}
+
+// ========================================================================
+// Distribution Config Endpoints
+// ========================================================================
+
+/// Distribution config request
+#[derive(Deserialize)]
+pub struct SetDistributionConfigRequest {
+    /// Catalog name (required)
+    pub catalog: String,
+    /// Schema name (optional - empty for catalog-level)
+    #[serde(default)]
+    pub schema: String,
+    /// Table name (optional - empty for schema/catalog-level)
+    #[serde(default)]
+    pub table: String,
+    /// Distribution percentage [0-100]
+    /// 0 = single node (default), 100 = all nodes
+    pub percent: u8,
+}
+
+/// Distribution config response
+#[derive(Serialize)]
+pub struct DistributionConfigResponse {
+    pub success: bool,
+    pub catalog: String,
+    pub schema: String,
+    pub table: String,
+    pub scope: String,
+    pub percent: u8,
+    pub version: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Distribution config info
+#[derive(Serialize)]
+pub struct DistributionConfigInfo {
+    pub catalog: String,
+    pub schema: String,
+    pub table: String,
+    pub scope: String,
+    pub percent: u8,
+    pub created_at: i64,
+    pub last_modified: i64,
+    pub version: u64,
+}
+
+impl From<crate::meta::types::DistributionConfig> for DistributionConfigInfo {
+    fn from(config: crate::meta::types::DistributionConfig) -> Self {
+        let scope_str = match config.scope {
+            crate::meta::types::DistributionScope::Catalog => "catalog",
+            crate::meta::types::DistributionScope::Schema => "schema",
+            crate::meta::types::DistributionScope::Table => "table",
+        };
+        DistributionConfigInfo {
+            catalog: config.catalog,
+            schema: config.schema,
+            table: config.table,
+            scope: scope_str.to_string(),
+            percent: config.percent,
+            created_at: config.created_at,
+            last_modified: config.last_modified,
+            version: config.version,
+        }
+    }
+}
+
+/// Query params for distribution config
+#[derive(Deserialize, Default)]
+pub struct DistributionConfigQuery {
+    /// Catalog name (required for exact lookup)
+    #[serde(default)]
+    pub catalog: String,
+    /// Schema name (optional)
+    #[serde(default)]
+    pub schema: String,
+    /// Table name (optional)
+    #[serde(default)]
+    pub table: String,
+    /// Use hierarchical lookup (effective config)
+    #[serde(default)]
+    pub effective: bool,
+}
+
+/// Set distribution config
+async fn set_distribution_config(
+    State(state): State<MetaHttpState>,
+    Json(request): Json<SetDistributionConfigRequest>,
+) -> impl IntoResponse {
+    // Validate percent
+    if request.percent > 100 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(DistributionConfigResponse {
+                success: false,
+                catalog: request.catalog,
+                schema: request.schema,
+                table: request.table,
+                scope: String::new(),
+                percent: request.percent,
+                version: 0,
+                error: Some("percent must be between 0 and 100".to_string()),
+            }),
+        );
+    }
+
+    // Determine scope
+    let scope_str = if !request.table.is_empty() {
+        "table"
+    } else if !request.schema.is_empty() {
+        "schema"
+    } else {
+        "catalog"
+    };
+
+    match state
+        .meta_node
+        .set_distribution_config(&request.catalog, &request.schema, &request.table, request.percent)
+        .await
+    {
+        Ok(response) => match response {
+            crate::meta::types::MetaResponse::DistributionConfigSet { version, .. } => (
+                StatusCode::OK,
+                Json(DistributionConfigResponse {
+                    success: true,
+                    catalog: request.catalog,
+                    schema: request.schema,
+                    table: request.table,
+                    scope: scope_str.to_string(),
+                    percent: request.percent,
+                    version,
+                    error: None,
+                }),
+            ),
+            crate::meta::types::MetaResponse::Error { message } => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(DistributionConfigResponse {
+                    success: false,
+                    catalog: request.catalog,
+                    schema: request.schema,
+                    table: request.table,
+                    scope: scope_str.to_string(),
+                    percent: request.percent,
+                    version: 0,
+                    error: Some(message),
+                }),
+            ),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(DistributionConfigResponse {
+                    success: false,
+                    catalog: request.catalog,
+                    schema: request.schema,
+                    table: request.table,
+                    scope: scope_str.to_string(),
+                    percent: request.percent,
+                    version: 0,
+                    error: Some("Unexpected response".to_string()),
+                }),
+            ),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(DistributionConfigResponse {
+                success: false,
+                catalog: request.catalog,
+                schema: request.schema,
+                table: request.table,
+                scope: scope_str.to_string(),
+                percent: request.percent,
+                version: 0,
+                error: Some(e),
+            }),
+        ),
+    }
+}
+
+/// Delete distribution config
+async fn delete_distribution_config(
+    State(state): State<MetaHttpState>,
+    Json(request): Json<SetDistributionConfigRequest>,
+) -> impl IntoResponse {
+    let scope_str = if !request.table.is_empty() {
+        "table"
+    } else if !request.schema.is_empty() {
+        "schema"
+    } else {
+        "catalog"
+    };
+
+    match state
+        .meta_node
+        .delete_distribution_config(&request.catalog, &request.schema, &request.table)
+        .await
+    {
+        Ok(response) => match response {
+            crate::meta::types::MetaResponse::DistributionConfigDeleted { .. } => (
+                StatusCode::OK,
+                Json(DistributionConfigResponse {
+                    success: true,
+                    catalog: request.catalog,
+                    schema: request.schema,
+                    table: request.table,
+                    scope: scope_str.to_string(),
+                    percent: 0,
+                    version: 0,
+                    error: None,
+                }),
+            ),
+            crate::meta::types::MetaResponse::DistributionConfigNotFound { .. } => (
+                StatusCode::NOT_FOUND,
+                Json(DistributionConfigResponse {
+                    success: false,
+                    catalog: request.catalog,
+                    schema: request.schema,
+                    table: request.table,
+                    scope: scope_str.to_string(),
+                    percent: 0,
+                    version: 0,
+                    error: Some("Distribution config not found".to_string()),
+                }),
+            ),
+            crate::meta::types::MetaResponse::Error { message } => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(DistributionConfigResponse {
+                    success: false,
+                    catalog: request.catalog,
+                    schema: request.schema,
+                    table: request.table,
+                    scope: scope_str.to_string(),
+                    percent: 0,
+                    version: 0,
+                    error: Some(message),
+                }),
+            ),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(DistributionConfigResponse {
+                    success: false,
+                    catalog: request.catalog,
+                    schema: request.schema,
+                    table: request.table,
+                    scope: scope_str.to_string(),
+                    percent: 0,
+                    version: 0,
+                    error: Some("Unexpected response".to_string()),
+                }),
+            ),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(DistributionConfigResponse {
+                success: false,
+                catalog: request.catalog,
+                schema: request.schema,
+                table: request.table,
+                scope: scope_str.to_string(),
+                percent: 0,
+                version: 0,
+                error: Some(e),
+            }),
+        ),
+    }
+}
+
+/// Get distribution config
+async fn get_distribution_config(
+    State(state): State<MetaHttpState>,
+    Query(query): Query<DistributionConfigQuery>,
+) -> impl IntoResponse {
+    let config = if query.effective {
+        // Hierarchical lookup
+        state
+            .meta_node
+            .get_effective_distribution_config(&query.catalog, &query.schema, &query.table)
+            .await
+    } else {
+        // Exact match
+        state
+            .meta_node
+            .get_distribution_config(&query.catalog, &query.schema, &query.table)
+            .await
+    };
+
+    match config {
+        Some(c) => (StatusCode::OK, Json(Some(DistributionConfigInfo::from(c)))),
+        None => (StatusCode::NOT_FOUND, Json(None)),
+    }
+}
+
+/// List distribution configs query
+#[derive(Deserialize, Default)]
+pub struct ListDistributionConfigsQuery {
+    /// Filter by catalog (optional)
+    #[serde(default)]
+    pub catalog: Option<String>,
+}
+
+/// List distribution configs
+async fn list_distribution_configs(
+    State(state): State<MetaHttpState>,
+    Query(query): Query<ListDistributionConfigsQuery>,
+) -> impl IntoResponse {
+    let configs = state
+        .meta_node
+        .list_distribution_configs(query.catalog.as_deref())
+        .await;
+
+    let infos: Vec<DistributionConfigInfo> = configs.into_iter().map(DistributionConfigInfo::from).collect();
+
+    (StatusCode::OK, Json(infos))
 }
 
 /// Start HTTP server for Meta node

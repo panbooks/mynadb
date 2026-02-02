@@ -810,6 +810,184 @@ impl MetaClient {
     }
 
     // ========================================================================
+    // Distribution Config
+    // ========================================================================
+
+    /// Set distribution config for catalog/schema/table
+    ///
+    /// - percent=0: Single node routing (default)
+    /// - percent=100: Route to all primary nodes
+    ///
+    /// The config is hierarchical: table-level overrides schema-level which overrides catalog-level.
+    pub async fn set_distribution_config(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        percent: u8,
+    ) -> Result<u64, String> {
+        let request = proto::SetDistributionConfigRequest {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            percent: percent as u32,
+        };
+
+        let response = self
+            .with_retry("set_distribution_config", |mut client| {
+                let req = request.clone();
+                async move {
+                    client
+                        .set_distribution_config(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            })
+            .await?;
+
+        if response.success {
+            Ok(response.version)
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Delete distribution config
+    pub async fn delete_distribution_config(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<(), String> {
+        let request = proto::DeleteDistributionConfigRequest {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+        };
+
+        let response = self
+            .with_retry("delete_distribution_config", |mut client| {
+                let req = request.clone();
+                async move {
+                    client
+                        .delete_distribution_config(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            })
+            .await?;
+
+        if response.success {
+            Ok(())
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Get distribution config for a specific key (exact match)
+    pub async fn get_distribution_config(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<Option<DistributionConfig>, String> {
+        let request = proto::GetDistributionConfigRequest {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+        };
+
+        let response = self
+            .with_retry("get_distribution_config", |mut client| {
+                let req = request.clone();
+                async move {
+                    client
+                        .get_distribution_config(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            })
+            .await?;
+
+        if response.found {
+            response
+                .config
+                .map(|c| proto_to_distribution_config(&c))
+                .ok_or_else(|| "Found but no config".to_string())
+                .map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get effective distribution config (hierarchical lookup: table > schema > catalog)
+    ///
+    /// This is the method to use when determining how to route writes.
+    /// It returns the most specific config that applies to the given table.
+    pub async fn get_effective_distribution_config(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<Option<DistributionConfig>, String> {
+        let request = proto::GetEffectiveDistributionConfigRequest {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+        };
+
+        let response = self
+            .with_retry("get_effective_distribution_config", |mut client| {
+                let req = request.clone();
+                async move {
+                    client
+                        .get_effective_distribution_config(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            })
+            .await?;
+
+        if response.found {
+            response
+                .config
+                .map(|c| proto_to_distribution_config(&c))
+                .ok_or_else(|| "Found but no config".to_string())
+                .map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// List all distribution configs (optionally filtered by catalog)
+    pub async fn list_distribution_configs(
+        &self,
+        catalog: Option<&str>,
+    ) -> Result<Vec<DistributionConfig>, String> {
+        let request = proto::ListDistributionConfigsRequest {
+            catalog: catalog.unwrap_or("").to_string(),
+        };
+
+        let response = self
+            .with_retry("list_distribution_configs", |mut client| {
+                let req = request.clone();
+                async move {
+                    client
+                        .list_distribution_configs(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            })
+            .await?;
+
+        Ok(response
+            .configs
+            .iter()
+            .map(proto_to_distribution_config)
+            .collect())
+    }
+
+    // ========================================================================
     // Distributed Locks
     // ========================================================================
 
@@ -1266,6 +1444,25 @@ impl MetaClient {
         } else {
             Err(response.error)
         }
+    }
+}
+
+/// Helper function to convert proto DistributionConfig to DistributionConfig
+fn proto_to_distribution_config(c: &proto::DistributionConfig) -> DistributionConfig {
+    DistributionConfig {
+        catalog: c.catalog.clone(),
+        schema: c.schema.clone(),
+        table: c.table.clone(),
+        scope: match c.scope {
+            1 => DistributionScope::Catalog,
+            2 => DistributionScope::Schema,
+            3 => DistributionScope::Table,
+            _ => DistributionScope::Catalog, // Default to catalog
+        },
+        percent: c.percent as u8,
+        created_at: c.created_at,
+        last_modified: c.last_modified,
+        version: c.version,
     }
 }
 

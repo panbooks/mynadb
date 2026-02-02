@@ -580,6 +580,160 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
     }
 
     // ========================================================================
+    // Distribution Config
+    // ========================================================================
+
+    async fn set_distribution_config(
+        &self,
+        request: Request<proto::SetDistributionConfigRequest>,
+    ) -> Result<Response<proto::SetDistributionConfigResponse>, Status> {
+        let req = request.into_inner();
+
+        match self
+            .node
+            .set_distribution_config(&req.catalog, &req.schema, &req.table, req.percent as u8)
+            .await
+        {
+            Ok(response) => match response {
+                MetaResponse::DistributionConfigSet { version, .. } => {
+                    Ok(Response::new(proto::SetDistributionConfigResponse {
+                        success: true,
+                        error: String::new(),
+                        version,
+                    }))
+                }
+                MetaResponse::Error { message } => {
+                    Ok(Response::new(proto::SetDistributionConfigResponse {
+                        success: false,
+                        error: message,
+                        version: 0,
+                    }))
+                }
+                _ => Ok(Response::new(proto::SetDistributionConfigResponse {
+                    success: false,
+                    error: "Unexpected response".to_string(),
+                    version: 0,
+                })),
+            },
+            Err(e) => Ok(Response::new(proto::SetDistributionConfigResponse {
+                success: false,
+                error: e,
+                version: 0,
+            })),
+        }
+    }
+
+    async fn delete_distribution_config(
+        &self,
+        request: Request<proto::DeleteDistributionConfigRequest>,
+    ) -> Result<Response<proto::DeleteDistributionConfigResponse>, Status> {
+        let req = request.into_inner();
+
+        match self
+            .node
+            .delete_distribution_config(&req.catalog, &req.schema, &req.table)
+            .await
+        {
+            Ok(response) => match response {
+                MetaResponse::DistributionConfigDeleted { .. } => {
+                    Ok(Response::new(proto::DeleteDistributionConfigResponse {
+                        success: true,
+                        error: String::new(),
+                    }))
+                }
+                MetaResponse::DistributionConfigNotFound { .. } => {
+                    Ok(Response::new(proto::DeleteDistributionConfigResponse {
+                        success: false,
+                        error: "Distribution config not found".to_string(),
+                    }))
+                }
+                MetaResponse::Error { message } => {
+                    Ok(Response::new(proto::DeleteDistributionConfigResponse {
+                        success: false,
+                        error: message,
+                    }))
+                }
+                _ => Ok(Response::new(proto::DeleteDistributionConfigResponse {
+                    success: false,
+                    error: "Unexpected response".to_string(),
+                })),
+            },
+            Err(e) => Ok(Response::new(proto::DeleteDistributionConfigResponse {
+                success: false,
+                error: e,
+            })),
+        }
+    }
+
+    async fn get_distribution_config(
+        &self,
+        request: Request<proto::GetDistributionConfigRequest>,
+    ) -> Result<Response<proto::GetDistributionConfigResponse>, Status> {
+        let req = request.into_inner();
+
+        let config = self
+            .node
+            .get_distribution_config(&req.catalog, &req.schema, &req.table)
+            .await;
+
+        Ok(Response::new(match config {
+            Some(c) => proto::GetDistributionConfigResponse {
+                found: true,
+                config: Some(distribution_config_to_proto(&c)),
+            },
+            None => proto::GetDistributionConfigResponse {
+                found: false,
+                config: None,
+            },
+        }))
+    }
+
+    async fn get_effective_distribution_config(
+        &self,
+        request: Request<proto::GetEffectiveDistributionConfigRequest>,
+    ) -> Result<Response<proto::GetEffectiveDistributionConfigResponse>, Status> {
+        let req = request.into_inner();
+
+        let config = self
+            .node
+            .get_effective_distribution_config(&req.catalog, &req.schema, &req.table)
+            .await;
+
+        Ok(Response::new(match config {
+            Some(c) => proto::GetEffectiveDistributionConfigResponse {
+                found: true,
+                config: Some(distribution_config_to_proto(&c)),
+            },
+            None => proto::GetEffectiveDistributionConfigResponse {
+                found: false,
+                config: None,
+            },
+        }))
+    }
+
+    async fn list_distribution_configs(
+        &self,
+        request: Request<proto::ListDistributionConfigsRequest>,
+    ) -> Result<Response<proto::ListDistributionConfigsResponse>, Status> {
+        let req = request.into_inner();
+
+        let catalog = if req.catalog.is_empty() {
+            None
+        } else {
+            Some(req.catalog.as_str())
+        };
+
+        let configs = self.node.list_distribution_configs(catalog).await;
+
+        let proto_configs: Vec<proto::DistributionConfig> =
+            configs.iter().map(distribution_config_to_proto).collect();
+
+        Ok(Response::new(proto::ListDistributionConfigsResponse {
+            configs: proto_configs,
+        }))
+    }
+
+    // ========================================================================
     // Distributed Locks
     // ========================================================================
 
@@ -1191,6 +1345,24 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
                 warnings: vec![],
             })),
         }
+    }
+}
+
+/// Helper function to convert DistributionConfig to proto
+fn distribution_config_to_proto(c: &DistributionConfig) -> proto::DistributionConfig {
+    proto::DistributionConfig {
+        catalog: c.catalog.clone(),
+        schema: c.schema.clone(),
+        table: c.table.clone(),
+        scope: match c.scope {
+            DistributionScope::Catalog => 1, // DISTRIBUTION_SCOPE_CATALOG
+            DistributionScope::Schema => 2,  // DISTRIBUTION_SCOPE_SCHEMA
+            DistributionScope::Table => 3,   // DISTRIBUTION_SCOPE_TABLE
+        },
+        percent: c.percent as u32,
+        created_at: c.created_at,
+        last_modified: c.last_modified,
+        version: c.version,
     }
 }
 

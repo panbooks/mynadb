@@ -31,6 +31,18 @@ service MetaService {
     rpc ListTablesForNode(ListTablesForNodeRequest) returns (ListTablesForNodeResponse);
     rpc ListTables(ListTablesRequest) returns (ListTablesResponse);
 
+    // =========================================================================
+    // Write Distribution Configuration
+    // =========================================================================
+    // Configures how writes are distributed across primary nodes for load balancing.
+    // percent=0 means single node (default), percent=100 means all nodes.
+
+    rpc SetDistributionConfig(SetDistributionConfigRequest) returns (SetDistributionConfigResponse);
+    rpc DeleteDistributionConfig(DeleteDistributionConfigRequest) returns (DeleteDistributionConfigResponse);
+    rpc GetDistributionConfig(GetDistributionConfigRequest) returns (GetDistributionConfigResponse);
+    rpc GetEffectiveDistributionConfig(GetEffectiveDistributionConfigRequest) returns (GetEffectiveDistributionConfigResponse);
+    rpc ListDistributionConfigs(ListDistributionConfigsRequest) returns (ListDistributionConfigsResponse);
+
     // Distributed locks (atomic CAS with fencing tokens)
     rpc TryLock(TryLockRequest) returns (TryLockResponse);
     rpc Unlock(UnlockRequest) returns (UnlockResponse);
@@ -311,6 +323,82 @@ message ListTablesRequest {
 
 message ListTablesResponse {
     repeated TableMeta tables = 1;
+}
+
+// ============================================================================
+// Write Distribution Configuration
+// ============================================================================
+
+enum DistributionScope {
+    DISTRIBUTION_SCOPE_UNKNOWN = 0;
+    DISTRIBUTION_SCOPE_CATALOG = 1;
+    DISTRIBUTION_SCOPE_SCHEMA = 2;
+    DISTRIBUTION_SCOPE_TABLE = 3;
+}
+
+message DistributionConfig {
+    string catalog = 1;             // Catalog name (required)
+    string schema = 2;              // Schema name (optional - empty means catalog-level)
+    string table = 3;               // Table name (optional - empty means schema/catalog-level)
+    DistributionScope scope = 4;    // Scope level
+    uint32 percent = 5;             // Distribution percentage [0-100]
+    int64 created_at = 6;
+    int64 last_modified = 7;
+    uint64 version = 8;
+}
+
+message SetDistributionConfigRequest {
+    string catalog = 1;
+    string schema = 2;              // Optional
+    string table = 3;               // Optional
+    uint32 percent = 4;             // 0-100
+}
+
+message SetDistributionConfigResponse {
+    bool success = 1;
+    string error = 2;
+    uint64 version = 3;
+}
+
+message DeleteDistributionConfigRequest {
+    string catalog = 1;
+    string schema = 2;              // Optional
+    string table = 3;               // Optional
+}
+
+message DeleteDistributionConfigResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+message GetDistributionConfigRequest {
+    string catalog = 1;
+    string schema = 2;              // Optional
+    string table = 3;               // Optional
+}
+
+message GetDistributionConfigResponse {
+    bool found = 1;
+    DistributionConfig config = 2;
+}
+
+message GetEffectiveDistributionConfigRequest {
+    string catalog = 1;
+    string schema = 2;
+    string table = 3;
+}
+
+message GetEffectiveDistributionConfigResponse {
+    bool found = 1;
+    DistributionConfig config = 2;  // Most specific matching config
+}
+
+message ListDistributionConfigsRequest {
+    string catalog = 1;             // Optional: filter by catalog
+}
+
+message ListDistributionConfigsResponse {
+    repeated DistributionConfig configs = 1;
 }
 
 // ============================================================================
