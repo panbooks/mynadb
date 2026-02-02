@@ -269,8 +269,8 @@ pub async fn start(config_path: &str) {
             info!("Background flush enabled with replication checkpoint broadcast");
         }
         (Some(client), None) => {
-            // With Meta but no replication: Register files AND refresh query engine tables
-            common::start_background_flush_with_meta_and_query_engine(
+            // With Meta: Use table-level routing (register table + update stats)
+            common::start_background_flush_with_table_routing(
                 (*data_cache).clone(),
                 config.cache.flush_interval_secs,
                 Arc::clone(client),

@@ -189,16 +189,134 @@ impl MetaNode {
         }
     }
 
-    /// Register files
-    pub async fn register_files(&self, files: Vec<FileInfo>) -> Result<u64, String> {
-        let cmd = MetaCommand::RegisterFiles { files };
-        self.apply_command(cmd).await
+    // ========================================================================
+    // Table-Level Operations (Recommended for routing)
+    // ========================================================================
+
+    /// Register a new table with its owner node
+    pub async fn register_table(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        owner_node_id: &str,
+    ) -> Result<MetaResponse, String> {
+        let cmd = MetaCommand::RegisterTable {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            owner_node_id: owner_node_id.to_string(),
+        };
+
+        let result = self.raft.client_write(cmd).await;
+        match result {
+            Ok(response) => Ok(response.data),
+            Err(e) => Err(format!("Failed to register table: {}", e)),
+        }
     }
 
-    /// Remove files
-    pub async fn remove_files(&self, paths: Vec<String>) -> Result<u64, String> {
-        let cmd = MetaCommand::RemoveFiles { paths };
-        self.apply_command(cmd).await
+    /// Update table statistics after flush
+    pub async fn update_table_stats(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        delta: TableStatsDelta,
+    ) -> Result<MetaResponse, String> {
+        let cmd = MetaCommand::UpdateTableStats {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            delta,
+        };
+
+        let result = self.raft.client_write(cmd).await;
+        match result {
+            Ok(response) => Ok(response.data),
+            Err(e) => Err(format!("Failed to update table stats: {}", e)),
+        }
+    }
+
+    /// Reassign a table to a different owner node
+    pub async fn reassign_table(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        new_owner_node_id: &str,
+    ) -> Result<MetaResponse, String> {
+        let cmd = MetaCommand::ReassignTable {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            new_owner_node_id: new_owner_node_id.to_string(),
+        };
+
+        let result = self.raft.client_write(cmd).await;
+        match result {
+            Ok(response) => Ok(response.data),
+            Err(e) => Err(format!("Failed to reassign table: {}", e)),
+        }
+    }
+
+    /// Remove a table from the registry
+    pub async fn remove_table(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<MetaResponse, String> {
+        let cmd = MetaCommand::RemoveTable {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+        };
+
+        let result = self.raft.client_write(cmd).await;
+        match result {
+            Ok(response) => Ok(response.data),
+            Err(e) => Err(format!("Failed to remove table: {}", e)),
+        }
+    }
+
+    /// Get the owner node for a table (primary routing operation)
+    pub async fn get_table_owner(&self, catalog: &str, schema: &str, table: &str) -> Option<String> {
+        self.state_machine.get_table_owner(catalog, schema, table)
+    }
+
+    /// Get full table metadata
+    pub async fn get_table_meta(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Option<TableMeta> {
+        self.state_machine.get_table_meta(catalog, schema, table)
+    }
+
+    /// List all tables owned by a specific node
+    pub async fn list_tables_for_node(&self, node_id: &str) -> Vec<TableMeta> {
+        self.state_machine.list_tables_for_node(node_id)
+    }
+
+    /// List all tables in a schema
+    pub async fn list_tables_in_schema(&self, catalog: &str, schema: &str) -> Vec<TableMeta> {
+        self.state_machine.list_tables_in_schema(catalog, schema)
+    }
+
+    /// List all tables in a catalog
+    pub async fn list_tables_in_catalog(&self, catalog: &str) -> Vec<TableMeta> {
+        self.state_machine.list_tables_in_catalog(catalog)
+    }
+
+    /// List all tables
+    pub async fn list_all_tables(&self) -> Vec<TableMeta> {
+        self.state_machine.list_all_tables()
+    }
+
+    /// Count tables per node (for load balancing)
+    pub async fn count_tables_per_node(&self) -> std::collections::HashMap<String, usize> {
+        self.state_machine.count_tables_per_node()
     }
 
     /// Try to acquire a lock
@@ -729,48 +847,6 @@ impl MetaNode {
             .ok()
             .flatten()
             .and_then(|v| bincode::deserialize::<NodeInfo>(&v).ok())
-    }
-
-    /// List files for a partition
-    pub async fn list_files_for_partition(
-        &self,
-        catalog: &str,
-        schema: &str,
-        table: &str,
-        partition: &str,
-    ) -> Vec<FileInfo> {
-        self.state_machine
-            .list_files_for_partition(catalog, schema, table, partition)
-    }
-
-    /// List files for a table
-    pub async fn list_files_for_table(
-        &self,
-        catalog: &str,
-        schema: &str,
-        table: &str,
-    ) -> Vec<FileInfo> {
-        // Read directly from db to avoid state machine clone issues
-        let prefix = format!(
-            "{}{}/{}/{}/",
-            crate::meta::types::keys::PREFIX_FILE,
-            catalog,
-            schema,
-            table
-        );
-        let mut files = Vec::new();
-
-        let _ = self.state_machine.db().flush();
-
-        for item in self.state_machine.db().scan_prefix(prefix.as_bytes()) {
-            if let Ok((_, v)) = item {
-                if let Ok(info) = bincode::deserialize::<FileInfo>(&v) {
-                    files.push(info);
-                }
-            }
-        }
-
-        files
     }
 
     /// Get lock info

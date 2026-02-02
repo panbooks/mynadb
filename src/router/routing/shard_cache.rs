@@ -118,18 +118,56 @@ pub struct PartitionReplicaInfo {
     pub standby_node_ids: Vec<String>,
 }
 
+/// Table key for routing (table-level routing)
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct TableKey {
+    pub catalog: String,
+    pub schema: String,
+    pub table: String,
+}
+
+impl TableKey {
+    pub fn new(catalog: &str, schema: &str, table: &str) -> Self {
+        Self {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+        }
+    }
+
+    /// Convert to path string
+    pub fn to_path(&self) -> String {
+        format!("{}/{}/{}", self.catalog, self.schema, self.table)
+    }
+}
+
+/// Cached table metadata for routing
+#[derive(Debug, Clone)]
+pub struct CachedTableMeta {
+    pub owner_node_id: String,
+    pub version: u64,
+    pub cached_at: i64,
+}
+
 /// Shard cache for partition→node mapping
 ///
 /// Uses a two-level lookup:
-/// 1. partition_owners: partition_path → node_id (reference only)
-/// 2. data_nodes: node_id → DataNodeInfo (single source of truth)
-/// 3. partition_replicas: partition_key → PartitionReplicaInfo (for warm standby failover)
+/// 1. table_owners: table_path → owner_node_id (RECOMMENDED - table-level routing)
+/// 2. partition_owners: partition_path → node_id (DEPRECATED - partition-level)
+/// 3. data_nodes: node_id → DataNodeInfo (single source of truth)
+/// 4. partition_replicas: partition_key → PartitionReplicaInfo (for warm standby failover)
 ///
-/// This design ensures node state is always fresh - when a node becomes
-/// unhealthy, the lookup automatically fails over to hash-based routing
-/// without needing to update partition_owners.
+/// Table-level routing is recommended for time-series workloads where 95%+ queries
+/// access recent data. It provides:
+/// - 600x fewer Meta entries (100K tables vs 60M files)
+/// - Single routing lookup per query
+/// - Excellent cache locality for hot data
 pub struct ShardCache {
-    /// Partition → owner node_id (reference only, not full DataNodeInfo)
+    /// Table → owner node_id (RECOMMENDED - table-level routing)
+    /// Key: "catalog/schema/table"
+    table_owners: DashMap<String, CachedTableMeta>,
+
+    /// Partition → owner node_id (DEPRECATED - use table_owners)
     partition_owners: DashMap<String, String>,
 
     /// node_id → DataNodeInfo (single source of truth for node state)
@@ -145,6 +183,7 @@ pub struct ShardCache {
 impl ShardCache {
     pub fn new() -> Self {
         Self {
+            table_owners: DashMap::new(),
             partition_owners: DashMap::new(),
             data_nodes: RwLock::new(HashMap::new()),
             partition_replicas: DashMap::new(),
@@ -152,12 +191,140 @@ impl ShardCache {
         }
     }
 
+    // ========================================================================
+    // Table-Level Routing (RECOMMENDED)
+    // ========================================================================
+
+    /// Get the owner node_id for a table
+    pub fn get_table_owner(&self, key: &TableKey) -> Option<String> {
+        self.table_owners
+            .get(&key.to_path())
+            .map(|v| v.owner_node_id.clone())
+    }
+
+    /// Get cached table metadata
+    pub fn get_table_meta(&self, key: &TableKey) -> Option<CachedTableMeta> {
+        self.table_owners.get(&key.to_path()).map(|v| v.clone())
+    }
+
+    /// Set the owner node_id for a table
+    pub fn set_table_owner(&self, key: &TableKey, node_id: String, version: u64) {
+        debug!(
+            "Setting table owner: {} -> {} (v{})",
+            key.to_path(),
+            node_id,
+            version
+        );
+        self.table_owners.insert(
+            key.to_path(),
+            CachedTableMeta {
+                owner_node_id: node_id,
+                version,
+                cached_at: chrono::Utc::now().timestamp_millis(),
+            },
+        );
+    }
+
+    /// Remove a table owner (e.g., when table is dropped)
+    pub fn remove_table_owner(&self, key: &TableKey) {
+        self.table_owners.remove(&key.to_path());
+    }
+
+    /// Remove all table ownership entries for a specific node
+    /// Called when a node permanently leaves the cluster
+    pub fn remove_tables_for_node(&self, node_id: &str) -> usize {
+        let mut removed = 0;
+        self.table_owners.retain(|_, meta| {
+            if meta.owner_node_id == node_id {
+                removed += 1;
+                false
+            } else {
+                true
+            }
+        });
+        if removed > 0 {
+            info!(
+                "Cleaned up {} table entries for departed node {}",
+                removed, node_id
+            );
+        }
+        removed
+    }
+
+    /// Select node for a table using table-level routing
+    ///
+    /// Selection priority:
+    /// 1. Cached table owner (if Active)
+    /// 2. Hash-based selection among Active Primary nodes
+    pub fn select_node_for_table(&self, key: &TableKey) -> Option<DataNodeInfo> {
+        // Check cached table owner first
+        if let Some(owner_id) = self.get_table_owner(key) {
+            let nodes = self.data_nodes.read();
+            if let Some(owner) = nodes.get(&owner_id) {
+                // Owner must be Active AND Primary
+                if owner.state == NodeState::Active && owner.mode == DataNodeMode::Primary {
+                    return Some(owner.clone());
+                }
+                // Owner is unhealthy/retiring - fall through to hash-based
+                debug!(
+                    "Table owner {} is {:?}/{:?}, falling back to hash routing",
+                    owner_id, owner.state, owner.mode
+                );
+            }
+        }
+
+        // Hash-based selection among Active Primary nodes
+        let primary_nodes = self.get_active_primary_nodes();
+        if !primary_nodes.is_empty() {
+            let mut hasher = DefaultHasher::new();
+            key.hash(&mut hasher);
+            let hash = hasher.finish();
+            let idx = (hash as usize) % primary_nodes.len();
+            let selected = &primary_nodes[idx];
+            debug!(
+                "Hash routing for table {}: -> {}",
+                key.to_path(),
+                selected.node_id
+            );
+            return Some(selected.clone());
+        }
+
+        warn!("No active Primary nodes available for table {}", key.to_path());
+        None
+    }
+
+    /// Get list of tables owned by a node
+    pub fn get_tables_for_node(&self, node_id: &str) -> Vec<TableKey> {
+        self.table_owners
+            .iter()
+            .filter(|entry| entry.value().owner_node_id == node_id)
+            .filter_map(|entry| {
+                let parts: Vec<&str> = entry.key().split('/').collect();
+                if parts.len() == 3 {
+                    Some(TableKey {
+                        catalog: parts[0].to_string(),
+                        schema: parts[1].to_string(),
+                        table: parts[2].to_string(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    // ========================================================================
+    // Partition-Level Routing (DEPRECATED - use table-level)
+    // ========================================================================
+
     /// Get the owner node_id for a partition
+    /// DEPRECATED: Use get_table_owner for table-level routing
     pub fn get_partition_owner(&self, key: &PartitionKey) -> Option<String> {
         self.partition_owners.get(&key.to_path()).map(|v| v.clone())
     }
 
     /// Set the owner node_id for a partition
+    /// DEPRECATED: Use set_table_owner for table-level routing
     pub fn set_partition_owner(&self, key: &PartitionKey, node_id: String) {
         debug!("Setting partition owner: {} -> {}", key.to_path(), node_id);
         self.partition_owners.insert(key.to_path(), node_id);
@@ -592,6 +759,7 @@ impl ShardCache {
     pub fn stats(&self) -> ShardCacheStats {
         let nodes = self.data_nodes.read();
         ShardCacheStats {
+            table_count: self.table_owners.len(),
             partition_count: self.partition_owners.len(),
             data_node_count: nodes.len(),
             active_node_count: nodes
@@ -612,6 +780,7 @@ impl Default for ShardCache {
 /// Stats about the shard cache
 #[derive(Debug, Clone)]
 pub struct ShardCacheStats {
+    pub table_count: usize,
     pub partition_count: usize,
     pub data_node_count: usize,
     pub active_node_count: usize,

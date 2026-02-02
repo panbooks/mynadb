@@ -550,7 +550,16 @@ mod tests {
 
         // Append entries with actual commands
         let entries = vec![
-            create_normal_entry(1, 1, MetaCommand::RegisterFiles { files: vec![] }),
+            create_normal_entry(
+                1,
+                1,
+                MetaCommand::RegisterTable {
+                    catalog: "testdb".to_string(),
+                    schema: "default".to_string(),
+                    table: "cpu".to_string(),
+                    owner_node_id: "node-1".to_string(),
+                },
+            ),
             create_normal_entry(
                 2,
                 1,

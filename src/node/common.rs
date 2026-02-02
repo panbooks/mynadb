@@ -6,7 +6,7 @@ use crate::query::cache::{hot_partition_cache, query_cache};
 use crate::query::{catalog, query_engine};
 use crate::services::{api, flight_service, mysql_service};
 use crate::storage::{cache, file_cache, parquet_writer, storage as storage_mod, wal};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -314,88 +314,27 @@ pub fn start_background_flush_with_query_engine(
     );
 }
 
-/// Start background flush with Meta file registration (for Data nodes in cluster mode)
+/// Start background flush with table-level Meta registration (RECOMMENDED)
 ///
-/// After flush completes, registers files with Meta service including:
-/// - Full path with node_id prefix (e.g., "data-1/mydb/default/cpu/date=.../L0_xxx.parquet")
-/// - created_by field set to node_id for distributed query routing
+/// After flush completes, registers/updates tables with Meta service using
+/// table-level routing. This is the recommended approach for cluster mode.
 ///
-/// This enables the QueryCoordinator to route queries to the correct Data node
-/// based on which node created each file.
-pub fn start_background_flush_with_meta_registration(
-    cache: cache::DataCache,
-    interval_secs: u64,
-    meta_client: Arc<crate::meta::client::MetaClient>,
-    node_id: String,
-) {
-    let meta_for_flush = meta_client;
-    let node_id_for_flush = node_id;
-
-    cache.start_background_flush_with_callback(
-        interval_secs,
-        Some(move |files: Vec<parquet_writer::FileWriteResult>| {
-            let client = meta_for_flush.clone();
-            let node_id = node_id_for_flush.clone();
-
-            tokio::spawn(async move {
-                if files.is_empty() {
-                    return;
-                }
-
-                // Convert FileWriteResult to Meta FileInfo with created_by
-                let meta_files: Vec<crate::meta::types::FileInfo> = files
-                    .iter()
-                    .map(|file| crate::meta::types::FileInfo {
-                        // Path already includes node_id prefix from ParquetWriter
-                        path: file.path.clone(),
-                        catalog: file.catalog.clone(),
-                        schema: file.schema.clone(),
-                        table: file.table.clone(),
-                        partition: file.partition_key.clone(),
-                        level: file.level,
-                        size_bytes: file.size_bytes,
-                        row_count: file.row_count,
-                        min_time: 0, // TODO: Extract from file metadata
-                        max_time: 0, // TODO: Extract from file metadata
-                        created_at: crate::meta::current_timestamp_ms(),
-                        created_by: node_id.clone(), // Critical: Set to this node's ID
-                    })
-                    .collect();
-
-                // Register files with Meta service
-                match client.register_files(meta_files).await {
-                    Ok(seq) => {
-                        info!(
-                            "Registered {} files with Meta (seq={}), created_by={}",
-                            files.len(),
-                            seq,
-                            node_id
-                        );
-                    }
-                    Err(e) => {
-                        warn!("Failed to register files with Meta: {}", e);
-                    }
-                }
-            });
-        }),
-    );
-}
-
-/// Start background flush with Meta file registration AND QueryEngine refresh
+/// Benefits over file-level registration:
+/// - 600x fewer Meta entries (100K tables vs 60M files)
+/// - Zero daily growth (new partitions don't create entries)
+/// - Excellent cache locality for time-series workloads
 ///
-/// This is the correct function for Data nodes in cluster mode. After flush:
-/// 1. Registers files with Meta service (for distributed query routing)
-/// 2. Refreshes QueryEngine table registrations (so local queries find new files)
-///
-/// Without step 2, queries after flush return empty because the old table
-/// registration still points to memtable-only (which is now empty).
-pub fn start_background_flush_with_meta_and_query_engine(
+/// The Data node owns all partitions for tables it creates. Files are
+/// discovered via S3 listing at query time, not stored in Meta.
+pub fn start_background_flush_with_table_routing(
     cache: cache::DataCache,
     interval_secs: u64,
     meta_client: Arc<crate::meta::client::MetaClient>,
     query_engine: Arc<query_engine::QueryEngine>,
     node_id: String,
 ) {
+    use crate::meta::types::TableStatsDelta;
+
     let meta_for_flush = meta_client;
     let qe_for_flush = query_engine;
     let node_id_for_flush = node_id;
@@ -412,78 +351,116 @@ pub fn start_background_flush_with_meta_and_query_engine(
                     return;
                 }
 
-                // Track unique tables that were flushed
-                let mut flushed_tables: HashSet<(String, String, String)> = HashSet::new();
+                // Aggregate stats per table
+                let mut table_stats: std::collections::HashMap<
+                    (String, String, String),
+                    TableStatsDelta,
+                > = std::collections::HashMap::new();
 
-                // Convert FileWriteResult to Meta FileInfo with created_by
-                let meta_files: Vec<crate::meta::types::FileInfo> = files
-                    .iter()
-                    .map(|file| {
-                        // Track this table for later refresh
-                        flushed_tables.insert((
-                            file.catalog.clone(),
-                            file.schema.clone(),
-                            file.table.clone(),
-                        ));
+                // Track partitions we've seen for each table (to count new partitions)
+                let mut seen_partitions: std::collections::HashMap<
+                    (String, String, String),
+                    std::collections::HashSet<String>,
+                > = std::collections::HashMap::new();
 
-                        crate::meta::types::FileInfo {
-                            path: file.path.clone(),
-                            catalog: file.catalog.clone(),
-                            schema: file.schema.clone(),
-                            table: file.table.clone(),
-                            partition: file.partition_key.clone(),
-                            level: file.level,
-                            size_bytes: file.size_bytes,
-                            row_count: file.row_count,
-                            min_time: 0,
-                            max_time: 0,
-                            created_at: crate::meta::current_timestamp_ms(),
-                            created_by: node_id.clone(),
-                        }
-                    })
-                    .collect();
+                for file in &files {
+                    let key = (
+                        file.catalog.clone(),
+                        file.schema.clone(),
+                        file.table.clone(),
+                    );
 
-                // Register files with Meta service
-                match client.register_files(meta_files).await {
-                    Ok(seq) => {
-                        info!(
-                            "Registered {} files with Meta (seq={}), created_by={}",
-                            files.len(),
-                            seq,
-                            node_id
-                        );
+                    let partitions = seen_partitions.entry(key.clone()).or_default();
+                    let is_new_partition = partitions.insert(file.partition_key.clone());
+
+                    let delta = table_stats.entry(key).or_insert_with(TableStatsDelta::new);
+                    delta.bytes_delta += file.size_bytes as i64;
+                    delta.rows_delta += file.row_count as i64;
+                    delta.files_delta += 1;
+                    if is_new_partition {
+                        delta.partition_count_delta += 1;
                     }
-                    Err(e) => {
-                        warn!("Failed to register files with Meta: {}", e);
+                    // Update newest partition
+                    if delta.newest_partition.is_none()
+                        || file.partition_key > *delta.newest_partition.as_ref().unwrap()
+                    {
+                        delta.newest_partition = Some(file.partition_key.clone());
                     }
                 }
 
-                // CRITICAL: Refresh QueryEngine table registrations for all flushed tables
-                // This ensures DataFusion can find the new Parquet files
-                for (catalog, schema, table) in &flushed_tables {
+                // Register/update each table with Meta
+                for ((catalog, schema, table), delta) in table_stats {
+                    // First, ensure table is registered (idempotent)
+                    match client
+                        .register_table(&catalog, &schema, &table, &node_id)
+                        .await
+                    {
+                        Ok((already_exists, current_owner, _)) => {
+                            if already_exists && current_owner != node_id {
+                                // Table owned by another node - this shouldn't happen
+                                // in normal operation but log it
+                                warn!(
+                                    "Table {}.{}.{} owned by {} but {} is writing to it",
+                                    catalog, schema, table, current_owner, node_id
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to register table {}.{}.{}: {}",
+                                catalog, schema, table, e
+                            );
+                            continue;
+                        }
+                    }
+
+                    // Then update stats
+                    match client
+                        .update_table_stats(&catalog, &schema, &table, delta.clone())
+                        .await
+                    {
+                        Ok(version) => {
+                            debug!(
+                                "Updated table stats {}.{}.{} v{} (+{} bytes, +{} rows, +{} files)",
+                                catalog,
+                                schema,
+                                table,
+                                version,
+                                delta.bytes_delta,
+                                delta.rows_delta,
+                                delta.files_delta
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to update table stats {}.{}.{}: {}",
+                                catalog, schema, table, e
+                            );
+                        }
+                    }
+
+                    // Refresh QueryEngine registration
                     debug!(
                         "Refreshing table after flush: {}.{}.{}",
                         catalog, schema, table
                     );
-                    qe.refresh_table_after_flush(catalog, schema, table);
+                    qe.refresh_table_after_flush(&catalog, &schema, &table);
                 }
 
-                if !flushed_tables.is_empty() {
-                    info!(
-                        "Background flush complete: {} files, {} tables refreshed",
-                        files.len(),
-                        flushed_tables.len()
-                    );
-                }
+                info!(
+                    "Background flush complete: {} files across {} tables (table-level routing)",
+                    files.len(),
+                    seen_partitions.len()
+                );
             });
         }),
     );
 }
 
-/// Start background flush with Meta file registration, QueryEngine refresh, AND FlushCheckpoint broadcast
+/// Start background flush with table-level Meta registration, QueryEngine refresh, AND FlushCheckpoint broadcast
 ///
 /// This version is for Primary nodes with replication enabled. After each flush:
-/// 1. Register files with Meta service
+/// 1. Register/update tables with Meta service (table-level routing)
 /// 2. Refresh QueryEngine table registrations
 /// 3. Broadcast FlushCheckpoint to all Standby nodes
 pub fn start_background_flush_with_replication(
@@ -495,6 +472,7 @@ pub fn start_background_flush_with_replication(
     node_id: String,
 ) {
     use crate::data::replication::types::FlushCheckpoint;
+    use crate::meta::types::TableStatsDelta;
 
     let meta_for_flush = meta_client;
     let qe_for_flush = query_engine;
@@ -515,62 +493,65 @@ pub fn start_background_flush_with_replication(
                 }
 
                 // Get the current sequence number BEFORE processing
-                // This represents the highest seq that was included in this flush
                 let flushed_seq = repl_manager.current_seq();
                 let total_rows: u64 = files.iter().map(|f| f.row_count).sum();
                 let files_count = files.len() as u32;
 
-                // Track unique tables that were flushed
-                let mut flushed_tables: HashSet<(String, String, String)> = HashSet::new();
+                // Aggregate stats per table (catalog, schema, table) -> (bytes, rows, files, partitions)
+                let mut table_stats: HashMap<(String, String, String), (i64, i64, i64, HashSet<String>)> =
+                    HashMap::new();
 
-                // Convert FileWriteResult to Meta FileInfo with created_by
-                let meta_files: Vec<crate::meta::types::FileInfo> = files
-                    .iter()
-                    .map(|file| {
-                        // Track this table for later refresh
-                        flushed_tables.insert((
-                            file.catalog.clone(),
-                            file.schema.clone(),
-                            file.table.clone(),
-                        ));
-
-                        crate::meta::types::FileInfo {
-                            path: file.path.clone(),
-                            catalog: file.catalog.clone(),
-                            schema: file.schema.clone(),
-                            table: file.table.clone(),
-                            partition: file.partition_key.clone(),
-                            level: file.level,
-                            size_bytes: file.size_bytes,
-                            row_count: file.row_count,
-                            min_time: 0,
-                            max_time: 0,
-                            created_at: crate::meta::current_timestamp_ms(),
-                            created_by: node_id.clone(),
-                        }
-                    })
-                    .collect();
-
-                // Register files with Meta service
-                match client.register_files(meta_files).await {
-                    Ok(seq) => {
-                        info!(
-                            "Registered {} files with Meta (seq={}), created_by={}",
-                            files_count, seq, node_id
-                        );
-                    }
-                    Err(e) => {
-                        warn!("Failed to register files with Meta: {}", e);
-                    }
+                for file in &files {
+                    let key = (file.catalog.clone(), file.schema.clone(), file.table.clone());
+                    let entry = table_stats.entry(key).or_insert((0, 0, 0, HashSet::new()));
+                    entry.0 += file.size_bytes as i64;
+                    entry.1 += file.row_count as i64;
+                    entry.2 += 1;
+                    entry.3.insert(file.partition_key.clone());
                 }
 
-                // CRITICAL: Refresh QueryEngine table registrations for all flushed tables
-                // This ensures DataFusion can find the new Parquet files
-                for (catalog, schema, table) in &flushed_tables {
-                    debug!(
-                        "Refreshing table after flush: {}.{}.{}",
-                        catalog, schema, table
-                    );
+                // Register tables and update stats with Meta (table-level routing)
+                for ((catalog, schema, table), (bytes, rows, file_count, partitions)) in &table_stats {
+                    // First ensure table is registered
+                    match client
+                        .register_table(catalog, schema, table, &node_id)
+                        .await
+                    {
+                        Ok(_) => {
+                            debug!("Table registered: {}.{}.{}", catalog, schema, table);
+                        }
+                        Err(e) if e.contains("already exists") => {
+                            // Table already registered, that's fine
+                        }
+                        Err(e) => {
+                            warn!("Failed to register table {}.{}.{}: {}", catalog, schema, table, e);
+                        }
+                    }
+
+                    // Then update stats
+                    let newest_partition = partitions.iter().max().cloned();
+                    let delta = TableStatsDelta {
+                        partition_count_delta: partitions.len() as i64,
+                        bytes_delta: *bytes,
+                        rows_delta: *rows,
+                        files_delta: *file_count,
+                        newest_partition,
+                        min_time: 0,
+                        max_time: 0,
+                    };
+
+                    if let Err(e) = client
+                        .update_table_stats(catalog, schema, table, delta)
+                        .await
+                    {
+                        warn!(
+                            "Failed to update stats for {}.{}.{}: {}",
+                            catalog, schema, table, e
+                        );
+                    }
+
+                    // Refresh QueryEngine registration
+                    debug!("Refreshing table after flush: {}.{}.{}", catalog, schema, table);
                     qe.refresh_table_after_flush(catalog, schema, table);
                 }
 
@@ -586,15 +567,13 @@ pub fn start_background_flush_with_replication(
 
                 let notified = repl_manager.broadcast_flush_checkpoint(checkpoint).await;
 
-                if !flushed_tables.is_empty() {
-                    info!(
-                        "Background flush complete: {} files, {} tables refreshed, {} standbys notified (seq={})",
-                        files_count,
-                        flushed_tables.len(),
-                        notified,
-                        flushed_seq
-                    );
-                }
+                info!(
+                    "Background flush complete: {} files, {} tables, {} standbys notified (seq={})",
+                    files_count,
+                    table_stats.len(),
+                    notified,
+                    flushed_seq
+                );
             });
         }),
     );

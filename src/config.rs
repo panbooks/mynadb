@@ -19,6 +19,8 @@ pub struct Config {
     #[serde(default)]
     pub hot_partition_cache: HotPartitionCacheConfig,
     #[serde(default)]
+    pub partition_files_cache: PartitionFilesCacheConfig,
+    #[serde(default)]
     pub query: QueryConfig,
     #[serde(default)]
     pub compaction: CompactionConfig,
@@ -295,6 +297,47 @@ fn default_hot_partition_hot_days() -> u32 {
 
 fn default_hot_partition_ttl_secs() -> u64 {
     1800 // 30 minutes
+}
+
+/// Partition files cache configuration
+///
+/// Caches S3 LIST results for partition file discovery at query time.
+/// Used with table-level routing (see docs/architecture-meta-routing.md).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartitionFilesCacheConfig {
+    /// Enable partition files caching
+    #[serde(default = "default_partition_files_cache_enabled")]
+    pub enabled: bool,
+
+    /// Cache TTL in seconds (how long to cache file listings)
+    #[serde(default = "default_partition_files_cache_ttl_secs")]
+    pub ttl_secs: u64,
+
+    /// Maximum number of partitions to cache
+    #[serde(default = "default_partition_files_cache_max_entries")]
+    pub max_entries: usize,
+}
+
+impl Default for PartitionFilesCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_partition_files_cache_enabled(),
+            ttl_secs: default_partition_files_cache_ttl_secs(),
+            max_entries: default_partition_files_cache_max_entries(),
+        }
+    }
+}
+
+fn default_partition_files_cache_enabled() -> bool {
+    true
+}
+
+fn default_partition_files_cache_ttl_secs() -> u64 {
+    30 // 30 seconds - short TTL to see new files quickly
+}
+
+fn default_partition_files_cache_max_entries() -> usize {
+    10000 // 10K partitions
 }
 
 /// Query engine configuration
@@ -806,6 +849,7 @@ impl Default for Config {
             cache: CacheConfig::default(),
             query_cache: QueryCacheConfig::default(),
             hot_partition_cache: HotPartitionCacheConfig::default(),
+            partition_files_cache: PartitionFilesCacheConfig::default(),
             query: QueryConfig::default(),
             compaction: CompactionConfig::default(),
             logging: LoggingConfig::default(),

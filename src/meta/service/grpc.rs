@@ -209,154 +209,296 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
     }
 
     // ========================================================================
-    // File Registry
+    // Table-Level Routing (Recommended)
     // ========================================================================
 
-    async fn register_files(
+    async fn register_table(
         &self,
-        request: Request<proto::RegisterFilesRequest>,
-    ) -> Result<Response<proto::RegisterFilesResponse>, Status> {
+        request: Request<proto::RegisterTableRequest>,
+    ) -> Result<Response<proto::RegisterTableResponse>, Status> {
         let req = request.into_inner();
 
-        let files: Vec<FileInfo> = req
-            .files
-            .into_iter()
-            .map(|f| FileInfo {
-                path: f.path,
-                catalog: f.catalog,
-                schema: f.schema,
-                table: f.table,
-                partition: f.partition,
-                level: f.level as u8,
-                size_bytes: f.size_bytes,
-                row_count: f.row_count,
-                min_time: f.min_time,
-                max_time: f.max_time,
-                created_at: f.created_at,
-                created_by: f.created_by,
-            })
-            .collect();
-
-        match self.node.register_files(files).await {
-            Ok(sequence) => Ok(Response::new(proto::RegisterFilesResponse {
-                success: true,
-                error: String::new(),
-                sequence,
-            })),
-            Err(e) => Ok(Response::new(proto::RegisterFilesResponse {
-                success: false,
-                error: e,
-                sequence: 0,
-            })),
-        }
-    }
-
-    async fn remove_files(
-        &self,
-        request: Request<proto::RemoveFilesRequest>,
-    ) -> Result<Response<proto::RemoveFilesResponse>, Status> {
-        let req = request.into_inner();
-
-        match self.node.remove_files(req.paths).await {
-            Ok(sequence) => Ok(Response::new(proto::RemoveFilesResponse {
-                success: true,
-                error: String::new(),
-                sequence,
-            })),
-            Err(e) => Ok(Response::new(proto::RemoveFilesResponse {
-                success: false,
-                error: e,
-                sequence: 0,
-            })),
-        }
-    }
-
-    async fn list_files_for_partition(
-        &self,
-        request: Request<proto::ListFilesRequest>,
-    ) -> Result<Response<proto::ListFilesResponse>, Status> {
-        let req = request.into_inner();
-
-        let files = self
+        match self
             .node
-            .list_files_for_partition(&req.catalog, &req.schema, &req.table, &req.partition)
+            .register_table(&req.catalog, &req.schema, &req.table, &req.owner_node_id)
+            .await
+        {
+            Ok(response) => match response {
+                MetaResponse::TableRegistered { version, .. } => {
+                    Ok(Response::new(proto::RegisterTableResponse {
+                        success: true,
+                        error: String::new(),
+                        already_exists: false,
+                        current_owner: req.owner_node_id,
+                        version,
+                    }))
+                }
+                MetaResponse::TableAlreadyExists { current_owner, .. } => {
+                    Ok(Response::new(proto::RegisterTableResponse {
+                        success: true,
+                        error: String::new(),
+                        already_exists: true,
+                        current_owner,
+                        version: 0,
+                    }))
+                }
+                _ => Ok(Response::new(proto::RegisterTableResponse {
+                    success: false,
+                    error: "Unexpected response".to_string(),
+                    already_exists: false,
+                    current_owner: String::new(),
+                    version: 0,
+                })),
+            },
+            Err(e) => Ok(Response::new(proto::RegisterTableResponse {
+                success: false,
+                error: e,
+                already_exists: false,
+                current_owner: String::new(),
+                version: 0,
+            })),
+        }
+    }
+
+    async fn update_table_stats(
+        &self,
+        request: Request<proto::UpdateTableStatsRequest>,
+    ) -> Result<Response<proto::UpdateTableStatsResponse>, Status> {
+        let req = request.into_inner();
+        let delta = req.delta.unwrap_or_default();
+
+        let stats_delta = TableStatsDelta {
+            partition_count_delta: delta.partition_count_delta,
+            bytes_delta: delta.bytes_delta,
+            rows_delta: delta.rows_delta,
+            files_delta: delta.files_delta,
+            newest_partition: if delta.newest_partition.is_empty() {
+                None
+            } else {
+                Some(delta.newest_partition)
+            },
+            min_time: delta.min_time,
+            max_time: delta.max_time,
+        };
+
+        match self
+            .node
+            .update_table_stats(&req.catalog, &req.schema, &req.table, stats_delta)
+            .await
+        {
+            Ok(response) => match response {
+                MetaResponse::TableStatsUpdated { version, .. } => {
+                    Ok(Response::new(proto::UpdateTableStatsResponse {
+                        success: true,
+                        error: String::new(),
+                        version,
+                    }))
+                }
+                MetaResponse::TableNotFound { .. } => {
+                    Ok(Response::new(proto::UpdateTableStatsResponse {
+                        success: false,
+                        error: "Table not found".to_string(),
+                        version: 0,
+                    }))
+                }
+                _ => Ok(Response::new(proto::UpdateTableStatsResponse {
+                    success: false,
+                    error: "Unexpected response".to_string(),
+                    version: 0,
+                })),
+            },
+            Err(e) => Ok(Response::new(proto::UpdateTableStatsResponse {
+                success: false,
+                error: e,
+                version: 0,
+            })),
+        }
+    }
+
+    async fn reassign_table(
+        &self,
+        request: Request<proto::ReassignTableRequest>,
+    ) -> Result<Response<proto::ReassignTableResponse>, Status> {
+        let req = request.into_inner();
+
+        match self
+            .node
+            .reassign_table(&req.catalog, &req.schema, &req.table, &req.new_owner_node_id)
+            .await
+        {
+            Ok(response) => match response {
+                MetaResponse::TableReassigned {
+                    old_owner,
+                    new_owner,
+                    version,
+                    ..
+                } => Ok(Response::new(proto::ReassignTableResponse {
+                    success: true,
+                    error: String::new(),
+                    old_owner,
+                    new_owner,
+                    version,
+                })),
+                MetaResponse::TableNotFound { .. } => {
+                    Ok(Response::new(proto::ReassignTableResponse {
+                        success: false,
+                        error: "Table not found".to_string(),
+                        old_owner: String::new(),
+                        new_owner: String::new(),
+                        version: 0,
+                    }))
+                }
+                _ => Ok(Response::new(proto::ReassignTableResponse {
+                    success: false,
+                    error: "Unexpected response".to_string(),
+                    old_owner: String::new(),
+                    new_owner: String::new(),
+                    version: 0,
+                })),
+            },
+            Err(e) => Ok(Response::new(proto::ReassignTableResponse {
+                success: false,
+                error: e,
+                old_owner: String::new(),
+                new_owner: String::new(),
+                version: 0,
+            })),
+        }
+    }
+
+    async fn remove_table(
+        &self,
+        request: Request<proto::RemoveTableRequest>,
+    ) -> Result<Response<proto::RemoveTableResponse>, Status> {
+        let req = request.into_inner();
+
+        match self
+            .node
+            .remove_table(&req.catalog, &req.schema, &req.table)
+            .await
+        {
+            Ok(_) => Ok(Response::new(proto::RemoveTableResponse {
+                success: true,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(proto::RemoveTableResponse {
+                success: false,
+                error: e,
+            })),
+        }
+    }
+
+    async fn get_table_owner(
+        &self,
+        request: Request<proto::GetTableOwnerRequest>,
+    ) -> Result<Response<proto::GetTableOwnerResponse>, Status> {
+        let req = request.into_inner();
+
+        let table_meta = self
+            .node
+            .get_table_meta(&req.catalog, &req.schema, &req.table)
             .await;
 
-        let proto_files: Vec<proto::FileInfo> = files
+        match table_meta {
+            Some(meta) => Ok(Response::new(proto::GetTableOwnerResponse {
+                found: true,
+                owner_node_id: meta.owner_node_id.clone(),
+                table_meta: Some(proto::TableMeta {
+                    catalog: meta.catalog,
+                    schema: meta.schema,
+                    table: meta.table,
+                    owner_node_id: meta.owner_node_id,
+                    partition_count: meta.partition_count,
+                    total_bytes: meta.total_bytes,
+                    total_rows: meta.total_rows,
+                    oldest_partition: meta.oldest_partition.unwrap_or_default(),
+                    newest_partition: meta.newest_partition.unwrap_or_default(),
+                    min_time: meta.min_time,
+                    max_time: meta.max_time,
+                    created_at: meta.created_at,
+                    last_modified: meta.last_modified,
+                    version: meta.version,
+                }),
+            })),
+            None => Ok(Response::new(proto::GetTableOwnerResponse {
+                found: false,
+                owner_node_id: String::new(),
+                table_meta: None,
+            })),
+        }
+    }
+
+    async fn list_tables_for_node(
+        &self,
+        request: Request<proto::ListTablesForNodeRequest>,
+    ) -> Result<Response<proto::ListTablesForNodeResponse>, Status> {
+        let req = request.into_inner();
+
+        let tables = self.node.list_tables_for_node(&req.node_id).await;
+
+        let proto_tables: Vec<proto::TableMeta> = tables
             .into_iter()
-            .map(|f| proto::FileInfo {
-                path: f.path,
-                catalog: f.catalog,
-                schema: f.schema,
-                table: f.table,
-                partition: f.partition,
-                level: f.level as u32,
-                size_bytes: f.size_bytes,
-                row_count: f.row_count,
-                min_time: f.min_time,
-                max_time: f.max_time,
-                created_at: f.created_at,
-                created_by: f.created_by,
+            .map(|m| proto::TableMeta {
+                catalog: m.catalog,
+                schema: m.schema,
+                table: m.table,
+                owner_node_id: m.owner_node_id,
+                partition_count: m.partition_count,
+                total_bytes: m.total_bytes,
+                total_rows: m.total_rows,
+                oldest_partition: m.oldest_partition.unwrap_or_default(),
+                newest_partition: m.newest_partition.unwrap_or_default(),
+                min_time: m.min_time,
+                max_time: m.max_time,
+                created_at: m.created_at,
+                last_modified: m.last_modified,
+                version: m.version,
             })
             .collect();
 
-        Ok(Response::new(proto::ListFilesResponse {
-            files: proto_files,
+        Ok(Response::new(proto::ListTablesForNodeResponse {
+            tables: proto_tables,
         }))
     }
 
-    async fn get_files_for_query(
+    async fn list_tables(
         &self,
-        request: Request<proto::QueryFilesRequest>,
-    ) -> Result<Response<proto::QueryFilesResponse>, Status> {
+        request: Request<proto::ListTablesRequest>,
+    ) -> Result<Response<proto::ListTablesResponse>, Status> {
         let req = request.into_inner();
 
-        // Get files for all requested tables
-        let mut all_files = Vec::new();
-        let mut nodes_set = std::collections::HashSet::new();
+        let tables = if !req.catalog.is_empty() && !req.schema.is_empty() {
+            self.node
+                .list_tables_in_schema(&req.catalog, &req.schema)
+                .await
+        } else if !req.catalog.is_empty() {
+            self.node.list_tables_in_catalog(&req.catalog).await
+        } else {
+            self.node.list_all_tables().await
+        };
 
-        for table_ref in &req.tables {
-            // Parse "schema.table" format
-            let parts: Vec<&str> = table_ref.split('.').collect();
-            if parts.len() != 2 {
-                continue;
-            }
+        let proto_tables: Vec<proto::TableMeta> = tables
+            .into_iter()
+            .map(|m| proto::TableMeta {
+                catalog: m.catalog,
+                schema: m.schema,
+                table: m.table,
+                owner_node_id: m.owner_node_id,
+                partition_count: m.partition_count,
+                total_bytes: m.total_bytes,
+                total_rows: m.total_rows,
+                oldest_partition: m.oldest_partition.unwrap_or_default(),
+                newest_partition: m.newest_partition.unwrap_or_default(),
+                min_time: m.min_time,
+                max_time: m.max_time,
+                created_at: m.created_at,
+                last_modified: m.last_modified,
+                version: m.version,
+            })
+            .collect();
 
-            let files = self
-                .node
-                .list_files_for_table(&req.catalog, parts[0], parts[1])
-                .await;
-
-            for file in files {
-                // Filter by time range if specified
-                if req.min_time > 0 && file.max_time < req.min_time {
-                    continue;
-                }
-                if req.max_time > 0 && file.min_time > req.max_time {
-                    continue;
-                }
-
-                nodes_set.insert(file.created_by.clone());
-                all_files.push(proto::FileInfo {
-                    path: file.path,
-                    catalog: file.catalog,
-                    schema: file.schema,
-                    table: file.table,
-                    partition: file.partition,
-                    level: file.level as u32,
-                    size_bytes: file.size_bytes,
-                    row_count: file.row_count,
-                    min_time: file.min_time,
-                    max_time: file.max_time,
-                    created_at: file.created_at,
-                    created_by: file.created_by,
-                });
-            }
-        }
-
-        Ok(Response::new(proto::QueryFilesResponse {
-            files: all_files,
-            nodes: nodes_set.into_iter().collect(),
+        Ok(Response::new(proto::ListTablesResponse {
+            tables: proto_tables,
         }))
     }
 

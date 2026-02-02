@@ -2,9 +2,7 @@
 //!
 //! Read-only operations for querying state machine data.
 
-use crate::meta::types::{
-    keys, Event, FileInfo, LeaderInfo, LockInfo, NodeInfo, NodeRole, NodeState, PartitionReplica,
-};
+use crate::meta::types::{keys, Event, LeaderInfo, LockInfo, NodeInfo, NodeRole, NodeState, PartitionReplica};
 use std::sync::atomic::Ordering;
 
 use super::super::MetaStateMachine;
@@ -71,44 +69,6 @@ impl MetaStateMachine {
             .ok()
             .flatten()
             .and_then(|data| bincode::deserialize(&data).ok())
-    }
-
-    /// List files for a partition
-    pub fn list_files_for_partition(
-        &self,
-        catalog: &str,
-        schema: &str,
-        table: &str,
-        partition: &str,
-    ) -> Vec<FileInfo> {
-        let prefix = FileInfo::partition_prefix(catalog, schema, table, partition);
-        let mut files = Vec::new();
-
-        for item in self.db.scan_prefix(prefix.as_bytes()) {
-            if let Ok((_, v)) = item {
-                if let Ok(file) = bincode::deserialize::<FileInfo>(&v) {
-                    files.push(file);
-                }
-            }
-        }
-
-        files
-    }
-
-    /// List files for a table
-    pub fn list_files_for_table(&self, catalog: &str, schema: &str, table: &str) -> Vec<FileInfo> {
-        let prefix = FileInfo::table_prefix(catalog, schema, table);
-        let mut files = Vec::new();
-
-        for item in self.db.scan_prefix(prefix.as_bytes()) {
-            if let Ok((_, v)) = item {
-                if let Ok(file) = bincode::deserialize::<FileInfo>(&v) {
-                    files.push(file);
-                }
-            }
-        }
-
-        files
     }
 
     /// Get lock info

@@ -63,8 +63,6 @@ pub fn build_router(state: MetaHttpState) -> Router {
         .route("/nodes/:node_id", get(get_node))
         // Replica endpoints
         .route("/replicas", get(list_replicas))
-        // File endpoints
-        .route("/files/:catalog/:schema/:table", get(list_files))
         // Scale-in endpoints
         .route("/nodes/:node_id/retire", post(retire_node))
         .route("/nodes/:node_id/retire/status", get(retire_status))
@@ -320,53 +318,6 @@ async fn list_replicas(
         .into_iter()
         .map(ReplicaInfoResponse::from)
         .collect();
-
-    (StatusCode::OK, Json(responses))
-}
-
-// ========================================================================
-// File Management Endpoints
-// ========================================================================
-
-/// File info response
-#[derive(Serialize)]
-pub struct FileInfoResponse {
-    pub path: String,
-    pub partition: String,
-    pub level: u8,
-    pub size_bytes: u64,
-    pub row_count: u64,
-    pub min_time: i64,
-    pub max_time: i64,
-    pub created_by: String,
-}
-
-impl From<crate::meta::types::FileInfo> for FileInfoResponse {
-    fn from(f: crate::meta::types::FileInfo) -> Self {
-        FileInfoResponse {
-            path: f.path,
-            partition: f.partition,
-            level: f.level,
-            size_bytes: f.size_bytes,
-            row_count: f.row_count,
-            min_time: f.min_time,
-            max_time: f.max_time,
-            created_by: f.created_by,
-        }
-    }
-}
-
-/// List files for a table
-async fn list_files(
-    State(state): State<MetaHttpState>,
-    Path((catalog, schema, table)): Path<(String, String, String)>,
-) -> impl IntoResponse {
-    let files = state
-        .meta_node
-        .list_files_for_table(&catalog, &schema, &table)
-        .await;
-
-    let responses: Vec<FileInfoResponse> = files.into_iter().map(FileInfoResponse::from).collect();
 
     (StatusCode::OK, Json(responses))
 }

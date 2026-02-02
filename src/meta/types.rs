@@ -8,7 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub mod keys {
     pub const PREFIX_NODE: &str = "/nodes/";
     pub const PREFIX_SCHEMA: &str = "/schemas/";
-    pub const PREFIX_FILE: &str = "/files/";
+    pub const PREFIX_TABLE: &str = "/tables/";
+    pub const PREFIX_FILE: &str = "/files/"; // Deprecated: use table-level routing
     pub const PREFIX_LOCK: &str = "/locks/";
     pub const PREFIX_LEADER: &str = "/leaders/";
     pub const PREFIX_EVENT: &str = "/events/";
@@ -311,6 +312,7 @@ impl NodeInfo {
 }
 
 /// File metadata in the registry
+/// DEPRECATED: Use TableMeta for routing. File lists should be derived from S3 listing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileInfo {
     pub path: String,
@@ -329,6 +331,7 @@ pub struct FileInfo {
 
 impl FileInfo {
     /// Generate the storage key for this file
+    /// DEPRECATED: Use TableMeta for routing
     pub fn storage_key(&self) -> String {
         format!(
             "{}{}/{}/{}/{}/{}",
@@ -342,6 +345,7 @@ impl FileInfo {
     }
 
     /// Generate a prefix key for listing files in a partition
+    /// DEPRECATED: Use S3 listing instead
     pub fn partition_prefix(catalog: &str, schema: &str, table: &str, partition: &str) -> String {
         format!(
             "{}{}/{}/{}/{}/",
@@ -354,8 +358,185 @@ impl FileInfo {
     }
 
     /// Generate a prefix key for listing files in a table
+    /// DEPRECATED: Use S3 listing instead
     pub fn table_prefix(catalog: &str, schema: &str, table: &str) -> String {
         format!("{}{}/{}/{}/", keys::PREFIX_FILE, catalog, schema, table)
+    }
+}
+
+/// Table-level metadata for routing and statistics
+///
+/// This is the primary routing mechanism for cluster mode. Each table is owned
+/// by a single Data node which handles all partitions for that table.
+///
+/// Key design principles:
+/// - One Meta entry per table (not per partition or per file)
+/// - 100K tables = 100K entries (vs 60M for file-level)
+/// - Data node manages its own partitions locally
+/// - File lists derived from S3 listing, not stored in Meta
+///
+/// This design optimizes for time-series workloads where 95%+ queries
+/// access today's partition, making table-level routing optimal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableMeta {
+    // Identity
+    pub catalog: String,
+    pub schema: String,
+    pub table: String,
+
+    // Routing (primary purpose)
+    /// The Data node that owns all partitions for this table
+    pub owner_node_id: String,
+
+    // Cached statistics (updated periodically, not per-flush)
+    /// Number of date partitions (e.g., 30 for a month of data)
+    pub partition_count: u32,
+    /// Total bytes across all partitions
+    pub total_bytes: u64,
+    /// Total rows across all partitions
+    pub total_rows: u64,
+    /// Oldest partition key (e.g., "date=2024-01-01")
+    pub oldest_partition: Option<String>,
+    /// Newest partition key (e.g., "date=2024-01-31")
+    pub newest_partition: Option<String>,
+    /// Minimum timestamp across all data
+    pub min_time: i64,
+    /// Maximum timestamp across all data
+    pub max_time: i64,
+
+    // Metadata
+    pub created_at: i64,
+    pub last_modified: i64,
+    /// Version for optimistic concurrency and cache invalidation
+    pub version: u64,
+}
+
+impl TableMeta {
+    /// Create a new TableMeta for a newly discovered table
+    pub fn new(catalog: String, schema: String, table: String, owner_node_id: String) -> Self {
+        let now = current_timestamp_ms();
+        Self {
+            catalog,
+            schema,
+            table,
+            owner_node_id,
+            partition_count: 0,
+            total_bytes: 0,
+            total_rows: 0,
+            oldest_partition: None,
+            newest_partition: None,
+            min_time: i64::MAX,
+            max_time: i64::MIN,
+            created_at: now,
+            last_modified: now,
+            version: 1,
+        }
+    }
+
+    /// Generate the storage key for this table
+    pub fn storage_key(&self) -> String {
+        Self::key_for(&self.catalog, &self.schema, &self.table)
+    }
+
+    /// Generate a storage key for a table
+    pub fn key_for(catalog: &str, schema: &str, table: &str) -> String {
+        format!("{}{}/{}/{}", keys::PREFIX_TABLE, catalog, schema, table)
+    }
+
+    /// Generate a prefix for listing all tables in a schema
+    pub fn schema_prefix(catalog: &str, schema: &str) -> String {
+        format!("{}{}/{}/", keys::PREFIX_TABLE, catalog, schema)
+    }
+
+    /// Generate a prefix for listing all tables in a catalog
+    pub fn catalog_prefix(catalog: &str) -> String {
+        format!("{}{}/", keys::PREFIX_TABLE, catalog)
+    }
+
+    /// Generate a prefix for listing all tables
+    pub fn all_prefix() -> String {
+        keys::PREFIX_TABLE.to_string()
+    }
+
+    /// Update statistics with a delta (after flush)
+    pub fn apply_stats_delta(&mut self, delta: &TableStatsDelta) {
+        self.partition_count = (self.partition_count as i64 + delta.partition_count_delta) as u32;
+        self.total_bytes = (self.total_bytes as i64 + delta.bytes_delta) as u64;
+        self.total_rows = (self.total_rows as i64 + delta.rows_delta) as u64;
+
+        if let Some(ref partition) = delta.newest_partition {
+            // Update newest if this is newer
+            if self.newest_partition.is_none()
+                || partition > self.newest_partition.as_ref().unwrap()
+            {
+                self.newest_partition = Some(partition.clone());
+            }
+        }
+
+        if delta.min_time < self.min_time {
+            self.min_time = delta.min_time;
+        }
+        if delta.max_time > self.max_time {
+            self.max_time = delta.max_time;
+        }
+
+        self.last_modified = current_timestamp_ms();
+        self.version += 1;
+    }
+}
+
+/// Delta for updating table statistics
+///
+/// Used after flush operations to update Meta with aggregated changes.
+/// This avoids per-file updates and reduces Meta traffic significantly.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TableStatsDelta {
+    /// Change in partition count (+1 for new partition, 0 for existing)
+    pub partition_count_delta: i64,
+    /// Change in total bytes (positive for flush, negative for delete)
+    pub bytes_delta: i64,
+    /// Change in total rows
+    pub rows_delta: i64,
+    /// Files added in this operation
+    pub files_delta: i64,
+    /// Newest partition affected (for updating newest_partition)
+    pub newest_partition: Option<String>,
+    /// Minimum timestamp in this delta
+    pub min_time: i64,
+    /// Maximum timestamp in this delta
+    pub max_time: i64,
+}
+
+impl TableStatsDelta {
+    pub fn new() -> Self {
+        Self {
+            partition_count_delta: 0,
+            bytes_delta: 0,
+            rows_delta: 0,
+            files_delta: 0,
+            newest_partition: None,
+            min_time: i64::MAX,
+            max_time: i64::MIN,
+        }
+    }
+
+    /// Create from flush results
+    pub fn from_flush(
+        bytes: u64,
+        rows: u64,
+        files: u32,
+        partition: &str,
+        is_new_partition: bool,
+    ) -> Self {
+        Self {
+            partition_count_delta: if is_new_partition { 1 } else { 0 },
+            bytes_delta: bytes as i64,
+            rows_delta: rows as i64,
+            files_delta: files as i64,
+            newest_partition: Some(partition.to_string()),
+            min_time: i64::MAX,
+            max_time: i64::MIN,
+        }
     }
 }
 
@@ -820,12 +1001,52 @@ pub enum MetaCommand {
         state: NodeState,
     },
 
-    // File operations
-    RegisterFiles {
-        files: Vec<FileInfo>,
+    // ========================================================================
+    // Table-Level Operations (Recommended for routing)
+    // ========================================================================
+
+    /// Register a new table with its owner node
+    ///
+    /// Called when a Data node first receives data for a new table.
+    /// The node that first writes to a table becomes its owner.
+    RegisterTable {
+        catalog: String,
+        schema: String,
+        table: String,
+        owner_node_id: String,
     },
-    RemoveFiles {
-        paths: Vec<String>,
+
+    /// Update table statistics after flush
+    ///
+    /// Called periodically (not per-flush) to sync aggregated stats.
+    /// Data nodes batch stats locally and sync every few minutes.
+    UpdateTableStats {
+        catalog: String,
+        schema: String,
+        table: String,
+        delta: TableStatsDelta,
+    },
+
+    /// Reassign a table to a different owner node
+    ///
+    /// Used for:
+    /// - Load balancing (move hot tables)
+    /// - Node failure recovery
+    /// - Manual rebalancing
+    ReassignTable {
+        catalog: String,
+        schema: String,
+        table: String,
+        new_owner_node_id: String,
+    },
+
+    /// Remove a table from the registry
+    ///
+    /// Called when a table is dropped or all data is deleted.
+    RemoveTable {
+        catalog: String,
+        schema: String,
+        table: String,
     },
 
     // Lock operations
@@ -1025,6 +1246,64 @@ pub enum MetaResponse {
     NodeRegistered {
         lease_id: u64,
     },
+
+    // ========================================================================
+    // Table-Level Responses
+    // ========================================================================
+
+    /// Table registered successfully
+    TableRegistered {
+        catalog: String,
+        schema: String,
+        table: String,
+        owner_node_id: String,
+        version: u64,
+    },
+
+    /// Table already exists (idempotent registration)
+    TableAlreadyExists {
+        catalog: String,
+        schema: String,
+        table: String,
+        current_owner: String,
+    },
+
+    /// Table stats updated successfully
+    TableStatsUpdated {
+        catalog: String,
+        schema: String,
+        table: String,
+        version: u64,
+    },
+
+    /// Table reassigned to new owner
+    TableReassigned {
+        catalog: String,
+        schema: String,
+        table: String,
+        old_owner: String,
+        new_owner: String,
+        version: u64,
+    },
+
+    /// Table removed successfully
+    TableRemoved {
+        catalog: String,
+        schema: String,
+        table: String,
+    },
+
+    /// Table not found
+    TableNotFound {
+        catalog: String,
+        schema: String,
+        table: String,
+    },
+
+    // ========================================================================
+    // Lock Responses
+    // ========================================================================
+
     LockAcquired {
         fencing_token: u64,
     },
