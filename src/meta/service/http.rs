@@ -61,8 +61,6 @@ pub fn build_router(state: MetaHttpState) -> Router {
         // Node endpoints
         .route("/nodes", get(list_nodes))
         .route("/nodes/:node_id", get(get_node))
-        // Replica endpoints
-        .route("/replicas", get(list_replicas))
         // Scale-in endpoints
         .route("/nodes/:node_id/retire", post(retire_node))
         .route("/nodes/:node_id/retire/status", get(retire_status))
@@ -82,9 +80,7 @@ async fn home() -> &'static str {
        GET  /health                      - Health check\n\
        GET  /version                     - Version info\n\
        GET  /nodes                       - List all registered nodes\n\
-       GET  /nodes/{node_id}             - Get specific node info\n\
-       GET  /replicas                    - List all partition replicas\n\
-       GET  /files/{catalog}/{schema}/{table} - List files for a table\n\n\
+       GET  /nodes/{node_id}             - Get specific node info\n\n\
      Scale-In Endpoints:\n\
        POST /nodes/{node_id}/retire      - Start graceful retirement\n\
        GET  /nodes/{node_id}/retire/status - Get retirement progress\n\
@@ -259,67 +255,6 @@ async fn get_node(
         Some(info) => (StatusCode::OK, Json(Some(NodeInfoResponse::from(info)))),
         None => (StatusCode::NOT_FOUND, Json(None)),
     }
-}
-
-// ========================================================================
-// Replica Management Endpoints
-// ========================================================================
-
-/// Query params for listing replicas
-#[derive(Deserialize, Default)]
-pub struct ListReplicasQuery {
-    /// Filter by leader node ID
-    #[serde(default)]
-    pub leader: Option<String>,
-}
-
-/// Replica info response
-#[derive(Serialize)]
-pub struct ReplicaInfoResponse {
-    pub partition_key: String,
-    pub leader_node_id: String,
-    pub standby_node_ids: Vec<String>,
-    pub replication_factor: u8,
-    pub state: String,
-    pub last_replicated_seq: u64,
-    pub replication_lag_ms: u64,
-}
-
-impl From<crate::meta::types::PartitionReplica> for ReplicaInfoResponse {
-    fn from(r: crate::meta::types::PartitionReplica) -> Self {
-        let state_str = match r.state {
-            crate::meta::types::ReplicaState::InSync => "in_sync",
-            crate::meta::types::ReplicaState::CatchingUp => "catching_up",
-            crate::meta::types::ReplicaState::Offline => "offline",
-        };
-        ReplicaInfoResponse {
-            partition_key: r.partition_key,
-            leader_node_id: r.leader_node_id,
-            standby_node_ids: r.standby_node_ids,
-            replication_factor: r.replication_factor,
-            state: state_str.to_string(),
-            last_replicated_seq: r.last_replicated_seq,
-            replication_lag_ms: r.replication_lag_ms,
-        }
-    }
-}
-
-/// List all partition replicas
-async fn list_replicas(
-    State(state): State<MetaHttpState>,
-    Query(query): Query<ListReplicasQuery>,
-) -> impl IntoResponse {
-    let replicas = state
-        .meta_node
-        .list_partition_replicas(query.leader.as_deref())
-        .await;
-
-    let responses: Vec<ReplicaInfoResponse> = replicas
-        .into_iter()
-        .map(ReplicaInfoResponse::from)
-        .collect();
-
-    (StatusCode::OK, Json(responses))
 }
 
 // ========================================================================

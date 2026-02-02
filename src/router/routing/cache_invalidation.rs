@@ -2,7 +2,7 @@
 //!
 //! Subscribes to Meta service events and updates the Router's ShardCache accordingly.
 
-use super::shard_cache::{DataNodeInfo, NodeState, PartitionKey, ShardCache};
+use super::shard_cache::{DataNodeInfo, NodeState, ShardCache, TableKey};
 use crate::meta::client::{EventSubscriber, MetaClient, MetaEvent, SubscriberConfig};
 use crate::meta::types::{DataNodeMode, EventType, NodeRole, NodeState as MetaNodeState};
 use crate::router::client::DataNodePool;
@@ -322,8 +322,8 @@ impl CacheInvalidationHandler {
                 // Remove from connection pool
                 data_node_pool.remove_node(node_id);
 
-                // Clean up partition ownership to prevent memory growth
-                shard_cache.remove_partitions_for_node(node_id);
+                // Clean up table ownership to prevent memory growth
+                shard_cache.remove_tables_for_node(node_id);
             }
         }
     }
@@ -419,81 +419,54 @@ impl CacheInvalidationHandler {
         }
     }
 
-    /// Handle files registered event
+    /// Handle table registered event (table-level routing)
+    ///
+    /// Updates the shard cache with table ownership information.
     fn handle_files_registered(shard_cache: &ShardCache, event: &MetaEvent) {
         if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
-            if let Some(files) = payload["files"].as_array() {
-                for file in files {
-                    let catalog = file["catalog"].as_str().unwrap_or_default();
-                    let schema = file["schema"].as_str().unwrap_or_default();
-                    let table = file["table"].as_str().unwrap_or_default();
-                    let partition = file["partition"].as_str().unwrap_or_default();
-                    let created_by = file["created_by"].as_str().unwrap_or_default();
-
-                    if !catalog.is_empty() && !partition.is_empty() && !created_by.is_empty() {
-                        // Extract date from partition (format: "date=YYYY-MM-DD")
-                        let date = partition.strip_prefix("date=").unwrap_or(partition);
-
-                        let key = PartitionKey::new(catalog, schema, table, date);
-                        debug!("File registered for partition: {}", key.to_path());
-
-                        // Update partition owner (just the node_id reference)
-                        // Full node info is looked up from data_nodes when routing
-                        shard_cache.set_partition_owner(&key, created_by.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    /// Handle files removed event
-    fn handle_files_removed(shard_cache: &ShardCache, event: &MetaEvent) {
-        if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
-            if let Some(paths) = payload["paths"].as_array() {
-                for path in paths {
-                    if let Some(path_str) = path.as_str() {
-                        // Try to parse partition key from path
-                        if let Some(key) = PartitionKey::from_path(path_str) {
-                            debug!("File removed from partition: {}", key.to_path());
-                            // Note: We don't remove partition owners on file removal
-                            // since there might be other files in the partition
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Handle replica assigned event (warm standby replication)
-    ///
-    /// Updates the shard cache with partition replica information for instant failover.
-    fn handle_replica_assigned(shard_cache: &ShardCache, event: &MetaEvent) {
-        if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
-            let partition_key = payload["partition_key"].as_str().unwrap_or_default();
-            let leader_node_id = payload["leader_node_id"].as_str().unwrap_or_default();
-            let standby_node_ids: Vec<String> = payload["standby_node_ids"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect()
-                })
+            // Handle table registration events
+            let catalog = payload["catalog"].as_str().unwrap_or_default();
+            let schema = payload["schema"].as_str().unwrap_or_default();
+            let table = payload["table"].as_str().unwrap_or_default();
+            let owner_node_id = payload["owner_node_id"]
+                .as_str()
+                .or_else(|| payload["created_by"].as_str())
                 .unwrap_or_default();
+            let version = payload["version"].as_u64().unwrap_or(1);
 
-            if !partition_key.is_empty() && !leader_node_id.is_empty() {
-                info!(
-                    "Replica assigned: {} -> leader={}, standbys={:?}",
-                    partition_key, leader_node_id, standby_node_ids
+            if !catalog.is_empty() && !table.is_empty() && !owner_node_id.is_empty() {
+                let key = TableKey::new(catalog, schema, table);
+                debug!(
+                    "Table registered: {} -> {} (v{})",
+                    key.to_path(),
+                    owner_node_id,
+                    version
                 );
 
-                // Update shard cache with replica information
-                shard_cache.set_partition_replica(
-                    partition_key,
-                    leader_node_id.to_string(),
-                    standby_node_ids,
-                );
+                // Update table owner for routing
+                shard_cache.set_table_owner(&key, owner_node_id.to_string(), version);
             }
         }
+    }
+
+    /// Handle files removed event (no-op for table-level routing)
+    fn handle_files_removed(_shard_cache: &ShardCache, event: &MetaEvent) {
+        // With table-level routing, file removal doesn't affect routing
+        // Tables are only removed when explicitly dropped
+        debug!(
+            "Files removed event (no-op for table routing): seq={}",
+            event.sequence
+        );
+    }
+
+    /// Handle replica assigned event (no-op for table-level routing)
+    ///
+    /// With table-level routing, partition replicas are not used.
+    fn handle_replica_assigned(_shard_cache: &ShardCache, event: &MetaEvent) {
+        debug!(
+            "Replica assigned event (no-op for table routing): seq={}",
+            event.sequence
+        );
     }
 
     // handle_replica_promoted() removed - using No-Promotion architecture

@@ -47,12 +47,6 @@ service MetaService {
     rpc GetClusterStatus(GetClusterStatusRequest) returns (GetClusterStatusResponse);
     rpc GetRaftStatus(GetRaftStatusRequest) returns (GetRaftStatusResponse);
 
-    // Partition Replica Management
-    rpc GetPartitionReplica(GetPartitionReplicaRequest) returns (GetPartitionReplicaResponse);
-    rpc ListPartitionReplicas(ListPartitionReplicasRequest) returns (ListPartitionReplicasResponse);
-    rpc AutoAssignReplica(AutoAssignReplicaRequest) returns (AutoAssignReplicaResponse);
-    rpc UpdateReplicaState(UpdateReplicaStateRequest) returns (UpdateReplicaStateResponse);
-
     // Data Node Mode Management (Cold Standby Architecture)
     // Note: No promotion RPCs - using No-Promotion architecture
     // Standby nodes never promote to Primary; K8s handles node replacement
@@ -442,49 +436,6 @@ message PartitionReplicaInfo {
     uint64 replication_lag_ms = 7;      // Replication lag in milliseconds
     int64 created_at = 8;               // Creation timestamp (ms since epoch)
     int64 leader_last_seen = 9;         // Last leader heartbeat timestamp
-}
-
-message GetPartitionReplicaRequest {
-    string partition_key = 1;
-}
-
-message GetPartitionReplicaResponse {
-    bool found = 1;
-    PartitionReplicaInfo replica = 2;
-    string error = 3;
-}
-
-message ListPartitionReplicasRequest {
-    string leader_node_id = 1;          // Optional: filter by leader (empty = all)
-}
-
-message ListPartitionReplicasResponse {
-    repeated PartitionReplicaInfo replicas = 1;
-}
-
-message AutoAssignReplicaRequest {
-    string partition_key = 1;
-}
-
-message AutoAssignReplicaResponse {
-    bool success = 1;
-    PartitionReplicaInfo replica = 2;
-    string error = 3;
-}
-
-// PromoteStandby removed - using No-Promotion architecture
-// Standby nodes never promote to Primary; K8s handles node replacement
-
-message UpdateReplicaStateRequest {
-    string partition_key = 1;
-    ReplicaState state = 2;
-    uint64 last_replicated_seq = 3;
-    uint64 replication_lag_ms = 4;
-}
-
-message UpdateReplicaStateResponse {
-    bool success = 1;
-    string error = 2;
 }
 
 // ============================================================================
