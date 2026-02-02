@@ -543,20 +543,8 @@ impl ShardCache {
         }
     }
 
-    /// Update a node's operational mode (Cold Standby Architecture)
-    ///
-    /// In No-Promotion architecture, mode changes only happen at registration time.
-    /// This method is kept for backward compatibility and administrative operations.
-    pub fn update_node_mode(&self, node_id: &str, mode: DataNodeMode) {
-        let mut nodes = self.data_nodes.write();
-        if let Some(node) = nodes.get_mut(node_id) {
-            info!(
-                "Updating node {} mode from {:?} to {:?}",
-                node_id, node.mode, mode
-            );
-            node.mode = mode;
-        }
-    }
+    // update_node_mode() removed - No-Promotion architecture
+    // Mode is set at registration time (via upsert_data_node) and never changes
 
     /// Select node with load balancing (for reads)
     ///

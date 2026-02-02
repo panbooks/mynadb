@@ -271,10 +271,7 @@ impl MetaStateMachine {
 
             // Cold Standby Architecture: Data node mode management
             // PromoteDataNode removed - using No-Promotion architecture
-
-            MetaCommand::UpdateDataNodeMode { node_id, mode } => {
-                self.update_data_node_mode(&node_id, mode)
-            }
+            // UpdateDataNodeMode removed - No-Promotion architecture (mode set at registration)
 
             // Scale-in (retirement) operations
             MetaCommand::StartRetire { node_id } => self.start_retire(&node_id),
@@ -1275,72 +1272,8 @@ impl MetaStateMachine {
 
     // select_standby_to_promote() removed - using No-Promotion architecture
     // promote_data_node() removed - using No-Promotion architecture
+    // update_data_node_mode() removed - No-Promotion architecture (mode set at registration)
     // Standby nodes never promote to Primary; K8s handles node replacement
-
-    /// Update a data node's mode (Primary/Standby)
-    fn update_data_node_mode(&self, node_id: &str, mode: DataNodeMode) -> MetaResponse {
-        let node_key = format!("{}{}", keys::PREFIX_NODE, node_id);
-
-        // Get the current node info
-        let node_data = match self.db.get(node_key.as_bytes()) {
-            Ok(Some(data)) => data,
-            Ok(None) => {
-                return MetaResponse::DataNodeNotFound {
-                    node_id: node_id.to_string(),
-                }
-            }
-            Err(e) => {
-                return MetaResponse::Error {
-                    message: format!("Database error: {}", e),
-                }
-            }
-        };
-
-        let mut node: NodeInfo = match bincode::deserialize(&node_data) {
-            Ok(n) => n,
-            Err(e) => {
-                return MetaResponse::Error {
-                    message: format!("Deserialize error: {}", e),
-                }
-            }
-        };
-
-        // Verify it's a Data node
-        if node.role != NodeRole::Data {
-            return MetaResponse::Error {
-                message: format!("Node {} is not a Data node", node_id),
-            };
-        }
-
-        let old_mode = node.mode;
-        node.mode = Some(mode);
-        let _ = self
-            .db
-            .insert(node_key.as_bytes(), bincode::serialize(&node).unwrap());
-
-        info!(
-            "Updated Data node {} mode: {:?} -> {:?}",
-            node_id, old_mode, mode
-        );
-
-        // Publish mode change event
-        let payload = serde_json::json!({
-            "node_id": node_id,
-            "old_mode": old_mode.map(|m| format!("{:?}", m)),
-            "new_mode": format!("{:?}", mode),
-        });
-        self.publish_event(
-            "nodes",
-            EventType::DataNodeModeChanged,
-            serde_json::to_vec(&payload).unwrap_or_default(),
-            node_id,
-        );
-
-        MetaResponse::DataNodeModeUpdated {
-            node_id: node_id.to_string(),
-            mode,
-        }
-    }
 
     // ========================================================================
     // Scale-In (Retirement) Operations

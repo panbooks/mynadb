@@ -908,13 +908,8 @@ pub enum MetaCommand {
     // PromoteDataNode removed - using No-Promotion architecture
     // Standby nodes never promote to Primary; K8s handles node replacement
 
-    /// Update a data node's mode (Primary/Standby)
-    ///
-    /// Used internally during auto-assignment at registration time.
-    UpdateDataNodeMode {
-        node_id: String,
-        mode: DataNodeMode,
-    },
+    // UpdateDataNodeMode removed - No-Promotion architecture
+    // Mode is set at registration time and never changes dynamically
 
     // Scale-in (retirement) operations
     /// Start retiring a node (scale-in)
@@ -1080,11 +1075,7 @@ pub enum MetaResponse {
         updated_count: usize,
     },
     // DataNodePromoted removed - using No-Promotion architecture
-    /// Data node mode updated
-    DataNodeModeUpdated {
-        node_id: String,
-        mode: DataNodeMode,
-    },
+    // DataNodeModeUpdated removed - No-Promotion architecture (mode set at registration)
     /// Data node not found
     DataNodeNotFound {
         node_id: String,

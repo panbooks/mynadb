@@ -240,7 +240,9 @@ impl CacheInvalidationHandler {
                     Self::handle_replica_state_changed(&shard_cache, &event);
                 }
                 EventType::DataNodeModeChanged => {
-                    Self::handle_data_node_mode_changed(&shard_cache, &event);
+                    // No-Promotion architecture: mode is set at registration time
+                    // This event is never published, kept for backward compatibility
+                    debug!("DataNodeModeChanged event ignored (No-Promotion architecture)");
                 }
                 _ => {
                     // FlushForRecovery handled by Data nodes directly
@@ -515,26 +517,6 @@ impl CacheInvalidationHandler {
         }
     }
 
-    /// Handle data node mode changed event (Cold Standby Architecture)
-    ///
-    /// In No-Promotion architecture, mode changes only happen at registration time.
-    /// This handler is kept for backward compatibility and administrative operations.
-    fn handle_data_node_mode_changed(shard_cache: &ShardCache, event: &MetaEvent) {
-        if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
-            let node_id = payload["node_id"].as_str().unwrap_or_default();
-            let mode_str = payload["mode"].as_str().unwrap_or("primary");
-
-            if !node_id.is_empty() {
-                let mode = match mode_str {
-                    "standby" => DataNodeMode::Standby,
-                    _ => DataNodeMode::Primary,
-                };
-
-                info!("Data node mode changed: {} -> {:?}", node_id, mode);
-
-                // Update node mode in shard cache
-                shard_cache.update_node_mode(node_id, mode);
-            }
-        }
-    }
+    // handle_data_node_mode_changed() removed - No-Promotion architecture
+    // Mode is set at registration time and never changes dynamically
 }
