@@ -1,3 +1,4 @@
+use crate::utils::hash::compute_hash;
 use datafusion::arrow::array::RecordBatch;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -50,10 +51,7 @@ impl QueryCacheKey {
 
     /// Compute hash of normalized SQL
     fn hash_sql(sql: &str) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        let mut hasher = DefaultHasher::new();
-        sql.hash(&mut hasher);
-        hasher.finish()
+        compute_hash(&sql)
     }
 }
 

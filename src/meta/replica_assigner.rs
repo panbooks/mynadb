@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use crate::meta::config::ReplicationAssignmentConfig;
 use crate::meta::types::{DataNodeMode, NodeInfo, NodeRole, NodeState, PartitionReplica};
+use crate::utils::hash::hash_select_index;
 
 /// Handles automatic replica assignment for partitions
 pub struct ReplicaAssigner {
@@ -282,10 +283,7 @@ impl ReplicaAssigner {
                 if nodes.is_empty() {
                     None
                 } else {
-                    use std::hash::{Hash, Hasher};
-                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                    nodes.len().hash(&mut hasher);
-                    let idx = hasher.finish() as usize % nodes.len();
+                    let idx = hash_select_index(&nodes.len(), nodes.len());
                     Some(nodes[idx])
                 }
             }

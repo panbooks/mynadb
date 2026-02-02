@@ -1,5 +1,6 @@
 //! File cache types
 
+use crate::utils::hash::compute_hash;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
@@ -186,12 +187,7 @@ impl CacheKey {
 
     /// Generate a hash-based file name for local storage
     pub fn to_cache_filename(&self) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        let hash = hasher.finish();
+        let hash = compute_hash(self);
 
         match self.row_group {
             Some(rg) => format!("{:016x}_rg{}.parquet", hash, rg),

@@ -3,6 +3,7 @@ use super::line_protocol::{format_date32_as_partition, Point};
 use super::parquet_writer::{FileWriteResult, ParquetWriter};
 use super::storage::Storage;
 use super::wal::Wal;
+use crate::utils::hash::compute_hash;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use parking_lot::{Mutex, RwLock};
@@ -257,10 +258,7 @@ impl DataCache {
     /// Get shard index for a key (hash-based distribution)
     #[inline]
     fn shard_index(&self, key: &CacheKey) -> usize {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        key.hash(&mut hasher);
-        (hasher.finish() as usize) % NUM_SHARDS
+        (compute_hash(key) as usize) % NUM_SHARDS
     }
 
     /// Add points to the in-memory cache as RecordBatch
