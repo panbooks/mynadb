@@ -201,6 +201,10 @@ pub struct DataCache {
     cardinality_tracker: Arc<RwLock<HashMap<TableKey, TableCardinalityTracker>>>,
     /// Node ID for path prefixing (enables distributed parallel queries)
     node_id: String,
+    /// Mutex to prevent concurrent flush operations
+    /// This prevents race conditions where cleanup_old_data_wal_files() could
+    /// delete WAL files that another concurrent flush is still relying on
+    flush_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl DataCache {
@@ -229,6 +233,7 @@ impl DataCache {
             wal,
             cardinality_tracker: Arc::new(RwLock::new(HashMap::new())),
             node_id,
+            flush_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -506,6 +511,13 @@ impl DataCache {
     /// Uses swap-and-flush pattern: takes data from shards instantly, then writes without blocking
     /// Returns list of written files with metadata for registration
     ///
+    /// ## Concurrency Safety
+    ///
+    /// This method uses a mutex to prevent concurrent flush operations. This is critical
+    /// because the WAL cleanup at the end of flush deletes all WAL files except the current
+    /// one. Without the lock, a race condition could occur where one flush deletes WAL files
+    /// that another concurrent flush is still relying on.
+    ///
     /// ## WAL Consistency
     ///
     /// The flush operation maintains WAL consistency by rotating the WAL BEFORE
@@ -527,6 +539,11 @@ impl DataCache {
     /// 7. Crash → Recovery reads WAL file 2 → C recovered
     /// ```
     pub async fn flush(&self) -> Result<Vec<FileWriteResult>, String> {
+        // Acquire flush lock to prevent concurrent flush operations
+        // This prevents race conditions in WAL cleanup where one flush could
+        // delete WAL files that another concurrent flush is still using
+        let _flush_guard = self.flush_lock.lock().await;
+
         let start = Instant::now();
 
         // Phase 0: Rotate WAL BEFORE taking data from cache
