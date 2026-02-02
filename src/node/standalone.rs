@@ -113,7 +113,10 @@ pub async fn run(config_path: &str) {
 
     // WAL Recovery
     if let Some(ref wal_arc) = wal {
-        perform_wal_recovery(wal_arc, &cache, &query_engine, &config).await;
+        welcome!("");
+        welcome!("  Replaying WAL files...");
+        common::perform_wal_recovery(wal_arc, &cache, &query_engine, &config).await;
+        welcome!("  WAL recovery complete");
     } else {
         info!("WAL disabled, skipping recovery");
         welcome!("");
@@ -295,93 +298,6 @@ fn print_server_info(config: &Config) {
         );
     } else {
         info!("Background retention: disabled");
-    }
-}
-
-/// Perform WAL recovery by replaying unflushed writes
-async fn perform_wal_recovery(
-    wal: &Arc<crate::storage::wal::Wal>,
-    cache: &cache::DataCache,
-    query_engine: &Arc<crate::query::query_engine::QueryEngine>,
-    config: &Arc<Config>,
-) {
-    info!("Starting WAL recovery - replaying unflushed writes...");
-    welcome!("");
-    welcome!("  Replaying WAL files...");
-
-    wal.set_recovery_mode(true);
-
-    let cache_for_recovery = cache.clone();
-    let query_engine_for_recovery = Arc::clone(query_engine);
-    let config_for_recovery = config.clone();
-
-    let recovered_data = wal
-        .replay_data_writes(|db, line_protocol| {
-            debug!(
-                "WAL recovery: replaying {} bytes to {}",
-                line_protocol.len(),
-                db
-            );
-
-            match tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(api::ingest_line_protocol_to_cache(
-                    db,
-                    line_protocol,
-                    &cache_for_recovery,
-                    Some(&query_engine_for_recovery),
-                    &config_for_recovery.schema,
-                ))
-            }) {
-                Ok(count) => {
-                    debug!("WAL recovery: replayed {} points to {}", count, db);
-                    Ok(())
-                }
-                Err(e) => {
-                    error!("WAL recovery failed for {}: {}", db, e);
-                    Err(e)
-                }
-            }
-        })
-        .await;
-
-    match recovered_data {
-        Ok(count) => {
-            if count > 0 {
-                info!("WAL recovery: replayed {} data write entries", count);
-                welcome!("   Replayed {} data entries", count);
-
-                info!("Flushing recovered data to Parquet for durability...");
-                welcome!("   Flushing recovered data to Parquet...");
-                match cache.flush().await {
-                    Ok(files) => {
-                        info!("Recovery flush complete: {} file(s) written", files.len());
-                        welcome!(
-                            "     Recovery complete: {} Parquet file(s) written",
-                            files.len()
-                        );
-
-                        wal.set_recovery_mode(false);
-                        if let Err(e) = wal.cleanup_old_data_wal_files().await {
-                            warn!("Failed to cleanup old WAL files after recovery: {}", e);
-                        }
-                    }
-                    Err(e) => {
-                        error!("Recovery flush failed: {}", e);
-                        welcome!("     Recovery flush failed: {}", e);
-                        wal.set_recovery_mode(false);
-                    }
-                }
-            } else {
-                info!("WAL recovery: no data writes to replay");
-                welcome!("     No WAL entries to replay");
-                wal.set_recovery_mode(false);
-            }
-        }
-        Err(e) => {
-            error!("WAL recovery failed: {}", e);
-            welcome!("     WAL recovery failed: {}", e);
-            wal.set_recovery_mode(false);
-        }
     }
 }
 

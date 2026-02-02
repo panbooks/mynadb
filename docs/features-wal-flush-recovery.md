@@ -309,40 +309,67 @@ for entry in replay_all_wal_files() {
 1. WAL rotation after successful flush
 2. WAL file cleanup after retention period
 3. Proper error handling during rotation
+4. **Checkpoint-based duplicate prevention** (as of 2026-02)
 
-### ⚠️ Known Issue
-- **Recovery replays all WAL files**, including already-flushed data
-- **Result**: Duplicate writes after crash recovery
+### ✅ Fixed: Duplicate Writes on Recovery
 
-### 🔧 Recommended Fix
+The duplicate writes issue has been fixed using a timestamp-based checkpoint approach:
 
-**Immediate (Simple)**: Marker File Approach
+**How it works:**
+1. WAL files are named with timestamps: `data_{timestamp_millis}_{sequence}.wal`
+2. After successful Parquet write, record the current WAL file's timestamp as checkpoint
+3. On recovery, only replay WAL files with timestamps >= checkpoint timestamp
+4. Clear checkpoint after successfully deleting old WAL files
+
+**Checkpoint content:**
+- Single timestamp (milliseconds) representing the cutoff point
+- Files with timestamps < checkpoint are already flushed to Parquet
+- Files with timestamps >= checkpoint need to be replayed
+
+**Crash safety:**
+- If crash before checkpoint write: All WAL files replayed (safe, no data loss)
+- If crash between checkpoint write and file deletion: Recovery skips flushed files (no duplicates)
+- If crash after deletion: Checkpoint cleared on next cleanup (harmless)
+
+**Implementation in `wal.rs`:**
 ```rust
-// In cache.rs flush():
-if let Some(ref wal) = self.wal {
-    wal.rotate_data_wal().await?;
-
-    // Create marker file for old WAL
-    let old_wal_files = wal.get_rotated_files()?;
-    for file in old_wal_files {
-        std::fs::write(format!("{}.flushed", file), b"")?;
-    }
+// Extract timestamp from WAL filename
+fn extract_wal_timestamp(filename: &str) -> Option<u128> {
+    // Format: data_{timestamp_millis}_{sequence}.wal
+    let parts: Vec<&str> = name.split('_').collect();
+    parts[1].parse::<u128>().ok()
 }
 
-// In wal.rs replay:
-for wal_file in wal_files {
-    if Path::new(&format!("{}.flushed", wal_file)).exists() {
-        debug!("Skipping flushed WAL: {}", wal_file);
-        continue;
+// In cleanup_old_data_wal_files():
+// Step 1: Get current active WAL file's timestamp
+let current_timestamp = extract_wal_timestamp(&current_path);
+
+// Step 2: Write checkpoint BEFORE deleting
+self.write_flush_checkpoint(current_timestamp).await?;
+
+// Step 3: Delete old WAL files
+for file_path in &files_to_delete {
+    self.storage.delete(file_path).await?;
+}
+
+// Step 4: Clear checkpoint after deletion
+self.clear_flush_checkpoint().await?;
+
+// In replay_data_writes():
+let checkpoint_timestamp = self.read_flush_checkpoint().await;
+for file_path in files {
+    if let Some(file_ts) = extract_wal_timestamp(&file_path) {
+        if let Some(checkpoint_ts) = checkpoint_timestamp {
+            if file_ts < checkpoint_ts {
+                info!("Skipping WAL file {} (timestamp {} < checkpoint {})",
+                      file_path, file_ts, checkpoint_ts);
+                continue;
+            }
+        }
     }
-    replay_wal_file(wal_file);
+    // replay...
 }
 ```
-
-**Long-term (Robust)**: Sequence Numbers
-- Add sequence field to WalEntry
-- Track last flushed sequence in checkpoint file
-- Replay only entries after checkpoint
 
 ## Testing Strategy
 
@@ -480,16 +507,17 @@ tail -n 100 data/_wal/data_*.wal | wc -l
 ✅ WAL rotation after flush prevents unbounded growth
 ✅ Cleanup task safely deletes old WAL files
 ✅ Proper separation of flushed vs unflushed data
+✅ Checkpoint-based duplicate prevention on recovery
+✅ Flush lock to prevent concurrent flush race conditions
+✅ Recovery mode safety check in cleanup
 
-### What Still Needs Work
-⚠️ Duplicate replay during recovery (known issue)
-⚠️ Need marker files or sequence numbers to skip flushed data
-
-### Recommendation
-Implement marker file approach immediately to prevent duplicates on recovery.
+### Architecture
+The WAL system now provides full crash safety:
+- **Write path**: Data → WAL → Cache → Parquet
+- **Recovery path**: WAL replay (skipping checkpointed files) → Cache → Parquet
+- **Checkpoint**: Ensures no duplicates if crash between Parquet write and WAL deletion
 
 ---
 
-**Status**: Partial Fix Implemented
-**Date**: 2025-12-29
-**Next**: Implement duplicate prevention in recovery
+**Status**: Fully Implemented
+**Last Updated**: 2026-02
