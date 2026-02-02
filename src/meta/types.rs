@@ -108,22 +108,22 @@ impl From<NodeState> for i32 {
 
 /// Data node operational mode (Cold Standby Architecture)
 ///
-/// In the Cold Standby architecture, Data nodes are either Primary (actively
-/// serving traffic) or Standby (cold backup only). This prevents avalanche
-/// failures: when a Primary fails, a dedicated Standby takes over completely
-/// instead of adding load to other Primaries.
+/// In the Cold Standby architecture (No-Promotion design), Data nodes are either
+/// Primary (actively serving traffic) or Standby (cold backup only).
 ///
 /// Key properties:
 /// - Primary nodes: Serve writes and queries, assigned as partition leaders
-/// - Standby nodes: Only receive replicated data, never serve queries until promoted
-/// - On failover: Standby becomes Primary (no extra load on other Primaries)
+/// - Standby nodes: Only receive replicated data, never serve queries
+/// - Roles are IMMUTABLE: Standby never promotes to Primary, Primary never demotes
+/// - On Primary failure: Standby flushes cache to S3, K8s replaces the Primary pod
+/// - This design eliminates split-brain risk and simplifies failover logic
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[repr(u8)]
 pub enum DataNodeMode {
     /// Actively serves writes and queries, assigned as partition leaders
     #[default]
     Primary = 0,
-    /// Cold standby - only receives replication, promoted on Primary failure
+    /// Cold standby - only receives replication, flushes cache on Primary failure
     Standby = 1,
 }
 
@@ -167,7 +167,7 @@ pub struct NodeInfo {
     /// Data node mode (only relevant for NodeRole::Data)
     ///
     /// - Primary: Actively serves writes and queries
-    /// - Standby: Cold backup, only receives replication until promoted
+    /// - Standby: Cold backup, only receives replication (never promoted)
     ///
     /// None for non-Data nodes (Meta, Router, Compactor).
     /// Auto-assigned by Meta based on `primary_standby_ratio` config.
@@ -553,19 +553,8 @@ impl PartitionReplica {
         self.standby_node_ids.first()
     }
 
-    /// Promote first standby to leader, returning the new leader ID
-    pub fn promote_standby(&mut self) -> Option<String> {
-        if let Some(new_leader) = self.standby_node_ids.first().cloned() {
-            let old_leader = std::mem::replace(&mut self.leader_node_id, new_leader.clone());
-            self.standby_node_ids.remove(0);
-            // Old leader could become standby if it recovers
-            self.standby_node_ids.push(old_leader);
-            self.leader_last_seen = current_timestamp_ms();
-            Some(new_leader)
-        } else {
-            None
-        }
-    }
+    // Note: promote_standby() removed - using No-Promotion architecture
+    // Standby nodes never promote to Primary; K8s handles node replacement
 }
 
 /// Status of a node retirement (scale-in) operation
@@ -731,14 +720,13 @@ pub enum EventType {
     SchemaChanged = 8,
     /// Partition replica assigned (leader + standbys)
     ReplicaAssigned = 9,
-    /// Standby promoted to leader (failover)
-    ReplicaPromoted = 10,
+    /// Replica leader changed (reassignment, not promotion)
+    /// Note: In No-Promotion architecture, this is only for partition reassignment
+    ReplicaPromoted = 10, // Kept for backward compatibility, but no longer used for promotion
     /// Replica state changed (InSync/CatchingUp/Offline)
     ReplicaStateChanged = 11,
     /// Data node mode changed (Cold Standby Architecture)
-    ///
-    /// Published when a Standby node is promoted to Primary.
-    /// Payload contains: {"node_id": "...", "old_mode": "Standby", "new_mode": "Primary"}
+    /// Note: In No-Promotion architecture, mode changes only happen at registration
     DataNodeModeChanged = 12,
 
     /// Standby needs to flush data for crashed Primary (Recovery)
@@ -888,9 +876,7 @@ pub enum MetaCommand {
         standby_node_ids: Vec<String>,
         replication_factor: u8,
     },
-    PromoteStandby {
-        partition_key: String,
-    },
+    // PromoteStandby removed - using No-Promotion architecture
     UpdateReplicaState {
         partition_key: String,
         state: ReplicaState,
@@ -919,18 +905,12 @@ pub enum MetaCommand {
         node_id: String,
     },
 
-    /// Promote a Standby data node to Primary (Cold Standby Architecture)
-    ///
-    /// Called when a Primary node fails. The Standby takes over
-    /// the failed Primary's partition leadership.
-    PromoteDataNode {
-        standby_node_id: String,
-        failed_primary_id: Option<String>,
-    },
+    // PromoteDataNode removed - using No-Promotion architecture
+    // Standby nodes never promote to Primary; K8s handles node replacement
 
     /// Update a data node's mode (Primary/Standby)
     ///
-    /// Used internally during auto-assignment and promotion.
+    /// Used internally during auto-assignment at registration time.
     UpdateDataNodeMode {
         node_id: String,
         mode: DataNodeMode,
@@ -999,7 +979,7 @@ pub enum MetaCommand {
 
     /// Trigger Standby to flush a crashed Primary's replicated data
     ///
-    /// When a Primary crashes with promote_standby=false:
+    /// When a Primary crashes (No-Promotion architecture):
     /// 1. Find Standby backing the crashed Primary
     /// 2. Standby flushes all replicated memtable data to Parquet
     /// 3. This ensures no data loss before partition redistribution
@@ -1033,7 +1013,7 @@ pub enum MetaCommand {
 
     /// Redistribute partitions from a crashed Primary to remaining Primaries
     ///
-    /// Called during Primary crash recovery (promote_standby=false):
+    /// Called during Primary crash recovery (No-Promotion architecture):
     /// 1. Get all partitions owned by crashed Primary
     /// 2. Distribute evenly to remaining active Primaries
     /// 3. Update replica assignments
@@ -1075,11 +1055,7 @@ pub enum MetaResponse {
         partition_key: String,
         leader_node_id: String,
     },
-    StandbyPromoted {
-        partition_key: String,
-        new_leader_id: String,
-        old_leader_id: String,
-    },
+    // StandbyPromoted removed - using No-Promotion architecture
     ReplicaUpdated {
         partition_key: String,
     },
@@ -1089,9 +1065,7 @@ pub enum MetaResponse {
     ReplicaNotFound {
         partition_key: String,
     },
-    NoStandbyAvailable {
-        partition_key: String,
-    },
+    // NoStandbyAvailable removed - using No-Promotion architecture
     ReplicaAutoAssigned {
         partition_key: String,
         leader_node_id: String,
@@ -1105,12 +1079,7 @@ pub enum MetaResponse {
     RebalanceCompleted {
         updated_count: usize,
     },
-    /// Data node promoted from Standby to Primary
-    DataNodePromoted {
-        node_id: String,
-        old_mode: DataNodeMode,
-        new_mode: DataNodeMode,
-    },
+    // DataNodePromoted removed - using No-Promotion architecture
     /// Data node mode updated
     DataNodeModeUpdated {
         node_id: String,

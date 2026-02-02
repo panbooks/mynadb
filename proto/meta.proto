@@ -42,11 +42,11 @@ service MetaService {
     rpc GetPartitionReplica(GetPartitionReplicaRequest) returns (GetPartitionReplicaResponse);
     rpc ListPartitionReplicas(ListPartitionReplicasRequest) returns (ListPartitionReplicasResponse);
     rpc AutoAssignReplica(AutoAssignReplicaRequest) returns (AutoAssignReplicaResponse);
-    rpc PromoteStandby(PromoteStandbyRequest) returns (PromoteStandbyResponse);
     rpc UpdateReplicaState(UpdateReplicaStateRequest) returns (UpdateReplicaStateResponse);
 
     // Data Node Mode Management (Cold Standby Architecture)
-    rpc PromoteDataNode(PromoteDataNodeRequest) returns (PromoteDataNodeResponse);
+    // Note: No promotion RPCs - using No-Promotion architecture
+    // Standby nodes never promote to Primary; K8s handles node replacement
     rpc GetDataNodeMode(GetDataNodeModeRequest) returns (GetDataNodeModeResponse);
 
     // Scale-In (Retirement) Operations
@@ -410,16 +410,8 @@ message AutoAssignReplicaResponse {
     string error = 3;
 }
 
-message PromoteStandbyRequest {
-    string partition_key = 1;
-}
-
-message PromoteStandbyResponse {
-    bool success = 1;
-    string new_leader_id = 2;
-    string old_leader_id = 3;
-    string error = 4;
-}
+// PromoteStandby removed - using No-Promotion architecture
+// Standby nodes never promote to Primary; K8s handles node replacement
 
 message UpdateReplicaStateRequest {
     string partition_key = 1;
@@ -503,21 +495,9 @@ message ForwardCommandResponse {
 // Data Node Mode Management (Cold Standby Architecture)
 // ============================================================================
 
-// Promote a Standby data node to Primary
-// Called when a Primary fails and we need to promote its standby
-message PromoteDataNodeRequest {
-    string standby_node_id = 1;     // Standby node to promote
-    string failed_primary_id = 2;   // Primary that failed (optional, for logging)
-}
-
-message PromoteDataNodeResponse {
-    bool success = 1;
-    string error = 2;
-    // Details about the promotion
-    string promoted_node_id = 3;    // Node that was promoted
-    DataNodeMode old_mode = 4;      // Previous mode (should be Standby)
-    DataNodeMode new_mode = 5;      // New mode (should be Primary)
-}
+// Note: PromoteDataNode removed - using No-Promotion architecture
+// Standby nodes never promote to Primary; K8s handles node replacement
+// When Primary fails, Standby flushes cache to S3 and K8s replaces the Primary pod
 
 // Get the current mode of a data node
 message GetDataNodeModeRequest {

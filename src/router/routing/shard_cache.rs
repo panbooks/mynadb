@@ -225,21 +225,8 @@ impl ShardCache {
             .map(|r| r.clone())
     }
 
-    /// Promote standby to leader (called on ReplicaPromoted event)
-    ///
-    /// Updates the local cache so that subsequent routing uses the new leader.
-    pub fn promote_partition_leader(&self, partition_key: &str, new_leader_id: String) {
-        if let Some(mut replica) = self.partition_replicas.get_mut(partition_key) {
-            let old_leader = std::mem::replace(&mut replica.leader_node_id, new_leader_id.clone());
-            // Move old leader to end of standby list (it may recover)
-            replica.standby_node_ids.retain(|id| id != &new_leader_id);
-            replica.standby_node_ids.push(old_leader);
-            info!(
-                "Promoted partition leader: {} -> new_leader={}",
-                partition_key, new_leader_id
-            );
-        }
-    }
+    // promote_partition_leader() removed - using No-Promotion architecture
+    // Standby nodes never promote to Primary; K8s handles node replacement
 
     /// Remove partition replica
     pub fn remove_partition_replica(&self, partition_key: &str) {
@@ -333,7 +320,7 @@ impl ShardCache {
 
     /// Get all active STANDBY Data nodes
     ///
-    /// Standby nodes only receive replication and are promoted on Primary failure.
+    /// Standby nodes only receive replication (never promoted in No-Promotion architecture).
     /// Returns nodes sorted by node_id for consistent routing.
     pub fn get_active_standby_nodes(&self) -> Vec<DataNodeInfo> {
         let mut nodes: Vec<_> = self
@@ -558,7 +545,8 @@ impl ShardCache {
 
     /// Update a node's operational mode (Cold Standby Architecture)
     ///
-    /// Called when a Standby is promoted to Primary or vice versa.
+    /// In No-Promotion architecture, mode changes only happen at registration time.
+    /// This method is kept for backward compatibility and administrative operations.
     pub fn update_node_mode(&self, node_id: &str, mode: DataNodeMode) {
         let mut nodes = self.data_nodes.write();
         if let Some(node) = nodes.get_mut(node_id) {

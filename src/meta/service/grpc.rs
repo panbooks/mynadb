@@ -842,29 +842,8 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
         }
     }
 
-    async fn promote_standby(
-        &self,
-        request: Request<proto::PromoteStandbyRequest>,
-    ) -> Result<Response<proto::PromoteStandbyResponse>, Status> {
-        let req = request.into_inner();
-
-        match self.node.promote_standby(&req.partition_key).await {
-            Ok((new_leader_id, old_leader_id)) => {
-                Ok(Response::new(proto::PromoteStandbyResponse {
-                    success: true,
-                    new_leader_id,
-                    old_leader_id,
-                    error: String::new(),
-                }))
-            }
-            Err(e) => Ok(Response::new(proto::PromoteStandbyResponse {
-                success: false,
-                new_leader_id: String::new(),
-                old_leader_id: String::new(),
-                error: e,
-            })),
-        }
-    }
+    // promote_standby() removed - using No-Promotion architecture
+    // Standby nodes never promote to Primary; K8s handles node replacement
 
     async fn update_replica_state(
         &self,
@@ -899,39 +878,8 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
     // Data Node Mode Management (Cold Standby Architecture)
     // ========================================================================
 
-    async fn promote_data_node(
-        &self,
-        request: Request<proto::PromoteDataNodeRequest>,
-    ) -> Result<Response<proto::PromoteDataNodeResponse>, Status> {
-        let req = request.into_inner();
-
-        let failed_primary = if req.failed_primary_id.is_empty() {
-            None
-        } else {
-            Some(req.failed_primary_id.as_str())
-        };
-
-        match self
-            .node
-            .promote_data_node(&req.standby_node_id, failed_primary)
-            .await
-        {
-            Ok((old_mode, new_mode)) => Ok(Response::new(proto::PromoteDataNodeResponse {
-                success: true,
-                error: String::new(),
-                promoted_node_id: req.standby_node_id,
-                old_mode: mode_to_proto(Some(old_mode)),
-                new_mode: mode_to_proto(Some(new_mode)),
-            })),
-            Err(e) => Ok(Response::new(proto::PromoteDataNodeResponse {
-                success: false,
-                error: e,
-                promoted_node_id: String::new(),
-                old_mode: 0,
-                new_mode: 0,
-            })),
-        }
-    }
+    // promote_data_node() removed - using No-Promotion architecture
+    // Standby nodes never promote to Primary; K8s handles node replacement
 
     async fn get_data_node_mode(
         &self,

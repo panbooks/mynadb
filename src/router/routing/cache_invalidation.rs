@@ -232,7 +232,9 @@ impl CacheInvalidationHandler {
                     Self::handle_replica_assigned(&shard_cache, &event);
                 }
                 EventType::ReplicaPromoted => {
-                    Self::handle_replica_promoted(&shard_cache, &event);
+                    // No-Promotion architecture: this event is no longer used for promotion
+                    // Kept for backward compatibility with older Meta versions
+                    debug!("ReplicaPromoted event received but ignored (No-Promotion architecture)");
                 }
                 EventType::ReplicaStateChanged => {
                     Self::handle_replica_state_changed(&shard_cache, &event);
@@ -496,33 +498,8 @@ impl CacheInvalidationHandler {
         }
     }
 
-    /// Handle replica promoted event (standby becomes leader)
-    ///
-    /// This is the critical event for zero-downtime failover. When a leader fails,
-    /// Meta promotes a standby and publishes this event. Router immediately updates
-    /// its shard cache so subsequent writes go to the new leader.
-    fn handle_replica_promoted(shard_cache: &ShardCache, event: &MetaEvent) {
-        if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
-            let partition_key = payload["partition_key"].as_str().unwrap_or_default();
-            let new_leader_id = payload["new_leader_id"].as_str().unwrap_or_default();
-            let old_leader_id = payload["old_leader_id"].as_str().unwrap_or_default();
-
-            if !partition_key.is_empty() && !new_leader_id.is_empty() {
-                info!(
-                    "Replica promoted: {} -> new_leader={}, old_leader={}",
-                    partition_key, new_leader_id, old_leader_id
-                );
-
-                // Update shard cache: promote standby to leader
-                shard_cache.promote_partition_leader(partition_key, new_leader_id.to_string());
-
-                // Mark old leader as suspect (if it's still in the cache)
-                if !old_leader_id.is_empty() {
-                    shard_cache.mark_node_suspect(old_leader_id);
-                }
-            }
-        }
-    }
+    // handle_replica_promoted() removed - using No-Promotion architecture
+    // Standby nodes never promote to Primary; K8s handles node replacement
 
     /// Handle replica state changed event
     fn handle_replica_state_changed(shard_cache: &ShardCache, event: &MetaEvent) {
@@ -540,9 +517,8 @@ impl CacheInvalidationHandler {
 
     /// Handle data node mode changed event (Cold Standby Architecture)
     ///
-    /// When a Standby node is promoted to Primary, or a node's mode changes,
-    /// this event is published. Router updates its shard cache to include/exclude
-    /// the node from query routing.
+    /// In No-Promotion architecture, mode changes only happen at registration time.
+    /// This handler is kept for backward compatibility and administrative operations.
     fn handle_data_node_mode_changed(shard_cache: &ShardCache, event: &MetaEvent) {
         if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
             let node_id = payload["node_id"].as_str().unwrap_or_default();

@@ -247,7 +247,7 @@ impl MetaStateMachine {
                 replication_factor,
             ),
 
-            MetaCommand::PromoteStandby { partition_key } => self.promote_standby(&partition_key),
+            // PromoteStandby removed - using No-Promotion architecture
 
             MetaCommand::UpdateReplicaState {
                 partition_key,
@@ -270,10 +270,7 @@ impl MetaStateMachine {
             MetaCommand::RebalanceOnNodeJoin { node_id } => self.rebalance_on_node_join(&node_id),
 
             // Cold Standby Architecture: Data node mode management
-            MetaCommand::PromoteDataNode {
-                standby_node_id,
-                failed_primary_id,
-            } => self.promote_data_node(&standby_node_id, failed_primary_id.as_deref()),
+            // PromoteDataNode removed - using No-Promotion architecture
 
             MetaCommand::UpdateDataNodeMode { node_id, mode } => {
                 self.update_data_node_mode(&node_id, mode)
@@ -579,23 +576,10 @@ impl MetaStateMachine {
             }
         }
 
-        // Cold Standby Architecture: Primary crash handled by RecoveryManager
-        // No automatic promotion - RecoveryManager uses flush-and-redistribute strategy
-        // which prevents avalanche failures by not overloading remaining nodes.
-
-        // Legacy ISR mode: Automatic failover for partitions where this node was leader
-        // Only applies when cold standby architecture is disabled
-        if !self.standby_config.enabled {
-            let replicas_to_failover = self.get_replicas_by_leader(node_id);
-            for replica in replicas_to_failover {
-                info!(
-                    "Auto-failover: Node {} was leader for partition {}, promoting standby",
-                    node_id, replica.partition_key
-                );
-                // Promote the first available standby
-                self.promote_standby(&replica.partition_key);
-            }
-        }
+        // No-Promotion Architecture: Primary crash handled by RecoveryManager
+        // - Standby flushes cache to S3 via FlushForRecovery event
+        // - K8s replaces the failed Primary pod
+        // - No automatic promotion, eliminating split-brain risk
 
         // Publish event
         if let Some(info) = info {
@@ -961,51 +945,8 @@ impl MetaStateMachine {
         }
     }
 
-    /// Promote standby to leader (failover)
-    fn promote_standby(&self, partition_key: &str) -> MetaResponse {
-        let storage_key = format!("{}{}", keys::PREFIX_REPLICA, partition_key);
-
-        if let Ok(Some(data)) = self.db.get(storage_key.as_bytes()) {
-            if let Ok(mut replica) = bincode::deserialize::<PartitionReplica>(&data) {
-                let old_leader = replica.leader_node_id.clone();
-
-                if let Some(new_leader) = replica.promote_standby() {
-                    // Update storage
-                    let _ = self.db.insert(
-                        storage_key.as_bytes(),
-                        bincode::serialize(&replica).unwrap(),
-                    );
-
-                    // Publish event for Router cache invalidation
-                    let payload = serde_json::json!({
-                        "partition_key": partition_key,
-                        "new_leader_id": &new_leader,
-                        "old_leader_id": &old_leader,
-                    });
-                    self.publish_event(
-                        "replicas",
-                        EventType::ReplicaPromoted,
-                        serde_json::to_vec(&payload).unwrap_or_default(),
-                        &new_leader,
-                    );
-
-                    return MetaResponse::StandbyPromoted {
-                        partition_key: partition_key.to_string(),
-                        new_leader_id: new_leader,
-                        old_leader_id: old_leader,
-                    };
-                } else {
-                    return MetaResponse::NoStandbyAvailable {
-                        partition_key: partition_key.to_string(),
-                    };
-                }
-            }
-        }
-
-        MetaResponse::ReplicaNotFound {
-            partition_key: partition_key.to_string(),
-        }
-    }
+    // promote_standby() removed - using No-Promotion architecture
+    // Standby nodes never promote to Primary; K8s handles node replacement
 
     /// Update replica state (replication progress)
     fn update_replica_state(
@@ -1332,157 +1273,9 @@ impl MetaStateMachine {
         }
     }
 
-    /// Select a Standby node to promote when a Primary fails
-    ///
-    /// Selection criteria:
-    /// 1. Must be in Active state
-    /// 2. Must be in Standby mode
-    /// 3. Prefer nodes in different zones for fault tolerance
-    fn select_standby_to_promote(&self, failed_primary_id: &str) -> Option<NodeInfo> {
-        // Get the failed primary's info for zone comparison
-        let failed_primary = self.get_node(failed_primary_id);
-
-        // Get all active Standby nodes
-        let standbys: Vec<NodeInfo> = self
-            .list_nodes(Some(NodeRole::Data), Some(NodeState::Active))
-            .into_iter()
-            .filter(|n| n.mode == Some(DataNodeMode::Standby))
-            .collect();
-
-        if standbys.is_empty() {
-            return None;
-        }
-
-        // If we have zone info for the failed primary, prefer standbys in different zones
-        if let Some(ref failed) = failed_primary {
-            // First, try to find a standby in a different zone
-            let different_zone = standbys.iter().find(|s| s.is_different_zone(failed));
-            if let Some(standby) = different_zone {
-                return Some(standby.clone());
-            }
-        }
-
-        // Fall back to the first available standby
-        standbys.into_iter().next()
-    }
-
-    /// Promote a Standby data node to Primary
-    ///
-    /// Called when a Primary node fails and we need a replacement.
-    /// The promoted Standby:
-    /// 1. Changes mode from Standby to Primary
-    /// 2. Takes over partition leadership from the failed Primary
-    /// 3. Starts serving queries and flushing to Parquet
-    fn promote_data_node(
-        &self,
-        standby_node_id: &str,
-        failed_primary_id: Option<&str>,
-    ) -> MetaResponse {
-        let node_key = format!("{}{}", keys::PREFIX_NODE, standby_node_id);
-
-        // Get the current node info
-        let node_data = match self.db.get(node_key.as_bytes()) {
-            Ok(Some(data)) => data,
-            Ok(None) => {
-                return MetaResponse::DataNodeNotFound {
-                    node_id: standby_node_id.to_string(),
-                }
-            }
-            Err(e) => {
-                return MetaResponse::Error {
-                    message: format!("Database error: {}", e),
-                }
-            }
-        };
-
-        let mut node: NodeInfo = match bincode::deserialize(&node_data) {
-            Ok(n) => n,
-            Err(e) => {
-                return MetaResponse::Error {
-                    message: format!("Deserialize error: {}", e),
-                }
-            }
-        };
-
-        // Verify it's a Standby data node
-        if node.role != NodeRole::Data {
-            return MetaResponse::Error {
-                message: format!(
-                    "Node {} is not a Data node (role={:?})",
-                    standby_node_id, node.role
-                ),
-            };
-        }
-
-        let old_mode = node.mode.unwrap_or(DataNodeMode::Primary);
-        if old_mode != DataNodeMode::Standby {
-            return MetaResponse::Error {
-                message: format!(
-                    "Node {} is not a Standby (mode={:?})",
-                    standby_node_id, old_mode
-                ),
-            };
-        }
-
-        // Promote to Primary
-        node.mode = Some(DataNodeMode::Primary);
-        let _ = self
-            .db
-            .insert(node_key.as_bytes(), bincode::serialize(&node).unwrap());
-
-        info!(
-            "Promoted Data node {} from Standby to Primary (failed_primary={:?})",
-            standby_node_id, failed_primary_id
-        );
-
-        // If a failed Primary was specified, transfer its partition leadership
-        if let Some(failed_id) = failed_primary_id {
-            let replicas_to_transfer = self.get_replicas_by_leader(failed_id);
-            for replica in replicas_to_transfer {
-                // Re-assign leader to the promoted node
-                let mut updated = replica.clone();
-                updated.leader_node_id = standby_node_id.to_string();
-                // Remove the promoted node from standbys if it was there
-                updated.standby_node_ids.retain(|id| id != standby_node_id);
-                // Add the old leader to standbys (it may recover)
-                if !updated.standby_node_ids.contains(&failed_id.to_string()) {
-                    updated.standby_node_ids.push(failed_id.to_string());
-                }
-                updated.leader_last_seen = current_timestamp_ms();
-
-                let storage_key = updated.storage_key();
-                let _ = self.db.insert(
-                    storage_key.as_bytes(),
-                    bincode::serialize(&updated).unwrap(),
-                );
-
-                info!(
-                    "Transferred partition {} leadership from {} to {}",
-                    updated.partition_key, failed_id, standby_node_id
-                );
-            }
-        }
-
-        // Publish mode change event
-        let payload = serde_json::json!({
-            "node_id": standby_node_id,
-            "old_mode": format!("{:?}", old_mode),
-            "new_mode": "Primary",
-            "failed_primary_id": failed_primary_id,
-        });
-        self.publish_event(
-            "nodes",
-            EventType::DataNodeModeChanged,
-            serde_json::to_vec(&payload).unwrap_or_default(),
-            standby_node_id,
-        );
-
-        MetaResponse::DataNodePromoted {
-            node_id: standby_node_id.to_string(),
-            old_mode,
-            new_mode: DataNodeMode::Primary,
-        }
-    }
+    // select_standby_to_promote() removed - using No-Promotion architecture
+    // promote_data_node() removed - using No-Promotion architecture
+    // Standby nodes never promote to Primary; K8s handles node replacement
 
     /// Update a data node's mode (Primary/Standby)
     fn update_data_node_mode(&self, node_id: &str, mode: DataNodeMode) -> MetaResponse {

@@ -81,13 +81,11 @@ impl StandbyReceiver {
         info!("Standby mode enabled for node {}", self.node_id);
     }
 
-    /// Disable standby mode (e.g., when promoted to leader)
+    /// Disable standby mode
+    /// Note: In No-Promotion architecture, this is only used for testing/debugging
     pub fn disable_standby_mode(&self) {
         self.is_standby.store(false, Ordering::SeqCst);
-        info!(
-            "Standby mode disabled for node {} (promoted to leader)",
-            self.node_id
-        );
+        info!("Standby mode disabled for node {}", self.node_id);
     }
 
     /// Check if this node is in standby mode
@@ -350,29 +348,8 @@ impl StandbyReceiver {
         }
     }
 
-    /// Handle promotion to leader
-    ///
-    /// When this standby is promoted to leader, it needs to:
-    /// 1. Stop accepting replication
-    /// 2. Enable flush to Parquet
-    /// 3. Start accepting direct writes
-    pub fn promote_to_leader(&self, partition_key: &str) {
-        info!(
-            "Node {} promoted to leader for partition {}",
-            self.node_id, partition_key
-        );
-
-        // Mark partition as no longer in standby mode for this partition
-        if let Some(state) = self.partitions.read().get(partition_key) {
-            state.active.store(false, Ordering::SeqCst);
-        }
-
-        // Remove from standby partitions
-        self.unregister_partition(partition_key);
-
-        // The cache will now start flushing this partition to Parquet
-        // (handled by the caller who promotes this node)
-    }
+    // promote_to_leader() removed - using No-Promotion architecture
+    // Standby nodes never promote to Primary; K8s handles node replacement
 
     /// Get partitions this standby is responsible for
     pub fn get_standby_partitions(&self) -> Vec<String> {
@@ -566,37 +543,7 @@ mod tests {
         assert!(receiver.get_standby_partitions().is_empty());
     }
 
-    #[test]
-    fn test_standby_receiver_promote_to_leader() {
-        use crate::storage::storage::Storage;
-
-        let storage = Storage::new_local("/tmp/test-promote")
-            .expect("Failed to create storage");
-        let cache = Arc::new(DataCache::new(
-            Arc::new(storage),
-            64,
-            None,
-            "test-standby".to_string(),
-        ));
-
-        let receiver = StandbyReceiver::new("standby-1".to_string(), cache);
-        receiver.enable_standby_mode();
-
-        // Register a partition
-        let state = receiver.register_partition(
-            "db/schema/table/date=2024-01-01",
-            Some("leader-1".to_string()),
-        );
-
-        // Promote to leader for this partition
-        receiver.promote_to_leader("db/schema/table/date=2024-01-01");
-
-        // State should be inactive
-        assert!(!state.active.load(Ordering::Relaxed));
-
-        // Partition should be unregistered
-        assert!(receiver.get_standby_partitions().is_empty());
-    }
+    // test_standby_receiver_promote_to_leader removed - using No-Promotion architecture
 
     #[test]
     fn test_standby_receiver_stats() {

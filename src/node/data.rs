@@ -434,17 +434,8 @@ pub async fn start(config_path: &str) {
                                                     if is_leader { "leader" } else { "standby" }
                                                 );
 
-                                                // If promoted to leader, should start flushing
-                                                if event.event_type == EventType::ReplicaPromoted
-                                                    && is_leader
-                                                {
-                                                    info!(
-                                                        "PROMOTED to leader for partition {}! Will start flushing.",
-                                                        replica.partition_key
-                                                    );
-                                                    // The DataCache will automatically flush based on normal intervals
-                                                    // Future: Could trigger immediate flush here
-                                                }
+                                                // Note: ReplicaPromoted event is no longer used for promotion
+                                                // (No-Promotion architecture). Just update the replica cache.
 
                                                 replica_cache
                                                     .insert(replica.partition_key.clone(), replica);
