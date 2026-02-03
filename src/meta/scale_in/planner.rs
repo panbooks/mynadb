@@ -2,10 +2,10 @@
 //!
 //! Generates scale-in plans that follow the Golden Rule:
 //! 1. Never retire a Standby while it still backs up active Primaries
-//! 2. Never retire a Primary while it still owns partitions
+//! 2. Never retire a Primary while it still owns tables
 //!
 //! The planner creates a three-phase plan:
-//! - Phase 1: Migrate partitions away from target Primaries
+//! - Phase 1: Migrate tables away from target Primaries
 //! - Phase 2: Retire empty Primaries (Standbys still protect remaining Primaries)
 //! - Phase 3: Retire orphaned Standbys (no Primaries to back up)
 
@@ -51,7 +51,7 @@ impl ScaleInPlanner {
         // Validate we have enough nodes
         self.validate_node_counts(cluster_state, &primaries_to_retire, &standbys_to_retire)?;
 
-        // Generate partition migrations
+        // Generate table migrations
         let migrations = self.plan_migrations(cluster_state, &primaries_to_retire)?;
 
         // Generate phases
@@ -117,18 +117,18 @@ impl ScaleInPlanner {
         }
     }
 
-    /// Select least-loaded nodes (fewest partitions)
+    /// Select least-loaded nodes (fewest tables)
     fn select_least_loaded(
         &self,
         cluster_state: &ClusterState,
         reduce_primaries: usize,
         reduce_standbys: usize,
     ) -> Result<(Vec<String>, Vec<String>), ScaleInError> {
-        // Sort primaries by partition count (ascending)
+        // Sort primaries by table count (ascending)
         let mut primaries: Vec<_> = cluster_state.primaries.iter().collect();
         primaries.sort_by_key(|n| {
             cluster_state
-                .partitions_per_node
+                .tables_per_node
                 .get(&n.node_id)
                 .copied()
                 .unwrap_or(0)
@@ -231,7 +231,7 @@ impl ScaleInPlanner {
         units_sorted.sort_by_key(|unit| {
             unit.primary_ids
                 .iter()
-                .map(|id| cluster_state.partitions_per_node.get(id).copied().unwrap_or(0))
+                .map(|id| cluster_state.tables_per_node.get(id).copied().unwrap_or(0))
                 .sum::<usize>()
         });
 
@@ -256,7 +256,7 @@ impl ScaleInPlanner {
             let mut sorted = remaining_primaries;
             sorted.sort_by_key(|n| {
                 cluster_state
-                    .partitions_per_node
+                    .tables_per_node
                     .get(&n.node_id)
                     .copied()
                     .unwrap_or(0)
@@ -312,27 +312,24 @@ impl ScaleInPlanner {
     }
 
     /// Find a standby that backs up the given primaries
+    ///
+    /// Note: With table-level ownership, standbys back up Primary nodes at the
+    /// node level (not per-table). This function looks for standbys that
+    /// are configured to back up the given primaries.
     fn find_standby_for_primaries(
         &self,
         cluster_state: &ClusterState,
         primary_ids: &[String],
     ) -> Option<String> {
         // Find standby nodes that are backing up any of these primaries
-        let mut standby_scores: HashMap<String, usize> = HashMap::new();
-
-        for assignment in cluster_state.partition_assignments.values() {
-            if primary_ids.contains(&assignment.leader_node_id) {
-                for standby_id in &assignment.standby_node_ids {
-                    *standby_scores.entry(standby_id.clone()).or_insert(0) += 1;
-                }
-            }
+        // Note: With table-level routing, standbys back up entire Primary nodes
+        // rather than individual tables. We pick any standby.
+        if cluster_state.standbys.is_empty() {
+            return None;
         }
 
-        // Return the standby with the highest coverage of these primaries
-        standby_scores
-            .into_iter()
-            .max_by_key(|(_, score)| *score)
-            .map(|(id, _)| id)
+        // Return the first available standby
+        cluster_state.standbys.first().map(|s| s.node_id.clone())
     }
 
     /// Select standbys that back up the retiring primaries
@@ -401,10 +398,10 @@ impl ScaleInPlanner {
             });
         }
 
-        // Check that we can migrate partitions
-        if remaining_primaries == 0 && cluster_state.total_partitions() > 0 {
+        // Check that we can migrate tables
+        if remaining_primaries == 0 && cluster_state.total_tables() > 0 {
             return Err(ScaleInError::HAViolation(
-                "Cannot remove all primaries when partitions exist".to_string(),
+                "Cannot remove all primaries when tables exist".to_string(),
             ));
         }
 
@@ -432,12 +429,12 @@ impl ScaleInPlanner {
         Ok(())
     }
 
-    /// Plan partition migrations
+    /// Plan table migrations
     fn plan_migrations(
         &self,
         cluster_state: &ClusterState,
         primaries_to_retire: &[String],
-    ) -> Result<Vec<PartitionMigration>, ScaleInError> {
+    ) -> Result<Vec<TableMigration>, ScaleInError> {
         let mut migrations = Vec::new();
 
         // Get remaining primaries
@@ -450,26 +447,26 @@ impl ScaleInPlanner {
 
         if remaining_primaries.is_empty() && !primaries_to_retire.is_empty() {
             // This shouldn't happen due to validation, but double-check
-            let total_partitions = primaries_to_retire
+            let total_tables = primaries_to_retire
                 .iter()
-                .filter_map(|id| cluster_state.partitions_per_node.get(id))
+                .filter_map(|id| cluster_state.tables_per_node.get(id))
                 .sum::<usize>();
 
-            if total_partitions > 0 {
+            if total_tables > 0 {
                 return Err(ScaleInError::HAViolation(
-                    "No remaining primaries to receive migrated partitions".to_string(),
+                    "No remaining primaries to receive migrated tables".to_string(),
                 ));
             }
         }
 
-        // Track how many partitions each remaining primary will receive
-        let mut target_partition_counts: HashMap<String, usize> = remaining_primaries
+        // Track how many tables each remaining primary will receive
+        let mut target_table_counts: HashMap<String, usize> = remaining_primaries
             .iter()
             .map(|id| {
                 (
                     id.clone(),
                     cluster_state
-                        .partitions_per_node
+                        .tables_per_node
                         .get(id)
                         .copied()
                         .unwrap_or(0),
@@ -477,32 +474,32 @@ impl ScaleInPlanner {
             })
             .collect();
 
-        // For each retiring primary, migrate its partitions
+        // For each retiring primary, migrate its tables
         for retiring_id in primaries_to_retire {
-            let partitions = cluster_state.partitions_for_leader(retiring_id);
+            let tables = cluster_state.tables_for_primary(retiring_id);
 
-            for partition in partitions {
+            for table in tables {
                 // Select least-loaded remaining primary as target
-                let target_id = target_partition_counts
+                let target_id = target_table_counts
                     .iter()
                     .min_by_key(|(_, count)| *count)
                     .map(|(id, _)| id.clone());
 
                 if let Some(target) = target_id {
-                    migrations.push(PartitionMigration {
-                        partition_key: partition.partition_key.clone(),
+                    migrations.push(TableMigration {
+                        table_key: table.table_key(),
                         from_node: retiring_id.clone(),
                         to_node: target.clone(),
                         reason: format!("Retiring node {}", retiring_id),
                     });
 
                     // Update target count
-                    *target_partition_counts.get_mut(&target).unwrap() += 1;
+                    *target_table_counts.get_mut(&target).unwrap() += 1;
                 }
             }
         }
 
-        debug!("Planned {} partition migrations", migrations.len());
+        debug!("Planned {} table migrations", migrations.len());
         Ok(migrations)
     }
 
@@ -511,16 +508,16 @@ impl ScaleInPlanner {
         &self,
         primaries_to_retire: &[String],
         standbys_to_retire: &[String],
-        migrations: &[PartitionMigration],
+        migrations: &[TableMigration],
     ) -> Vec<ScaleInPhase> {
         let mut phases = Vec::new();
 
-        // Phase 1: Migrate Partitions
+        // Phase 1: Migrate Tables
         if !migrations.is_empty() {
             let operations: Vec<_> = migrations
                 .iter()
-                .map(|m| ScaleInOperation::MigratePartition {
-                    partition_key: m.partition_key.clone(),
+                .map(|m| ScaleInOperation::MigrateTable {
+                    table_key: m.table_key.clone(),
                     from_node: m.from_node.clone(),
                     to_node: m.to_node.clone(),
                 })
@@ -528,9 +525,9 @@ impl ScaleInPlanner {
 
             phases.push(ScaleInPhase {
                 phase_number: 1,
-                phase_type: ScaleInPhaseType::MigratePartitions,
+                phase_type: ScaleInPhaseType::MigrateTables,
                 description: format!(
-                    "Migrate {} partitions away from retiring Primaries",
+                    "Migrate {} tables away from retiring Primaries",
                     migrations.len()
                 ),
                 affected_nodes: primaries_to_retire.to_vec(),
@@ -584,8 +581,8 @@ impl ScaleInPlanner {
             let mut operations = Vec::new();
 
             for node_id in standbys_to_retire {
-                // Remove from replica assignments first
-                operations.push(ScaleInOperation::RemoveStandbyFromReplicas {
+                // Remove from table secondary assignments first
+                operations.push(ScaleInOperation::RemoveStandbyFromTables {
                     standby_node_id: node_id.clone(),
                 });
 
@@ -637,7 +634,7 @@ impl ScaleInPlanner {
             primary_count,
             standby_count,
             ratio_maintained,
-            total_partitions: cluster_state.total_partitions(),
+            total_tables: cluster_state.total_tables(),
         }
     }
 
@@ -659,21 +656,21 @@ impl ScaleInPlanner {
         }
 
         // Warn about heavy migration load
-        let total_partitions_to_migrate: usize = primaries_to_retire
+        let total_tables_to_migrate: usize = primaries_to_retire
             .iter()
-            .filter_map(|id| cluster_state.partitions_per_node.get(id))
+            .filter_map(|id| cluster_state.tables_per_node.get(id))
             .sum();
 
-        if total_partitions_to_migrate > 100 {
+        if total_tables_to_migrate > 100 {
             warnings.push(format!(
-                "Large migration: {} partitions will be moved (may take time)",
-                total_partitions_to_migrate
+                "Large migration: {} tables will be moved (may take time)",
+                total_tables_to_migrate
             ));
         }
 
         // Warn if only one primary remains
         if final_state.primary_count == 1 {
-            warnings.push("Only 1 Primary will remain - no redundancy for partitions".to_string());
+            warnings.push("Only 1 Primary will remain - no redundancy for tables".to_string());
         }
 
         // Warn if no standbys remain
@@ -705,8 +702,8 @@ mod tests {
             primaries: vec![],
             standbys: vec![],
             retiring: vec![],
-            partition_assignments: HashMap::new(),
-            partitions_per_node: HashMap::new(),
+            table_assignments: HashMap::new(),
+            tables_per_node: HashMap::new(),
             primary_standby_ratio: 2,
         };
 
@@ -732,8 +729,8 @@ mod tests {
             ],
             standbys: vec![make_node("s1", DataNodeMode::Standby)],
             retiring: vec![],
-            partition_assignments: HashMap::new(),
-            partitions_per_node: [
+            table_assignments: HashMap::new(),
+            tables_per_node: [
                 ("p1".to_string(), 10),
                 ("p2".to_string(), 5),
                 ("p3".to_string(), 20),
@@ -746,6 +743,6 @@ mod tests {
         let result = planner.select_least_loaded(&cluster_state, 1, 0);
         assert!(result.is_ok());
         let (primaries, _) = result.unwrap();
-        assert_eq!(primaries, vec!["p2".to_string()]); // p2 has fewest partitions
+        assert_eq!(primaries, vec!["p2".to_string()]); // p2 has fewest tables
     }
 }

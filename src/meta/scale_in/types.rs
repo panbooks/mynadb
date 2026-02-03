@@ -2,8 +2,13 @@
 //!
 //! These types define the data structures used in scale-in planning,
 //! validation, and execution.
+//!
+//! Scale-in operates at the TABLE level, not partition level:
+//! - Tables are the unit of migration (not date partitions)
+//! - TableMeta tracks primary/secondary ownership per table
+//! - All partitions of a table are owned by the same node(s)
 
-use crate::meta::types::NodeInfo;
+use crate::meta::types::{NodeInfo, TableMeta};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
@@ -20,7 +25,7 @@ pub struct ScaleInConfig {
     /// Minimum number of Standby nodes to keep (for HA)
     pub min_standbys: usize,
 
-    /// Timeout for partition migration (seconds)
+    /// Timeout for table migration (seconds)
     pub migration_timeout_secs: u64,
 
     /// Timeout for memtable flush (seconds)
@@ -66,7 +71,7 @@ impl Default for ScaleInConfig {
 /// Strategy for selecting which nodes to retire
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScaleInStrategy {
-    /// Retire least-loaded nodes first (fewest partitions)
+    /// Retire least-loaded nodes first (fewest tables)
     LeastLoaded,
 
     /// Retire oldest nodes first (FIFO - First In, First Out)
@@ -236,8 +241,8 @@ pub struct ScaleInPlan {
     /// Standby nodes to retire (in order)
     pub standbys_to_retire: Vec<String>,
 
-    /// Partition migrations to perform
-    pub migrations: Vec<PartitionMigration>,
+    /// Table migrations to perform
+    pub migrations: Vec<TableMigration>,
 
     /// Warnings about the plan
     pub warnings: Vec<String>,
@@ -268,8 +273,8 @@ pub struct ScaleInPhase {
 /// Type of scale-in phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScaleInPhaseType {
-    /// Phase 1: Migrate partitions away from target Primaries
-    MigratePartitions,
+    /// Phase 1: Migrate tables away from target Primaries
+    MigrateTables,
 
     /// Phase 2: Retire empty Primaries
     RetirePrimaries,
@@ -284,7 +289,7 @@ pub enum ScaleInPhaseType {
 impl std::fmt::Display for ScaleInPhaseType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MigratePartitions => write!(f, "Migrate Partitions"),
+            Self::MigrateTables => write!(f, "Migrate Tables"),
             Self::RetirePrimaries => write!(f, "Retire Primaries"),
             Self::RetireStandbys => write!(f, "Retire Standbys"),
             Self::Completed => write!(f, "Completed"),
@@ -295,9 +300,10 @@ impl std::fmt::Display for ScaleInPhaseType {
 /// An operation within a scale-in phase
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ScaleInOperation {
-    /// Migrate a partition from one node to another
-    MigratePartition {
-        partition_key: String,
+    /// Migrate a table from one node to another
+    MigrateTable {
+        /// Table key: "catalog/schema/table"
+        table_key: String,
         from_node: String,
         to_node: String,
     },
@@ -311,8 +317,8 @@ pub enum ScaleInOperation {
     /// Mark node as drained (safe to stop)
     CompleteRetire { node_id: String },
 
-    /// Remove standby from replica assignments
-    RemoveStandbyFromReplicas { standby_node_id: String },
+    /// Remove standby from table secondary assignments
+    RemoveStandbyFromTables { standby_node_id: String },
 
     /// Wait for node to finish draining
     WaitForDrain {
@@ -321,11 +327,11 @@ pub enum ScaleInOperation {
     },
 }
 
-/// A partition migration
+/// A table migration (moving table ownership from one node to another)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PartitionMigration {
-    /// Partition key
-    pub partition_key: String,
+pub struct TableMigration {
+    /// Table key: "catalog/schema/table"
+    pub table_key: String,
 
     /// Source node (retiring Primary)
     pub from_node: String,
@@ -349,8 +355,8 @@ pub struct ClusterStatePreview {
     /// Whether the Primary:Standby ratio is maintained
     pub ratio_maintained: bool,
 
-    /// Total partitions (unchanged)
-    pub total_partitions: usize,
+    /// Total tables (unchanged)
+    pub total_tables: usize,
 }
 
 /// Current cluster state for planning
@@ -365,60 +371,44 @@ pub struct ClusterState {
     /// Currently retiring nodes
     pub retiring: Vec<NodeInfo>,
 
-    /// Partition assignments (partition_key -> assignment)
-    pub partition_assignments: HashMap<String, PartitionAssignment>,
+    /// Table assignments (table_key -> TableMeta)
+    pub table_assignments: HashMap<String, TableMeta>,
 
-    /// Partitions per node (node_id -> count)
-    pub partitions_per_node: HashMap<String, usize>,
+    /// Tables per node (node_id -> count)
+    pub tables_per_node: HashMap<String, usize>,
 
     /// Configured Primary:Standby ratio
     pub primary_standby_ratio: u32,
 }
 
 impl ClusterState {
-    /// Get total partition count
-    pub fn total_partitions(&self) -> usize {
-        self.partition_assignments.len()
+    /// Get total table count
+    pub fn total_tables(&self) -> usize {
+        self.table_assignments.len()
     }
 
-    /// Check if a node has partitions
-    pub fn node_has_partitions(&self, node_id: &str) -> bool {
-        self.partitions_per_node.get(node_id).copied().unwrap_or(0) > 0
+    /// Check if a node has tables
+    pub fn node_has_tables(&self, node_id: &str) -> bool {
+        self.tables_per_node.get(node_id).copied().unwrap_or(0) > 0
     }
 
-    /// Get partitions led by a node
-    pub fn partitions_for_leader(&self, node_id: &str) -> Vec<&PartitionAssignment> {
-        self.partition_assignments
+    /// Get tables owned by a node (as primary owner)
+    pub fn tables_for_primary(&self, node_id: &str) -> Vec<&TableMeta> {
+        self.table_assignments
             .values()
-            .filter(|p| p.leader_node_id == node_id)
+            .filter(|t| t.primary_owner() == Some(node_id))
             .collect()
     }
 
     /// Get Primary nodes that a Standby backs up
-    pub fn primaries_backed_by_standby(&self, standby_id: &str) -> Vec<String> {
-        let mut primaries = std::collections::HashSet::new();
-
-        for assignment in self.partition_assignments.values() {
-            if assignment.standby_node_ids.contains(&standby_id.to_string()) {
-                primaries.insert(assignment.leader_node_id.clone());
-            }
-        }
-
-        primaries.into_iter().collect()
+    ///
+    /// Note: With table-level ownership, standbys back up Primary nodes at the
+    /// node level. A standby can back up multiple primaries.
+    pub fn primaries_backed_by_standby(&self, _standby_id: &str) -> Vec<String> {
+        // With table-level routing, all Primary nodes are backed by all Standbys
+        // Return all primary node IDs
+        self.primaries.iter().map(|p| p.node_id.clone()).collect()
     }
-}
-
-/// A partition assignment
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PartitionAssignment {
-    /// Partition key
-    pub partition_key: String,
-
-    /// Leader (Primary) node
-    pub leader_node_id: String,
-
-    /// Standby nodes
-    pub standby_node_ids: Vec<String>,
 }
 
 /// Result of a scale-in execution
@@ -436,8 +426,8 @@ pub struct ScaleInResult {
     /// Standby nodes that were retired
     pub standbys_retired: Vec<String>,
 
-    /// Partitions that were migrated
-    pub partitions_migrated: usize,
+    /// Tables that were migrated
+    pub tables_migrated: usize,
 
     /// Execution duration (milliseconds)
     pub duration_ms: u64,
@@ -490,9 +480,9 @@ pub enum ScaleInError {
     /// Would violate HA requirements
     HAViolation(String),
 
-    /// Partition migration failed
+    /// Table migration failed
     MigrationFailed {
-        partition: String,
+        table: String,
         reason: String,
     },
 
@@ -549,8 +539,8 @@ impl std::fmt::Display for ScaleInError {
                 )
             }
             Self::HAViolation(msg) => write!(f, "HA violation: {}", msg),
-            Self::MigrationFailed { partition, reason } => {
-                write!(f, "Migration failed for {}: {}", partition, reason)
+            Self::MigrationFailed { table, reason } => {
+                write!(f, "Migration failed for table {}: {}", table, reason)
             }
             Self::RetirementFailed { node_id, reason } => {
                 write!(f, "Retirement failed for {}: {}", node_id, reason)

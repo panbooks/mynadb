@@ -8,8 +8,8 @@
 //!    - Before retiring a Standby, all its backed Primaries must be retired first
 //!    - This prevents data loss if a Primary crashes after its Standby is removed
 //!
-//! 2. **NEVER retire a Primary while it still owns partitions**
-//!    - All partitions must be migrated to other Primaries first
+//! 2. **NEVER retire a Primary while it still owns tables**
+//!    - All tables must be migrated to other Primaries first
 //!    - This ensures no writes are lost during scale-in
 //!
 //! ## Validation Checks
@@ -17,7 +17,7 @@
 //! | Rule | Description | Phase Enforced |
 //! |------|-------------|----------------|
 //! | GR-1 | Standbys retired only after their Primaries | Phase 3 |
-//! | GR-2 | Primaries retired only after partition drain | Phase 2 |
+//! | GR-2 | Primaries retired only after table drain | Phase 2 |
 //! | MIN-P | Minimum Primary count maintained | Plan validation |
 //! | MIN-S | Minimum Standby count maintained | Plan validation |
 //! | HA-C | HA coverage for remaining cluster | Plan validation |
@@ -53,7 +53,7 @@ impl ScaleInValidator {
         self.validate_minimum_nodes(plan, cluster_state)?;
         self.validate_ha_coverage(plan, cluster_state)?;
         self.validate_phase_order(plan)?;
-        self.validate_no_orphan_partitions(plan, cluster_state)?;
+        self.validate_no_orphan_tables(plan, cluster_state)?;
 
         info!("Scale-in plan {} validated successfully", plan.plan_id);
         Ok(())
@@ -105,9 +105,9 @@ impl ScaleInValidator {
         Ok(())
     }
 
-    /// Golden Rule 2: Never retire a Primary while it owns partitions
+    /// Golden Rule 2: Never retire a Primary while it owns tables
     ///
-    /// Verify that the plan includes partition migrations for ALL partitions
+    /// Verify that the plan includes table migrations for ALL tables
     /// owned by retiring Primaries.
     fn validate_golden_rule_2(
         &self,
@@ -115,15 +115,15 @@ impl ScaleInValidator {
         cluster_state: &ClusterState,
     ) -> Result<(), ScaleInError> {
         for primary_id in &plan.primaries_to_retire {
-            let owned_partitions = cluster_state.partitions_for_leader(primary_id);
-            let partition_count = owned_partitions.len();
+            let owned_tables = cluster_state.tables_for_primary(primary_id);
+            let table_count = owned_tables.len();
 
-            if partition_count == 0 {
-                // No partitions - safe to retire directly
+            if table_count == 0 {
+                // No tables - safe to retire directly
                 continue;
             }
 
-            // Check that all partitions have migration planned
+            // Check that all tables have migration planned
             let migrations_for_primary: Vec<_> = plan
                 .migrations
                 .iter()
@@ -132,28 +132,28 @@ impl ScaleInValidator {
 
             let migrated_keys: HashSet<_> = migrations_for_primary
                 .iter()
-                .map(|m| m.partition_key.as_str())
+                .map(|m| m.table_key.as_str())
                 .collect();
 
-            let unmigrated: Vec<_> = owned_partitions
+            let unmigrated: Vec<_> = owned_tables
                 .iter()
-                .filter(|p| !migrated_keys.contains(p.partition_key.as_str()))
-                .map(|p| p.partition_key.as_str())
+                .filter(|t| !migrated_keys.contains(t.table_key().as_str()))
+                .map(|t| t.table_key())
                 .collect();
 
             if !unmigrated.is_empty() {
                 error!(
-                    "GR-2 violation: Primary {} owns {} partitions without migration plan: {:?}",
+                    "GR-2 violation: Primary {} owns {} tables without migration plan: {:?}",
                     primary_id,
                     unmigrated.len(),
                     unmigrated
                 );
 
                 return Err(ScaleInError::ValidationFailed(ValidationError {
-                    rule: "GR-2: Partition Drain".to_string(),
+                    rule: "GR-2: Table Drain".to_string(),
                     description: format!(
-                        "Primary {} owns {} partitions without migration plan. \
-                         All partitions must be migrated before retirement. \
+                        "Primary {} owns {} tables without migration plan. \
+                         All tables must be migrated before retirement. \
                          Missing migrations: {:?}",
                         primary_id,
                         unmigrated.len(),
@@ -164,12 +164,12 @@ impl ScaleInValidator {
             }
 
             debug!(
-                "Primary {} has {} partitions with migration plans",
-                primary_id, partition_count
+                "Primary {} has {} tables with migration plans",
+                primary_id, table_count
             );
         }
 
-        debug!("Golden Rule 2 validated: All retiring Primaries have partition migrations");
+        debug!("Golden Rule 2 validated: All retiring Primaries have table migrations");
         Ok(())
     }
 
@@ -209,8 +209,8 @@ impl ScaleInValidator {
 
     /// Validate HA coverage for remaining cluster
     ///
-    /// After scale-in, remaining partitions should still have:
-    /// - A leader (Primary) assigned
+    /// After scale-in, remaining tables should still have:
+    /// - A primary owner assigned
     /// - Standby coverage if standbys exist
     fn validate_ha_coverage(
         &self,
@@ -236,25 +236,27 @@ impl ScaleInValidator {
             .collect();
 
         // Build expected state after migrations
-        let mut post_migration_leaders: std::collections::HashMap<String, String> =
+        let mut post_migration_owners: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
 
         // Start with current assignments
-        for (key, assignment) in &cluster_state.partition_assignments {
-            post_migration_leaders.insert(key.clone(), assignment.leader_node_id.clone());
+        for (key, table) in &cluster_state.table_assignments {
+            if let Some(primary) = table.primary_owner() {
+                post_migration_owners.insert(key.clone(), primary.to_string());
+            }
         }
 
         // Apply migrations
         for migration in &plan.migrations {
-            post_migration_leaders.insert(migration.partition_key.clone(), migration.to_node.clone());
+            post_migration_owners.insert(migration.table_key.clone(), migration.to_node.clone());
         }
 
-        // Check all partitions have valid leaders
-        for (partition, leader) in &post_migration_leaders {
-            if !remaining_primaries.contains(leader) && !primaries_retiring.contains(leader) {
+        // Check all tables have valid owners
+        for (table_key, owner) in &post_migration_owners {
+            if !remaining_primaries.contains(owner) && !primaries_retiring.contains(owner) {
                 return Err(ScaleInError::HAViolation(format!(
-                    "Partition {} would have no valid leader after scale-in (assigned to {})",
-                    partition, leader
+                    "Table {} would have no valid owner after scale-in (assigned to {})",
+                    table_key, owner
                 )));
             }
         }
@@ -269,10 +271,10 @@ impl ScaleInValidator {
         }
 
         debug!(
-            "HA coverage validated: {} primaries, {} standbys, {} partitions",
+            "HA coverage validated: {} primaries, {} standbys, {} tables",
             remaining_primaries.len(),
             remaining_standbys.len(),
-            post_migration_leaders.len()
+            post_migration_owners.len()
         );
         Ok(())
     }
@@ -280,7 +282,7 @@ impl ScaleInValidator {
     /// Validate phase order follows Golden Rule
     ///
     /// Required order:
-    /// 1. Partition migration (if needed)
+    /// 1. Table migration (if needed)
     /// 2. Primary retirement (after draining)
     /// 3. Standby retirement (after Primaries)
     fn validate_phase_order(&self, plan: &ScaleInPlan) -> Result<(), ScaleInError> {
@@ -290,11 +292,11 @@ impl ScaleInValidator {
 
         for phase in &plan.phases {
             match phase.phase_type {
-                ScaleInPhaseType::MigratePartitions => {
+                ScaleInPhaseType::MigrateTables => {
                     if seen_retire_primary || seen_retire_standby {
                         return Err(ScaleInError::ValidationFailed(ValidationError {
                             rule: "Phase Order".to_string(),
-                            description: "Partition migration must happen before any retirements"
+                            description: "Table migration must happen before any retirements"
                                 .to_string(),
                             nodes: vec![],
                         }));
@@ -335,36 +337,38 @@ impl ScaleInValidator {
         Ok(())
     }
 
-    /// Validate no partitions become orphaned
+    /// Validate no tables become orphaned
     ///
-    /// After all migrations and retirements, every partition must have
-    /// a valid leader from the remaining primaries.
-    fn validate_no_orphan_partitions(
+    /// After all migrations and retirements, every table must have
+    /// a valid owner from the remaining primaries.
+    fn validate_no_orphan_tables(
         &self,
         plan: &ScaleInPlan,
         cluster_state: &ClusterState,
     ) -> Result<(), ScaleInError> {
         let primaries_retiring: HashSet<_> = plan.primaries_to_retire.iter().collect();
 
-        // Track partition assignments after migrations
+        // Track table assignments after migrations
         let mut final_assignments: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
 
         // Start with current assignments
-        for (key, assignment) in &cluster_state.partition_assignments {
-            final_assignments.insert(key.clone(), assignment.leader_node_id.clone());
+        for (key, table) in &cluster_state.table_assignments {
+            if let Some(primary) = table.primary_owner() {
+                final_assignments.insert(key.clone(), primary.to_string());
+            }
         }
 
         // Apply migrations
         for migration in &plan.migrations {
-            final_assignments.insert(migration.partition_key.clone(), migration.to_node.clone());
+            final_assignments.insert(migration.table_key.clone(), migration.to_node.clone());
         }
 
-        // Check for orphans (partitions assigned to retiring nodes without migration)
+        // Check for orphans (tables assigned to retiring nodes without migration)
         let mut orphans = Vec::new();
-        for (partition, leader) in &final_assignments {
-            if primaries_retiring.contains(leader) {
-                orphans.push((partition.clone(), leader.clone()));
+        for (table_key, owner) in &final_assignments {
+            if primaries_retiring.contains(owner) {
+                orphans.push((table_key.clone(), owner.clone()));
             }
         }
 
@@ -372,23 +376,23 @@ impl ScaleInValidator {
             let orphan_info: Vec<_> = orphans
                 .iter()
                 .take(5) // Limit error message size
-                .map(|(p, l)| format!("{} (on {})", p, l))
+                .map(|(t, o)| format!("{} (on {})", t, o))
                 .collect();
 
             return Err(ScaleInError::ValidationFailed(ValidationError {
-                rule: "No Orphan Partitions".to_string(),
+                rule: "No Orphan Tables".to_string(),
                 description: format!(
-                    "{} partition(s) would be orphaned (assigned to retiring nodes): {}{}",
+                    "{} table(s) would be orphaned (assigned to retiring nodes): {}{}",
                     orphans.len(),
                     orphan_info.join(", "),
                     if orphans.len() > 5 { "..." } else { "" }
                 ),
-                nodes: orphans.iter().map(|(_, l)| l.clone()).collect(),
+                nodes: orphans.iter().map(|(_, o)| o.clone()).collect(),
             }));
         }
 
         debug!(
-            "No orphan partitions: {} partitions have valid leaders",
+            "No orphan tables: {} tables have valid owners",
             final_assignments.len()
         );
         Ok(())
@@ -415,12 +419,12 @@ impl ScaleInValidator {
                     });
                 }
 
-                // If it's a Primary, verify it has no partitions (already drained)
-                if is_primary && cluster_state.node_has_partitions(node_id) {
+                // If it's a Primary, verify it has no tables (already drained)
+                if is_primary && cluster_state.node_has_tables(node_id) {
                     return Err(ScaleInError::ValidationFailed(ValidationError {
-                        rule: "GR-2: Partition Drain".to_string(),
+                        rule: "GR-2: Table Drain".to_string(),
                         description: format!(
-                            "Cannot retire Primary {} - still has partitions",
+                            "Cannot retire Primary {} - still has tables",
                             node_id
                         ),
                         nodes: vec![node_id.clone()],
@@ -445,8 +449,8 @@ impl ScaleInValidator {
                 }
             }
 
-            ScaleInOperation::MigratePartition {
-                partition_key,
+            ScaleInOperation::MigrateTable {
+                table_key,
                 to_node,
                 ..
             } => {
@@ -458,7 +462,7 @@ impl ScaleInValidator {
 
                 if !target_is_primary {
                     return Err(ScaleInError::MigrationFailed {
-                        partition: partition_key.clone(),
+                        table: table_key.clone(),
                         reason: format!("Target node {} is not an active Primary", to_node),
                     });
                 }
@@ -476,12 +480,21 @@ impl ScaleInValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::meta::types::{DataNodeMode, NodeInfo, NodeRole, NodeState};
+    use crate::meta::types::{DataNodeMode, NodeInfo, NodeRole, NodeState, TableMeta};
 
     fn make_node(id: &str, mode: DataNodeMode) -> NodeInfo {
         let mut node = NodeInfo::new(id.to_string(), NodeRole::Data, format!("{}:7000", id));
         node.mode = Some(mode);
         node
+    }
+
+    fn make_table(catalog: &str, schema: &str, table: &str, primary: &str) -> TableMeta {
+        TableMeta::new(
+            catalog.to_string(),
+            schema.to_string(),
+            table.to_string(),
+            primary.to_string(),
+        )
     }
 
     #[test]
@@ -490,15 +503,9 @@ mod tests {
         let validator = ScaleInValidator::new(config);
 
         // Cluster with 2 primaries and 1 standby
-        let mut partition_assignments = std::collections::HashMap::new();
-        partition_assignments.insert(
-            "part1".to_string(),
-            PartitionAssignment {
-                partition_key: "part1".to_string(),
-                leader_node_id: "p1".to_string(),
-                standby_node_ids: vec!["s1".to_string()],
-            },
-        );
+        let table = make_table("db", "default", "test", "p1");
+        let mut table_assignments = std::collections::HashMap::new();
+        table_assignments.insert(table.table_key(), table);
 
         let cluster_state = ClusterState {
             primaries: vec![
@@ -507,8 +514,8 @@ mod tests {
             ],
             standbys: vec![make_node("s1", DataNodeMode::Standby)],
             retiring: vec![],
-            partition_assignments,
-            partitions_per_node: [("p1".to_string(), 1)].into_iter().collect(),
+            table_assignments,
+            tables_per_node: [("p1".to_string(), 1)].into_iter().collect(),
             primary_standby_ratio: 2,
         };
 
@@ -532,7 +539,7 @@ mod tests {
                 primary_count: 2,
                 standby_count: 0,
                 ratio_maintained: false,
-                total_partitions: 1,
+                total_tables: 1,
             },
         };
 
@@ -549,16 +556,10 @@ mod tests {
         let config = ScaleInConfig::default();
         let validator = ScaleInValidator::new(config);
 
-        // Cluster with partition
-        let mut partition_assignments = std::collections::HashMap::new();
-        partition_assignments.insert(
-            "part1".to_string(),
-            PartitionAssignment {
-                partition_key: "part1".to_string(),
-                leader_node_id: "p1".to_string(),
-                standby_node_ids: vec![],
-            },
-        );
+        // Cluster with table
+        let table = make_table("db", "default", "test", "p1");
+        let mut table_assignments = std::collections::HashMap::new();
+        table_assignments.insert(table.table_key(), table);
 
         let cluster_state = ClusterState {
             primaries: vec![
@@ -567,12 +568,12 @@ mod tests {
             ],
             standbys: vec![],
             retiring: vec![],
-            partition_assignments,
-            partitions_per_node: [("p1".to_string(), 1)].into_iter().collect(),
+            table_assignments,
+            tables_per_node: [("p1".to_string(), 1)].into_iter().collect(),
             primary_standby_ratio: 2,
         };
 
-        // Plan that tries to retire p1 without migrating its partition
+        // Plan that tries to retire p1 without migrating its table
         let plan = ScaleInPlan {
             plan_id: "test".to_string(),
             created_at: 0,
@@ -580,13 +581,13 @@ mod tests {
             phases: vec![],
             primaries_to_retire: vec!["p1".to_string()],
             standbys_to_retire: vec![],
-            migrations: vec![], // No migration for part1!
+            migrations: vec![], // No migration for table!
             warnings: vec![],
             final_state: ClusterStatePreview {
                 primary_count: 1,
                 standby_count: 0,
                 ratio_maintained: true,
-                total_partitions: 1,
+                total_tables: 1,
             },
         };
 
@@ -632,7 +633,7 @@ mod tests {
                 primary_count: 1,
                 standby_count: 0,
                 ratio_maintained: true,
-                total_partitions: 0,
+                total_tables: 0,
             },
         };
 

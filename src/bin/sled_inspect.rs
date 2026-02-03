@@ -76,17 +76,6 @@ fn main() {
                         }
                     }
                 }
-                // Try to decode as FileInfo if it looks like a file key
-                else if key_str.starts_with("/files/") {
-                    if let Ok(file) = bincode::deserialize::<mynadb::meta::types::FileInfo>(&value)
-                    {
-                        println!("  Decoded FileInfo:");
-                        println!("    path: {}", file.path);
-                        println!("    created_by: {}", file.created_by);
-                    } else {
-                        println!("  (Could not decode as FileInfo)");
-                    }
-                }
                 // Try to decode as PartitionReplica
                 else if key_str.starts_with("/replicas/") {
                     if let Ok(replica) =

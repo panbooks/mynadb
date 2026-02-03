@@ -9,7 +9,6 @@ pub mod keys {
     pub const PREFIX_NODE: &str = "/nodes/";
     pub const PREFIX_SCHEMA: &str = "/schemas/";
     pub const PREFIX_TABLE: &str = "/tables/";
-    pub const PREFIX_FILE: &str = "/files/"; // Deprecated: use table-level routing
     pub const PREFIX_LOCK: &str = "/locks/";
     pub const PREFIX_LEADER: &str = "/leaders/";
     pub const PREFIX_EVENT: &str = "/events/";
@@ -184,7 +183,6 @@ pub struct NodeInfo {
     // Each Primary is paired with a specific Standby at registration time.
     // All data from the Primary replicates to its assigned Standby.
     // This ensures complete data recovery on Primary crash.
-
     /// For Primary nodes: The Standby node that backs this Primary.
     ///
     /// All data written to this Primary is replicated to this Standby.
@@ -216,8 +214,8 @@ impl NodeInfo {
             registered_at: now,
             last_heartbeat: now,
             labels: HashMap::new(),
-            mode: None,              // Auto-assigned by Meta for Data nodes
-            backing_standby: None,   // Assigned when Standby becomes available
+            mode: None,               // Auto-assigned by Meta for Data nodes
+            backing_standby: None,    // Assigned when Standby becomes available
             backed_primaries: vec![], // Populated when Standby is assigned Primaries
         }
     }
@@ -309,59 +307,6 @@ impl NodeInfo {
     /// Returns true if any difference is found.
     pub fn is_different_failure_domain(&self, other: &NodeInfo) -> bool {
         self.is_different_zone(other) || self.is_different_rack(other)
-    }
-}
-
-/// File metadata in the registry
-/// DEPRECATED: Use TableMeta for routing. File lists should be derived from S3 listing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileInfo {
-    pub path: String,
-    pub catalog: String,
-    pub schema: String,
-    pub table: String,
-    pub partition: String,
-    pub level: u8,
-    pub size_bytes: u64,
-    pub row_count: u64,
-    pub min_time: i64,
-    pub max_time: i64,
-    pub created_at: i64,
-    pub created_by: String,
-}
-
-impl FileInfo {
-    /// Generate the storage key for this file
-    /// DEPRECATED: Use TableMeta for routing
-    pub fn storage_key(&self) -> String {
-        format!(
-            "{}{}/{}/{}/{}/{}",
-            keys::PREFIX_FILE,
-            self.catalog,
-            self.schema,
-            self.table,
-            self.partition,
-            self.path.split('/').last().unwrap_or(&self.path)
-        )
-    }
-
-    /// Generate a prefix key for listing files in a partition
-    /// DEPRECATED: Use S3 listing instead
-    pub fn partition_prefix(catalog: &str, schema: &str, table: &str, partition: &str) -> String {
-        format!(
-            "{}{}/{}/{}/{}/",
-            keys::PREFIX_FILE,
-            catalog,
-            schema,
-            table,
-            partition
-        )
-    }
-
-    /// Generate a prefix key for listing files in a table
-    /// DEPRECATED: Use S3 listing instead
-    pub fn table_prefix(catalog: &str, schema: &str, table: &str) -> String {
-        format!("{}{}/{}/{}/", keys::PREFIX_FILE, catalog, schema, table)
     }
 }
 
@@ -519,6 +464,11 @@ impl TableMeta {
     /// Generate the storage key for this table
     pub fn storage_key(&self) -> String {
         Self::key_for(&self.catalog, &self.schema, &self.table)
+    }
+
+    /// Get the table key in format "catalog/schema/table"
+    pub fn table_key(&self) -> String {
+        format!("{}/{}/{}", self.catalog, self.schema, self.table)
     }
 
     /// Generate a storage key for a table
@@ -776,7 +726,13 @@ impl DistributionConfig {
     /// Generate storage key for a distribution config
     pub fn key_for(catalog: &str, schema: &str, table: &str) -> String {
         if !table.is_empty() {
-            format!("{}{}/{}/{}", keys::PREFIX_DISTRIBUTION, catalog, schema, table)
+            format!(
+                "{}{}/{}/{}",
+                keys::PREFIX_DISTRIBUTION,
+                catalog,
+                schema,
+                table
+            )
         } else if !schema.is_empty() {
             format!("{}{}/{}", keys::PREFIX_DISTRIBUTION, catalog, schema)
         } else {
@@ -1319,7 +1275,6 @@ pub enum MetaCommand {
     // ========================================================================
     // Table-Level Operations (Recommended for routing)
     // ========================================================================
-
     /// Register a new table with its owner node
     ///
     /// Called when a Data node first receives data for a new table.
@@ -1388,7 +1343,6 @@ pub enum MetaCommand {
     // ========================================================================
     // Write Distribution Configuration
     // ========================================================================
-
     /// Set distribution config for catalog/schema/table
     ///
     /// Configures how writes are distributed across primary nodes.
@@ -1552,7 +1506,6 @@ pub enum MetaCommand {
     },
 
     // Recovery operations (failover without promotion)
-
     /// Trigger Standby to flush a crashed Primary's replicated data
     ///
     /// When a Primary crashes (No-Promotion architecture):
@@ -1610,7 +1563,6 @@ pub enum MetaResponse {
     // ========================================================================
     // Table-Level Responses
     // ========================================================================
-
     /// Table registered successfully
     TableRegistered {
         catalog: String,
@@ -1698,7 +1650,6 @@ pub enum MetaResponse {
     // ========================================================================
     // Distribution Config Responses
     // ========================================================================
-
     /// Distribution config set successfully
     DistributionConfigSet {
         catalog: String,
@@ -1725,7 +1676,6 @@ pub enum MetaResponse {
     // ========================================================================
     // Lock Responses
     // ========================================================================
-
     LockAcquired {
         fencing_token: u64,
     },
@@ -1828,7 +1778,6 @@ pub enum MetaResponse {
     },
 
     // Recovery responses
-
     /// Standby flush triggered for crashed Primary
     StandbyFlushTriggered {
         standby_id: String,
@@ -1879,12 +1828,8 @@ mod tests {
 
         #[test]
         fn test_distribution_config_new_catalog_scope() {
-            let config = DistributionConfig::new(
-                "mydb".to_string(),
-                "".to_string(),
-                "".to_string(),
-                100,
-            );
+            let config =
+                DistributionConfig::new("mydb".to_string(), "".to_string(), "".to_string(), 100);
 
             assert_eq!(config.catalog, "mydb");
             assert_eq!(config.schema, "");
@@ -1927,12 +1872,8 @@ mod tests {
 
         #[test]
         fn test_distribution_config_storage_key_catalog() {
-            let config = DistributionConfig::new(
-                "mydb".to_string(),
-                "".to_string(),
-                "".to_string(),
-                100,
-            );
+            let config =
+                DistributionConfig::new("mydb".to_string(), "".to_string(), "".to_string(), 100);
 
             // Catalog-level: /distribution/catalog
             assert_eq!(config.storage_key(), "/distribution/mydb");
@@ -2016,30 +1957,18 @@ mod tests {
         #[test]
         fn test_distribution_config_percent_boundaries() {
             // Test 0% (single node)
-            let config_0 = DistributionConfig::new(
-                "db".to_string(),
-                "".to_string(),
-                "".to_string(),
-                0,
-            );
+            let config_0 =
+                DistributionConfig::new("db".to_string(), "".to_string(), "".to_string(), 0);
             assert_eq!(config_0.percent, 0);
 
             // Test 100% (all nodes)
-            let config_100 = DistributionConfig::new(
-                "db".to_string(),
-                "".to_string(),
-                "".to_string(),
-                100,
-            );
+            let config_100 =
+                DistributionConfig::new("db".to_string(), "".to_string(), "".to_string(), 100);
             assert_eq!(config_100.percent, 100);
 
             // Test mid-range
-            let config_50 = DistributionConfig::new(
-                "db".to_string(),
-                "".to_string(),
-                "".to_string(),
-                50,
-            );
+            let config_50 =
+                DistributionConfig::new("db".to_string(), "".to_string(), "".to_string(), 50);
             assert_eq!(config_50.percent, 50);
         }
     }

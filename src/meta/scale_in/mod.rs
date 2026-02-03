@@ -10,16 +10,16 @@
 //! 1. **NEVER retire a Standby while it still backs up active Primaries**
 //!    - If a Standby is retired and its Primary crashes, data loss occurs
 //!
-//! 2. **NEVER retire a Primary while it still owns partitions**
-//!    - Partitions must be drained before a Primary can be safely removed
+//! 2. **NEVER retire a Primary while it still owns tables**
+//!    - Tables must be migrated before a Primary can be safely removed
 //!
 //! # Three-Phase Execution
 //!
 //! ```text
-//! Phase 1: Partition Migration
-//! ├── Move partitions from target Primaries to remaining Primaries
+//! Phase 1: Table Migration
+//! ├── Move tables from target Primaries to remaining Primaries
 //! ├── Standbys continue backing up all Primaries (HA maintained)
-//! └── Target Primaries become empty (no partitions)
+//! └── Target Primaries become empty (no tables)
 //!
 //! Phase 2: Retire Empty Primaries
 //! ├── Mark empty Primaries as Retiring → Drained
@@ -264,35 +264,31 @@ impl ScaleInManager {
             .cloned()
             .collect();
 
-        // Get partition assignments
-        let replicas = sm.list_replicas();
-        let mut partition_assignments = std::collections::HashMap::new();
+        // Get table assignments
+        let tables = sm.list_all_tables();
+        let mut table_assignments = std::collections::HashMap::new();
 
-        for replica in &replicas {
-            partition_assignments.insert(
-                replica.partition_key.clone(),
-                PartitionAssignment {
-                    partition_key: replica.partition_key.clone(),
-                    leader_node_id: replica.leader_node_id.clone(),
-                    standby_node_ids: replica.standby_node_ids.clone(),
-                },
-            );
+        for table in &tables {
+            let table_key = table.table_key();
+            table_assignments.insert(table_key, table.clone());
         }
 
-        // Count partitions per node
-        let mut partitions_per_node = std::collections::HashMap::new();
-        for replica in &replicas {
-            *partitions_per_node
-                .entry(replica.leader_node_id.clone())
-                .or_insert(0) += 1;
+        // Count tables per node (by primary owner)
+        let mut tables_per_node: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for table in &tables {
+            if let Some(primary) = table.primary_owner() {
+                *tables_per_node
+                    .entry(primary.to_string())
+                    .or_insert(0) += 1;
+            }
         }
 
         Ok(ClusterState {
             primaries,
             standbys,
             retiring,
-            partition_assignments,
-            partitions_per_node,
+            table_assignments,
+            tables_per_node,
             primary_standby_ratio: self.config.primary_standby_ratio,
         })
     }
