@@ -19,7 +19,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
-use super::discovery::TableLegacyPrefixes;
 use super::QueryEngine;
 
 impl QueryEngine {
@@ -58,14 +57,13 @@ impl QueryEngine {
 
     /// Register a table in catalog.schema.table format with partition support
     /// Uses cache to avoid re-scanning directories on every query
+    /// Supports multi-prefix registration for scale-in (legacy prefixes from retired nodes)
     pub async fn register_table(
         &self,
         catalog_name: &str,
         schema_name: &str,
         table_name: &str,
     ) -> Result<(), String> {
-        // For object storage with memtable data, always re-register to include fresh writes
-        // This is needed because the table might have been registered with stale/empty data
         let is_object_storage = self
             .storage
             .as_ref()
@@ -78,37 +76,43 @@ impl QueryEngine {
             .map(|c| c.has_cached_data(catalog_name, schema_name, table_name))
             .unwrap_or(false);
 
+        // Check for legacy prefixes (scale-in support)
+        let legacy_prefixes = self.get_legacy_prefixes(catalog_name, schema_name, table_name).await;
+        let has_legacy_prefixes = !legacy_prefixes.is_empty() && is_object_storage;
+
         // Check if table is already registered in DataFusion
         if let Some(catalog) = self.ctx.catalog(catalog_name) {
             if let Some(schema) = catalog.schema(schema_name) {
                 if schema.table_exist(table_name) {
-                    // For object storage with memtable data, re-register to include fresh writes
-                    if is_object_storage && has_memtable_data {
+                    // Re-register if we have new memtable data or legacy prefixes
+                    if (is_object_storage && has_memtable_data) || has_legacy_prefixes {
                         debug!(
-                            "Re-registering {}.{}.{} to include memtable data",
-                            catalog_name, schema_name, table_name
+                            "Re-registering {}.{}.{} (memtable={}, legacy_prefixes={})",
+                            catalog_name, schema_name, table_name, has_memtable_data, legacy_prefixes.len()
                         );
-                        // Deregister the old table first
                         let _ = schema.deregister_table(table_name);
                     } else {
-                        // Table already registered and no new memtable data, skip
                         return Ok(());
                     }
                 }
             }
         }
 
+        // Use multi-prefix registration if we have legacy prefixes
+        if has_legacy_prefixes {
+            return self
+                .register_table_multi_prefix(catalog_name, schema_name, table_name, &legacy_prefixes)
+                .await;
+        }
+
         // Build table URL based on storage backend
-        // When write_cache is present, files are stored with node_id prefix
         let table_url = if let Some(ref storage) = self.storage {
             if let Some(ref cache) = self.write_cache {
-                // With write_cache, always use node_id prefix (both local and object storage)
                 storage.table_url_with_node(cache.node_id(), catalog_name, schema_name, table_name)
             } else {
                 storage.table_url(catalog_name, schema_name, table_name)
             }
         } else {
-            // No storage configured, use data_dir with node_id prefix if write_cache exists
             if let Some(ref cache) = self.write_cache {
                 format!(
                     "file://{}/{}/{}/{}/{}",
@@ -126,8 +130,7 @@ impl QueryEngine {
             }
         };
 
-        // Build local path for existence check (only for local storage)
-        // Include node_id prefix if write_cache is present
+        // Build local path for existence check
         let table_path = if let Some(ref cache) = self.write_cache {
             format!(
                 "{}/{}/{}/{}/{}",
@@ -145,7 +148,6 @@ impl QueryEngine {
         };
 
         // For object storage with memtable data, use memtable-only registration
-        // (fresh writes go to memtable before flush, parquet files don't exist yet)
         if is_object_storage && has_memtable_data {
             debug!(
                 "Object storage: using memtable for {}.{}.{}",
@@ -168,16 +170,13 @@ impl QueryEngine {
             self.metadata_cache
                 .get_table_info(catalog_name, schema_name, table_name)
         {
-            // Use cached partition info
             debug!(
                 "Using cached table info for {}.{}.{}",
                 catalog_name, schema_name, table_name
             );
             (cached.has_partitions, cached.partitions)
         } else {
-            // Cache miss - need to scan directory
             if !path_exists {
-                // Check if we have memtable data for this table
                 if let Some(ref cache) = self.write_cache {
                     if cache.has_cached_data(catalog_name, schema_name, table_name) {
                         return self
@@ -188,11 +187,9 @@ impl QueryEngine {
                 return Err(format!("Table path not found: {}", table_path));
             }
 
-            // Discover partitions
             let partitions = if self.storage.is_none() || !is_object_storage {
                 self.discover_table_partitions(&table_path)?
             } else {
-                // For object storage, assume partitioned
                 Vec::new()
             };
 
@@ -202,7 +199,6 @@ impl QueryEngine {
                 true
             };
 
-            // Cache the result
             self.metadata_cache.set_table_info(
                 catalog_name,
                 schema_name,
@@ -212,20 +208,15 @@ impl QueryEngine {
             );
             debug!(
                 "Cached table info for {}.{}.{} (partitions: {})",
-                catalog_name,
-                schema_name,
-                table_name,
-                partitions.len()
+                catalog_name, schema_name, table_name, partitions.len()
             );
 
             (has_partitions, partitions)
         };
 
-        // Ensure catalog and schema exist
         self.ensure_schema_in_catalog(catalog_name, schema_name)
             .await?;
 
-        // Try to register parquet table
         let parquet_result = if has_partitions {
             self.register_partitioned_table(catalog_name, schema_name, table_name, &table_url)
                 .await
@@ -234,7 +225,6 @@ impl QueryEngine {
                 .await
         };
 
-        // If parquet registration fails (no files), try memtable-only for object storage
         if parquet_result.is_err() {
             if let Some(ref cache) = self.write_cache {
                 if cache.has_cached_data(catalog_name, schema_name, table_name) {
@@ -247,17 +237,13 @@ impl QueryEngine {
                         .await;
                 }
             }
-            // No memtable data either, return the original error
             return parquet_result;
         }
 
         if has_partitions {
             debug!(
                 "Registered partitioned table: {}.{}.{} ({} partitions)",
-                catalog_name,
-                schema_name,
-                table_name,
-                partitions.len()
+                catalog_name, schema_name, table_name, partitions.len()
             );
         } else {
             debug!(
@@ -266,7 +252,6 @@ impl QueryEngine {
             );
         }
 
-        // Track registration
         let mut catalogs = self.registered_catalogs.write().await;
         catalogs
             .entry(catalog_name.to_string())
@@ -520,39 +505,18 @@ impl QueryEngine {
     // Multi-Prefix Registration (Scale-In Support)
     // ========================================================================
 
-    /// Register a table with legacy prefix support (for scale-in)
+    /// Register a table with multiple prefixes (for scale-in)
     ///
     /// When a cluster scales in, data from retired nodes remains in S3 under
     /// their original prefixes. This method creates a MultiUnionTableProvider
     /// that combines data from all relevant prefixes.
-    pub async fn register_table_with_legacy(
+    async fn register_table_multi_prefix(
         &self,
         catalog_name: &str,
         schema_name: &str,
         table_name: &str,
-        legacy: &TableLegacyPrefixes,
+        legacy_prefixes: &[String],
     ) -> Result<(), String> {
-        // If no legacy prefixes, use normal registration
-        if legacy.prefixes.is_empty() {
-            return self.register_table(catalog_name, schema_name, table_name).await;
-        }
-
-        let is_object_storage = self
-            .storage
-            .as_ref()
-            .map(|s| !s.is_local())
-            .unwrap_or(false);
-
-        // Multi-prefix registration only makes sense for object storage
-        if !is_object_storage {
-            debug!(
-                "Local storage: ignoring legacy prefixes for {}.{}.{}",
-                catalog_name, schema_name, table_name
-            );
-            return self.register_table(catalog_name, schema_name, table_name).await;
-        }
-
-        // Ensure catalog and schema exist
         self.ensure_schema_in_catalog(catalog_name, schema_name).await?;
 
         let storage = self
@@ -579,7 +543,7 @@ impl QueryEngine {
         }
 
         // Legacy prefix URLs
-        for lp in &legacy.prefixes {
+        for lp in legacy_prefixes {
             let url = storage.table_url_with_node(lp, catalog_name, schema_name, table_name);
             table_urls.push((url, lp.clone()));
         }
@@ -597,7 +561,6 @@ impl QueryEngine {
                     valid_prefixes.push(prefix);
                 }
                 Err(e) => {
-                    // Log but continue - some prefixes might have no data for this table
                     debug!(
                         "No data at prefix '{}' for {}.{}.{}: {}",
                         prefix, catalog_name, schema_name, table_name, e
@@ -607,7 +570,6 @@ impl QueryEngine {
         }
 
         if providers.is_empty() {
-            // Check if we have memtable data
             if let Some(ref cache) = self.write_cache {
                 if cache.has_cached_data(catalog_name, schema_name, table_name) {
                     return self
@@ -623,7 +585,7 @@ impl QueryEngine {
 
         let full_name = format!("{}.{}.{}", catalog_name, schema_name, table_name);
 
-        // If only one provider, use normal registration path
+        // If only one provider, use it directly
         if providers.len() == 1 {
             let provider = providers.remove(0);
             let final_provider =
@@ -635,7 +597,6 @@ impl QueryEngine {
         let multi_union = MultiUnionTableProvider::try_new(providers, full_name.clone(), valid_prefixes.clone())
             .map_err(|e| format!("Failed to create multi-union provider: {}", e))?;
 
-        // Wrap with memtable if needed
         let final_provider = self.maybe_wrap_with_memtable(
             catalog_name,
             schema_name,
@@ -649,11 +610,10 @@ impl QueryEngine {
             "Registered table {} with {} prefixes (including {} legacy): {:?}",
             full_name,
             valid_prefixes.len(),
-            legacy.prefixes.len(),
+            legacy_prefixes.len(),
             valid_prefixes
         );
 
-        // Track registration
         let mut catalogs = self.registered_catalogs.write().await;
         catalogs
             .entry(catalog_name.to_string())

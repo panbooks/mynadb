@@ -24,6 +24,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
+/// Key for legacy prefix lookup: (catalog, schema, table)
+pub type TableKey = (String, String, String);
+
 // Sub-modules containing impl blocks for QueryEngine
 mod cache;
 mod discovery;
@@ -36,7 +39,6 @@ pub use crate::query::cache::hot_partition_cache::HotPartitionCacheStats;
 pub use crate::query::cache::metadata_cache::{CacheStatistics, TableParquetStats};
 pub use crate::query::cache::query_cache::QueryCacheStats;
 pub use crate::query::types::{QueryAnalysis, QueryExplainResult};
-pub use discovery::TableLegacyPrefixes;
 
 /// Default memory limit for query execution (16GB)
 const DEFAULT_MEMORY_LIMIT_BYTES: usize = 16 * 1024 * 1024 * 1024;
@@ -55,6 +57,10 @@ pub struct QueryEngine {
     pub(crate) write_cache: Option<Arc<DataCache>>,
     /// Local parquet file cache for cluster mode (object storage)
     pub(crate) parquet_cache: Option<Arc<crate::data::cache::ParquetLocalCache>>,
+    /// Legacy prefixes from retired nodes during scale-in.
+    /// Key: (catalog, schema, table), Value: list of retired node prefixes.
+    /// Set by router/API before query execution.
+    pub(crate) legacy_prefixes: Arc<RwLock<HashMap<TableKey, Vec<String>>>>,
 }
 
 impl QueryEngine {
@@ -257,7 +263,52 @@ impl QueryEngine {
             use_custom_table_provider,
             parquet_cache: None,
             write_cache,
+            legacy_prefixes: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    // ========================================================================
+    // Legacy Prefix Management (Scale-In Support)
+    // ========================================================================
+
+    /// Set legacy prefixes for a table (from retired nodes during scale-in)
+    pub async fn set_legacy_prefixes(&self, catalog: &str, schema: &str, table: &str, prefixes: Vec<String>) {
+        let key = (catalog.to_string(), schema.to_string(), table.to_string());
+        let mut map = self.legacy_prefixes.write().await;
+        if prefixes.is_empty() {
+            map.remove(&key);
+        } else {
+            map.insert(key, prefixes);
+        }
+    }
+
+    /// Get legacy prefixes for a table
+    pub async fn get_legacy_prefixes(&self, catalog: &str, schema: &str, table: &str) -> Vec<String> {
+        let key = (catalog.to_string(), schema.to_string(), table.to_string());
+        let map = self.legacy_prefixes.read().await;
+        map.get(&key).cloned().unwrap_or_default()
+    }
+
+    /// Set legacy prefixes for all tables in a catalog (bulk update from ShardCache)
+    pub async fn set_catalog_legacy_prefixes(&self, catalog: &str, table_prefixes: HashMap<(String, String), Vec<String>>) {
+        let mut map = self.legacy_prefixes.write().await;
+        for ((schema, table), prefixes) in table_prefixes {
+            let key = (catalog.to_string(), schema, table);
+            if prefixes.is_empty() {
+                map.remove(&key);
+            } else {
+                map.insert(key, prefixes);
+            }
+        }
+    }
+
+    /// Get all legacy prefixes for a catalog (returns map of (schema, table) -> prefixes)
+    pub async fn get_catalog_legacy_prefixes(&self, catalog: &str) -> HashMap<(String, String), Vec<String>> {
+        let map = self.legacy_prefixes.read().await;
+        map.iter()
+            .filter(|(k, _)| k.0 == catalog)
+            .map(|(k, v)| ((k.1.clone(), k.2.clone()), v.clone()))
+            .collect()
     }
 }
 
