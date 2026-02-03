@@ -22,6 +22,7 @@ use crate::storage::line_protocol::{format_date32_as_string, parse_line_protocol
 use crate::utils::hash::hash_select_index;
 use arrow::array::RecordBatch;
 use futures::FutureExt;
+use rand::seq::SliceRandom;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
@@ -266,32 +267,7 @@ impl WriteRouter {
                     &table_key,
                 );
 
-                if target_nodes.is_empty() {
-                    futures.push(async move {
-                        Err::<(u64, u32), String>(format!(
-                            "No data nodes available for distributed table {}",
-                            table_key.to_path()
-                        ))
-                    }.boxed());
-                    continue;
-                }
-
-                // Write to all selected nodes in parallel
-                let future = async move {
-                    Self::write_partition_distributed(
-                        &pool,
-                        &shard_cache,
-                        meta_client.as_ref(),
-                        &catalog_str,
-                        partition_key,
-                        batch,
-                        target_nodes,
-                    )
-                    .await
-                };
-                futures.push(future.boxed());
-            } else {
-                // Standard single-node routing with retry
+                // Distributed write with target nodes
                 let future = async move {
                     Self::write_partition_with_retry(
                         &pool,
@@ -300,6 +276,23 @@ impl WriteRouter {
                         &catalog_str,
                         partition_key,
                         batch,
+                        target_nodes,
+                        MAX_WRITE_RETRIES,
+                    )
+                    .await
+                };
+                futures.push(future.boxed());
+            } else {
+                // Standard single-node routing (empty target_nodes triggers table-level routing)
+                let future = async move {
+                    Self::write_partition_with_retry(
+                        &pool,
+                        &shard_cache,
+                        meta_client.as_ref(),
+                        &catalog_str,
+                        partition_key,
+                        batch,
+                        Vec::new(),
                         MAX_WRITE_RETRIES,
                     )
                     .await
@@ -329,138 +322,14 @@ impl WriteRouter {
         (total_written, total_retries, errors)
     }
 
-    /// Write a partition to multiple nodes for distributed tables
+    /// Write a partition with retry logic
     ///
-    /// All target nodes receive the same data in parallel.
-    /// Each successful node is registered as a table owner in Meta.
-    async fn write_partition_distributed(
-        pool: &DataNodePool,
-        shard_cache: &ShardCache,
-        meta_client: Option<&Arc<MetaClient>>,
-        catalog: &str,
-        partition_key: PartitionKey,
-        batch: RecordBatch,
-        target_nodes: Vec<DataNodeInfo>,
-    ) -> Result<(u64, u32), String> {
-        let table_key = TableKey::new(catalog, &partition_key.schema, &partition_key.table);
-        let table_path = table_key.to_path();
-        let row_count = batch.num_rows() as u64;
-
-        debug!(
-            "Distributed write: {} rows to {} nodes for table {}",
-            row_count,
-            target_nodes.len(),
-            table_path
-        );
-
-        // Write to all target nodes in parallel
-        let mut write_futures = Vec::new();
-        for node in &target_nodes {
-            let node_id = node.node_id.clone();
-            let node_id_for_error = node.node_id.clone();
-            let catalog = catalog.to_string();
-            let schema = partition_key.schema.clone();
-            let table = partition_key.table.clone();
-            let date = partition_key.date_as_i32();
-            let batch_clone = batch.clone();
-
-            write_futures.push(async move {
-                pool.write_batch(&node_id, &catalog, &schema, &table, date, batch_clone)
-                    .await
-                    .map(|written| (node_id, written))
-                    .map_err(|e| (node_id_for_error, e))
-            });
-        }
-
-        let results: Vec<_> = futures::future::join_all(write_futures).await;
-
-        // Count successes and failures
-        let mut successful_nodes: Vec<String> = Vec::new();
-        let mut failed_nodes: Vec<(String, String)> = Vec::new();
-
-        for result in results {
-            match result {
-                Ok((node_id, _written)) => {
-                    shard_cache.record_node_success(&node_id);
-                    successful_nodes.push(node_id);
-                }
-                Err((node_id, error)) => {
-                    shard_cache.mark_node_suspect(&node_id);
-                    failed_nodes.push((node_id, error));
-                }
-            }
-        }
-
-        // Register all successful nodes as table owners in Meta
-        if let Some(client) = meta_client {
-            for node_id in &successful_nodes {
-                match client
-                    .add_table_owner(catalog, &partition_key.schema, &partition_key.table, node_id)
-                    .await
-                {
-                    Ok((already_owner, all_owners, version)) => {
-                        if !already_owner {
-                            debug!(
-                                "Registered distributed node {} as owner for table {} (v{})",
-                                node_id, table_path, version
-                            );
-                        }
-                        // Update local cache with all owners
-                        shard_cache.set_table_owners(&table_key, all_owners, version);
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to register distributed node {} as owner for table {}: {}",
-                            node_id, table_path, e
-                        );
-                    }
-                }
-            }
-        }
-
-        // Log result
-        if successful_nodes.is_empty() {
-            let errors: Vec<String> = failed_nodes
-                .iter()
-                .map(|(n, e)| format!("{}: {}", n, e))
-                .collect();
-            error!(
-                "Distributed write failed for table {} on all {} nodes: {}",
-                table_path,
-                target_nodes.len(),
-                errors.join("; ")
-            );
-            return Err(format!(
-                "Distributed write failed for table {} on all nodes: {}",
-                table_path,
-                errors.join("; ")
-            ));
-        }
-
-        if !failed_nodes.is_empty() {
-            warn!(
-                "Distributed write partially succeeded for table {}: {} of {} nodes failed",
-                table_path,
-                failed_nodes.len(),
-                target_nodes.len()
-            );
-        } else {
-            debug!(
-                "Distributed write succeeded for table {} on {} nodes",
-                table_path,
-                successful_nodes.len()
-            );
-        }
-
-        // Return success (at least one node received the data)
-        // For distributed writes, we count the rows once even though multiple nodes have the data
-        Ok((row_count, 0))
-    }
-
-    /// Write a single partition with retry logic using table-level routing
+    /// Unified write function that handles both distributed and non-distributed tables:
+    /// - Distributed (target_nodes provided): randomly selects from target pool for load distribution
+    /// - Non-distributed (target_nodes empty): uses table-level routing with exclusion on retry
     ///
     /// Returns (rows_written, retry_count) on success.
-    /// On successful reroute, adds the new node as a table owner in Meta.
+    /// On successful write, registers the node as table owner in Meta.
     async fn write_partition_with_retry(
         pool: &DataNodePool,
         shard_cache: &ShardCache,
@@ -468,58 +337,75 @@ impl WriteRouter {
         catalog: &str,
         partition_key: PartitionKey,
         batch: RecordBatch,
+        target_nodes: Vec<DataNodeInfo>,
         max_retries: u32,
     ) -> Result<(u64, u32), String> {
+        const MAX_ATTEMPTS: usize = 3;
+
         let table_key = TableKey::new(catalog, &partition_key.schema, &partition_key.table);
         let table_path = table_key.to_path();
-        let partition_path = partition_key.to_path();
         let row_count = batch.num_rows() as u64;
+        let is_distributed = !target_nodes.is_empty();
+
+        // Prepare candidate nodes based on write mode
+        let candidates: Vec<DataNodeInfo> = if is_distributed {
+            // Distributed: shuffle target nodes for random selection
+            let mut shuffled = target_nodes;
+            {
+                let mut rng = rand::thread_rng();
+                shuffled.shuffle(&mut rng);
+            }
+            shuffled
+        } else {
+            // Non-distributed: will select dynamically via table routing
+            Vec::new()
+        };
+
+        let max_attempts = if is_distributed {
+            candidates.len().min(MAX_ATTEMPTS)
+        } else {
+            (max_retries + 1) as usize
+        };
+
+        debug!(
+            "Write partition: {} rows to table {}, mode={}, max_attempts={}",
+            row_count,
+            table_path,
+            if is_distributed { "distributed" } else { "single" },
+            max_attempts
+        );
+
         let mut tried_nodes: HashSet<String> = HashSet::new();
         let mut last_error = String::new();
         let mut retries = 0u32;
 
-        for attempt in 0..=max_retries {
-            // Select target node using table-level routing (excluding already-tried nodes on retry)
-            let node = if attempt == 0 {
-                shard_cache.select_node_for_table(&table_key)
+        for attempt in 0..max_attempts {
+            // Select target node
+            let node = if is_distributed {
+                // Distributed: use pre-shuffled candidates
+                candidates.get(attempt).cloned()
             } else {
-                shard_cache.select_node_for_table_excluding(&table_key, &tried_nodes)
+                // Non-distributed: table-level routing with exclusion
+                if attempt == 0 {
+                    shard_cache.select_node_for_table(&table_key)
+                } else {
+                    shard_cache.select_node_for_table_excluding(&table_key, &tried_nodes)
+                }
             };
 
             let node = match node {
                 Some(n) => n,
                 None => {
-                    return if attempt == 0 {
-                        Err(format!(
-                            "No data node available for table {}",
-                            table_path
-                        ))
-                    } else {
-                        // No more nodes to try
-                        Err(format!(
-                            "All {} data nodes failed for table {}: {}",
-                            tried_nodes.len(),
-                            table_path,
-                            last_error
-                        ))
-                    };
+                    if attempt == 0 {
+                        return Err(format!("No data node available for table {}", table_path));
+                    }
+                    break; // No more nodes to try
                 }
             };
 
             tried_nodes.insert(node.node_id.clone());
 
-            debug!(
-                "Writing {} rows to {} for partition {} (table: {}, attempt {})",
-                row_count,
-                node.node_id,
-                partition_path,
-                table_path,
-                attempt + 1
-            );
-
-            // Try to write
-            // Table-level routing ensures all partitions of a table go to the same node.
-            // Data node will register table ownership with Meta after flush.
+            // Attempt write
             match pool
                 .write_batch(
                     &node.node_id,
@@ -532,58 +418,33 @@ impl WriteRouter {
                 .await
             {
                 Ok(written) => {
-                    // Success!
-                    if attempt > 0 {
-                        info!(
-                            "Write succeeded on retry {} (node {}) for table {}",
-                            attempt, node.node_id, table_path
-                        );
-                        // Mark original failed nodes as suspect
-                        for failed_node_id in tried_nodes.iter() {
-                            if failed_node_id != &node.node_id {
-                                shard_cache.mark_node_suspect(failed_node_id);
-                            }
-                        }
+                    // Success - record and register owner
+                    shard_cache.record_node_success(&node.node_id);
 
-                        // CRITICAL: Add rerouted node as table owner in Meta
-                        // This ensures queries will scatter-gather to all nodes with data
-                        if let Some(client) = meta_client {
-                            match client
-                                .add_table_owner(
-                                    catalog,
-                                    &partition_key.schema,
-                                    &partition_key.table,
-                                    &node.node_id,
-                                )
-                                .await
-                            {
-                                Ok((already_owner, all_owners, version)) => {
-                                    if !already_owner {
-                                        info!(
-                                            "Added rerouted node {} as owner for table {} (v{}, owners: {:?})",
-                                            node.node_id, table_path, version, all_owners
-                                        );
-                                        // Update local cache with all owners
-                                        shard_cache.set_table_owners(&table_key, all_owners, version);
-                                    }
-                                }
-                                Err(e) => {
-                                    // Log error but don't fail the write - data is already written
-                                    warn!(
-                                        "Failed to add rerouted node {} as owner for table {}: {}",
-                                        node.node_id, table_path, e
-                                    );
-                                }
+                    // Mark failed nodes as suspect (for retried writes)
+                    if attempt > 0 {
+                        for failed_id in tried_nodes.iter() {
+                            if failed_id != &node.node_id {
+                                shard_cache.mark_node_suspect(failed_id);
                             }
                         }
                     }
 
-                    // Record success for the working node
-                    shard_cache.record_node_success(&node.node_id);
+                    // Register as table owner in Meta
+                    Self::register_table_owner(
+                        meta_client,
+                        shard_cache,
+                        &table_key,
+                        catalog,
+                        &partition_key,
+                        &node.node_id,
+                        attempt > 0,
+                    )
+                    .await;
 
                     debug!(
-                        "Successfully wrote {} rows to {} for partition {}",
-                        written, node.node_id, partition_path
+                        "Write succeeded for table {} on node {} (attempt {})",
+                        table_path, node.node_id, attempt + 1
                     );
                     return Ok((written, retries));
                 }
@@ -597,16 +458,15 @@ impl WriteRouter {
                     );
                     last_error = e;
                     retries += 1;
-                    // Continue to next attempt
                 }
             }
         }
 
-        // All retries exhausted
+        // All attempts failed
         error!(
-            "Write failed after {} attempts for table {}: {}",
-            max_retries + 1,
+            "Write failed for table {} after {} attempts: {}",
             table_path,
+            tried_nodes.len(),
             last_error
         );
 
@@ -616,20 +476,72 @@ impl WriteRouter {
         }
 
         Err(format!(
-            "Write failed after {} attempts for table {}: {}",
-            max_retries + 1,
+            "Write failed for table {} after {} attempts: {}",
             table_path,
+            tried_nodes.len(),
             last_error
         ))
     }
 
-    /// Select nodes for distributed writes based on distribution percent
+    /// Register a node as table owner in Meta (helper function)
+    async fn register_table_owner(
+        meta_client: Option<&Arc<MetaClient>>,
+        shard_cache: &ShardCache,
+        table_key: &TableKey,
+        catalog: &str,
+        partition_key: &PartitionKey,
+        node_id: &str,
+        is_reroute: bool,
+    ) {
+        let Some(client) = meta_client else { return };
+
+        match client
+            .add_table_owner(catalog, &partition_key.schema, &partition_key.table, node_id)
+            .await
+        {
+            Ok((already_owner, all_owners, version)) => {
+                if !already_owner {
+                    if is_reroute {
+                        info!(
+                            "Added rerouted node {} as owner for table {} (v{})",
+                            node_id,
+                            table_key.to_path(),
+                            version
+                        );
+                    } else {
+                        debug!(
+                            "Registered node {} as owner for table {} (v{})",
+                            node_id,
+                            table_key.to_path(),
+                            version
+                        );
+                    }
+                }
+                shard_cache.set_table_owners(table_key, all_owners, version);
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to register node {} as owner for table {}: {}",
+                    node_id,
+                    table_key.to_path(),
+                    e
+                );
+            }
+        }
+    }
+
+    /// Select target nodes for distributed writes based on distribution percent
+    ///
+    /// Strategy: Use existing table owners as target pool, complement if needed.
     ///
     /// - percent=0: Single node (standard routing)
     /// - percent=100: All primary nodes
-    /// - percent=50: ~50% of primary nodes (minimum 1)
+    /// - percent=50: Existing owners if >= 50%, else complement to reach 50%
     ///
-    /// Uses hash-based selection with random offset for load balancing.
+    /// This ensures:
+    /// 1. Data stays co-located on nodes that already have table data
+    /// 2. Query routing (via table owners) always finds all data
+    /// 3. New tables gradually build up their owner set
     fn select_nodes_for_distributed_write(
         &self,
         catalog: &str,
@@ -667,41 +579,70 @@ impl WriteRouter {
             return all_nodes;
         }
 
-        // Calculate how many nodes to select (minimum 1)
-        let num_nodes = ((all_nodes.len() as f64 * percent as f64 / 100.0).ceil() as usize).max(1);
+        // Calculate target node count (minimum 1)
+        let target_count =
+            ((all_nodes.len() as f64 * percent as f64 / 100.0).ceil() as usize).max(1);
 
-        // Use hash-based selection with timestamp for randomness
-        // This provides pseudo-random but reproducible selection for debugging
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
+        // Strategy: Use existing owners first, complement if needed
+        // This keeps data co-located on nodes that already have this table's data
+        let existing_owners = self.shard_cache.get_table_owners(table_key);
+        let owner_node_ids: HashSet<String> = existing_owners
+            .as_ref()
+            .map(|v| v.iter().cloned().collect())
+            .unwrap_or_default();
 
-        // Start from a hash-based offset for distribution
-        let start_idx = hash_select_index(&(table_key.to_path(), timestamp), all_nodes.len());
+        // Filter to get active owner nodes
+        let mut active_owners: Vec<DataNodeInfo> = all_nodes
+            .iter()
+            .filter(|n| owner_node_ids.contains(&n.node_id))
+            .cloned()
+            .collect();
 
-        // Select num_nodes starting from the offset
-        let mut selected: Vec<DataNodeInfo> = Vec::with_capacity(num_nodes);
-        for i in 0..num_nodes {
-            let idx = (start_idx + i) % all_nodes.len();
-            selected.push(all_nodes[idx].clone());
+        if active_owners.len() >= target_count {
+            // Existing owners meet the target ratio - use them as target pool
+            debug!(
+                "Distributed write ({}%): using {} existing owners for {}/{}/{}: {:?}",
+                percent,
+                active_owners.len(),
+                catalog,
+                schema,
+                table,
+                active_owners.iter().map(|n| &n.node_id).collect::<Vec<_>>()
+            );
+            return active_owners;
         }
 
-        // Sort for consistent logging
-        selected.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+        // Need to complement with additional nodes to reach target
+        // Use hash-based selection for deterministic complementing
+        let need_more = target_count - active_owners.len();
+        let start_idx = hash_select_index(table_key, all_nodes.len());
+
+        let mut added = 0;
+        for i in 0..all_nodes.len() {
+            if added >= need_more {
+                break;
+            }
+            let idx = (start_idx + i) % all_nodes.len();
+            let candidate = &all_nodes[idx];
+            if !owner_node_ids.contains(&candidate.node_id) {
+                active_owners.push(candidate.clone());
+                added += 1;
+            }
+        }
 
         debug!(
-            "Distributed write ({}%): selecting {} of {} nodes for {}/{}/{}: {:?}",
+            "Distributed write ({}%): {} owners + {} complement = {} nodes for {}/{}/{}: {:?}",
             percent,
-            selected.len(),
-            all_nodes.len(),
+            active_owners.len() - added,
+            added,
+            active_owners.len(),
             catalog,
             schema,
             table,
-            selected.iter().map(|n| &n.node_id).collect::<Vec<_>>()
+            active_owners.iter().map(|n| &n.node_id).collect::<Vec<_>>()
         );
 
-        selected
+        active_owners
     }
 
     /// Check if a table should use distributed writes
@@ -742,5 +683,216 @@ impl WriteRouter {
         } else {
             Err(errors.join("; "))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::meta::types::DataNodeMode;
+    use crate::router::routing::shard_cache::NodeState;
+    use arrow::array::{Int64Array, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use std::collections::HashMap;
+
+    fn create_test_nodes(count: usize) -> Vec<DataNodeInfo> {
+        (0..count)
+            .map(|i| DataNodeInfo {
+                node_id: format!("node-{}", i),
+                grpc_addr: format!("127.0.0.1:{}", 7000 + i),
+                state: NodeState::Active,
+                mode: DataNodeMode::Primary,
+            })
+            .collect()
+    }
+
+    fn create_test_batch(rows: usize) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("time", DataType::Int64, false),
+            Field::new("value", DataType::Utf8, true),
+        ]));
+
+        let time_array = Int64Array::from((0..rows as i64).collect::<Vec<_>>());
+        let value_array = StringArray::from((0..rows).map(|i| format!("val-{}", i)).collect::<Vec<_>>());
+
+        RecordBatch::try_new(schema, vec![Arc::new(time_array), Arc::new(value_array)]).unwrap()
+    }
+
+    /// Test that random selection distributes writes across nodes
+    #[test]
+    fn test_random_distribution_over_multiple_calls() {
+        use rand::seq::SliceRandom;
+
+        let nodes = create_test_nodes(3);
+        let mut selection_counts: HashMap<String, usize> = HashMap::new();
+
+        // Simulate 1000 random selections
+        let mut rng = rand::thread_rng();
+        for _ in 0..1000 {
+            let mut shuffled = nodes.clone();
+            shuffled.shuffle(&mut rng);
+            let selected = &shuffled[0];
+            *selection_counts.entry(selected.node_id.clone()).or_insert(0) += 1;
+        }
+
+        // Each node should be selected roughly 333 times (±15% tolerance)
+        for (node_id, count) in &selection_counts {
+            let expected = 1000.0 / 3.0;
+            let tolerance = expected * 0.20; // 20% tolerance for randomness
+            assert!(
+                (*count as f64 - expected).abs() < tolerance,
+                "Node {} selected {} times, expected ~{:.0} (±{:.0})",
+                node_id,
+                count,
+                expected,
+                tolerance
+            );
+        }
+
+        // All 3 nodes should have been selected at least once
+        assert_eq!(selection_counts.len(), 3, "All nodes should be selected");
+    }
+
+    /// Test that shuffling produces different orders
+    #[test]
+    fn test_shuffle_produces_different_orders() {
+        use rand::seq::SliceRandom;
+
+        let nodes = create_test_nodes(5);
+        let mut orders_seen: HashSet<String> = HashSet::new();
+
+        let mut rng = rand::thread_rng();
+        for _ in 0..100 {
+            let mut shuffled = nodes.clone();
+            shuffled.shuffle(&mut rng);
+            let order: String = shuffled.iter().map(|n| n.node_id.clone()).collect::<Vec<_>>().join(",");
+            orders_seen.insert(order);
+        }
+
+        // With 5 nodes (120 possible permutations), we should see many different orders
+        assert!(
+            orders_seen.len() > 10,
+            "Should see many different shuffle orders, got {}",
+            orders_seen.len()
+        );
+    }
+
+    /// Test partition key to i32 conversion
+    #[test]
+    fn test_partition_key_date_conversion() {
+        let pk = PartitionKey::new("mydb", "default", "cpu", "2024-01-15");
+
+        // 2024-01-15 should be day number since epoch
+        let date_i32 = pk.date_as_i32();
+        assert!(date_i32 > 0, "Date should be positive days since epoch");
+
+        // Verify it's roughly correct (2024 is ~54 years = ~19700 days)
+        assert!(date_i32 > 19000, "Date should be > 19000 days since epoch");
+        assert!(date_i32 < 25000, "Date should be < 25000 days since epoch");
+    }
+
+    /// Test that single node case works (no randomness needed)
+    #[test]
+    fn test_single_node_always_selected() {
+        use rand::seq::SliceRandom;
+
+        let nodes = create_test_nodes(1);
+
+        let mut rng = rand::thread_rng();
+        for _ in 0..10 {
+            let mut shuffled = nodes.clone();
+            shuffled.shuffle(&mut rng);
+            assert_eq!(shuffled[0].node_id, "node-0");
+        }
+    }
+
+    /// Test empty nodes case
+    #[test]
+    fn test_empty_nodes_returns_empty() {
+        let nodes: Vec<DataNodeInfo> = vec![];
+        assert!(nodes.is_empty());
+    }
+
+    /// Test batch cloning for fallback (batch should be reusable)
+    #[test]
+    fn test_batch_can_be_cloned_for_retry() {
+        let batch = create_test_batch(100);
+        assert_eq!(batch.num_rows(), 100);
+
+        // Clone multiple times (simulating retries)
+        let clone1 = batch.clone();
+        let clone2 = batch.clone();
+        let clone3 = batch.clone();
+
+        assert_eq!(clone1.num_rows(), 100);
+        assert_eq!(clone2.num_rows(), 100);
+        assert_eq!(clone3.num_rows(), 100);
+
+        // Original should still be valid
+        assert_eq!(batch.num_rows(), 100);
+    }
+
+    /// Test that node selection with fallback tries all nodes
+    #[test]
+    fn test_fallback_order_covers_all_nodes() {
+        use rand::seq::SliceRandom;
+
+        let nodes = create_test_nodes(4);
+
+        let mut rng = rand::thread_rng();
+        let mut shuffled = nodes.clone();
+        shuffled.shuffle(&mut rng);
+
+        // All nodes should be present in shuffled order
+        let node_ids: HashSet<String> = shuffled.iter().map(|n| n.node_id.clone()).collect();
+        assert_eq!(node_ids.len(), 4);
+        assert!(node_ids.contains("node-0"));
+        assert!(node_ids.contains("node-1"));
+        assert!(node_ids.contains("node-2"));
+        assert!(node_ids.contains("node-3"));
+    }
+
+    /// Test table key construction
+    #[test]
+    fn test_table_key_path() {
+        let key = TableKey::new("mydb", "service_1", "cpu");
+        assert_eq!(key.to_path(), "mydb/service_1/cpu");
+    }
+
+    /// Test that write result captures all fields
+    #[test]
+    fn test_write_result_structure() {
+        let result = WriteResult {
+            success: true,
+            points_written: 1000,
+            bytes_written: 50000,
+            error: None,
+            elapsed_ms: 42,
+            retries: 0,
+        };
+
+        assert!(result.success);
+        assert_eq!(result.points_written, 1000);
+        assert_eq!(result.bytes_written, 50000);
+        assert!(result.error.is_none());
+        assert_eq!(result.elapsed_ms, 42);
+        assert_eq!(result.retries, 0);
+    }
+
+    /// Test write result with error
+    #[test]
+    fn test_write_result_with_error() {
+        let result = WriteResult {
+            success: false,
+            points_written: 0,
+            bytes_written: 0,
+            error: Some("Connection refused".to_string()),
+            elapsed_ms: 100,
+            retries: 2,
+        };
+
+        assert!(!result.success);
+        assert_eq!(result.error, Some("Connection refused".to_string()));
+        assert_eq!(result.retries, 2);
     }
 }

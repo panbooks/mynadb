@@ -25,6 +25,7 @@ use super::shard_cache::{DataNodeInfo, ShardCache, TableKey};
 use crate::meta::client::MetaClient;
 use crate::query::sql_utils::{extract_table_references, extract_time_range};
 use crate::router::client::DataNodePool;
+use crate::utils::hash::hash_select_index;
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::*;
@@ -215,8 +216,7 @@ impl QueryCoordinator {
         sql: &str,
     ) -> Result<DistributedQueryPlan, String> {
         // Extract table references from SQL
-        let table_refs = extract_table_references(sql, catalog);
-        let tables: Vec<TableRef> = table_refs
+        let tables: Vec<TableRef> = extract_table_references(sql, catalog)
             .iter()
             .map(|(_, schema, table)| TableRef {
                 schema: schema.clone(),
@@ -224,214 +224,27 @@ impl QueryCoordinator {
             })
             .collect();
 
-        info!(
-            "Extracted {} table references from query: {:?}",
-            tables.len(),
-            tables
-        );
+        info!("Extracted {} table references: {:?}", tables.len(), tables);
 
-        // Extract time range from WHERE clause for partition pruning
+        // Extract time range for partition pruning
         let time_range = extract_time_range(sql).map(|tr| TimeRange {
             min_time: tr.start_timestamp,
             max_time: tr.end_timestamp,
         });
 
-        if let Some(ref tr) = time_range {
-            debug!(
-                "Extracted time range: min={:?}, max={:?}",
-                tr.min_time, tr.max_time
-            );
-        }
-
-        // Determine if query has aggregation/ordering that needs consolidation
+        // Detect aggregation/ordering that needs consolidation
         let sql_upper = sql.to_uppercase();
-        let needs_aggregation = sql_upper.contains("GROUP BY")
-            || sql_upper.contains("ORDER BY")
-            || sql_upper.contains("LIMIT")
-            || sql_upper.contains(" COUNT(")
-            || sql_upper.contains(" SUM(")
-            || sql_upper.contains(" AVG(")
-            || sql_upper.contains(" MIN(")
-            || sql_upper.contains(" MAX(");
+        let needs_aggregation = ["GROUP BY", "ORDER BY", "LIMIT", " COUNT(", " SUM(", " AVG(", " MIN(", " MAX("]
+            .iter()
+            .any(|kw| sql_upper.contains(kw));
 
-        // Get queryable Primary data nodes (Active or Retiring)
+        // Get all queryable nodes
         let all_primary_nodes = self.shard_cache.get_queryable_primary_nodes();
 
-        // ====================================================================
-        // TABLE-LEVEL ROUTING WITH DISTRIBUTION SUPPORT
-        // ====================================================================
-        // For time-series workloads:
-        // - 95% of queries access today's data (single partition)
-        // - Each table is owned by one node (default)
-        // - Route to owner → excellent cache locality
-        //
-        // For distributed tables (percent > 0):
-        // - Data is spread across multiple/all primary nodes
-        // - Query ALL nodes that may have data (scatter-gather)
-        // - Handles scale-in legacy data via legacy_prefixes
-
-        let (table_owners, target_nodes) = if let Some(ref meta_client) = self.meta_client {
-            let mut owners: HashMap<String, String> = HashMap::new();
-            let mut nodes_to_query: HashMap<String, DataNodeInfo> = HashMap::new();
-            let mut any_distributed = false;
-
-            for table in &tables {
-                let table_key = TableKey::new(catalog, &table.schema, &table.table);
-
-                // Check if this table is distributed (writes go to multiple nodes)
-                let distribution_percent =
-                    self.shard_cache
-                        .get_distribution_percent(catalog, &table.schema, &table.table);
-
-                if distribution_percent == 100 {
-                    // Fully distributed: query ALL primary nodes
-                    // Each primary may have a portion of the data
-                    any_distributed = true;
-                    info!(
-                        "Table {} is fully distributed (100%) - querying all {} primaries",
-                        table_key.to_path(),
-                        all_primary_nodes.len()
-                    );
-                    for node in &all_primary_nodes {
-                        owners.insert(table_key.to_path(), node.node_id.clone());
-                        nodes_to_query.insert(node.node_id.clone(), node.clone());
-                    }
-                    continue;
-                } else if distribution_percent > 0 {
-                    // Partially distributed: query a subset of nodes based on hash
-                    any_distributed = true;
-                    let target_count = std::cmp::max(
-                        1,
-                        (all_primary_nodes.len() * distribution_percent as usize) / 100,
-                    );
-                    info!(
-                        "Table {} is {}% distributed - querying {} of {} primaries",
-                        table_key.to_path(),
-                        distribution_percent,
-                        target_count,
-                        all_primary_nodes.len()
-                    );
-                    // Use consistent hash to select which nodes to query
-                    // This ensures the same nodes are selected for the same table
-                    for (i, node) in all_primary_nodes.iter().enumerate() {
-                        if i < target_count {
-                            owners.insert(table_key.to_path(), node.node_id.clone());
-                            nodes_to_query.insert(node.node_id.clone(), node.clone());
-                        }
-                    }
-                    continue;
-                }
-
-                // Non-distributed table: route to owner(s) only
-                // First check local cache
-                if let Some(cached_meta) = self.shard_cache.get_table_meta(&table_key) {
-                    let mut found_active_owner = false;
-                    for owner_id in cached_meta.all_owners() {
-                        if let Some(node) = self.shard_cache.get_data_node(owner_id) {
-                            if node.state == super::shard_cache::NodeState::Active
-                                || node.state == super::shard_cache::NodeState::Retiring
-                            {
-                                owners.insert(table_key.to_path(), owner_id.clone());
-                                nodes_to_query.insert(owner_id.clone(), node);
-                                found_active_owner = true;
-                            }
-                        }
-                    }
-                    if found_active_owner {
-                        continue;
-                    }
-                }
-
-                // Cache miss - query Meta
-                // Table in SQL are countable, performance acceptable
-                match meta_client
-                    .get_table_owner(catalog, &table.schema, &table.table)
-                    .await
-                {
-                    Ok(Some(table_meta)) => {
-                        // Get all owners for scatter-gather
-                        let all_owners = table_meta.all_owners();
-
-                        // Cache table meta including legacy prefixes
-                        self.shard_cache.set_table_owners_with_legacy(
-                            &table_key,
-                            all_owners.to_vec(),
-                            table_meta.legacy_prefixes.clone(),
-                            table_meta.version,
-                        );
-
-                        // Log if table has legacy data from scale-in
-                        if !table_meta.legacy_prefixes.is_empty() {
-                            info!(
-                                "Table {} has {} legacy prefixes from scale-in",
-                                table_key.to_path(),
-                                table_meta.legacy_prefixes.len()
-                            );
-                        }
-
-                        // Add all available owners to query set
-                        for owner_id in all_owners {
-                            if let Some(node) = self.shard_cache.get_data_node(owner_id) {
-                                if node.state == super::shard_cache::NodeState::Active
-                                    || node.state == super::shard_cache::NodeState::Retiring
-                                {
-                                    owners.insert(table_key.to_path(), owner_id.clone());
-                                    nodes_to_query.insert(owner_id.clone(), node);
-                                } else {
-                                    debug!(
-                                        "Table {} owner {} is {:?}, skipping",
-                                        table_key.to_path(),
-                                        owner_id,
-                                        node.state
-                                    );
-                                }
-                            } else {
-                                debug!(
-                                    "Table {} owner {} not found in node list",
-                                    table_key.to_path(),
-                                    owner_id
-                                );
-                            }
-                        }
-
-                        // If no owners are available, log for fallback
-                        if !owners.contains_key(&table_key.to_path()) {
-                            debug!(
-                                "Table {} has no available owners, will use fallback",
-                                table_key.to_path()
-                            );
-                        }
-                    }
-                    Ok(None) => {
-                        debug!(
-                            "Table {} not found in Meta, will broadcast",
-                            table_key.to_path()
-                        );
-                    }
-                    Err(e) => {
-                        warn!("Failed to get table owner from Meta: {}, will broadcast", e);
-                    }
-                }
-            }
-
-            if !owners.is_empty() {
-                let nodes: Vec<DataNodeInfo> = nodes_to_query.into_values().collect();
-                info!(
-                    "Table-level routing: {} tables -> {} nodes (distributed={})",
-                    owners.len(),
-                    nodes.len(),
-                    any_distributed
-                );
-                (Some(owners), nodes)
-            } else {
-                // No table owners found, fall back to broadcast
-                debug!("No table owners found, falling back to broadcast query");
-                (None, all_primary_nodes.clone())
-            }
-        } else {
-            // No MetaClient, use broadcast
-            (None, all_primary_nodes.clone())
-        };
+        // Resolve target nodes for query routing
+        let (table_owners, target_nodes) = self
+            .resolve_query_targets(catalog, &tables, &all_primary_nodes)
+            .await;
 
         // Limit parallel fan-out
         let target_nodes: Vec<_> = target_nodes
@@ -440,9 +253,8 @@ impl QueryCoordinator {
             .collect();
 
         info!(
-            "Planned distributed query to {} nodes for catalog {}: tables={:?}, needs_aggregation={}, table_routing={}",
+            "Planned query: {} nodes, tables={:?}, aggregation={}, table_routing={}",
             target_nodes.len(),
-            catalog,
             tables,
             needs_aggregation,
             table_owners.is_some()
@@ -457,6 +269,207 @@ impl QueryCoordinator {
             needs_aggregation,
             table_owners,
         })
+    }
+
+    /// Resolve target nodes for query routing
+    ///
+    /// Returns (table_owners, target_nodes):
+    /// - table_owners: Map of table -> owner node (if known)
+    /// - target_nodes: List of nodes to query
+    async fn resolve_query_targets(
+        &self,
+        catalog: &str,
+        tables: &[TableRef],
+        all_primary_nodes: &[DataNodeInfo],
+    ) -> (Option<HashMap<String, String>>, Vec<DataNodeInfo>) {
+        let Some(ref meta_client) = self.meta_client else {
+            return (None, all_primary_nodes.to_vec());
+        };
+
+        let mut owners: HashMap<String, String> = HashMap::new();
+        let mut nodes_to_query: HashMap<String, DataNodeInfo> = HashMap::new();
+
+        for table in tables {
+            let table_key = TableKey::new(catalog, &table.schema, &table.table);
+            let distribution_percent = self
+                .shard_cache
+                .get_distribution_percent(catalog, &table.schema, &table.table);
+
+            // Try to resolve from cache first
+            if let Some(cached_meta) = self.shard_cache.get_table_meta(&table_key) {
+                let count = self.add_queryable_owners(
+                    cached_meta.all_owners(),
+                    &table_key,
+                    &mut owners,
+                    &mut nodes_to_query,
+                );
+                if count > 0 {
+                    debug!(
+                        "Table {} resolved from cache: {} owners (dist={}%)",
+                        table_key.to_path(),
+                        count,
+                        distribution_percent
+                    );
+                    continue;
+                }
+            }
+
+            // Cache miss - handle based on distribution mode
+            if distribution_percent > 0 {
+                // Distributed table fallback: use hash-based or all nodes
+                self.add_distributed_fallback(
+                    &table_key,
+                    distribution_percent,
+                    all_primary_nodes,
+                    &mut owners,
+                    &mut nodes_to_query,
+                );
+            } else {
+                // Non-distributed: query Meta for owner
+                self.resolve_from_meta(
+                    meta_client,
+                    catalog,
+                    table,
+                    &table_key,
+                    &mut owners,
+                    &mut nodes_to_query,
+                )
+                .await;
+            }
+        }
+
+        if owners.is_empty() {
+            debug!("No table owners found, falling back to broadcast");
+            (None, all_primary_nodes.to_vec())
+        } else {
+            info!(
+                "Table-level routing: {} tables -> {} nodes",
+                owners.len(),
+                nodes_to_query.len()
+            );
+            (Some(owners), nodes_to_query.into_values().collect())
+        }
+    }
+
+    /// Add queryable owners to the query set, returns count added
+    fn add_queryable_owners(
+        &self,
+        owner_ids: &[String],
+        table_key: &TableKey,
+        owners: &mut HashMap<String, String>,
+        nodes_to_query: &mut HashMap<String, DataNodeInfo>,
+    ) -> usize {
+        let mut count = 0;
+        for owner_id in owner_ids {
+            if let Some(node) = self.shard_cache.get_data_node(owner_id) {
+                if Self::is_queryable(&node) {
+                    owners.insert(table_key.to_path(), owner_id.clone());
+                    nodes_to_query.insert(owner_id.clone(), node);
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    /// Check if a node is queryable (Active or Retiring)
+    fn is_queryable(node: &DataNodeInfo) -> bool {
+        node.state == super::shard_cache::NodeState::Active
+            || node.state == super::shard_cache::NodeState::Retiring
+    }
+
+    /// Add distributed table fallback nodes
+    fn add_distributed_fallback(
+        &self,
+        table_key: &TableKey,
+        distribution_percent: u8,
+        all_primary_nodes: &[DataNodeInfo],
+        owners: &mut HashMap<String, String>,
+        nodes_to_query: &mut HashMap<String, DataNodeInfo>,
+    ) {
+        if distribution_percent >= 100 {
+            // 100%: query all primary nodes
+            warn!(
+                "Table {} (100% dist) has no cached owners - querying all {} primaries",
+                table_key.to_path(),
+                all_primary_nodes.len()
+            );
+            for node in all_primary_nodes {
+                owners.insert(table_key.to_path(), node.node_id.clone());
+                nodes_to_query.insert(node.node_id.clone(), node.clone());
+            }
+        } else {
+            // Partial: use hash-based selection
+            warn!(
+                "Table {} ({}% dist) has no cached owners - using hash fallback",
+                table_key.to_path(),
+                distribution_percent
+            );
+            let target_count = ((all_primary_nodes.len() as f64
+                * distribution_percent as f64
+                / 100.0)
+                .ceil() as usize)
+                .max(1);
+            let start_idx = hash_select_index(table_key, all_primary_nodes.len());
+
+            for i in 0..target_count {
+                let idx = (start_idx + i) % all_primary_nodes.len();
+                let node = &all_primary_nodes[idx];
+                owners.insert(table_key.to_path(), node.node_id.clone());
+                nodes_to_query.insert(node.node_id.clone(), node.clone());
+            }
+        }
+    }
+
+    /// Resolve table owner from Meta service
+    async fn resolve_from_meta(
+        &self,
+        meta_client: &MetaClient,
+        catalog: &str,
+        table: &TableRef,
+        table_key: &TableKey,
+        owners: &mut HashMap<String, String>,
+        nodes_to_query: &mut HashMap<String, DataNodeInfo>,
+    ) {
+        match meta_client
+            .get_table_owner(catalog, &table.schema, &table.table)
+            .await
+        {
+            Ok(Some(table_meta)) => {
+                // Cache the result
+                self.shard_cache.set_table_owners_with_legacy(
+                    table_key,
+                    table_meta.all_owners().to_vec(),
+                    table_meta.legacy_prefixes.clone(),
+                    table_meta.version,
+                );
+
+                if !table_meta.legacy_prefixes.is_empty() {
+                    info!(
+                        "Table {} has {} legacy prefixes",
+                        table_key.to_path(),
+                        table_meta.legacy_prefixes.len()
+                    );
+                }
+
+                // Add queryable owners
+                let count = self.add_queryable_owners(
+                    table_meta.all_owners(),
+                    table_key,
+                    owners,
+                    nodes_to_query,
+                );
+                if count == 0 {
+                    debug!("Table {} has no queryable owners", table_key.to_path());
+                }
+            }
+            Ok(None) => {
+                debug!("Table {} not found in Meta", table_key.to_path());
+            }
+            Err(e) => {
+                warn!("Failed to get table owner from Meta: {}", e);
+            }
+        }
     }
 
     /// Fan-out query to target nodes via Arrow Flight and collect results
