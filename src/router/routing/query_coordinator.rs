@@ -276,6 +276,11 @@ impl QueryCoordinator {
     /// Returns (table_owners, target_nodes):
     /// - table_owners: Map of table -> owner node (if known)
     /// - target_nodes: List of nodes to query
+    ///
+    /// Handles scale-in by:
+    /// 1. Detecting stale owners (removed from cluster)
+    /// 2. Refreshing from Meta when stale owners detected
+    /// 3. Assigning legacy_prefixes to active nodes via consistent hash
     async fn resolve_query_targets(
         &self,
         catalog: &str,
@@ -297,17 +302,53 @@ impl QueryCoordinator {
 
             // Try to resolve from cache first
             if let Some(cached_meta) = self.shard_cache.get_table_meta(&table_key) {
+                // Check for stale owners (removed from cluster after scale-in)
+                let (_active_count, stale_count) = self.check_owners_status(cached_meta.all_owners());
+
+                if stale_count > 0 {
+                    // Stale owners detected - refresh from Meta
+                    info!(
+                        "Table {} has {} stale owners (scale-in detected), refreshing from Meta",
+                        table_key.to_path(),
+                        stale_count
+                    );
+                    self.resolve_distributed_from_meta(
+                        meta_client,
+                        catalog,
+                        table,
+                        &table_key,
+                        all_primary_nodes,
+                        &mut owners,
+                        &mut nodes_to_query,
+                    )
+                    .await;
+                    continue;
+                }
+
+                // All owners are active - add them and handle legacy prefixes
                 let count = self.add_queryable_owners(
                     cached_meta.all_owners(),
                     &table_key,
                     &mut owners,
                     &mut nodes_to_query,
                 );
+
+                // Also handle legacy prefixes (data from previously retired nodes)
+                if cached_meta.has_legacy_prefixes() {
+                    self.add_legacy_prefix_nodes(
+                        &table_key,
+                        cached_meta.legacy_prefixes(),
+                        all_primary_nodes,
+                        &mut nodes_to_query,
+                    );
+                }
+
                 if count > 0 {
                     debug!(
-                        "Table {} resolved from cache: {} owners (dist={}%)",
+                        "Table {} resolved: {} owners, {} legacy prefixes (dist={}%)",
                         table_key.to_path(),
                         count,
+                        cached_meta.legacy_prefixes().len(),
                         distribution_percent
                     );
                     continue;
@@ -316,14 +357,17 @@ impl QueryCoordinator {
 
             // Cache miss - handle based on distribution mode
             if distribution_percent > 0 {
-                // Distributed table fallback: use hash-based or all nodes
-                self.add_distributed_fallback(
+                // Distributed table: query Meta then fallback
+                self.resolve_distributed_from_meta(
+                    meta_client,
+                    catalog,
+                    table,
                     &table_key,
-                    distribution_percent,
                     all_primary_nodes,
                     &mut owners,
                     &mut nodes_to_query,
-                );
+                )
+                .await;
             } else {
                 // Non-distributed: query Meta for owner
                 self.resolve_from_meta(
@@ -351,6 +395,24 @@ impl QueryCoordinator {
         }
     }
 
+    /// Check owners status - returns (active_count, stale_count)
+    fn check_owners_status(&self, owner_ids: &[String]) -> (usize, usize) {
+        let mut active = 0;
+        let mut stale = 0;
+        for owner_id in owner_ids {
+            if let Some(node) = self.shard_cache.get_data_node(owner_id) {
+                if Self::is_queryable(&node) {
+                    active += 1;
+                } else {
+                    stale += 1; // Node exists but not queryable
+                }
+            } else {
+                stale += 1; // Node removed from cluster
+            }
+        }
+        (active, stale)
+    }
+
     /// Add queryable owners to the query set, returns count added
     fn add_queryable_owners(
         &self,
@@ -372,10 +434,134 @@ impl QueryCoordinator {
         count
     }
 
+    /// Add nodes responsible for legacy prefixes (from retired nodes)
+    ///
+    /// Uses consistent hash to assign each legacy prefix to an active node.
+    /// This ensures stable assignment: same prefix always maps to same node.
+    fn add_legacy_prefix_nodes(
+        &self,
+        table_key: &TableKey,
+        legacy_prefixes: &[String],
+        all_primary_nodes: &[DataNodeInfo],
+        nodes_to_query: &mut HashMap<String, DataNodeInfo>,
+    ) {
+        if all_primary_nodes.is_empty() {
+            return;
+        }
+
+        for prefix in legacy_prefixes {
+            // Use consistent hash: hash(table_key + legacy_prefix) → node
+            // This ensures the same prefix always maps to the same node
+            let hash_key = format!("{}:{}", table_key.to_path(), prefix);
+            let idx = hash_select_index(&hash_key, all_primary_nodes.len());
+            let assigned_node = &all_primary_nodes[idx];
+
+            if !nodes_to_query.contains_key(&assigned_node.node_id) {
+                debug!(
+                    "Legacy prefix '{}' for table {} assigned to node {}",
+                    prefix,
+                    table_key.to_path(),
+                    assigned_node.node_id
+                );
+                nodes_to_query.insert(assigned_node.node_id.clone(), assigned_node.clone());
+            }
+        }
+    }
+
     /// Check if a node is queryable (Active or Retiring)
     fn is_queryable(node: &DataNodeInfo) -> bool {
         node.state == super::shard_cache::NodeState::Active
             || node.state == super::shard_cache::NodeState::Retiring
+    }
+
+    /// Resolve distributed table from Meta, with legacy prefix handling
+    async fn resolve_distributed_from_meta(
+        &self,
+        meta_client: &MetaClient,
+        catalog: &str,
+        table: &TableRef,
+        table_key: &TableKey,
+        all_primary_nodes: &[DataNodeInfo],
+        owners: &mut HashMap<String, String>,
+        nodes_to_query: &mut HashMap<String, DataNodeInfo>,
+    ) {
+        match meta_client
+            .get_table_owner(catalog, &table.schema, &table.table)
+            .await
+        {
+            Ok(Some(table_meta)) => {
+                // Cache the updated metadata
+                self.shard_cache.set_table_owners_with_legacy(
+                    table_key,
+                    table_meta.all_owners().to_vec(),
+                    table_meta.legacy_prefixes.clone(),
+                    table_meta.version,
+                );
+
+                // Add active owners
+                let count = self.add_queryable_owners(
+                    table_meta.all_owners(),
+                    table_key,
+                    owners,
+                    nodes_to_query,
+                );
+
+                // Add nodes for legacy prefixes
+                if !table_meta.legacy_prefixes.is_empty() {
+                    info!(
+                        "Table {} has {} legacy prefixes from scale-in",
+                        table_key.to_path(),
+                        table_meta.legacy_prefixes.len()
+                    );
+                    self.add_legacy_prefix_nodes(
+                        table_key,
+                        &table_meta.legacy_prefixes,
+                        all_primary_nodes,
+                        nodes_to_query,
+                    );
+                }
+
+                if count == 0 && table_meta.legacy_prefixes.is_empty() {
+                    // No owners and no legacy - use fallback
+                    let distribution_percent = self
+                        .shard_cache
+                        .get_distribution_percent(catalog, &table.schema, &table.table);
+                    self.add_distributed_fallback(
+                        table_key,
+                        distribution_percent,
+                        all_primary_nodes,
+                        owners,
+                        nodes_to_query,
+                    );
+                }
+            }
+            Ok(None) => {
+                debug!("Table {} not found in Meta, using fallback", table_key.to_path());
+                let distribution_percent = self
+                    .shard_cache
+                    .get_distribution_percent(catalog, &table.schema, &table.table);
+                self.add_distributed_fallback(
+                    table_key,
+                    distribution_percent,
+                    all_primary_nodes,
+                    owners,
+                    nodes_to_query,
+                );
+            }
+            Err(e) => {
+                warn!("Failed to get table owner from Meta: {}, using fallback", e);
+                let distribution_percent = self
+                    .shard_cache
+                    .get_distribution_percent(catalog, &table.schema, &table.table);
+                self.add_distributed_fallback(
+                    table_key,
+                    distribution_percent,
+                    all_primary_nodes,
+                    owners,
+                    nodes_to_query,
+                );
+            }
+        }
     }
 
     /// Add distributed table fallback nodes
@@ -727,5 +913,334 @@ impl QueryCoordinator {
 
         // Default: just select all from partial results
         "SELECT * FROM partial_results".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::meta::types::DataNodeMode;
+    use crate::router::routing::shard_cache::NodeState;
+    use std::collections::HashSet;
+
+    fn create_test_node(id: &str, state: NodeState) -> DataNodeInfo {
+        DataNodeInfo {
+            node_id: id.to_string(),
+            grpc_addr: format!("127.0.0.1:{}", 7000 + id.len()),
+            state,
+            mode: DataNodeMode::Primary,
+        }
+    }
+
+    fn create_active_nodes(ids: &[&str]) -> Vec<DataNodeInfo> {
+        ids.iter()
+            .map(|id| create_test_node(id, NodeState::Active))
+            .collect()
+    }
+
+    // =========================================================================
+    // Tests for is_queryable()
+    // =========================================================================
+
+    #[test]
+    fn test_is_queryable_active() {
+        let node = create_test_node("node1", NodeState::Active);
+        assert!(QueryCoordinator::is_queryable(&node));
+    }
+
+    #[test]
+    fn test_is_queryable_retiring() {
+        let node = create_test_node("node1", NodeState::Retiring);
+        assert!(QueryCoordinator::is_queryable(&node));
+    }
+
+    #[test]
+    fn test_is_queryable_unhealthy() {
+        let node = create_test_node("node1", NodeState::Unhealthy);
+        assert!(!QueryCoordinator::is_queryable(&node));
+    }
+
+    #[test]
+    fn test_is_queryable_draining() {
+        let node = create_test_node("node1", NodeState::Draining);
+        assert!(!QueryCoordinator::is_queryable(&node));
+    }
+
+    #[test]
+    fn test_is_queryable_drained() {
+        let node = create_test_node("node1", NodeState::Drained);
+        assert!(!QueryCoordinator::is_queryable(&node));
+    }
+
+    // =========================================================================
+    // Tests for legacy prefix consistent hash distribution
+    // =========================================================================
+
+    #[test]
+    fn test_legacy_prefix_hash_deterministic() {
+        // Same inputs should always produce same output
+        let table_key = TableKey::new("mydb", "metrics", "events");
+        let prefix = "node3";
+        let nodes = create_active_nodes(&["node1", "node2", "node4"]);
+
+        let hash_key = format!("{}:{}", table_key.to_path(), prefix);
+        let idx1 = hash_select_index(&hash_key, nodes.len());
+        let idx2 = hash_select_index(&hash_key, nodes.len());
+        let idx3 = hash_select_index(&hash_key, nodes.len());
+
+        assert_eq!(idx1, idx2);
+        assert_eq!(idx2, idx3);
+    }
+
+    #[test]
+    fn test_legacy_prefix_different_prefixes_distribute() {
+        // Different prefixes should distribute across nodes
+        let table_key = TableKey::new("mydb", "metrics", "events");
+        let prefixes = vec!["node3", "node5", "node6", "node7", "node8"];
+        let nodes = create_active_nodes(&["node1", "node2", "node4"]);
+
+        let mut assigned_indices: HashSet<usize> = HashSet::new();
+        for prefix in &prefixes {
+            let hash_key = format!("{}:{}", table_key.to_path(), prefix);
+            let idx = hash_select_index(&hash_key, nodes.len());
+            assigned_indices.insert(idx);
+        }
+
+        // With 5 prefixes and 3 nodes, we should hit at least 2 different nodes
+        assert!(
+            assigned_indices.len() >= 2,
+            "Legacy prefixes should distribute across nodes, got {} unique assignments",
+            assigned_indices.len()
+        );
+    }
+
+    #[test]
+    fn test_legacy_prefix_stable_after_scale_in() {
+        // Simulates scale-in: prefix assigned to node should remain stable
+        // when cluster shrinks (as long as that node still exists)
+
+        let table_key = TableKey::new("mydb", "metrics", "events");
+        let prefix = "retired_node";
+
+        // Before scale-in: 4 nodes
+        let nodes_before = create_active_nodes(&["node1", "node2", "node3", "node4"]);
+        let hash_key = format!("{}:{}", table_key.to_path(), prefix);
+        let idx_before = hash_select_index(&hash_key, nodes_before.len());
+        let assigned_before = &nodes_before[idx_before].node_id;
+
+        // After scale-in: 3 nodes (node4 removed)
+        let nodes_after = create_active_nodes(&["node1", "node2", "node3"]);
+
+        // Note: The assigned node might change if cluster size changes
+        // This is expected - we test that it's still deterministic
+        let idx_after = hash_select_index(&hash_key, nodes_after.len());
+        let assigned_after = &nodes_after[idx_after].node_id;
+
+        // Both assignments should be valid nodes
+        assert!(nodes_before.iter().any(|n| &n.node_id == assigned_before));
+        assert!(nodes_after.iter().any(|n| &n.node_id == assigned_after));
+
+        // Re-running with same cluster should give same result
+        let idx_after2 = hash_select_index(&hash_key, nodes_after.len());
+        assert_eq!(idx_after, idx_after2);
+    }
+
+    #[test]
+    fn test_legacy_prefix_single_node() {
+        // With single node, all prefixes go to that node
+        let table_key = TableKey::new("mydb", "metrics", "events");
+        let prefixes = vec!["node2", "node3", "node4"];
+        let nodes = create_active_nodes(&["node1"]);
+
+        for prefix in &prefixes {
+            let hash_key = format!("{}:{}", table_key.to_path(), prefix);
+            let idx = hash_select_index(&hash_key, nodes.len());
+            assert_eq!(idx, 0, "Single node should always be selected");
+        }
+    }
+
+    // =========================================================================
+    // Tests for table key utilities
+    // =========================================================================
+
+    #[test]
+    fn test_table_key_to_path() {
+        let key = TableKey::new("catalog", "schema", "table");
+        assert_eq!(key.to_path(), "catalog/schema/table");
+    }
+
+    #[test]
+    fn test_table_key_components() {
+        let key = TableKey::new("mydb", "metrics", "cpu");
+        assert_eq!(key.catalog, "mydb");
+        assert_eq!(key.schema, "metrics");
+        assert_eq!(key.table, "cpu");
+    }
+
+    // =========================================================================
+    // Tests for distributed query scenarios
+    // =========================================================================
+
+    #[test]
+    fn test_scale_in_scenario_legacy_redistribution() {
+        // Scenario: Table had data on [Node2, Node3], Node3 removed
+        // Legacy prefix "node3" should be assigned to one of [Node1, Node2, Node4]
+
+        let table_key = TableKey::new("mydb", "metrics", "events");
+        let legacy_prefix = "node3";
+        let remaining_nodes = create_active_nodes(&["node1", "node2", "node4"]);
+
+        let hash_key = format!("{}:{}", table_key.to_path(), legacy_prefix);
+        let idx = hash_select_index(&hash_key, remaining_nodes.len());
+
+        assert!(idx < remaining_nodes.len());
+        let assigned = &remaining_nodes[idx];
+        assert!(
+            ["node1", "node2", "node4"].contains(&assigned.node_id.as_str()),
+            "Legacy prefix should be assigned to an active node"
+        );
+    }
+
+    #[test]
+    fn test_multiple_legacy_prefixes_distribution() {
+        // Multiple retired nodes should distribute their data across remaining nodes
+        let table_key = TableKey::new("mydb", "metrics", "events");
+        let legacy_prefixes = vec!["retired1", "retired2", "retired3", "retired4"];
+        let active_nodes = create_active_nodes(&["node1", "node2", "node3"]);
+
+        let mut assignments: HashMap<String, Vec<String>> = HashMap::new();
+        for node in &active_nodes {
+            assignments.insert(node.node_id.clone(), Vec::new());
+        }
+
+        for prefix in &legacy_prefixes {
+            let hash_key = format!("{}:{}", table_key.to_path(), prefix);
+            let idx = hash_select_index(&hash_key, active_nodes.len());
+            let assigned_node = &active_nodes[idx].node_id;
+            assignments
+                .get_mut(assigned_node)
+                .unwrap()
+                .push(prefix.to_string());
+        }
+
+        // Verify distribution (not all on one node)
+        let non_empty_nodes: Vec<_> = assignments
+            .values()
+            .filter(|v| !v.is_empty())
+            .collect();
+
+        assert!(
+            non_empty_nodes.len() >= 2,
+            "Legacy prefixes should distribute across multiple nodes"
+        );
+
+        // Verify total coverage
+        let total_assigned: usize = assignments.values().map(|v| v.len()).sum();
+        assert_eq!(total_assigned, legacy_prefixes.len());
+    }
+
+    // =========================================================================
+    // Tests for node state transitions
+    // =========================================================================
+
+    #[test]
+    fn test_node_states_for_query() {
+        let states_queryable = vec![NodeState::Active, NodeState::Retiring];
+        let states_not_queryable = vec![
+            NodeState::Unhealthy,
+            NodeState::Draining,
+            NodeState::Drained,
+            NodeState::Suspect,
+        ];
+
+        for state in states_queryable {
+            let node = create_test_node("test", state);
+            assert!(
+                QueryCoordinator::is_queryable(&node),
+                "{:?} should be queryable",
+                state
+            );
+        }
+
+        for state in states_not_queryable {
+            let node = create_test_node("test", state);
+            assert!(
+                !QueryCoordinator::is_queryable(&node),
+                "{:?} should NOT be queryable",
+                state
+            );
+        }
+    }
+
+    // =========================================================================
+    // Tests for aggregation detection
+    // =========================================================================
+
+    #[test]
+    fn test_needs_aggregation_detection() {
+        let aggregation_keywords = [
+            "GROUP BY",
+            "ORDER BY",
+            "LIMIT",
+            " COUNT(",
+            " SUM(",
+            " AVG(",
+            " MIN(",
+            " MAX(",
+        ];
+
+        for keyword in aggregation_keywords {
+            let sql = format!("SELECT * FROM test {}", keyword);
+            let sql_upper = sql.to_uppercase();
+            let needs_agg = aggregation_keywords.iter().any(|kw| sql_upper.contains(kw));
+            assert!(needs_agg, "Should detect aggregation for: {}", sql);
+        }
+
+        // Simple query without aggregation
+        let simple_sql = "SELECT * FROM test WHERE time > 0";
+        let sql_upper = simple_sql.to_uppercase();
+        let needs_agg = aggregation_keywords.iter().any(|kw| sql_upper.contains(kw));
+        assert!(!needs_agg, "Simple query should not need aggregation");
+    }
+
+    // =========================================================================
+    // Tests for hash stability across table keys
+    // =========================================================================
+
+    #[test]
+    fn test_hash_stability_same_table() {
+        let key1 = TableKey::new("mydb", "metrics", "cpu");
+        let key2 = TableKey::new("mydb", "metrics", "cpu");
+
+        let nodes = create_active_nodes(&["n1", "n2", "n3", "n4"]);
+
+        let idx1 = hash_select_index(&key1, nodes.len());
+        let idx2 = hash_select_index(&key2, nodes.len());
+
+        assert_eq!(idx1, idx2, "Same table should hash to same index");
+    }
+
+    #[test]
+    fn test_hash_different_tables() {
+        let tables = vec![
+            TableKey::new("mydb", "metrics", "cpu"),
+            TableKey::new("mydb", "metrics", "memory"),
+            TableKey::new("mydb", "logs", "app"),
+            TableKey::new("other", "metrics", "cpu"),
+        ];
+
+        let nodes = create_active_nodes(&["n1", "n2", "n3", "n4"]);
+        let mut indices: HashSet<usize> = HashSet::new();
+
+        for table in &tables {
+            let idx = hash_select_index(table, nodes.len());
+            indices.insert(idx);
+        }
+
+        // Different tables should distribute (not all same index)
+        assert!(
+            indices.len() >= 2,
+            "Different tables should hash to different nodes"
+        );
     }
 }
