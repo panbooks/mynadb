@@ -1063,16 +1063,21 @@ mod tests {
             lease_ttl_ms: 30000,
         });
 
-        // Verify node exists
-        assert!(sm.get_node("data-1").is_some());
+        // Verify node exists and is Active
+        let node = sm.get_node("data-1");
+        assert!(node.is_some());
+        assert_eq!(node.unwrap().state, NodeState::Active);
 
         // Deregister
         sm.apply_command(MetaCommand::DeregisterNode {
             node_id: "data-1".to_string(),
         });
 
-        // Verify node removed
-        assert!(sm.get_node("data-1").is_none());
+        // Verify node is marked as Drained (not removed)
+        // Node stays in db for background cleanup job to process
+        let node = sm.get_node("data-1");
+        assert!(node.is_some());
+        assert_eq!(node.unwrap().state, NodeState::Drained);
     }
 
     #[test]

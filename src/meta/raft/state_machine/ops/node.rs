@@ -278,38 +278,24 @@ impl MetaStateMachine {
             }
         }
 
-        // Clean up table ownership: remove this node from multi-owner tables
-        // Note: Sole-owner tables are left for background rebalancer to handle
-        // (requires finding a suitable new owner which is async)
-        let tables = self.list_tables_for_node(node_id);
-        for table in tables {
-            if table.owner_node_ids.len() > 1 {
-                // Safe to remove - other owners exist
-                let mut updated = table.clone();
-                updated.remove_owner(node_id);
-                let table_key = format!(
-                    "{}{}",
-                    keys::PREFIX_TABLE,
-                    format!("{}/{}/{}", table.catalog, table.schema, table.table)
-                );
-                let _ = self
-                    .db
-                    .insert(table_key.as_bytes(), bincode::serialize(&updated).unwrap());
-                info!(
-                    "Deregister: removed {} from table {}.{}.{} owners (remaining: {:?})",
-                    node_id, table.catalog, table.schema, table.table, updated.owner_node_ids
-                );
-            } else {
-                // Sole owner - leave for background rebalancer
-                warn!(
-                    "Deregister: node {} is sole owner of table {}.{}.{}, will be reassigned by rebalancer",
-                    node_id, table.catalog, table.schema, table.table
-                );
-            }
+        // Mark node as Drained instead of removing immediately
+        // This allows:
+        // 1. get_table_owner() to filter out this node (returns active owners only)
+        // 2. Background job to clean up table ownership asynchronously
+        // 3. Avoids O(n) table scan blocking deregister_node
+        if let Some(mut node_info) = info.clone() {
+            node_info.state = NodeState::Drained;
+            let _ = self
+                .db
+                .insert(key.as_bytes(), bincode::serialize(&node_info).unwrap());
+            info!(
+                "Deregister: marked node {} as Drained (will be cleaned up by background job)",
+                node_id
+            );
+        } else {
+            // Node doesn't exist, just remove any stale data
+            let _ = self.db.remove(key.as_bytes());
         }
-
-        // Remove node
-        let _ = self.db.remove(key.as_bytes());
 
         // Remove any leases for this node
         let prefix = keys::PREFIX_LEASE;

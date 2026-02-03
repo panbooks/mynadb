@@ -11,7 +11,7 @@
 //! - Single routing lookup per query (scatter-gather for multi-owner)
 //! - Excellent cache locality for time-series workloads
 
-use crate::meta::types::{keys, Event, EventType, MetaResponse, TableMeta, TableStatsDelta};
+use crate::meta::types::{keys, Event, EventType, MetaResponse, NodeState, TableMeta, TableStatsDelta};
 use tracing::{debug, info, warn};
 
 use super::super::MetaStateMachine;
@@ -531,33 +531,63 @@ impl MetaStateMachine {
 
     /// Get the primary owner node for a table (for new write routing)
     ///
-    /// This returns the primary owner (first in list) for routing new writes.
+    /// This returns the first non-Drained owner for routing new writes.
+    /// Filters out Drained nodes to avoid routing to departed nodes.
+    /// If a node doesn't exist in Meta, it's returned (could be legacy/external).
     /// For queries, use get_table_all_owners() to scatter-gather.
     pub fn get_table_owner(&self, catalog: &str, schema: &str, table: &str) -> Option<String> {
         let key = TableMeta::key_for(catalog, schema, table);
 
-        self.db
+        let meta = self
+            .db
             .get(key.as_bytes())
             .ok()
             .flatten()
-            .and_then(|data| bincode::deserialize::<TableMeta>(&data).ok())
-            .and_then(|meta| meta.primary_owner().map(|s| s.to_string()))
+            .and_then(|data| bincode::deserialize::<TableMeta>(&data).ok())?;
+
+        // Return first non-Drained owner
+        // - If node exists and is Active → return (good)
+        // - If node exists and is Drained → skip (departed)
+        // - If node doesn't exist → return (legacy/external, let Router handle)
+        for owner_id in &meta.owner_node_ids {
+            match self.get_node(owner_id) {
+                Some(node) if node.state == NodeState::Drained => continue, // Skip drained
+                _ => return Some(owner_id.clone()), // Active or unknown → return
+            }
+        }
+        None
     }
 
     /// Get all owner nodes for a table (for scatter-gather queries)
     ///
-    /// Returns all nodes that have data for this table.
+    /// Returns all non-Drained nodes that have data for this table.
+    /// Filters out Drained nodes to avoid routing to departed nodes.
+    /// If a node doesn't exist in Meta, it's included (could be legacy/external).
     /// Queries should fan-out to all owners to get complete results.
     pub fn get_table_all_owners(&self, catalog: &str, schema: &str, table: &str) -> Vec<String> {
         let key = TableMeta::key_for(catalog, schema, table);
 
-        self.db
+        let meta = match self
+            .db
             .get(key.as_bytes())
             .ok()
             .flatten()
             .and_then(|data| bincode::deserialize::<TableMeta>(&data).ok())
-            .map(|meta| meta.owner_node_ids)
-            .unwrap_or_default()
+        {
+            Some(m) => m,
+            None => return Vec::new(),
+        };
+
+        // Filter out Drained owners, keep Active and unknown (legacy/external)
+        meta.owner_node_ids
+            .into_iter()
+            .filter(|owner_id| {
+                match self.get_node(owner_id) {
+                    Some(node) => node.state != NodeState::Drained,
+                    None => true, // Unknown node → include (legacy/external)
+                }
+            })
+            .collect()
     }
 
     /// Get full table metadata

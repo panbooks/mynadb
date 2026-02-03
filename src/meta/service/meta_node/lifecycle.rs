@@ -1,7 +1,7 @@
 //! Background tasks, rebalancing, and shutdown
 
 use super::MetaNode;
-use crate::meta::types::{MetaCommand, NodeRole, NodeState};
+use crate::meta::types::{keys, MetaCommand, NodeRole, NodeState};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
@@ -56,8 +56,11 @@ impl MetaNode {
                         continue;
                     }
 
-                    // Run rebalance check
+                    // Run rebalance check (removes dead owners from tables)
                     node.run_table_rebalance(auto_remove, auto_reassign).await;
+
+                    // Clean up Drained nodes that have no remaining table ownership
+                    node.cleanup_drained_nodes().await;
                 }
             });
         }
@@ -166,6 +169,49 @@ impl MetaNode {
                 "Rebalance completed: {} dead owners removed, {} tables reassigned",
                 dead_removed, tables_reassigned
             );
+        }
+    }
+
+    /// Clean up Drained nodes that have no remaining table ownership
+    ///
+    /// After deregister_node marks a node as Drained, the rebalancer removes it
+    /// from table ownership. This function removes the node entry once all its
+    /// tables have been cleaned up.
+    pub(crate) async fn cleanup_drained_nodes(&self) {
+        // Get all Drained data nodes
+        let drained_nodes = self
+            .state_machine
+            .list_nodes(Some(NodeRole::Data), Some(NodeState::Drained));
+
+        if drained_nodes.is_empty() {
+            return;
+        }
+
+        debug!("Found {} Drained nodes to check for cleanup", drained_nodes.len());
+
+        for node in drained_nodes {
+            // Check if node still owns any tables
+            let owned_tables = self.state_machine.list_tables_for_node(&node.node_id);
+
+            if owned_tables.is_empty() {
+                // Safe to remove - no more table ownership
+                let key = format!("{}{}", keys::PREFIX_NODE, node.node_id);
+                if let Err(e) = self.state_machine.db().remove(key.as_bytes()) {
+                    warn!("Failed to remove Drained node {}: {}", node.node_id, e);
+                } else {
+                    let _ = self.state_machine.db().flush();
+                    info!(
+                        "Cleaned up Drained node {} (no remaining table ownership)",
+                        node.node_id
+                    );
+                }
+            } else {
+                debug!(
+                    "Drained node {} still owns {} tables, waiting for rebalancer",
+                    node.node_id,
+                    owned_tables.len()
+                );
+            }
         }
     }
 
