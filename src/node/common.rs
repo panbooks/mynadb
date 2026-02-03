@@ -179,55 +179,6 @@ pub async fn init_file_cache(
     }
 }
 
-/// Start background flush with metadata registration callback
-pub fn start_background_flush_with_metadata(
-    cache: cache::DataCache,
-    interval_secs: u64,
-    metadata_manager: catalog::SharedMetadataManager,
-) {
-    let metadata_for_flush = metadata_manager.clone();
-    cache.start_background_flush_with_callback(
-        interval_secs,
-        Some(move |files: Vec<parquet_writer::FileWriteResult>| {
-            let manager = metadata_for_flush.clone();
-            tokio::spawn(async move {
-                for file in files {
-                    let file_name = file
-                        .path
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&file.path)
-                        .to_string();
-
-                    let file_info = catalog::FileInfo {
-                        path: file.path.clone(),
-                        file_name,
-                        catalog: file.catalog.clone(),
-                        schema: file.schema.clone(),
-                        table: file.table.clone(),
-                        partition_key: file.partition_key.clone(),
-                        size_bytes: file.size_bytes,
-                        row_count: file.row_count,
-                        level: file.level,
-                        min_timestamp: None,
-                        max_timestamp: None,
-                        created_at: chrono::Utc::now().timestamp_millis(),
-                        row_group_count: 1,
-                        column_stats: None,
-                        etag: None,
-                    };
-                    if let Err(e) = manager.register_file(file_info).await {
-                        warn!("Failed to register file {}: {}", file.path, e);
-                    }
-                }
-                if let Err(e) = manager.save().await {
-                    warn!("Failed to save metadata after flush: {}", e);
-                }
-            });
-        }),
-    );
-}
-
 /// Start background flush with metadata registration AND query engine table refresh
 ///
 /// This is the correct function to use for standalone mode. It ensures that after
@@ -326,152 +277,17 @@ pub fn start_background_flush_with_query_engine(
 ///
 /// The Data node owns all partitions for tables it creates. Files are
 /// discovered via S3 listing at query time, not stored in Meta.
+///
+/// When `replication_manager` is provided (Primary nodes with replication),
+/// also broadcasts FlushCheckpoint to all Standby nodes after each flush.
 pub fn start_background_flush_with_table_routing(
     cache: cache::DataCache,
     interval_secs: u64,
     meta_client: Arc<crate::meta::client::MetaClient>,
     query_engine: Arc<query_engine::QueryEngine>,
     node_id: String,
+    replication_manager: Option<Arc<crate::data::replication::ReplicationManager>>,
 ) {
-    use crate::meta::types::TableStatsDelta;
-
-    let meta_for_flush = meta_client;
-    let qe_for_flush = query_engine;
-    let node_id_for_flush = node_id;
-
-    cache.start_background_flush_with_callback(
-        interval_secs,
-        Some(move |files: Vec<parquet_writer::FileWriteResult>| {
-            let client = meta_for_flush.clone();
-            let qe = qe_for_flush.clone();
-            let node_id = node_id_for_flush.clone();
-
-            tokio::spawn(async move {
-                if files.is_empty() {
-                    return;
-                }
-
-                // Aggregate stats per table
-                let mut table_stats: std::collections::HashMap<
-                    (String, String, String),
-                    TableStatsDelta,
-                > = std::collections::HashMap::new();
-
-                // Track partitions we've seen for each table (to count new partitions)
-                let mut seen_partitions: std::collections::HashMap<
-                    (String, String, String),
-                    std::collections::HashSet<String>,
-                > = std::collections::HashMap::new();
-
-                for file in &files {
-                    let key = (
-                        file.catalog.clone(),
-                        file.schema.clone(),
-                        file.table.clone(),
-                    );
-
-                    let partitions = seen_partitions.entry(key.clone()).or_default();
-                    let is_new_partition = partitions.insert(file.partition_key.clone());
-
-                    let delta = table_stats.entry(key).or_insert_with(TableStatsDelta::new);
-                    delta.bytes_delta += file.size_bytes as i64;
-                    delta.rows_delta += file.row_count as i64;
-                    delta.files_delta += 1;
-                    if is_new_partition {
-                        delta.partition_count_delta += 1;
-                    }
-                    // Update newest partition
-                    if delta.newest_partition.is_none()
-                        || file.partition_key > *delta.newest_partition.as_ref().unwrap()
-                    {
-                        delta.newest_partition = Some(file.partition_key.clone());
-                    }
-                }
-
-                // Register/update each table with Meta
-                for ((catalog, schema, table), delta) in table_stats {
-                    // First, ensure table is registered (idempotent)
-                    match client
-                        .register_table(&catalog, &schema, &table, &node_id)
-                        .await
-                    {
-                        Ok((already_exists, current_owner, _)) => {
-                            if already_exists && current_owner != node_id {
-                                // Table owned by another node - this shouldn't happen
-                                // in normal operation but log it
-                                warn!(
-                                    "Table {}.{}.{} owned by {} but {} is writing to it",
-                                    catalog, schema, table, current_owner, node_id
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Failed to register table {}.{}.{}: {}",
-                                catalog, schema, table, e
-                            );
-                            continue;
-                        }
-                    }
-
-                    // Then update stats
-                    match client
-                        .update_table_stats(&catalog, &schema, &table, delta.clone())
-                        .await
-                    {
-                        Ok(version) => {
-                            debug!(
-                                "Updated table stats {}.{}.{} v{} (+{} bytes, +{} rows, +{} files)",
-                                catalog,
-                                schema,
-                                table,
-                                version,
-                                delta.bytes_delta,
-                                delta.rows_delta,
-                                delta.files_delta
-                            );
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Failed to update table stats {}.{}.{}: {}",
-                                catalog, schema, table, e
-                            );
-                        }
-                    }
-
-                    // Refresh QueryEngine registration
-                    debug!(
-                        "Refreshing table after flush: {}.{}.{}",
-                        catalog, schema, table
-                    );
-                    qe.refresh_table_after_flush(&catalog, &schema, &table);
-                }
-
-                info!(
-                    "Background flush complete: {} files across {} tables (table-level routing)",
-                    files.len(),
-                    seen_partitions.len()
-                );
-            });
-        }),
-    );
-}
-
-/// Start background flush with table-level Meta registration, QueryEngine refresh, AND FlushCheckpoint broadcast
-///
-/// This version is for Primary nodes with replication enabled. After each flush:
-/// 1. Register/update tables with Meta service (table-level routing)
-/// 2. Refresh QueryEngine table registrations
-/// 3. Broadcast FlushCheckpoint to all Standby nodes
-pub fn start_background_flush_with_replication(
-    cache: cache::DataCache,
-    interval_secs: u64,
-    meta_client: Arc<crate::meta::client::MetaClient>,
-    query_engine: Arc<query_engine::QueryEngine>,
-    replication_manager: Arc<crate::data::replication::ReplicationManager>,
-    node_id: String,
-) {
-    use crate::data::replication::types::FlushCheckpoint;
     use crate::meta::types::TableStatsDelta;
 
     let meta_for_flush = meta_client;
@@ -492,16 +308,19 @@ pub fn start_background_flush_with_replication(
                     return;
                 }
 
-                // Get the current sequence number BEFORE processing
-                let flushed_seq = repl_manager.current_seq();
-                let total_rows: u64 = files.iter().map(|f| f.row_count).sum();
-                let files_count = files.len() as u32;
+                // For replication: capture sequence number before processing
+                let repl_context = repl_manager.as_ref().map(|rm| {
+                    let seq = rm.current_seq();
+                    let total_rows: u64 = files.iter().map(|f| f.row_count).sum();
+                    let files_count = files.len() as u32;
+                    (rm.clone(), seq, files_count, total_rows)
+                });
 
-                // Aggregate stats per table (catalog, schema, table) -> (bytes, rows, files, partitions)
-                let mut table_stats: HashMap<
-                    (String, String, String),
-                    (i64, i64, i64, HashSet<String>),
-                > = HashMap::new();
+                // Aggregate stats per table
+                let mut table_stats: HashMap<(String, String, String), TableStatsDelta> =
+                    HashMap::new();
+                let mut seen_partitions: HashMap<(String, String, String), HashSet<String>> =
+                    HashMap::new();
 
                 for file in &files {
                     let key = (
@@ -509,85 +328,96 @@ pub fn start_background_flush_with_replication(
                         file.schema.clone(),
                         file.table.clone(),
                     );
-                    let entry = table_stats.entry(key).or_insert((0, 0, 0, HashSet::new()));
-                    entry.0 += file.size_bytes as i64;
-                    entry.1 += file.row_count as i64;
-                    entry.2 += 1;
-                    entry.3.insert(file.partition_key.clone());
+
+                    let partitions = seen_partitions.entry(key.clone()).or_default();
+                    let is_new_partition = partitions.insert(file.partition_key.clone());
+
+                    let delta = table_stats.entry(key).or_insert_with(TableStatsDelta::new);
+                    delta.bytes_delta += file.size_bytes as i64;
+                    delta.rows_delta += file.row_count as i64;
+                    delta.files_delta += 1;
+                    if is_new_partition {
+                        delta.partition_count_delta += 1;
+                    }
+                    if delta.newest_partition.is_none()
+                        || file.partition_key > *delta.newest_partition.as_ref().unwrap()
+                    {
+                        delta.newest_partition = Some(file.partition_key.clone());
+                    }
                 }
 
-                // Register tables and update stats with Meta (table-level routing)
-                for ((catalog, schema, table), (bytes, rows, file_count, partitions)) in
-                    &table_stats
-                {
-                    // First ensure table is registered
+                // Register/update each table with Meta
+                for ((catalog, schema, table), delta) in &table_stats {
+                    // Ensure table is registered (idempotent)
                     match client
                         .register_table(catalog, schema, table, &node_id)
                         .await
                     {
-                        Ok(_) => {
-                            debug!("Table registered: {}.{}.{}", catalog, schema, table);
-                        }
-                        Err(e) if e.contains("already exists") => {
-                            // Table already registered, that's fine
+                        Ok((already_exists, current_owner, _)) => {
+                            if already_exists && current_owner != node_id {
+                                warn!(
+                                    "Table {}.{}.{} owned by {} but {} is writing to it",
+                                    catalog, schema, table, current_owner, node_id
+                                );
+                            }
                         }
                         Err(e) => {
                             warn!(
                                 "Failed to register table {}.{}.{}: {}",
                                 catalog, schema, table, e
                             );
+                            continue;
                         }
                     }
 
-                    // Then update stats
-                    let newest_partition = partitions.iter().max().cloned();
-                    let delta = TableStatsDelta {
-                        partition_count_delta: partitions.len() as i64,
-                        bytes_delta: *bytes,
-                        rows_delta: *rows,
-                        files_delta: *file_count,
-                        newest_partition,
-                        min_time: 0,
-                        max_time: 0,
-                    };
-
-                    if let Err(e) = client
-                        .update_table_stats(catalog, schema, table, delta)
+                    // Update stats
+                    match client
+                        .update_table_stats(catalog, schema, table, delta.clone())
                         .await
                     {
-                        warn!(
-                            "Failed to update stats for {}.{}.{}: {}",
-                            catalog, schema, table, e
-                        );
+                        Ok(version) => {
+                            debug!(
+                                "Updated table stats {}.{}.{} v{} (+{} bytes, +{} rows, +{} files)",
+                                catalog, schema, table, version,
+                                delta.bytes_delta, delta.rows_delta, delta.files_delta
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to update table stats {}.{}.{}: {}",
+                                catalog, schema, table, e
+                            );
+                        }
                     }
 
                     // Refresh QueryEngine registration
-                    debug!(
-                        "Refreshing table after flush: {}.{}.{}",
-                        catalog, schema, table
-                    );
+                    debug!("Refreshing table after flush: {}.{}.{}", catalog, schema, table);
                     qe.refresh_table_after_flush(catalog, schema, table);
                 }
 
-                // Record the flush and broadcast FlushCheckpoint to all standbys
-                repl_manager.record_flush(flushed_seq);
+                // Replication: broadcast FlushCheckpoint to standbys
+                if let Some((rm, flushed_seq, files_count, total_rows)) = repl_context {
+                    use crate::data::replication::types::FlushCheckpoint;
 
-                let checkpoint = FlushCheckpoint::with_metrics(
-                    node_id.clone(),
-                    flushed_seq,
-                    files_count,
-                    total_rows,
-                );
+                    rm.record_flush(flushed_seq);
+                    let checkpoint = FlushCheckpoint::with_metrics(
+                        node_id.clone(),
+                        flushed_seq,
+                        files_count,
+                        total_rows,
+                    );
+                    let notified = rm.broadcast_flush_checkpoint(checkpoint).await;
 
-                let notified = repl_manager.broadcast_flush_checkpoint(checkpoint).await;
-
-                info!(
-                    "Background flush complete: {} files, {} tables, {} standbys notified (seq={})",
-                    files_count,
-                    table_stats.len(),
-                    notified,
-                    flushed_seq
-                );
+                    info!(
+                        "Background flush complete: {} files, {} tables, {} standbys notified (seq={})",
+                        files_count, table_stats.len(), notified, flushed_seq
+                    );
+                } else {
+                    info!(
+                        "Background flush complete: {} files across {} tables",
+                        files.len(), table_stats.len()
+                    );
+                }
             });
         }),
     );

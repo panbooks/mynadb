@@ -335,28 +335,21 @@ fn setup_background_flush(
     query_engine: Arc<QueryEngine>,
     node_id: &str,
 ) {
-    match (meta_client, replication_manager) {
-        (Some(client), Some(repl_manager)) => {
-            common::start_background_flush_with_replication(
-                (**data_cache).clone(),
-                config.cache.flush_interval_secs,
-                Arc::clone(client),
-                query_engine,
-                Arc::clone(repl_manager),
-                node_id.to_string(),
-            );
-            info!("Background flush enabled with replication checkpoint broadcast");
-        }
-        (Some(client), None) => {
+    match meta_client {
+        Some(client) => {
             common::start_background_flush_with_table_routing(
                 (**data_cache).clone(),
                 config.cache.flush_interval_secs,
                 Arc::clone(client),
                 query_engine,
                 node_id.to_string(),
+                replication_manager.as_ref().map(Arc::clone),
             );
+            if replication_manager.is_some() {
+                info!("Background flush enabled with replication checkpoint broadcast");
+            }
         }
-        (None, _) => {
+        None => {
             (**data_cache)
                 .clone()
                 .start_background_flush(config.cache.flush_interval_secs);
