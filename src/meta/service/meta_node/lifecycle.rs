@@ -177,6 +177,8 @@ impl MetaNode {
     /// After deregister_node marks a node as Drained, the rebalancer removes it
     /// from table ownership. This function removes the node entry once all its
     /// tables have been cleaned up.
+    ///
+    /// Optimized: Single table scan O(M) + O(N) node checks instead of O(N × M)
     pub(crate) async fn cleanup_drained_nodes(&self) {
         // Get all Drained data nodes
         let drained_nodes = self
@@ -189,29 +191,36 @@ impl MetaNode {
 
         debug!("Found {} Drained nodes to check for cleanup", drained_nodes.len());
 
-        for node in drained_nodes {
-            // Check if node still owns any tables
-            let owned_tables = self.state_machine.list_tables_for_node(&node.node_id);
+        // Single scan: build set of all nodes that still own tables - O(M)
+        let all_tables = self.state_machine.list_all_tables();
+        let nodes_with_tables: std::collections::HashSet<String> = all_tables
+            .iter()
+            .flat_map(|t| t.owner_node_ids.iter().cloned())
+            .collect();
 
-            if owned_tables.is_empty() {
+        // Check each drained node with O(1) lookup
+        let mut removed_count = 0;
+        for node in &drained_nodes {
+            if !nodes_with_tables.contains(&node.node_id) {
                 // Safe to remove - no more table ownership
                 let key = format!("{}{}", keys::PREFIX_NODE, node.node_id);
                 if let Err(e) = self.state_machine.db().remove(key.as_bytes()) {
                     warn!("Failed to remove Drained node {}: {}", node.node_id, e);
                 } else {
-                    let _ = self.state_machine.db().flush();
-                    info!(
-                        "Cleaned up Drained node {} (no remaining table ownership)",
-                        node.node_id
-                    );
+                    removed_count += 1;
+                    debug!("Removed Drained node {} (no remaining table ownership)", node.node_id);
                 }
-            } else {
-                debug!(
-                    "Drained node {} still owns {} tables, waiting for rebalancer",
-                    node.node_id,
-                    owned_tables.len()
-                );
             }
+        }
+
+        // Single flush after all removals
+        if removed_count > 0 {
+            let _ = self.state_machine.db().flush();
+            info!(
+                "Cleaned up {} Drained nodes ({} still have tables)",
+                removed_count,
+                drained_nodes.len() - removed_count
+            );
         }
     }
 

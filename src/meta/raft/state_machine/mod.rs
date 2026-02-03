@@ -1409,4 +1409,120 @@ mod tests {
         let events = sm.get_events_from(0, 10);
         assert!(!events.is_empty());
     }
+
+    #[test]
+    fn test_get_table_owner_filters_drained_nodes() {
+        let sm = create_test_state_machine();
+
+        // Register two data nodes
+        let info1 = create_test_node_info("data-1", NodeRole::Data);
+        let info2 = create_test_node_info("data-2", NodeRole::Data);
+
+        sm.apply_command(MetaCommand::RegisterNode {
+            info: info1,
+            lease_id: 0,
+            lease_ttl_ms: 30000,
+        });
+        sm.apply_command(MetaCommand::RegisterNode {
+            info: info2,
+            lease_id: 0,
+            lease_ttl_ms: 30000,
+        });
+
+        // Register table with data-1 as owner
+        sm.register_table("mydb", "default", "cpu", "data-1");
+
+        // Verify data-1 is the owner
+        assert_eq!(
+            sm.get_table_owner("mydb", "default", "cpu"),
+            Some("data-1".to_string())
+        );
+
+        // Deregister data-1 (marks as Drained)
+        sm.apply_command(MetaCommand::DeregisterNode {
+            node_id: "data-1".to_string(),
+        });
+
+        // Verify data-1 is Drained
+        let node = sm.get_node("data-1").unwrap();
+        assert_eq!(node.state, NodeState::Drained);
+
+        // get_table_owner should now return None (data-1 is Drained, no other owners)
+        assert_eq!(sm.get_table_owner("mydb", "default", "cpu"), None);
+
+        // Add data-2 as owner
+        sm.add_table_owner("mydb", "default", "cpu", "data-2");
+
+        // Now get_table_owner should return data-2 (skipping Drained data-1)
+        assert_eq!(
+            sm.get_table_owner("mydb", "default", "cpu"),
+            Some("data-2".to_string())
+        );
+
+        // get_table_all_owners should only return data-2
+        let all_owners = sm.get_table_all_owners("mydb", "default", "cpu");
+        assert_eq!(all_owners, vec!["data-2".to_string()]);
+    }
+
+    #[test]
+    fn test_drained_node_cleanup_logic() {
+        let sm = create_test_state_machine();
+
+        // Register nodes
+        let info1 = create_test_node_info("data-1", NodeRole::Data);
+        let info2 = create_test_node_info("data-2", NodeRole::Data);
+
+        sm.apply_command(MetaCommand::RegisterNode {
+            info: info1,
+            lease_id: 0,
+            lease_ttl_ms: 30000,
+        });
+        sm.apply_command(MetaCommand::RegisterNode {
+            info: info2,
+            lease_id: 0,
+            lease_ttl_ms: 30000,
+        });
+
+        // Register tables
+        sm.register_table("mydb", "default", "cpu", "data-1");
+        sm.register_table("mydb", "default", "memory", "data-2");
+
+        // Deregister data-1 (marks as Drained)
+        sm.apply_command(MetaCommand::DeregisterNode {
+            node_id: "data-1".to_string(),
+        });
+
+        // Simulate cleanup logic: build set of nodes with tables (single scan)
+        let all_tables = sm.list_all_tables();
+        let nodes_with_tables: std::collections::HashSet<String> = all_tables
+            .iter()
+            .flat_map(|t| t.owner_node_ids.iter().cloned())
+            .collect();
+
+        // data-1 should still be in the set (table ownership not yet cleaned)
+        assert!(nodes_with_tables.contains("data-1"));
+        assert!(nodes_with_tables.contains("data-2"));
+
+        // Get drained nodes
+        let drained = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Drained));
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].node_id, "data-1");
+
+        // data-1 is drained but still owns table, should NOT be removed yet
+        assert!(nodes_with_tables.contains(&drained[0].node_id));
+
+        // Now remove data-1 from table ownership (simulating rebalancer)
+        sm.remove_table("mydb", "default", "cpu");
+
+        // Rebuild the set
+        let all_tables = sm.list_all_tables();
+        let nodes_with_tables: std::collections::HashSet<String> = all_tables
+            .iter()
+            .flat_map(|t| t.owner_node_ids.iter().cloned())
+            .collect();
+
+        // Now data-1 is not in the set (no tables), safe to remove
+        assert!(!nodes_with_tables.contains("data-1"));
+        assert!(nodes_with_tables.contains("data-2"));
+    }
 }
