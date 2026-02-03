@@ -165,8 +165,8 @@ impl QueryEngine {
             true
         };
 
-        // Check cache first for table info
-        let (has_partitions, partitions) = if let Some(cached) =
+        // Check cache first for table info (all tables are partitioned by date)
+        let partitions = if let Some(cached) =
             self.metadata_cache
                 .get_table_info(catalog_name, schema_name, table_name)
         {
@@ -174,7 +174,7 @@ impl QueryEngine {
                 "Using cached table info for {}.{}.{}",
                 catalog_name, schema_name, table_name
             );
-            (cached.has_partitions, cached.partitions)
+            cached.partitions
         } else {
             if !path_exists {
                 if let Some(ref cache) = self.write_cache {
@@ -193,17 +193,11 @@ impl QueryEngine {
                 Vec::new()
             };
 
-            let has_partitions = if self.storage.is_none() || !is_object_storage {
-                !partitions.is_empty()
-            } else {
-                true
-            };
-
             self.metadata_cache.set_table_info(
                 catalog_name,
                 schema_name,
                 table_name,
-                has_partitions,
+                true, // All tables are partitioned
                 partitions.clone(),
             );
             debug!(
@@ -211,19 +205,16 @@ impl QueryEngine {
                 catalog_name, schema_name, table_name, partitions.len()
             );
 
-            (has_partitions, partitions)
+            partitions
         };
 
         self.ensure_schema_in_catalog(catalog_name, schema_name)
             .await?;
 
-        let parquet_result = if has_partitions {
-            self.register_partitioned_table(catalog_name, schema_name, table_name, &table_url)
-                .await
-        } else {
-            self.register_simple_table(catalog_name, schema_name, table_name, &table_url)
-                .await
-        };
+        // All tables are partitioned by date
+        let parquet_result = self
+            .register_parquet_table(catalog_name, schema_name, table_name, &table_url)
+            .await;
 
         if parquet_result.is_err() {
             if let Some(ref cache) = self.write_cache {
@@ -240,17 +231,10 @@ impl QueryEngine {
             return parquet_result;
         }
 
-        if has_partitions {
-            debug!(
-                "Registered partitioned table: {}.{}.{} ({} partitions)",
-                catalog_name, schema_name, table_name, partitions.len()
-            );
-        } else {
-            debug!(
-                "Registered non-partitioned table: {}.{}.{}",
-                catalog_name, schema_name, table_name
-            );
-        }
+        debug!(
+            "Registered table: {}.{}.{} ({} partitions)",
+            catalog_name, schema_name, table_name, partitions.len()
+        );
 
         let mut catalogs = self.registered_catalogs.write().await;
         catalogs
@@ -261,8 +245,12 @@ impl QueryEngine {
         Ok(())
     }
 
-    /// Register a simple (non-partitioned) table - dispatches based on config
-    async fn register_simple_table(
+    /// Register a table using custom ParquetTableProvider or ListingTable
+    ///
+    /// All tables are partitioned by date (Hive-style: date=YYYY-MM-DD).
+    /// When Storage is available, uses ObjectStore for unified file discovery.
+    /// Falls back to local filesystem operations when Storage is not configured.
+    async fn register_parquet_table(
         &self,
         catalog_name: &str,
         schema_name: &str,
@@ -270,40 +258,30 @@ impl QueryEngine {
         table_path: &str,
     ) -> Result<(), String> {
         if self.use_custom_table_provider {
-            self.register_table_custom(catalog_name, schema_name, table_name, table_path, false)
+            self.register_table_custom(catalog_name, schema_name, table_name, table_path)
                 .await
         } else {
-            let table_ref =
-                datafusion::sql::TableReference::full(catalog_name, schema_name, table_name);
-            self.ctx
-                .register_parquet(table_ref, table_path, ParquetReadOptions::default())
-                .await
-                .map_err(|e| {
-                    format!(
-                        "Failed to register table '{}.{}.{}': {}",
-                        catalog_name, schema_name, table_name, e
-                    )
-                })
+            self.register_partitioned_table_listing(
+                catalog_name,
+                schema_name,
+                table_name,
+                table_path,
+            )
+            .await
         }
     }
 
-    /// Register a table using custom ParquetTableProvider (consolidated method)
-    ///
-    /// This method works with both local filesystem and object storage (S3/MinIO/OSS).
-    /// When Storage is available, it uses ObjectStore for unified file discovery.
-    /// Falls back to local filesystem operations when Storage is not configured.
+    /// Register a table using custom ParquetTableProvider
     async fn register_table_custom(
         &self,
         catalog_name: &str,
         schema_name: &str,
         table_name: &str,
         table_path: &str,
-        partitioned: bool,
     ) -> Result<(), String> {
         let full_name = format!("{}.{}.{}", catalog_name, schema_name, table_name);
 
         let config = ParquetTableConfig::new(full_name.clone())
-            .with_partitioned(partitioned)
             .with_batch_size(8192);
 
         // Use ObjectStore-based async constructor when Storage is available
@@ -342,28 +320,6 @@ impl QueryEngine {
             }
         } else {
             url.to_string()
-        }
-    }
-
-    /// Register a partitioned table - dispatches based on config
-    async fn register_partitioned_table(
-        &self,
-        catalog_name: &str,
-        schema_name: &str,
-        table_name: &str,
-        table_path: &str,
-    ) -> Result<(), String> {
-        if self.use_custom_table_provider {
-            self.register_table_custom(catalog_name, schema_name, table_name, table_path, true)
-                .await
-        } else {
-            self.register_partitioned_table_listing(
-                catalog_name,
-                schema_name,
-                table_name,
-                table_path,
-            )
-            .await
         }
     }
 
