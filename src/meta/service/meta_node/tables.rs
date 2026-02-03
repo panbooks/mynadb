@@ -210,4 +210,47 @@ impl MetaNode {
     pub async fn count_tables_per_node(&self) -> std::collections::HashMap<String, usize> {
         self.state_machine.count_tables_per_node()
     }
+
+    /// Reassign a table for scale-in retirement
+    ///
+    /// Takes a table_key in format "catalog/schema/table" and reassigns to new owner.
+    /// Used during scale-in to migrate tables from retiring nodes.
+    pub async fn reassign_table_for_retire(
+        &self,
+        table_key: &str,
+        _from_node: &str,
+        to_node: &str,
+    ) -> Result<(), String> {
+        // Parse table_key: "catalog/schema/table"
+        let parts: Vec<&str> = table_key.split('/').collect();
+        if parts.len() != 3 {
+            return Err(format!("Invalid table_key format: {}", table_key));
+        }
+
+        let catalog = parts[0];
+        let schema = parts[1];
+        let table = parts[2];
+
+        match self.reassign_table(catalog, schema, table, to_node).await {
+            Ok(MetaResponse::TableReassigned { .. }) => Ok(()),
+            Ok(MetaResponse::Error { message }) => Err(message),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Remove a standby from all table secondary assignments
+    ///
+    /// Used during scale-in to clean up standby assignments before retirement.
+    /// Returns the number of tables affected.
+    pub async fn remove_standby_from_tables(&self, standby_node_id: &str) -> Result<usize, String> {
+        // For table-level routing, standbys don't have explicit table assignments
+        // They back up all primaries at the node level.
+        // This method is a no-op for table-level routing but kept for API compatibility.
+        tracing::debug!(
+            "remove_standby_from_tables: {} (no-op for table-level routing)",
+            standby_node_id
+        );
+        Ok(0)
+    }
 }

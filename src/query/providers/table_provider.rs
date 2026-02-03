@@ -1262,16 +1262,21 @@ mod tests {
     }
 
     #[test]
-    fn test_discover_flat_directory() {
+    fn test_discover_single_partition() {
+        // All tables are partitioned by date, test with a single partition
         let temp_dir = TempDir::new().unwrap();
-        create_test_parquet(temp_dir.path(), "file1.parquet", 1);
-        create_test_parquet(temp_dir.path(), "file2.parquet", 10);
+        let part = temp_dir.path().join("date=2024-01-01");
+        std::fs::create_dir_all(&part).unwrap();
+        create_test_parquet(&part, "file1.parquet", 1);
+        create_test_parquet(&part, "file2.parquet", 10);
 
         let config = ParquetTableConfig::new("test");
         let provider = ParquetTableProvider::try_new(temp_dir.path(), config).unwrap();
 
         assert_eq!(provider.file_count(), 2);
-        assert_eq!(provider.schema().fields().len(), 2);
+        // Schema should include date partition column + 2 data columns (id, name)
+        assert_eq!(provider.schema().fields().len(), 3);
+        assert!(provider.schema().field_with_name("date").is_ok());
     }
 
     #[test]

@@ -6,14 +6,14 @@
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────────┐
-//! │ Phase 1: Partition Migration                                    │
+//! │ Phase 1: Table Migration                                        │
 //! │ ┌─────────────┐     ┌─────────────┐     ┌─────────────┐       │
 //! │ │ Retiring P1 │ ──► │ Remaining P2│ ──► │ Remaining P3│       │
-//! │ │ (10 parts)  │     │ (+5 parts)  │     │ (+5 parts)  │       │
+//! │ │ (10 tables) │     │ (+5 tables) │     │ (+5 tables) │       │
 //! │ └─────────────┘     └─────────────┘     └─────────────┘       │
 //! │        │                                                        │
 //! │        ▼                                                        │
-//! │   All partitions moved, P1 now empty                           │
+//! │   All tables moved, P1 now empty                               │
 //! └─────────────────────────────────────────────────────────────────┘
 //!                               │
 //!                               ▼
@@ -30,7 +30,7 @@
 //! ┌─────────────────────────────────────────────────────────────────┐
 //! │ Phase 3: Retire Orphaned Standbys                              │
 //! │ ┌─────────────┐                                                │
-//! │ │ S1 (orphan) │ ──► RemoveFromReplicas ──► StartRetire ──► Done│
+//! │ │ S1 (orphan) │ ──► RemoveFromTables ──► StartRetire ──► Done  │
 //! │ └─────────────┘                                                │
 //! │                                                                 │
 //! │   S1's Primary (P1) already removed - safe to retire           │
@@ -69,6 +69,9 @@ impl ScaleInExecutor {
     /// This is CRITICAL during Phase 1 and Phase 2 when Primaries are being
     /// drained or retired. If a Standby fails during this time, we lose our
     /// safety net.
+    ///
+    /// With table-level routing, all Standbys back up all Primaries at the
+    /// node level, so we check all active Standbys.
     fn check_standby_health(
         &self,
         retiring_primaries: &[String],
@@ -79,17 +82,14 @@ impl ScaleInExecutor {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        // Get all Standbys that back up the retiring Primaries
-        let replicas = sm.list_replicas();
-        let mut critical_standbys: HashSet<String> = HashSet::new();
-
-        for replica in &replicas {
-            if retiring_primaries.contains(&replica.leader_node_id) {
-                for standby_id in &replica.standby_node_ids {
-                    critical_standbys.insert(standby_id.clone());
-                }
-            }
-        }
+        // With table-level routing, all Standbys back up all Primaries
+        // Get all active Standby nodes
+        let standby_nodes = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
+        let critical_standbys: HashSet<String> = standby_nodes
+            .iter()
+            .filter(|n| n.mode == Some(DataNodeMode::Standby))
+            .map(|n| n.node_id.clone())
+            .collect();
 
         // Check health of each critical Standby
         for standby_id in &critical_standbys {
@@ -102,22 +102,12 @@ impl ScaleInExecutor {
                         standby_id, heartbeat_age
                     );
 
-                    // Find which Primary this Standby was backing
-                    let backed_primaries: Vec<_> = replicas
-                        .iter()
-                        .filter(|r| {
-                            r.standby_node_ids.contains(standby_id)
-                                && retiring_primaries.contains(&r.leader_node_id)
-                        })
-                        .map(|r| r.leader_node_id.clone())
-                        .collect();
-
                     return Err(ScaleInError::SafetyNetLost {
-                        primary_id: backed_primaries.first().cloned().unwrap_or_default(),
+                        primary_id: retiring_primaries.first().cloned().unwrap_or_default(),
                         standby_id: standby_id.clone(),
                         reason: format!(
                             "Heartbeat stale ({}s > max {}s). Backed Primaries: {:?}",
-                            heartbeat_age, self.config.max_heartbeat_age_secs, backed_primaries
+                            heartbeat_age, self.config.max_heartbeat_age_secs, retiring_primaries
                         ),
                     });
                 }
@@ -163,7 +153,7 @@ impl ScaleInExecutor {
                 success: true,
                 primaries_retired: plan.primaries_to_retire.clone(),
                 standbys_retired: plan.standbys_to_retire.clone(),
-                partitions_migrated: plan.migrations.len(),
+                tables_migrated: plan.migrations.len(),
                 duration_ms: start.elapsed().as_millis() as u64,
                 errors: vec![],
                 warnings: vec!["Dry-run mode: no changes made".to_string()],
@@ -174,7 +164,7 @@ impl ScaleInExecutor {
         let warnings = Vec::new();
         let mut primaries_retired = Vec::new();
         let mut standbys_retired = Vec::new();
-        let mut partitions_migrated = 0;
+        let mut tables_migrated = 0;
         let mut completed_actions = Vec::new();
 
         // Initial Standby health check before starting
@@ -198,15 +188,15 @@ impl ScaleInExecutor {
             );
 
             match phase.phase_type {
-                ScaleInPhaseType::MigratePartitions => {
+                ScaleInPhaseType::MigrateTables => {
                     match self
                         .execute_migration_phase(phase, &plan.primaries_to_retire)
                         .await
                     {
                         Ok(count) => {
-                            partitions_migrated = count;
-                            completed_actions.push(format!("Migrated {} partitions", count));
-                            info!("Phase 1 complete: {} partitions migrated", count);
+                            tables_migrated = count;
+                            completed_actions.push(format!("Migrated {} tables", count));
+                            info!("Phase 1 complete: {} tables migrated", count);
                         }
                         Err(e) => {
                             error!("Phase 1 failed: {}", e);
@@ -216,7 +206,7 @@ impl ScaleInExecutor {
                             if matches!(e, ScaleInError::SafetyNetLost { .. }) {
                                 return Err(ScaleInError::Aborted {
                                     reason: e.to_string(),
-                                    phase: "MigratePartitions".to_string(),
+                                    phase: "MigrateTables".to_string(),
                                     completed_actions,
                                 });
                             }
@@ -299,18 +289,18 @@ impl ScaleInExecutor {
             success,
             primaries_retired,
             standbys_retired,
-            partitions_migrated,
+            tables_migrated,
             duration_ms,
             errors,
             warnings,
         })
     }
 
-    /// Execute Phase 1: Partition Migration
+    /// Execute Phase 1: Table Migration
     ///
     /// During migration, we continuously check Standby health because:
-    /// - Retiring Primaries still own partitions being migrated
-    /// - If a Standby fails, those partitions lose their backup
+    /// - Retiring Primaries still own tables being migrated
+    /// - If a Standby fails, those tables lose their backup
     async fn execute_migration_phase(
         &self,
         phase: &ScaleInPhase,
@@ -321,8 +311,8 @@ impl ScaleInExecutor {
         let _check_interval = self.config.health_check_interval_ms;
 
         for (i, operation) in phase.operations.iter().enumerate() {
-            if let ScaleInOperation::MigratePartition {
-                partition_key,
+            if let ScaleInOperation::MigrateTable {
+                table_key,
                 from_node,
                 to_node,
             } = operation
@@ -334,23 +324,23 @@ impl ScaleInExecutor {
                 }
 
                 debug!(
-                    "Migrating partition {} from {} to {} ({}/{})",
-                    partition_key, from_node, to_node, i + 1, total_operations
+                    "Migrating table {} from {} to {} ({}/{})",
+                    table_key, from_node, to_node, i + 1, total_operations
                 );
 
                 match self
                     .meta_node
-                    .reassign_partition_for_retire(partition_key, from_node, to_node)
+                    .reassign_table_for_retire(table_key, from_node, to_node)
                     .await
                 {
                     Ok(()) => {
                         migrated_count += 1;
-                        debug!("Migrated partition {}", partition_key);
+                        debug!("Migrated table {}", table_key);
                     }
                     Err(e) => {
-                        error!("Failed to migrate partition {}: {}", partition_key, e);
+                        error!("Failed to migrate table {}: {}", table_key, e);
                         return Err(ScaleInError::MigrationFailed {
-                            partition: partition_key.clone(),
+                            table: table_key.clone(),
                             reason: e,
                         });
                     }
@@ -410,11 +400,11 @@ impl ScaleInExecutor {
 
             // Step 2: Start retirement
             match self.meta_node.start_retire(node_id).await {
-                Ok(partitions) => {
-                    if partitions > 0 {
+                Ok(tables) => {
+                    if tables > 0 {
                         warn!(
-                            "Node {} still has {} partitions - should have been migrated",
-                            node_id, partitions
+                            "Node {} still has {} tables - should have been migrated",
+                            node_id, tables
                         );
                     }
                     debug!("Started retirement for {}", node_id);
@@ -472,14 +462,14 @@ impl ScaleInExecutor {
         for node_id in &phase.affected_nodes {
             info!("Retiring Standby node: {}", node_id);
 
-            // Step 1: Remove from replica assignments
-            match self.meta_node.remove_standby_from_replicas(node_id).await {
+            // Step 1: Remove from table secondary assignments
+            match self.meta_node.remove_standby_from_tables(node_id).await {
                 Ok(count) => {
-                    debug!("Removed {} from {} partition replicas", node_id, count);
+                    debug!("Removed {} from {} table assignments", node_id, count);
                 }
                 Err(e) => {
                     warn!(
-                        "Failed to remove {} from replicas (continuing): {}",
+                        "Failed to remove {} from tables (continuing): {}",
                         node_id, e
                     );
                 }
