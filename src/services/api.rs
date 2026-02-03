@@ -1426,10 +1426,7 @@ pub fn build_router(state: AppState, auth_middleware: Arc<auth::AuthMiddleware>)
         // Table management
         .route("/databases/:db/tables", post(create_table_handler))
         .route("/databases/:db/tables", get(list_tables_handler))
-        .route(
-            "/databases/:db/tables/:table",
-            delete(delete_table_handler),
-        )
+        .route("/databases/:db/tables/:table", delete(delete_table_handler))
         // Compaction endpoints
         .route("/compact/:catalog", post(compact_handler))
         .route(

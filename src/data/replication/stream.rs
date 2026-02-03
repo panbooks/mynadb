@@ -514,8 +514,7 @@ impl ReplicationManager {
     /// This is called after a successful flush to notify all standbys to clear their cache.
     /// Returns the number of standbys successfully notified.
     pub async fn broadcast_flush_checkpoint(&self, checkpoint: FlushCheckpoint) -> usize {
-        let streams: Vec<Arc<ReplicationStream>> =
-            self.streams.read().values().cloned().collect();
+        let streams: Vec<Arc<ReplicationStream>> = self.streams.read().values().cloned().collect();
 
         if streams.is_empty() {
             debug!("No standbys to broadcast flush checkpoint to");

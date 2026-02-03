@@ -313,11 +313,7 @@ async fn test_list_parquet_file_infos_filters_invalid() {
 
     // Create valid and invalid parquet files
     fs::write(temp_dir.path().join("L0_1000000.parquet"), b"test data").unwrap();
-    fs::write(
-        temp_dir.path().join("invalid_format.parquet"),
-        b"test data",
-    )
-    .unwrap();
+    fs::write(temp_dir.path().join("invalid_format.parquet"), b"test data").unwrap();
     fs::write(temp_dir.path().join("LX_1000000.parquet"), b"test data").unwrap();
 
     let result = compactor.list_parquet_file_infos(temp_dir.path().to_str().unwrap());

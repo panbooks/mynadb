@@ -465,11 +465,7 @@ impl ScaleInPlanner {
             .map(|id| {
                 (
                     id.clone(),
-                    cluster_state
-                        .tables_per_node
-                        .get(id)
-                        .copied()
-                        .unwrap_or(0),
+                    cluster_state.tables_per_node.get(id).copied().unwrap_or(0),
                 )
             })
             .collect();

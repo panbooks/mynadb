@@ -311,10 +311,7 @@ impl RefreshExecutor for DataFusionRefreshExecutor {
         // 1. Execute source_sql using QueryEngine
         // 2. Convert results to RecordBatch
         // 3. Write to target_table using ParquetWriter
-        debug!(
-            "Would execute refresh: {} -> {}",
-            source_sql, target_table
-        );
+        debug!("Would execute refresh: {} -> {}", source_sql, target_table);
         Ok((0, 0))
     }
 }

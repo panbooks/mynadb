@@ -161,7 +161,12 @@ impl MetaNode {
     }
 
     /// Get the primary owner node for a table (for new write routing)
-    pub async fn get_table_owner(&self, catalog: &str, schema: &str, table: &str) -> Option<String> {
+    pub async fn get_table_owner(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Option<String> {
         self.state_machine.get_table_owner(catalog, schema, table)
     }
 

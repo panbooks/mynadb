@@ -262,7 +262,9 @@ impl ScaleInValidator {
         }
 
         // Warn (but don't fail) if standbys don't cover all primaries
-        if !remaining_standbys.is_empty() && remaining_primaries.len() > remaining_standbys.len() * 2 {
+        if !remaining_standbys.is_empty()
+            && remaining_primaries.len() > remaining_standbys.len() * 2
+        {
             warn!(
                 "HA coverage may be reduced: {} primaries, {} standbys (ratio > 2:1)",
                 remaining_primaries.len(),
@@ -286,7 +288,6 @@ impl ScaleInValidator {
     /// 2. Primary retirement (after draining)
     /// 3. Standby retirement (after Primaries)
     fn validate_phase_order(&self, plan: &ScaleInPlan) -> Result<(), ScaleInError> {
-        let mut seen_migrate = false;
         let mut seen_retire_primary = false;
         let mut seen_retire_standby = false;
 
@@ -301,7 +302,6 @@ impl ScaleInValidator {
                             nodes: vec![],
                         }));
                     }
-                    seen_migrate = true;
                 }
                 ScaleInPhaseType::RetirePrimaries => {
                     if seen_retire_standby {
@@ -409,7 +409,10 @@ impl ScaleInValidator {
         match operation {
             ScaleInOperation::StartRetire { node_id } => {
                 // Verify node exists and is active
-                let is_primary = cluster_state.primaries.iter().any(|n| &n.node_id == node_id);
+                let is_primary = cluster_state
+                    .primaries
+                    .iter()
+                    .any(|n| &n.node_id == node_id);
                 let is_standby = cluster_state.standbys.iter().any(|n| &n.node_id == node_id);
 
                 if !is_primary && !is_standby {
@@ -441,18 +444,14 @@ impl ScaleInValidator {
                                 "Cannot retire Standby {} - still backs up Primaries: {:?}",
                                 node_id, backed
                             ),
-                            nodes: std::iter::once(node_id.clone())
-                                .chain(backed)
-                                .collect(),
+                            nodes: std::iter::once(node_id.clone()).chain(backed).collect(),
                         }));
                     }
                 }
             }
 
             ScaleInOperation::MigrateTable {
-                table_key,
-                to_node,
-                ..
+                table_key, to_node, ..
             } => {
                 // Verify target node is a valid Primary
                 let target_is_primary = cluster_state
@@ -480,7 +479,7 @@ impl ScaleInValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::meta::types::{DataNodeMode, NodeInfo, NodeRole, NodeState, TableMeta};
+    use crate::meta::types::{DataNodeMode, NodeInfo, NodeRole, TableMeta};
 
     fn make_node(id: &str, mode: DataNodeMode) -> NodeInfo {
         let mut node = NodeInfo::new(id.to_string(), NodeRole::Data, format!("{}:7000", id));

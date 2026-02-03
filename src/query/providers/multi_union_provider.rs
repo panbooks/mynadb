@@ -392,19 +392,17 @@ mod tests {
         let schema = create_test_schema();
         let providers: Vec<Arc<dyn TableProvider>> = vec![
             Arc::new(
-                MemTable::try_new(schema.clone(), vec![vec![create_test_batch(
+                MemTable::try_new(
                     schema.clone(),
-                    vec![1],
-                    vec!["a"],
-                )]])
+                    vec![vec![create_test_batch(schema.clone(), vec![1], vec!["a"])]],
+                )
                 .unwrap(),
             ),
             Arc::new(
-                MemTable::try_new(schema.clone(), vec![vec![create_test_batch(
+                MemTable::try_new(
                     schema.clone(),
-                    vec![2],
-                    vec!["b"],
-                )]])
+                    vec![vec![create_test_batch(schema.clone(), vec![2], vec!["b"])]],
+                )
                 .unwrap(),
             ),
         ];
@@ -487,11 +485,7 @@ mod tests {
 
     #[test]
     fn test_multi_union_provider_empty_providers() {
-        let result = MultiUnionTableProvider::try_new(
-            vec![],
-            "test.table",
-            vec![],
-        );
+        let result = MultiUnionTableProvider::try_new(vec![], "test.table", vec![]);
         assert!(result.is_err());
     }
 }

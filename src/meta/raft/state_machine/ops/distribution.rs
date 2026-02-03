@@ -197,24 +197,20 @@ impl MetaStateMachine {
         let prefix = DistributionConfig::all_prefix();
         self.db
             .scan_prefix(prefix.as_bytes())
-            .filter_map(|result| {
-                result
-                    .ok()
-                    .and_then(|(_, v)| bincode::deserialize(&v).ok())
-            })
+            .filter_map(|result| result.ok().and_then(|(_, v)| bincode::deserialize(&v).ok()))
             .collect()
     }
 
     /// List distribution configs for a catalog
     pub fn list_distribution_configs_for_catalog(&self, catalog: &str) -> Vec<DistributionConfig> {
-        let prefix = format!("{}{}", crate::meta::types::keys::PREFIX_DISTRIBUTION, catalog);
+        let prefix = format!(
+            "{}{}",
+            crate::meta::types::keys::PREFIX_DISTRIBUTION,
+            catalog
+        );
         self.db
             .scan_prefix(prefix.as_bytes())
-            .filter_map(|result| {
-                result
-                    .ok()
-                    .and_then(|(_, v)| bincode::deserialize(&v).ok())
-            })
+            .filter_map(|result| result.ok().and_then(|(_, v)| bincode::deserialize(&v).ok()))
             .collect()
     }
 

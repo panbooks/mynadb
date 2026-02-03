@@ -44,11 +44,7 @@ impl DatabaseManager {
         }
     }
 
-    pub fn with_storage_and_node_id(
-        data_dir: &str,
-        storage: Arc<Storage>,
-        node_id: &str,
-    ) -> Self {
+    pub fn with_storage_and_node_id(data_dir: &str, storage: Arc<Storage>, node_id: &str) -> Self {
         DatabaseManager {
             data_dir: data_dir.to_string(),
             storage: Some(storage),
@@ -287,7 +283,10 @@ impl DatabaseManager {
         if let Some(storage) = &self.storage {
             // Build prefix with node_id if in cluster mode
             let table_prefix = if let Some(ref node_id) = self.node_id {
-                format!("{}/{}/{}/{}", node_id, catalog_name, schema_name, table_name)
+                format!(
+                    "{}/{}/{}/{}",
+                    node_id, catalog_name, schema_name, table_name
+                )
             } else {
                 format!("{}/{}/{}", catalog_name, schema_name, table_name)
             };
@@ -306,7 +305,10 @@ impl DatabaseManager {
                             node_id, catalog_name, schema_name, table_name, dir_name
                         )
                     } else {
-                        format!("{}/{}/{}/{}", catalog_name, schema_name, table_name, dir_name)
+                        format!(
+                            "{}/{}/{}/{}",
+                            catalog_name, schema_name, table_name, dir_name
+                        )
                     };
                     let files = storage.list(&partition_prefix).await.unwrap_or_default();
 

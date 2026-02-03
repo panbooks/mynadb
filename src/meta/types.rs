@@ -872,7 +872,6 @@ impl LeaseInfo {
     }
 }
 
-
 /// Status of a node retirement (scale-in) operation
 ///
 /// Tracks the progress of retiring a node from the cluster.
@@ -1037,7 +1036,6 @@ pub enum EventType {
     // Note: IDs 9-12 were previously used for partition-level replica events
     // (ReplicaAssigned, ReplicaPromoted, ReplicaStateChanged, DataNodeModeChanged)
     // These have been removed as part of the table-level routing migration.
-
     /// Standby needs to flush data for crashed Primary (Recovery)
     ///
     /// Published when a Primary crashes and its Standby needs to flush replicated data.

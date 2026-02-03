@@ -85,7 +85,10 @@ impl Compactor {
         // Try to acquire distributed lock for cluster mode
         // This prevents multiple nodes from compacting the same partition simultaneously
         // Lock key format: /compaction/{catalog}/{schema}/{table}/{partition}
-        let lock_key = format!("/compaction/{}/{}/{}/{}", catalog, schema, table, partition_id);
+        let lock_key = format!(
+            "/compaction/{}/{}/{}/{}",
+            catalog, schema, table, partition_id
+        );
         let _distributed_lock_guard: Option<DistributedLockGuard> =
             if let Some(ref mc) = self.meta_client {
                 match mc.try_lock(&lock_key, COMPACTION_LOCK_TTL_MS).await {

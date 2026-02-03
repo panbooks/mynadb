@@ -193,18 +193,10 @@ mod tests {
     #[test]
     fn test_filter_legacy_prefixes_for_node_empty() {
         // Empty inputs
-        let result = filter_legacy_prefixes_for_node(
-            "node-1",
-            &[],
-            &["prefix-1".to_string()],
-        );
+        let result = filter_legacy_prefixes_for_node("node-1", &[], &["prefix-1".to_string()]);
         assert!(result.is_empty());
 
-        let result = filter_legacy_prefixes_for_node(
-            "node-1",
-            &["node-1".to_string()],
-            &[],
-        );
+        let result = filter_legacy_prefixes_for_node("node-1", &["node-1".to_string()], &[]);
         assert!(result.is_empty());
     }
 
@@ -233,8 +225,18 @@ mod tests {
             let result = filter_legacy_prefixes_for_node(node_id, &primaries, &legacy);
             total_assigned += result.len();
             // Each node should get roughly 10 prefixes (50/5)
-            assert!(result.len() >= 5, "Node {} got too few: {}", node_id, result.len());
-            assert!(result.len() <= 15, "Node {} got too many: {}", node_id, result.len());
+            assert!(
+                result.len() >= 5,
+                "Node {} got too few: {}",
+                node_id,
+                result.len()
+            );
+            assert!(
+                result.len() <= 15,
+                "Node {} got too many: {}",
+                node_id,
+                result.len()
+            );
         }
 
         // All prefixes should be assigned exactly once

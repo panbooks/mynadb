@@ -77,7 +77,9 @@ impl QueryEngine {
             .unwrap_or(false);
 
         // Check for legacy prefixes (scale-in support)
-        let legacy_prefixes = self.get_legacy_prefixes(catalog_name, schema_name, table_name).await;
+        let legacy_prefixes = self
+            .get_legacy_prefixes(catalog_name, schema_name, table_name)
+            .await;
         let has_legacy_prefixes = !legacy_prefixes.is_empty() && is_object_storage;
 
         // Check if table is already registered in DataFusion
@@ -88,7 +90,11 @@ impl QueryEngine {
                     if (is_object_storage && has_memtable_data) || has_legacy_prefixes {
                         debug!(
                             "Re-registering {}.{}.{} (memtable={}, legacy_prefixes={})",
-                            catalog_name, schema_name, table_name, has_memtable_data, legacy_prefixes.len()
+                            catalog_name,
+                            schema_name,
+                            table_name,
+                            has_memtable_data,
+                            legacy_prefixes.len()
                         );
                         let _ = schema.deregister_table(table_name);
                     } else {
@@ -101,7 +107,12 @@ impl QueryEngine {
         // Use multi-prefix registration if we have legacy prefixes
         if has_legacy_prefixes {
             return self
-                .register_table_multi_prefix(catalog_name, schema_name, table_name, &legacy_prefixes)
+                .register_table_multi_prefix(
+                    catalog_name,
+                    schema_name,
+                    table_name,
+                    &legacy_prefixes,
+                )
                 .await;
         }
 
@@ -202,7 +213,10 @@ impl QueryEngine {
             );
             debug!(
                 "Cached table info for {}.{}.{} (partitions: {})",
-                catalog_name, schema_name, table_name, partitions.len()
+                catalog_name,
+                schema_name,
+                table_name,
+                partitions.len()
             );
 
             partitions
@@ -233,7 +247,10 @@ impl QueryEngine {
 
         debug!(
             "Registered table: {}.{}.{} ({} partitions)",
-            catalog_name, schema_name, table_name, partitions.len()
+            catalog_name,
+            schema_name,
+            table_name,
+            partitions.len()
         );
 
         let mut catalogs = self.registered_catalogs.write().await;
@@ -281,8 +298,7 @@ impl QueryEngine {
     ) -> Result<(), String> {
         let full_name = format!("{}.{}.{}", catalog_name, schema_name, table_name);
 
-        let config = ParquetTableConfig::new(full_name.clone())
-            .with_batch_size(8192);
+        let config = ParquetTableConfig::new(full_name.clone()).with_batch_size(8192);
 
         // Use ObjectStore-based async constructor when Storage is available
         let mut provider = if let Some(ref storage) = self.storage {
@@ -291,12 +307,15 @@ impl QueryEngine {
 
             ParquetTableProvider::try_new_async(storage.object_store(), base_path, config)
                 .await
-                .map_err(|e| format!("Failed to create table provider for '{}': {}", full_name, e))?
+                .map_err(|e| {
+                    format!("Failed to create table provider for '{}': {}", full_name, e)
+                })?
         } else {
             // Fallback to sync local filesystem constructor
             let local_path = table_path.strip_prefix("file://").unwrap_or(table_path);
-            ParquetTableProvider::try_new(local_path, config)
-                .map_err(|e| format!("Failed to create table provider for '{}': {}", full_name, e))?
+            ParquetTableProvider::try_new(local_path, config).map_err(|e| {
+                format!("Failed to create table provider for '{}': {}", full_name, e)
+            })?
         };
 
         // Add parquet cache for cluster mode
@@ -504,7 +523,8 @@ impl QueryEngine {
         table_name: &str,
         legacy_prefixes: &[String],
     ) -> Result<(), String> {
-        self.ensure_schema_in_catalog(catalog_name, schema_name).await?;
+        self.ensure_schema_in_catalog(catalog_name, schema_name)
+            .await?;
 
         let storage = self
             .storage
@@ -517,12 +537,8 @@ impl QueryEngine {
 
         // Current node's URL
         if let Some(ref cache) = self.write_cache {
-            let url = storage.table_url_with_node(
-                cache.node_id(),
-                catalog_name,
-                schema_name,
-                table_name,
-            );
+            let url =
+                storage.table_url_with_node(cache.node_id(), catalog_name, schema_name, table_name);
             table_urls.push((url, cache.node_id().to_string()));
         } else {
             let url = storage.table_url(catalog_name, schema_name, table_name);
@@ -581,8 +597,9 @@ impl QueryEngine {
         }
 
         // Create MultiUnionTableProvider for multiple prefixes
-        let multi_union = MultiUnionTableProvider::try_new(providers, full_name.clone(), valid_prefixes.clone())
-            .map_err(|e| format!("Failed to create multi-union provider: {}", e))?;
+        let multi_union =
+            MultiUnionTableProvider::try_new(providers, full_name.clone(), valid_prefixes.clone())
+                .map_err(|e| format!("Failed to create multi-union provider: {}", e))?;
 
         let final_provider = self.maybe_wrap_with_memtable(
             catalog_name,

@@ -498,11 +498,17 @@ pub fn start_background_flush_with_replication(
                 let files_count = files.len() as u32;
 
                 // Aggregate stats per table (catalog, schema, table) -> (bytes, rows, files, partitions)
-                let mut table_stats: HashMap<(String, String, String), (i64, i64, i64, HashSet<String>)> =
-                    HashMap::new();
+                let mut table_stats: HashMap<
+                    (String, String, String),
+                    (i64, i64, i64, HashSet<String>),
+                > = HashMap::new();
 
                 for file in &files {
-                    let key = (file.catalog.clone(), file.schema.clone(), file.table.clone());
+                    let key = (
+                        file.catalog.clone(),
+                        file.schema.clone(),
+                        file.table.clone(),
+                    );
                     let entry = table_stats.entry(key).or_insert((0, 0, 0, HashSet::new()));
                     entry.0 += file.size_bytes as i64;
                     entry.1 += file.row_count as i64;
@@ -511,7 +517,9 @@ pub fn start_background_flush_with_replication(
                 }
 
                 // Register tables and update stats with Meta (table-level routing)
-                for ((catalog, schema, table), (bytes, rows, file_count, partitions)) in &table_stats {
+                for ((catalog, schema, table), (bytes, rows, file_count, partitions)) in
+                    &table_stats
+                {
                     // First ensure table is registered
                     match client
                         .register_table(catalog, schema, table, &node_id)
@@ -524,7 +532,10 @@ pub fn start_background_flush_with_replication(
                             // Table already registered, that's fine
                         }
                         Err(e) => {
-                            warn!("Failed to register table {}.{}.{}: {}", catalog, schema, table, e);
+                            warn!(
+                                "Failed to register table {}.{}.{}: {}",
+                                catalog, schema, table, e
+                            );
                         }
                     }
 
@@ -551,7 +562,10 @@ pub fn start_background_flush_with_replication(
                     }
 
                     // Refresh QueryEngine registration
-                    debug!("Refreshing table after flush: {}.{}.{}", catalog, schema, table);
+                    debug!(
+                        "Refreshing table after flush: {}.{}.{}",
+                        catalog, schema, table
+                    );
                     qe.refresh_table_after_flush(catalog, schema, table);
                 }
 

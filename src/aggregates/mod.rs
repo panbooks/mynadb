@@ -166,10 +166,7 @@ impl ContinuousAggregateManager {
     }
 
     /// Create a new continuous aggregate definition
-    pub async fn create_aggregate(
-        &self,
-        definition: AggregateDefinition,
-    ) -> Result<(), String> {
+    pub async fn create_aggregate(&self, definition: AggregateDefinition) -> Result<(), String> {
         if !self.config.enabled {
             return Err("Continuous aggregates feature is disabled".to_string());
         }

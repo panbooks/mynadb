@@ -112,10 +112,7 @@ impl AggregateColumn {
     pub fn new(source: &str, function: AggregateFunction, alias: &str) -> Self {
         let helper_columns = if matches!(function, AggregateFunction::Avg) {
             // For avg, we need sum and count for re-aggregation
-            vec![
-                format!("{}_sum", alias),
-                format!("{}_count", alias),
-            ]
+            vec![format!("{}_sum", alias), format!("{}_count", alias)]
         } else {
             vec![]
         };
@@ -147,12 +144,16 @@ impl AggregateColumn {
             result.push(format!(
                 "sum({}) AS {}",
                 self.source_column,
-                self.helper_columns.get(0).unwrap_or(&format!("{}_sum", self.alias))
+                self.helper_columns
+                    .get(0)
+                    .unwrap_or(&format!("{}_sum", self.alias))
             ));
             result.push(format!(
                 "count({}) AS {}",
                 self.source_column,
-                self.helper_columns.get(1).unwrap_or(&format!("{}_count", self.alias))
+                self.helper_columns
+                    .get(1)
+                    .unwrap_or(&format!("{}_count", self.alias))
             ));
         }
 
@@ -286,9 +287,9 @@ pub struct RefreshPolicy {
 impl Default for RefreshPolicy {
     fn default() -> Self {
         Self {
-            interval_secs: 300,      // 5 minutes
-            start_offset_secs: 60,   // Don't refresh last 1 minute (late data buffer)
-            end_offset_secs: None,   // No end limit
+            interval_secs: 300,                     // 5 minutes
+            start_offset_secs: 60, // Don't refresh last 1 minute (late data buffer)
+            end_offset_secs: None, // No end limit
             max_rows_per_refresh: Some(10_000_000), // 10M rows max per refresh
             full_refresh: false,
         }
@@ -379,11 +380,7 @@ impl AggregateDefinition {
             .map(|gb| gb.to_group_by_sql())
             .collect();
 
-        let mut sql = format!(
-            "SELECT {} FROM {} ",
-            columns.join(", "),
-            self.source_table
-        );
+        let mut sql = format!("SELECT {} FROM {} ", columns.join(", "), self.source_table);
 
         if let Some(filter) = &self.filter {
             sql.push_str(&format!("WHERE {} ", filter));
@@ -420,16 +417,10 @@ impl AggregateDefinition {
 
         if self.filter.is_some() {
             // Insert before GROUP BY, after existing WHERE
-            base_sql.replace(
-                "GROUP BY",
-                &format!("AND {} GROUP BY", time_filter),
-            )
+            base_sql.replace("GROUP BY", &format!("AND {} GROUP BY", time_filter))
         } else {
             // Insert WHERE clause
-            base_sql.replace(
-                "GROUP BY",
-                &format!("WHERE {} GROUP BY", time_filter),
-            )
+            base_sql.replace("GROUP BY", &format!("WHERE {} GROUP BY", time_filter))
         }
     }
 
@@ -511,7 +502,12 @@ impl AggregateDefinitionBuilder {
     }
 
     /// Add time bucket group by
-    pub fn time_bucket(mut self, source: &str, granularity: &str, alias: &str) -> Result<Self, String> {
+    pub fn time_bucket(
+        mut self,
+        source: &str,
+        granularity: &str,
+        alias: &str,
+    ) -> Result<Self, String> {
         let gran = TimeBucketGranularity::from_str(granularity)?;
         self.group_by_columns
             .push(GroupByColumn::time_bucket(source, gran, alias));

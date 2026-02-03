@@ -17,7 +17,10 @@ impl QueryEngine {
     // ========================================================================
 
     /// Discover date partitions in a table directory (with caching)
-    pub(crate) fn discover_table_partitions(&self, table_path: &str) -> Result<Vec<String>, String> {
+    pub(crate) fn discover_table_partitions(
+        &self,
+        table_path: &str,
+    ) -> Result<Vec<String>, String> {
         let path = std::path::Path::new(table_path);
         if !path.exists() {
             return Ok(Vec::new());
@@ -544,12 +547,21 @@ impl QueryEngine {
 
     /// Build all storage prefixes for schema discovery (current node + legacy)
     /// Uses internal legacy_prefixes field
-    pub(crate) async fn build_storage_prefixes(&self, catalog_name: &str, schema_name: &str) -> Vec<String> {
+    pub(crate) async fn build_storage_prefixes(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+    ) -> Vec<String> {
         let mut prefixes = Vec::new();
 
         // Current node's prefix
         if let Some(ref cache) = self.write_cache {
-            prefixes.push(format!("{}/{}/{}/", cache.node_id(), catalog_name, schema_name));
+            prefixes.push(format!(
+                "{}/{}/{}/",
+                cache.node_id(),
+                catalog_name,
+                schema_name
+            ));
         } else {
             prefixes.push(format!("{}/{}/", catalog_name, schema_name));
         }
@@ -621,9 +633,14 @@ impl QueryEngine {
         }
 
         // Add legacy prefixes for this specific table
-        let legacy = self.get_legacy_prefixes(catalog_name, schema_name, table_name).await;
+        let legacy = self
+            .get_legacy_prefixes(catalog_name, schema_name, table_name)
+            .await;
         for lp in legacy {
-            prefixes.push(format!("{}/{}/{}/{}/", lp, catalog_name, schema_name, table_name));
+            prefixes.push(format!(
+                "{}/{}/{}/{}/",
+                lp, catalog_name, schema_name, table_name
+            ));
         }
 
         prefixes

@@ -10,8 +10,8 @@ use std::time::Instant;
 use tracing::{debug, info, warn};
 
 use super::{
-    CompactionConfig, CompactionResult, Compactor, DistributedLockGuard, MB_TO_BYTES,
-    COMPACTION_LOCK_TTL_MS,
+    CompactionConfig, CompactionResult, Compactor, DistributedLockGuard, COMPACTION_LOCK_TTL_MS,
+    MB_TO_BYTES,
 };
 
 impl Compactor {
@@ -222,41 +222,45 @@ impl Compactor {
 
         // Try to acquire distributed lock for cluster mode
         // Uses same lock key format as LSM compaction to ensure mutual exclusion
-        let lock_key = format!("/compaction/{}/{}/{}/{}", catalog, schema, table, partition_name);
-        let _distributed_lock_guard: Option<DistributedLockGuard> =
-            if let Some(ref mc) = self.meta_client {
-                match mc.try_lock(&lock_key, COMPACTION_LOCK_TTL_MS).await {
-                    Ok(Some(token)) => {
-                        debug!(
-                            "Acquired distributed lock for full compaction {}/{}/{}/{} (token={})",
-                            catalog, schema, table, partition_name, token
-                        );
-                        Some(DistributedLockGuard {
-                            meta_client: Some(mc.clone()),
-                            lock_key: lock_key.clone(),
-                            fencing_token: token,
-                        })
-                    }
-                    Ok(None) => {
-                        // Lock held by another node - skip this partition
-                        debug!(
+        let lock_key = format!(
+            "/compaction/{}/{}/{}/{}",
+            catalog, schema, table, partition_name
+        );
+        let _distributed_lock_guard: Option<DistributedLockGuard> = if let Some(ref mc) =
+            self.meta_client
+        {
+            match mc.try_lock(&lock_key, COMPACTION_LOCK_TTL_MS).await {
+                Ok(Some(token)) => {
+                    debug!(
+                        "Acquired distributed lock for full compaction {}/{}/{}/{} (token={})",
+                        catalog, schema, table, partition_name, token
+                    );
+                    Some(DistributedLockGuard {
+                        meta_client: Some(mc.clone()),
+                        lock_key: lock_key.clone(),
+                        fencing_token: token,
+                    })
+                }
+                Ok(None) => {
+                    // Lock held by another node - skip this partition
+                    debug!(
                         "Skipping full compaction for {}/{}/{}/{}: partition locked by another node",
                         catalog, schema, table, partition_name
                     );
-                        return Ok(None);
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to acquire distributed lock for full compaction {}/{}/{}/{}: {}. \
-                         Proceeding with local-only lock.",
-                            catalog, schema, table, partition_name, e
-                        );
-                        None
-                    }
+                    return Ok(None);
                 }
-            } else {
-                None
-            };
+                Err(e) => {
+                    warn!(
+                        "Failed to acquire distributed lock for full compaction {}/{}/{}/{}: {}. \
+                         Proceeding with local-only lock.",
+                        catalog, schema, table, partition_name, e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         let start = Instant::now();
 

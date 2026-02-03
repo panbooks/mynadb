@@ -377,25 +377,29 @@ async fn retire(
 
             // By default, trigger immediate flush to accelerate retire draining
             // This avoids waiting 0-60 seconds for the background flush interval
-            let (flush_triggered, memtable_rows_flushing) = if !request.defer_flush && memtable_rows > 0 {
-                info!(
+            let (flush_triggered, memtable_rows_flushing) =
+                if !request.defer_flush && memtable_rows > 0 {
+                    info!(
                     "Node {} retire: triggering immediate flush of {} rows to accelerate draining",
                     state.node_id, memtable_rows
                 );
-                if let Err(e) = state.cache.flush().await {
-                    tracing::warn!("Error during retire flush: {}", e);
-                }
-                (true, memtable_rows)
-            } else if request.defer_flush && memtable_rows > 0 {
-                debug!(
-                    "Node {} retire: deferring flush (defer_flush=true), {} rows in memtable",
-                    state.node_id, memtable_rows
-                );
-                (false, 0)
-            } else {
-                debug!("Node {} retire: memtable empty, no flush needed", state.node_id);
-                (false, 0)
-            };
+                    if let Err(e) = state.cache.flush().await {
+                        tracing::warn!("Error during retire flush: {}", e);
+                    }
+                    (true, memtable_rows)
+                } else if request.defer_flush && memtable_rows > 0 {
+                    debug!(
+                        "Node {} retire: deferring flush (defer_flush=true), {} rows in memtable",
+                        state.node_id, memtable_rows
+                    );
+                    (false, 0)
+                } else {
+                    debug!(
+                        "Node {} retire: memtable empty, no flush needed",
+                        state.node_id
+                    );
+                    (false, 0)
+                };
 
             info!(
                 "Node {} started retirement: {} partitions to reassign, flush_triggered={}, memtable_rows={}",
@@ -461,8 +465,7 @@ async fn retire_status(State(state): State<DataNodeState>) -> impl IntoResponse 
         let timeout_exceeded = elapsed_secs > DEFAULT_RETIRE_TIMEOUT_SECS;
 
         // Ready for shutdown when retiring, memtable empty, and no in-flight queries
-        let ready_for_shutdown =
-            is_retiring && cache_stats.total_rows == 0 && in_flight == 0;
+        let ready_for_shutdown = is_retiring && cache_stats.total_rows == 0 && in_flight == 0;
 
         (
             StatusCode::OK,

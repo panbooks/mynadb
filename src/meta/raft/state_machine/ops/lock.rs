@@ -54,7 +54,13 @@ impl MetaStateMachine {
         }
     }
 
-    pub(crate) fn renew_lock(&self, key: &str, holder: &str, fencing_token: u64, ttl_ms: u64) -> MetaResponse {
+    pub(crate) fn renew_lock(
+        &self,
+        key: &str,
+        holder: &str,
+        fencing_token: u64,
+        ttl_ms: u64,
+    ) -> MetaResponse {
         let storage_key = format!("{}{}", keys::PREFIX_LOCK, key);
 
         if let Ok(Some(data)) = self.db.get(storage_key.as_bytes()) {

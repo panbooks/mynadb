@@ -203,10 +203,20 @@ impl CacheInvalidationHandler {
             // Handle event based on type
             match event.event_type {
                 EventType::NodeJoined => {
-                    Self::handle_node_joined(&shard_cache, &data_node_pool, &initial_node_ids, &event);
+                    Self::handle_node_joined(
+                        &shard_cache,
+                        &data_node_pool,
+                        &initial_node_ids,
+                        &event,
+                    );
                 }
                 EventType::NodeLeft => {
-                    Self::handle_node_left(&shard_cache, &data_node_pool, &initial_node_ids, &event);
+                    Self::handle_node_left(
+                        &shard_cache,
+                        &data_node_pool,
+                        &initial_node_ids,
+                        &event,
+                    );
                 }
                 EventType::NodeStateChanged => {
                     Self::handle_node_updated(&shard_cache, &data_node_pool, &event);
@@ -372,16 +382,13 @@ impl CacheInvalidationHandler {
                 };
 
                 // Preserve existing mode or extract from payload
-                let mode = existing_node
-                    .as_ref()
-                    .map(|n| n.mode)
-                    .unwrap_or_else(|| {
-                        // Try to get mode from payload
-                        match payload["mode"].as_str() {
-                            Some("standby") | Some("Standby") => DataNodeMode::Standby,
-                            _ => DataNodeMode::Primary,
-                        }
-                    });
+                let mode = existing_node.as_ref().map(|n| n.mode).unwrap_or_else(|| {
+                    // Try to get mode from payload
+                    match payload["mode"].as_str() {
+                        Some("standby") | Some("Standby") => DataNodeMode::Standby,
+                        _ => DataNodeMode::Primary,
+                    }
+                });
 
                 // Only update if we have a valid grpc_addr (either from event or existing)
                 if !grpc_addr.is_empty() {

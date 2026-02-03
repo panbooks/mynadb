@@ -331,7 +331,12 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
 
         match self
             .node
-            .reassign_table(&req.catalog, &req.schema, &req.table, &req.new_owner_node_id)
+            .reassign_table(
+                &req.catalog,
+                &req.schema,
+                &req.table,
+                &req.new_owner_node_id,
+            )
             .await
         {
             Ok(response) => match response {
@@ -1305,13 +1310,11 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
             .remove_standby_from_tables(&req.standby_node_id)
             .await
         {
-            Ok(tables_affected) => {
-                Ok(Response::new(proto::RemoveStandbyFromTablesResponse {
-                    success: true,
-                    error: String::new(),
-                    tables_affected: tables_affected as u32,
-                }))
-            }
+            Ok(tables_affected) => Ok(Response::new(proto::RemoveStandbyFromTablesResponse {
+                success: true,
+                error: String::new(),
+                tables_affected: tables_affected as u32,
+            })),
             Err(e) => Ok(Response::new(proto::RemoveStandbyFromTablesResponse {
                 success: false,
                 error: e,

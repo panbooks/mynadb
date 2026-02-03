@@ -20,7 +20,11 @@ impl MetaStateMachine {
     ///
     /// This publishes an event that the Standby node subscribes to.
     /// The Standby will then flush all replicated data to Parquet.
-    pub(crate) fn trigger_standby_flush(&self, standby_id: &str, crashed_primary_id: &str) -> MetaResponse {
+    pub(crate) fn trigger_standby_flush(
+        &self,
+        standby_id: &str,
+        crashed_primary_id: &str,
+    ) -> MetaResponse {
         info!(
             "Recovery: Triggering Standby {} to flush data for crashed Primary {}",
             standby_id, crashed_primary_id
@@ -50,7 +54,11 @@ impl MetaStateMachine {
     /// Assign a spare Standby to back specific Primaries (node-level pairing)
     ///
     /// Updates the node info to establish Primary-Standby pairing.
-    pub(crate) fn assign_standby_to_primaries(&self, standby_id: &str, primary_ids: &[String]) -> MetaResponse {
+    pub(crate) fn assign_standby_to_primaries(
+        &self,
+        standby_id: &str,
+        primary_ids: &[String],
+    ) -> MetaResponse {
         info!(
             "Recovery: Assigning spare Standby {} to Primaries: {:?}",
             standby_id, primary_ids
@@ -66,10 +74,9 @@ impl MetaStateMachine {
             standby_info.last_heartbeat = current_timestamp_ms();
 
             let key = format!("{}{}", crate::meta::types::keys::PREFIX_NODE, standby_id);
-            let _ = self.db.insert(
-                key.as_bytes(),
-                bincode::serialize(&standby_info).unwrap(),
-            );
+            let _ = self
+                .db
+                .insert(key.as_bytes(), bincode::serialize(&standby_info).unwrap());
         }
 
         // Update each Primary's backing_standby
@@ -80,10 +87,9 @@ impl MetaStateMachine {
                     primary_info.last_heartbeat = current_timestamp_ms();
 
                     let key = format!("{}{}", crate::meta::types::keys::PREFIX_NODE, primary_id);
-                    let _ = self.db.insert(
-                        key.as_bytes(),
-                        bincode::serialize(&primary_info).unwrap(),
-                    );
+                    let _ = self
+                        .db
+                        .insert(key.as_bytes(), bincode::serialize(&primary_info).unwrap());
                 }
             }
         }
@@ -103,7 +109,8 @@ impl MetaStateMachine {
 
         info!(
             "Recovery: Assigned Standby {} to {} Primaries",
-            standby_id, primary_ids.len()
+            standby_id,
+            primary_ids.len()
         );
 
         MetaResponse::StandbyAssignedToPrimaries {
@@ -115,11 +122,7 @@ impl MetaStateMachine {
     /// Mark a Primary as unprotected (no Standby backup)
     ///
     /// Publishes a warning event that monitoring systems can subscribe to.
-    pub(crate) fn mark_primary_unprotected(
-        &self,
-        primary_id: &str,
-        reason: &str,
-    ) -> MetaResponse {
+    pub(crate) fn mark_primary_unprotected(&self, primary_id: &str, reason: &str) -> MetaResponse {
         // Log warning - no event needed, just internal tracking
         warn!(
             "Recovery: Primary {} is now UNPROTECTED: {}",
@@ -140,9 +143,7 @@ impl MetaStateMachine {
         target_primaries: &[String],
     ) -> MetaResponse {
         if target_primaries.is_empty() {
-            error!(
-                "Recovery: Cannot redistribute tables - no target Primaries available"
-            );
+            error!("Recovery: Cannot redistribute tables - no target Primaries available");
             return MetaResponse::Error {
                 message: "No target Primaries available for redistribution".to_string(),
             };
@@ -164,12 +165,7 @@ impl MetaStateMachine {
             let new_owner = &target_primaries[target_idx];
 
             // Reassign the table to the new owner
-            let _ = self.reassign_table(
-                &table.catalog,
-                &table.schema,
-                &table.table,
-                new_owner,
-            );
+            let _ = self.reassign_table(&table.catalog, &table.schema, &table.table, new_owner);
 
             redistributed_count += 1;
 

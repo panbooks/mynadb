@@ -361,10 +361,7 @@ impl StandbyReceiver {
     /// This clears cached batches with seq <= flushed_seq to stay in sync with Primary.
     /// The Primary has persisted these batches to Parquet, so the Standby no longer
     /// needs them in memory (they'll be read from Parquet if needed).
-    pub fn handle_flush_checkpoint(
-        &self,
-        checkpoint: &FlushCheckpoint,
-    ) -> FlushCheckpointResponse {
+    pub fn handle_flush_checkpoint(&self, checkpoint: &FlushCheckpoint) -> FlushCheckpointResponse {
         let flushed_seq = checkpoint.flushed_seq;
 
         info!(
@@ -446,8 +443,8 @@ mod tests {
     fn test_standby_receiver_mode() {
         use crate::storage::storage::Storage;
 
-        let storage = Storage::new_local("/tmp/test-standby-mode")
-            .expect("Failed to create storage");
+        let storage =
+            Storage::new_local("/tmp/test-standby-mode").expect("Failed to create storage");
         let cache = Arc::new(DataCache::new(
             Arc::new(storage),
             64,
@@ -473,8 +470,8 @@ mod tests {
     fn test_standby_receiver_partition_registration() {
         use crate::storage::storage::Storage;
 
-        let storage = Storage::new_local("/tmp/test-partition-reg")
-            .expect("Failed to create storage");
+        let storage =
+            Storage::new_local("/tmp/test-partition-reg").expect("Failed to create storage");
         let cache = Arc::new(DataCache::new(
             Arc::new(storage),
             64,
@@ -492,10 +489,7 @@ mod tests {
         assert!(state.active.load(Ordering::Relaxed));
 
         // Verify leader is set
-        assert_eq!(
-            *state.leader_node_id.read(),
-            Some("leader-1".to_string())
-        );
+        assert_eq!(*state.leader_node_id.read(), Some("leader-1".to_string()));
 
         // Re-register same partition with different leader
         let state2 = receiver.register_partition(
@@ -504,10 +498,7 @@ mod tests {
         );
 
         // Should return same state with updated leader
-        assert_eq!(
-            *state2.leader_node_id.read(),
-            Some("leader-2".to_string())
-        );
+        assert_eq!(*state2.leader_node_id.read(), Some("leader-2".to_string()));
 
         // List partitions
         let partitions = receiver.get_standby_partitions();
@@ -519,8 +510,7 @@ mod tests {
     fn test_standby_receiver_unregister_partition() {
         use crate::storage::storage::Storage;
 
-        let storage = Storage::new_local("/tmp/test-unregister")
-            .expect("Failed to create storage");
+        let storage = Storage::new_local("/tmp/test-unregister").expect("Failed to create storage");
         let cache = Arc::new(DataCache::new(
             Arc::new(storage),
             64,
@@ -549,8 +539,7 @@ mod tests {
     fn test_standby_receiver_stats() {
         use crate::storage::storage::Storage;
 
-        let storage = Storage::new_local("/tmp/test-stats")
-            .expect("Failed to create storage");
+        let storage = Storage::new_local("/tmp/test-stats").expect("Failed to create storage");
         let cache = Arc::new(DataCache::new(
             Arc::new(storage),
             64,
@@ -580,8 +569,8 @@ mod tests {
     fn test_flush_checkpoint_handler() {
         use crate::storage::storage::Storage;
 
-        let storage = Storage::new_local("/tmp/test-flush-checkpoint")
-            .expect("Failed to create storage");
+        let storage =
+            Storage::new_local("/tmp/test-flush-checkpoint").expect("Failed to create storage");
         let cache = Arc::new(DataCache::new(
             Arc::new(storage),
             64,
@@ -595,8 +584,8 @@ mod tests {
         // Create a flush checkpoint
         let checkpoint = FlushCheckpoint::with_metrics(
             "primary-1".to_string(),
-            100, // flushed_seq
-            5,   // files_written
+            100,  // flushed_seq
+            5,    // files_written
             1000, // rows_flushed
         );
 
@@ -614,8 +603,8 @@ mod tests {
     fn test_flush_checkpoint_response_node_id() {
         use crate::storage::storage::Storage;
 
-        let storage = Storage::new_local("/tmp/test-response-node-id")
-            .expect("Failed to create storage");
+        let storage =
+            Storage::new_local("/tmp/test-response-node-id").expect("Failed to create storage");
         let cache = Arc::new(DataCache::new(
             Arc::new(storage),
             64,
@@ -636,8 +625,8 @@ mod tests {
     fn test_verify_batch_checksum_success() {
         use crate::storage::storage::Storage;
 
-        let storage = Storage::new_local("/tmp/test-checksum-success")
-            .expect("Failed to create storage");
+        let storage =
+            Storage::new_local("/tmp/test-checksum-success").expect("Failed to create storage");
         let cache = Arc::new(DataCache::new(
             Arc::new(storage),
             64,
@@ -650,12 +639,7 @@ mod tests {
         let data = b"test batch data";
         let checksum = compute_checksum(data);
 
-        let result = receiver.verify_batch_checksum(
-            data,
-            Some(checksum),
-            "partition-1",
-            1,
-        );
+        let result = receiver.verify_batch_checksum(data, Some(checksum), "partition-1", 1);
         assert!(result.is_ok());
     }
 
@@ -663,8 +647,8 @@ mod tests {
     fn test_verify_batch_checksum_failure() {
         use crate::storage::storage::Storage;
 
-        let storage = Storage::new_local("/tmp/test-checksum-fail")
-            .expect("Failed to create storage");
+        let storage =
+            Storage::new_local("/tmp/test-checksum-fail").expect("Failed to create storage");
         let cache = Arc::new(DataCache::new(
             Arc::new(storage),
             64,
@@ -677,12 +661,7 @@ mod tests {
         let data = b"test batch data";
         let wrong_checksum = 0xDEADBEEF;
 
-        let result = receiver.verify_batch_checksum(
-            data,
-            Some(wrong_checksum),
-            "partition-1",
-            1,
-        );
+        let result = receiver.verify_batch_checksum(data, Some(wrong_checksum), "partition-1", 1);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Checksum mismatch"));
     }
@@ -691,8 +670,8 @@ mod tests {
     fn test_verify_batch_checksum_no_checksum() {
         use crate::storage::storage::Storage;
 
-        let storage = Storage::new_local("/tmp/test-no-checksum")
-            .expect("Failed to create storage");
+        let storage =
+            Storage::new_local("/tmp/test-no-checksum").expect("Failed to create storage");
         let cache = Arc::new(DataCache::new(
             Arc::new(storage),
             64,
@@ -705,12 +684,7 @@ mod tests {
         let data = b"test batch data";
 
         // No checksum provided - should pass
-        let result = receiver.verify_batch_checksum(
-            data,
-            None,
-            "partition-1",
-            1,
-        );
+        let result = receiver.verify_batch_checksum(data, None, "partition-1", 1);
         assert!(result.is_ok());
     }
 }

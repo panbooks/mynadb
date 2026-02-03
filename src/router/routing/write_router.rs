@@ -350,14 +350,19 @@ impl WriteRouter {
 
                     debug!(
                         "Write succeeded: {} -> {} (attempt {})",
-                        table_path, node.node_id, attempt + 1
+                        table_path,
+                        node.node_id,
+                        attempt + 1
                     );
                     return Ok((written, attempt as u32));
                 }
                 Err(e) => {
                     warn!(
                         "Write failed: {} -> {} (attempt {}): {}",
-                        table_path, node.node_id, attempt + 1, e
+                        table_path,
+                        node.node_id,
+                        attempt + 1,
+                        e
                     );
                     last_error = e;
                 }
@@ -407,7 +412,12 @@ impl WriteRouter {
     }
 
     /// Handle all write attempts failed: mark nodes suspect, log error
-    fn on_write_failure(shard_cache: &ShardCache, table_path: &str, tried_nodes: &[String], last_error: &str) {
+    fn on_write_failure(
+        shard_cache: &ShardCache,
+        table_path: &str,
+        tried_nodes: &[String],
+        last_error: &str,
+    ) {
         error!(
             "Write failed for {} after {} attempts: {}",
             table_path,
@@ -454,7 +464,12 @@ impl WriteRouter {
 
         // Slow path: Register with Meta (only one concurrent call per table+node)
         let result = client
-            .add_table_owner(catalog, &partition_key.schema, &partition_key.table, node_id)
+            .add_table_owner(
+                catalog,
+                &partition_key.schema,
+                &partition_key.table,
+                node_id,
+            )
             .await;
 
         // Always clean up the pending marker
@@ -547,7 +562,11 @@ impl WriteRouter {
 
     /// Select candidates for distributed writes (percent > 0)
     /// Returns shuffled pool of target nodes
-    fn select_distributed_candidates(&self, table_key: &TableKey, percent: u8) -> Vec<DataNodeInfo> {
+    fn select_distributed_candidates(
+        &self,
+        table_key: &TableKey,
+        percent: u8,
+    ) -> Vec<DataNodeInfo> {
         let all_nodes = self.shard_cache.get_active_primary_nodes();
         if all_nodes.is_empty() {
             return vec![];
@@ -681,7 +700,8 @@ mod tests {
         ]));
 
         let time_array = Int64Array::from((0..rows as i64).collect::<Vec<_>>());
-        let value_array = StringArray::from((0..rows).map(|i| format!("val-{}", i)).collect::<Vec<_>>());
+        let value_array =
+            StringArray::from((0..rows).map(|i| format!("val-{}", i)).collect::<Vec<_>>());
 
         RecordBatch::try_new(schema, vec![Arc::new(time_array), Arc::new(value_array)]).unwrap()
     }
@@ -700,7 +720,9 @@ mod tests {
             let mut shuffled = nodes.clone();
             shuffled.shuffle(&mut rng);
             let selected = &shuffled[0];
-            *selection_counts.entry(selected.node_id.clone()).or_insert(0) += 1;
+            *selection_counts
+                .entry(selected.node_id.clone())
+                .or_insert(0) += 1;
         }
 
         // Each node should be selected roughly 333 times (±15% tolerance)
@@ -733,7 +755,11 @@ mod tests {
         for _ in 0..100 {
             let mut shuffled = nodes.clone();
             shuffled.shuffle(&mut rng);
-            let order: String = shuffled.iter().map(|n| n.node_id.clone()).collect::<Vec<_>>().join(",");
+            let order: String = shuffled
+                .iter()
+                .map(|n| n.node_id.clone())
+                .collect::<Vec<_>>()
+                .join(",");
             orders_seen.insert(order);
         }
 

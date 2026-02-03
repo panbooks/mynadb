@@ -234,9 +234,11 @@ impl QueryCoordinator {
 
         // Detect aggregation/ordering that needs consolidation
         let sql_upper = sql.to_uppercase();
-        let needs_aggregation = ["GROUP BY", "ORDER BY", "LIMIT", " COUNT(", " SUM(", " AVG(", " MIN(", " MAX("]
-            .iter()
-            .any(|kw| sql_upper.contains(kw));
+        let needs_aggregation = [
+            "GROUP BY", "ORDER BY", "LIMIT", " COUNT(", " SUM(", " AVG(", " MIN(", " MAX(",
+        ]
+        .iter()
+        .any(|kw| sql_upper.contains(kw));
 
         // Get all queryable nodes
         let all_primary_nodes = self.shard_cache.get_queryable_primary_nodes();
@@ -296,14 +298,15 @@ impl QueryCoordinator {
 
         for table in tables {
             let table_key = TableKey::new(catalog, &table.schema, &table.table);
-            let distribution_percent = self
-                .shard_cache
-                .get_distribution_percent(catalog, &table.schema, &table.table);
+            let distribution_percent =
+                self.shard_cache
+                    .get_distribution_percent(catalog, &table.schema, &table.table);
 
             // Try to resolve from cache first
             if let Some(cached_meta) = self.shard_cache.get_table_meta(&table_key) {
                 // Check for stale owners (removed from cluster after scale-in)
-                let (_active_count, stale_count) = self.check_owners_status(cached_meta.all_owners());
+                let (_active_count, stale_count) =
+                    self.check_owners_status(cached_meta.all_owners());
 
                 if stale_count > 0 {
                     // Stale owners detected - refresh from Meta
@@ -523,9 +526,11 @@ impl QueryCoordinator {
 
                 if count == 0 && table_meta.legacy_prefixes.is_empty() {
                     // No owners and no legacy - use fallback
-                    let distribution_percent = self
-                        .shard_cache
-                        .get_distribution_percent(catalog, &table.schema, &table.table);
+                    let distribution_percent = self.shard_cache.get_distribution_percent(
+                        catalog,
+                        &table.schema,
+                        &table.table,
+                    );
                     self.add_distributed_fallback(
                         table_key,
                         distribution_percent,
@@ -536,10 +541,13 @@ impl QueryCoordinator {
                 }
             }
             Ok(None) => {
-                debug!("Table {} not found in Meta, using fallback", table_key.to_path());
-                let distribution_percent = self
-                    .shard_cache
-                    .get_distribution_percent(catalog, &table.schema, &table.table);
+                debug!(
+                    "Table {} not found in Meta, using fallback",
+                    table_key.to_path()
+                );
+                let distribution_percent =
+                    self.shard_cache
+                        .get_distribution_percent(catalog, &table.schema, &table.table);
                 self.add_distributed_fallback(
                     table_key,
                     distribution_percent,
@@ -550,9 +558,9 @@ impl QueryCoordinator {
             }
             Err(e) => {
                 warn!("Failed to get table owner from Meta: {}, using fallback", e);
-                let distribution_percent = self
-                    .shard_cache
-                    .get_distribution_percent(catalog, &table.schema, &table.table);
+                let distribution_percent =
+                    self.shard_cache
+                        .get_distribution_percent(catalog, &table.schema, &table.table);
                 self.add_distributed_fallback(
                     table_key,
                     distribution_percent,
@@ -591,8 +599,7 @@ impl QueryCoordinator {
                 table_key.to_path(),
                 distribution_percent
             );
-            let target_count = ((all_primary_nodes.len() as f64
-                * distribution_percent as f64
+            let target_count = ((all_primary_nodes.len() as f64 * distribution_percent as f64
                 / 100.0)
                 .ceil() as usize)
                 .max(1);
@@ -1124,10 +1131,7 @@ mod tests {
         }
 
         // Verify distribution (not all on one node)
-        let non_empty_nodes: Vec<_> = assignments
-            .values()
-            .filter(|v| !v.is_empty())
-            .collect();
+        let non_empty_nodes: Vec<_> = assignments.values().filter(|v| !v.is_empty()).collect();
 
         assert!(
             non_empty_nodes.len() >= 2,
@@ -1179,14 +1183,7 @@ mod tests {
     #[test]
     fn test_needs_aggregation_detection() {
         let aggregation_keywords = [
-            "GROUP BY",
-            "ORDER BY",
-            "LIMIT",
-            " COUNT(",
-            " SUM(",
-            " AVG(",
-            " MIN(",
-            " MAX(",
+            "GROUP BY", "ORDER BY", "LIMIT", " COUNT(", " SUM(", " AVG(", " MIN(", " MAX(",
         ];
 
         for keyword in aggregation_keywords {
