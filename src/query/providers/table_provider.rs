@@ -181,7 +181,231 @@ impl ParquetTableProvider {
         self
     }
 
-    /// Discover Parquet files in the table directory
+    /// Create a new provider using ObjectStore (async, lazy file discovery)
+    ///
+    /// This is the unified constructor that works with both local filesystem
+    /// and remote object storage (S3/MinIO/OSS). File discovery is deferred
+    /// to scan time for better performance with large tables.
+    ///
+    /// # Arguments
+    /// * `object_store` - The ObjectStore to use for file operations
+    /// * `base_path` - The base path/prefix for the table (without URL scheme)
+    /// * `config` - Table configuration
+    pub async fn try_new_async(
+        object_store: Arc<dyn ObjectStore>,
+        base_path: impl Into<String>,
+        config: ParquetTableConfig,
+    ) -> Result<Self> {
+        let base_path_str = base_path.into();
+        let base_path_buf = PathBuf::from(&base_path_str);
+
+        // Only infer schema from ONE file - don't list all files
+        let schema = Self::infer_schema_from_prefix(&object_store, &base_path_str, &config).await?;
+
+        Ok(Self {
+            schema: Arc::new(schema),
+            files: RwLock::new(Vec::new()), // Empty - lazy discovery at scan time
+            config,
+            base_path: base_path_buf,
+            object_store: Some(object_store),
+            parquet_cache: None,
+        })
+    }
+
+    /// Infer schema by finding ONE parquet file under the prefix
+    async fn infer_schema_from_prefix(
+        object_store: &Arc<dyn ObjectStore>,
+        base_path: &str,
+        config: &ParquetTableConfig,
+    ) -> Result<Schema> {
+        use futures::StreamExt;
+        use object_store::path::Path as ObjectPath;
+
+        let prefix = ObjectPath::from(base_path.trim_start_matches('/'));
+
+        // Stream through files until we find one .parquet file
+        let mut list_stream = object_store.list(Some(&prefix));
+
+        while let Some(result) = list_stream.next().await {
+            match result {
+                Ok(meta) => {
+                    let path_str = meta.location.to_string();
+                    if path_str.ends_with(".parquet") {
+                        // Found a parquet file, infer schema from it
+                        let schema = Self::infer_schema_from_path(object_store, &meta.location).await?;
+
+                        // Add partition column if needed
+                        if config.partitioned {
+                            let mut fields: Vec<Field> = schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+                            if !fields.iter().any(|f| f.name() == &config.partition_column) {
+                                fields.push(Field::new(&config.partition_column, DataType::Utf8, true));
+                            }
+                            return Ok(Schema::new(fields));
+                        }
+                        return Ok(schema);
+                    }
+                }
+                Err(e) => {
+                    return Err(DataFusionError::External(Box::new(e)));
+                }
+            }
+        }
+
+        // No parquet files found - return minimal schema
+        if config.partitioned {
+            Ok(Schema::new(vec![Field::new(&config.partition_column, DataType::Utf8, true)]))
+        } else {
+            Ok(Schema::empty())
+        }
+    }
+
+    /// Infer schema from a specific parquet file path
+    async fn infer_schema_from_path(
+        object_store: &Arc<dyn ObjectStore>,
+        path: &object_store::path::Path,
+    ) -> Result<Schema> {
+        use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        // Fetch the file content
+        let get_result = object_store.get(path).await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let bytes = get_result.bytes().await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        // Build reader and get schema
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        Ok(reader.schema().as_ref().clone())
+    }
+
+    /// Discover files for scan with partition filter pruning (lazy discovery)
+    ///
+    /// This is called at scan time, not construction time. It uses partition
+    /// filters to prune directories before listing files, dramatically reducing
+    /// the number of list operations for large tables.
+    async fn discover_files_for_scan(
+        object_store: &Arc<dyn ObjectStore>,
+        base_path: &str,
+        config: &ParquetTableConfig,
+        filters: &[Expr],
+    ) -> Result<Vec<ParquetFileInfo>> {
+        use object_store::path::Path as ObjectPath;
+
+        let base_prefix = ObjectPath::from(base_path.trim_start_matches('/'));
+
+        if config.partitioned {
+            // For partitioned tables, discover partitions first and prune
+            Self::discover_partitioned_files(object_store, &base_prefix, config, filters).await
+        } else {
+            // For non-partitioned tables, list all parquet files
+            Self::discover_flat_files(object_store, &base_prefix).await
+        }
+    }
+
+    /// Discover files in partitioned table with filter pruning
+    async fn discover_partitioned_files(
+        object_store: &Arc<dyn ObjectStore>,
+        base_prefix: &object_store::path::Path,
+        config: &ParquetTableConfig,
+        filters: &[Expr],
+    ) -> Result<Vec<ParquetFileInfo>> {
+        use futures::TryStreamExt;
+
+        // Extract partition filters for pruning
+        let partition_filters = Self::extract_partition_filters(&config.partition_column, filters);
+
+        // List partition directories using list_with_delimiter
+        let list_result = object_store.list_with_delimiter(Some(base_prefix)).await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let mut files = Vec::new();
+        let partition_prefix = format!("{}=", config.partition_column);
+
+        // Process each partition directory
+        for prefix in list_result.common_prefixes {
+            let dir_name = prefix.as_ref()
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or("");
+
+            // Check if this is a partition directory
+            if !dir_name.starts_with(&partition_prefix) {
+                continue;
+            }
+
+            let partition_value = dir_name
+                .strip_prefix(&partition_prefix)
+                .unwrap_or("")
+                .to_string();
+
+            // Apply partition filter pruning
+            if !partition_filters.is_empty() && !Self::matches_partition_filter(&partition_value, &partition_filters) {
+                debug!(
+                    "Pruning partition {} (doesn't match filters)",
+                    partition_value
+                );
+                continue;
+            }
+
+            // List files in this partition
+            let partition_files = object_store.list(Some(&prefix));
+            let objects: Vec<_> = partition_files.try_collect().await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            for meta in objects {
+                let path_str = meta.location.to_string();
+                if !path_str.ends_with(".parquet") {
+                    continue;
+                }
+
+                let mut partition_values = HashMap::new();
+                partition_values.insert(config.partition_column.clone(), partition_value.clone());
+
+                files.push(ParquetFileInfo {
+                    path: PathBuf::from(&path_str),
+                    partition_values,
+                    file_size: meta.size as u64,
+                });
+            }
+        }
+
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(files)
+    }
+
+    /// Discover files in non-partitioned table
+    async fn discover_flat_files(
+        object_store: &Arc<dyn ObjectStore>,
+        base_prefix: &object_store::path::Path,
+    ) -> Result<Vec<ParquetFileInfo>> {
+        use futures::TryStreamExt;
+
+        let list_result = object_store.list(Some(base_prefix));
+        let objects: Vec<_> = list_result.try_collect().await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let mut files = Vec::new();
+        for meta in objects {
+            let path_str = meta.location.to_string();
+            if !path_str.ends_with(".parquet") {
+                continue;
+            }
+
+            files.push(ParquetFileInfo {
+                path: PathBuf::from(&path_str),
+                partition_values: HashMap::new(),
+                file_size: meta.size as u64,
+            });
+        }
+
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(files)
+    }
+
+    /// Discover Parquet files in the table directory (sync, local filesystem only)
     fn discover_files(
         base_path: &Path,
         config: &ParquetTableConfig,
@@ -696,20 +920,25 @@ impl TableProvider for ParquetTableProvider {
         // Compute the projected schema
         let projected_schema = project_schema(&self.schema, projection)?;
 
-        // Get files, applying partition pruning
-        let all_files = self.files.read().clone();
-        let total_files = all_files.len();
-        let files = if self.config.partitioned {
-            Self::filter_files_by_partition(&all_files, &self.config.partition_column, filters)
+        // Get files - use lazy discovery for object store, or cached files for local
+        let files = if let Some(ref object_store) = self.object_store {
+            // Lazy discovery at scan time with partition filter pruning
+            let base_path = self.base_path.to_string_lossy().to_string();
+            Self::discover_files_for_scan(object_store, &base_path, &self.config, filters).await?
         } else {
-            all_files
+            // Use pre-discovered files (local filesystem)
+            let all_files = self.files.read().clone();
+            if self.config.partitioned {
+                Self::filter_files_by_partition(&all_files, &self.config.partition_column, filters)
+            } else {
+                all_files
+            }
         };
 
         debug!(
-            "ParquetTableProvider scan: table={}, files={}/{}, filters={}, projection={:?}",
+            "ParquetTableProvider scan: table={}, files={}, filters={}, projection={:?}",
             self.config.table_name,
             files.len(),
-            total_files,
             filters.len(),
             projection
         );
