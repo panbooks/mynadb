@@ -69,6 +69,50 @@ pub fn hash_select_clone<T: Hash, V: Clone>(key: &T, items: &[V]) -> Option<V> {
     hash_select(key, items).cloned()
 }
 
+/// Filter legacy prefixes to only those assigned to this node via consistent hash
+///
+/// When a table has legacy prefixes from retired nodes (scale-in), we use
+/// consistent hashing to distribute responsibility across surviving primary nodes.
+/// Each primary node only scans the legacy prefixes it's responsible for.
+///
+/// # Arguments
+/// * `my_node_id` - This node's ID
+/// * `all_primary_node_ids` - All surviving primary node IDs (MUST be sorted for consistency)
+/// * `legacy_prefixes` - All legacy prefixes for the table
+///
+/// # Returns
+/// The subset of legacy prefixes this node should scan
+///
+/// # Example
+/// ```ignore
+/// // Node data-5 out of [data-1..data-50] with 50 legacy prefixes [data-51..data-100]
+/// let my_prefixes = filter_legacy_prefixes_for_node(
+///     "data-5",
+///     &["data-1", "data-2", ..., "data-50"],  // sorted
+///     &["data-51", "data-52", ..., "data-100"],
+/// );
+/// // Returns ~1 prefix that hashes to data-5
+/// ```
+pub fn filter_legacy_prefixes_for_node(
+    my_node_id: &str,
+    all_primary_node_ids: &[String],
+    legacy_prefixes: &[String],
+) -> Vec<String> {
+    if all_primary_node_ids.is_empty() || legacy_prefixes.is_empty() {
+        return Vec::new();
+    }
+
+    legacy_prefixes
+        .iter()
+        .filter(|prefix| {
+            // Use consistent hash to assign this prefix to a primary node
+            let assigned_idx = hash_select_index(prefix, all_primary_node_ids.len());
+            all_primary_node_ids.get(assigned_idx).map(|s| s.as_str()) == Some(my_node_id)
+        })
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +188,68 @@ mod tests {
             assert!(count > 50, "Bucket has too few items: {}", count);
             assert!(count < 150, "Bucket has too many items: {}", count);
         }
+    }
+
+    #[test]
+    fn test_filter_legacy_prefixes_for_node_empty() {
+        // Empty inputs
+        let result = filter_legacy_prefixes_for_node(
+            "node-1",
+            &[],
+            &["prefix-1".to_string()],
+        );
+        assert!(result.is_empty());
+
+        let result = filter_legacy_prefixes_for_node(
+            "node-1",
+            &["node-1".to_string()],
+            &[],
+        );
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_filter_legacy_prefixes_for_node_single_node() {
+        // Single surviving node gets all prefixes
+        let primaries = vec!["node-1".to_string()];
+        let legacy = vec![
+            "retired-1".to_string(),
+            "retired-2".to_string(),
+            "retired-3".to_string(),
+        ];
+
+        let result = filter_legacy_prefixes_for_node("node-1", &primaries, &legacy);
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn test_filter_legacy_prefixes_for_node_distribution() {
+        // Multiple nodes should distribute prefixes
+        let primaries: Vec<String> = (1..=5).map(|i| format!("node-{}", i)).collect();
+        let legacy: Vec<String> = (1..=50).map(|i| format!("retired-{}", i)).collect();
+
+        let mut total_assigned = 0;
+        for node_id in &primaries {
+            let result = filter_legacy_prefixes_for_node(node_id, &primaries, &legacy);
+            total_assigned += result.len();
+            // Each node should get roughly 10 prefixes (50/5)
+            assert!(result.len() >= 5, "Node {} got too few: {}", node_id, result.len());
+            assert!(result.len() <= 15, "Node {} got too many: {}", node_id, result.len());
+        }
+
+        // All prefixes should be assigned exactly once
+        assert_eq!(total_assigned, 50);
+    }
+
+    #[test]
+    fn test_filter_legacy_prefixes_for_node_deterministic() {
+        let primaries: Vec<String> = (1..=3).map(|i| format!("node-{}", i)).collect();
+        let legacy: Vec<String> = (1..=10).map(|i| format!("retired-{}", i)).collect();
+
+        let result1 = filter_legacy_prefixes_for_node("node-2", &primaries, &legacy);
+        let result2 = filter_legacy_prefixes_for_node("node-2", &primaries, &legacy);
+
+        // Same input should give same output
+        assert_eq!(result1, result2);
     }
 }

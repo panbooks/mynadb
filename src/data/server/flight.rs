@@ -883,34 +883,72 @@ impl FlightService for DataNodeFlightService {
 
         // Set legacy prefixes for scale-in support
         // When cluster scaled in, retired nodes' data remains in S3 under old prefixes.
-        // We fetch legacy_prefixes from Meta and set them on QueryEngine so it can
-        // scan all relevant prefixes (current node + legacy) when registering tables.
+        // We fetch legacy_prefixes from Meta and filter to only those THIS node is
+        // responsible for (via consistent hash), then set them on QueryEngine.
+        //
+        // This distributes legacy data scanning across all surviving primary nodes,
+        // preventing any single node from becoming a bottleneck.
         if let Some(ref meta_client) = self.meta_client {
             let table_refs = crate::query::sql_utils::extract_table_references(
                 &ticket.sql,
                 &ticket.catalog,
             );
 
+            // Get all primary node IDs for consistent hash assignment
+            // Only fetch once per query, not per table
+            let all_primary_ids: Vec<String> = match meta_client
+                .list_nodes(
+                    Some(crate::meta::types::NodeRole::Data),
+                    Some(crate::meta::types::NodeState::Active),
+                )
+                .await
+            {
+                Ok(nodes) => {
+                    let mut ids: Vec<String> = nodes
+                        .into_iter()
+                        .filter(|n| n.mode == Some(crate::meta::types::DataNodeMode::Primary))
+                        .map(|n| n.node_id)
+                        .collect();
+                    ids.sort(); // MUST sort for consistent hash assignment
+                    ids
+                }
+                Err(e) => {
+                    warn!("Failed to list primary nodes for legacy prefix assignment: {}", e);
+                    Vec::new()
+                }
+            };
+
             for (catalog, schema, table) in &table_refs {
                 match meta_client.get_table_owner(catalog, schema, table).await {
                     Ok(Some(table_meta)) => {
                         if !table_meta.legacy_prefixes.is_empty() {
-                            self.query_engine
-                                .set_legacy_prefixes(
+                            // Filter to only legacy prefixes this node is responsible for
+                            let my_prefixes = if all_primary_ids.is_empty() {
+                                // Fallback: if we can't get primary list, scan all prefixes
+                                table_meta.legacy_prefixes.clone()
+                            } else {
+                                crate::utils::hash::filter_legacy_prefixes_for_node(
+                                    &self.node_id,
+                                    &all_primary_ids,
+                                    &table_meta.legacy_prefixes,
+                                )
+                            };
+
+                            if !my_prefixes.is_empty() {
+                                self.query_engine
+                                    .set_legacy_prefixes(catalog, schema, table, my_prefixes.clone())
+                                    .await;
+                                debug!(
+                                    "Set {}/{} legacy prefixes for {}.{}.{} (this node: {}): {:?}",
+                                    my_prefixes.len(),
+                                    table_meta.legacy_prefixes.len(),
                                     catalog,
                                     schema,
                                     table,
-                                    table_meta.legacy_prefixes.clone(),
-                                )
-                                .await;
-                            debug!(
-                                "Set {} legacy prefixes for {}.{}.{}: {:?}",
-                                table_meta.legacy_prefixes.len(),
-                                catalog,
-                                schema,
-                                table,
-                                table_meta.legacy_prefixes
-                            );
+                                    self.node_id,
+                                    my_prefixes
+                                );
+                            }
                         }
                     }
                     Ok(None) => {} // Table not in Meta, no legacy prefixes

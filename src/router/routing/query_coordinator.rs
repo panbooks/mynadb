@@ -261,29 +261,89 @@ impl QueryCoordinator {
         let all_primary_nodes = self.shard_cache.get_queryable_primary_nodes();
 
         // ====================================================================
-        // TABLE-LEVEL ROUTING (RECOMMENDED)
+        // TABLE-LEVEL ROUTING WITH DISTRIBUTION SUPPORT
         // ====================================================================
         // For time-series workloads:
         // - 95% of queries access today's data (single partition)
-        // - Each table is owned by one node
+        // - Each table is owned by one node (default)
         // - Route to owner → excellent cache locality
+        //
+        // For distributed tables (percent > 0):
+        // - Data is spread across multiple/all primary nodes
+        // - Query ALL nodes that may have data (scatter-gather)
+        // - Handles scale-in legacy data via legacy_prefixes
 
         let (table_owners, target_nodes) = if let Some(ref meta_client) = self.meta_client {
             let mut owners: HashMap<String, String> = HashMap::new();
             let mut nodes_to_query: HashMap<String, DataNodeInfo> = HashMap::new();
+            let mut any_distributed = false;
 
             for table in &tables {
                 let table_key = TableKey::new(catalog, &table.schema, &table.table);
 
-                // First check local cache
-                if let Some(owner_id) = self.shard_cache.get_table_owner(&table_key) {
-                    if let Some(node) = self.shard_cache.get_data_node(&owner_id) {
-                        if node.state == super::shard_cache::NodeState::Active
-                            || node.state == super::shard_cache::NodeState::Retiring {
-                            owners.insert(table_key.to_path(), owner_id.clone());
-                            nodes_to_query.insert(owner_id, node);
-                            continue;
+                // Check if this table is distributed (writes go to multiple nodes)
+                let distribution_percent = self.shard_cache.get_distribution_percent(
+                    catalog,
+                    &table.schema,
+                    &table.table,
+                );
+
+                if distribution_percent == 100 {
+                    // Fully distributed: query ALL primary nodes
+                    // Each primary may have a portion of the data
+                    any_distributed = true;
+                    info!(
+                        "Table {} is fully distributed (100%) - querying all {} primaries",
+                        table_key.to_path(),
+                        all_primary_nodes.len()
+                    );
+                    for node in &all_primary_nodes {
+                        owners.insert(table_key.to_path(), node.node_id.clone());
+                        nodes_to_query.insert(node.node_id.clone(), node.clone());
+                    }
+                    continue;
+                } else if distribution_percent > 0 {
+                    // Partially distributed: query a subset of nodes based on hash
+                    any_distributed = true;
+                    let target_count = std::cmp::max(
+                        1,
+                        (all_primary_nodes.len() * distribution_percent as usize) / 100,
+                    );
+                    info!(
+                        "Table {} is {}% distributed - querying {} of {} primaries",
+                        table_key.to_path(),
+                        distribution_percent,
+                        target_count,
+                        all_primary_nodes.len()
+                    );
+                    // Use consistent hash to select which nodes to query
+                    // This ensures the same nodes are selected for the same table
+                    for (i, node) in all_primary_nodes.iter().enumerate() {
+                        if i < target_count {
+                            owners.insert(table_key.to_path(), node.node_id.clone());
+                            nodes_to_query.insert(node.node_id.clone(), node.clone());
                         }
+                    }
+                    continue;
+                }
+
+                // Non-distributed table: route to owner(s) only
+                // First check local cache
+                if let Some(cached_meta) = self.shard_cache.get_table_meta(&table_key) {
+                    let mut found_active_owner = false;
+                    for owner_id in cached_meta.all_owners() {
+                        if let Some(node) = self.shard_cache.get_data_node(owner_id) {
+                            if node.state == super::shard_cache::NodeState::Active
+                                || node.state == super::shard_cache::NodeState::Retiring
+                            {
+                                owners.insert(table_key.to_path(), owner_id.clone());
+                                nodes_to_query.insert(owner_id.clone(), node);
+                                found_active_owner = true;
+                            }
+                        }
+                    }
+                    if found_active_owner {
+                        continue;
                     }
                 }
 
@@ -292,31 +352,25 @@ impl QueryCoordinator {
                     Ok(Some(table_meta)) => {
                         // Get all owners for scatter-gather
                         let all_owners = table_meta.all_owners();
-                        let _primary_owner = table_meta.primary_owner().unwrap_or("").to_string();
 
-                        // Check if this is a distributed table (for logging)
-                        let is_distributed = self.shard_cache.is_distributed(
-                            catalog,
-                            &table.schema,
-                            &table.table,
-                        );
-                        if is_distributed || all_owners.len() > 1 {
-                            info!(
-                                "Table {} has {} owners (distributed={}) - using scatter-gather query",
-                                table_key.to_path(),
-                                all_owners.len(),
-                                is_distributed
-                            );
-                        }
-
-                        // Update local cache with primary owner and all owners
-                        self.shard_cache.set_table_owners(
+                        // Cache table meta including legacy prefixes
+                        self.shard_cache.set_table_owners_with_legacy(
                             &table_key,
                             all_owners.to_vec(),
+                            table_meta.legacy_prefixes.clone(),
                             table_meta.version,
                         );
 
-                        // Add all available owners to query set for scatter-gather
+                        // Log if table has legacy data from scale-in
+                        if !table_meta.legacy_prefixes.is_empty() {
+                            info!(
+                                "Table {} has {} legacy prefixes from scale-in",
+                                table_key.to_path(),
+                                table_meta.legacy_prefixes.len()
+                            );
+                        }
+
+                        // Add all available owners to query set
                         for owner_id in all_owners {
                             if let Some(node) = self.shard_cache.get_data_node(owner_id) {
                                 if node.state == super::shard_cache::NodeState::Active
@@ -364,9 +418,10 @@ impl QueryCoordinator {
             if !owners.is_empty() {
                 let nodes: Vec<DataNodeInfo> = nodes_to_query.into_values().collect();
                 info!(
-                    "Table-level routing: {} tables -> {} nodes",
+                    "Table-level routing: {} tables -> {} nodes (distributed={})",
                     owners.len(),
-                    nodes.len()
+                    nodes.len(),
+                    any_distributed
                 );
                 (Some(owners), nodes)
             } else {
