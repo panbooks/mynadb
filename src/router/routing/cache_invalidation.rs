@@ -226,22 +226,6 @@ impl CacheInvalidationHandler {
                 EventType::SchemaChanged => {
                     debug!("Schema changed event received");
                 }
-                EventType::ReplicaAssigned => {
-                    Self::handle_replica_assigned(&shard_cache, &event);
-                }
-                EventType::ReplicaPromoted => {
-                    // No-Promotion architecture: this event is no longer used for promotion
-                    // Kept for backward compatibility with older Meta versions
-                    debug!("ReplicaPromoted event received but ignored (No-Promotion architecture)");
-                }
-                EventType::ReplicaStateChanged => {
-                    Self::handle_replica_state_changed(&shard_cache, &event);
-                }
-                EventType::DataNodeModeChanged => {
-                    // No-Promotion architecture: mode is set at registration time
-                    // This event is never published, kept for backward compatibility
-                    debug!("DataNodeModeChanged event ignored (No-Promotion architecture)");
-                }
                 EventType::DistributionConfigChanged => {
                     Self::handle_distribution_config_changed(&shard_cache, &event);
                 }
@@ -461,36 +445,6 @@ impl CacheInvalidationHandler {
             event.sequence
         );
     }
-
-    /// Handle replica assigned event (no-op for table-level routing)
-    ///
-    /// With table-level routing, partition replicas are not used.
-    fn handle_replica_assigned(_shard_cache: &ShardCache, event: &MetaEvent) {
-        debug!(
-            "Replica assigned event (no-op for table routing): seq={}",
-            event.sequence
-        );
-    }
-
-    // handle_replica_promoted() removed - using No-Promotion architecture
-    // Standby nodes never promote to Primary; K8s handles node replacement
-
-    /// Handle replica state changed event
-    fn handle_replica_state_changed(_shard_cache: &ShardCache, event: &MetaEvent) {
-        if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
-            let partition_key = payload["partition_key"].as_str().unwrap_or_default();
-            let state = payload["state"].as_str().unwrap_or("offline");
-
-            if !partition_key.is_empty() {
-                debug!("Replica state changed: {} -> {}", partition_key, state);
-                // State changes are informational for now
-                // Router uses node health for routing decisions
-            }
-        }
-    }
-
-    // handle_data_node_mode_changed() removed - No-Promotion architecture
-    // Mode is set at registration time and never changes dynamically
 
     /// Handle distribution config changed event
     ///

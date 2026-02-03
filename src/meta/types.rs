@@ -1034,16 +1034,9 @@ pub enum EventType {
     LeaderChanged = 6,
     CacheInvalidate = 7,
     SchemaChanged = 8,
-    /// Partition replica assigned (leader + standbys)
-    ReplicaAssigned = 9,
-    /// Replica leader changed (reassignment, not promotion)
-    /// Note: In No-Promotion architecture, this is only for partition reassignment
-    ReplicaPromoted = 10, // Kept for backward compatibility, but no longer used for promotion
-    /// Replica state changed (InSync/CatchingUp/Offline)
-    ReplicaStateChanged = 11,
-    /// Data node mode changed (Cold Standby Architecture)
-    /// Note: In No-Promotion architecture, mode changes only happen at registration
-    DataNodeModeChanged = 12,
+    // Note: IDs 9-12 were previously used for partition-level replica events
+    // (ReplicaAssigned, ReplicaPromoted, ReplicaStateChanged, DataNodeModeChanged)
+    // These have been removed as part of the table-level routing migration.
 
     /// Standby needs to flush data for crashed Primary (Recovery)
     ///
@@ -1094,10 +1087,7 @@ impl From<i32> for EventType {
             6 => EventType::LeaderChanged,
             7 => EventType::CacheInvalidate,
             8 => EventType::SchemaChanged,
-            9 => EventType::ReplicaAssigned,
-            10 => EventType::ReplicaPromoted,
-            11 => EventType::ReplicaStateChanged,
-            12 => EventType::DataNodeModeChanged,
+            // 9-12 reserved (formerly replica events, now removed)
             13 => EventType::FlushForRecovery,
             14 => EventType::TableOwnerAdded,
             15 => EventType::TableOwnerRemoved,

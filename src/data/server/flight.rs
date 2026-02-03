@@ -37,11 +37,6 @@ use tracing::{debug, error, info, warn};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WriteTicket {
     pub catalog: String,
-    pub fencing_token: Option<u64>,
-    /// Optional partition key for fencing token validation
-    /// Format: catalog/schema/table/date (e.g., "mydb/default/cpu/2024-01-15")
-    #[serde(default)]
-    pub partition_key: Option<String>,
 }
 
 /// Batch write request metadata sent via Flight Descriptor
@@ -52,7 +47,6 @@ pub struct BatchWriteTicket {
     pub schema: String,
     pub table: String,
     pub date: i32, // Days since Unix epoch (Date32 format)
-    pub fencing_token: Option<u64>,
 }
 
 /// Query request metadata sent via Flight Ticket
@@ -378,25 +372,9 @@ impl DataNodeFlightService {
         Status,
     > {
         debug!(
-            "DoPut batch write: catalog={}, schema={}, table={}, date={}, fencing_token={:?}",
-            ticket.catalog, ticket.schema, ticket.table, ticket.date, ticket.fencing_token
+            "DoPut batch write: catalog={}, schema={}, table={}, date={}",
+            ticket.catalog, ticket.schema, ticket.table, ticket.date
         );
-
-        // Validate fencing token if provided
-        if let Some(token) = ticket.fencing_token {
-            self.validate_fencing_token(
-                token,
-                &ticket.catalog,
-                Some(&format!(
-                    "{}/{}/{}/date={}",
-                    ticket.catalog,
-                    ticket.schema,
-                    ticket.table,
-                    crate::storage::line_protocol::format_date32_as_string(ticket.date)
-                )),
-            )
-            .await?;
-        }
 
         // Check if replication is enabled - if so, clone batches for replication
         let replication_enabled = self.replication_manager.is_some();
@@ -506,16 +484,7 @@ impl DataNodeFlightService {
         Response<Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>>,
         Status,
     > {
-        debug!(
-            "DoPut legacy write: catalog={}, fencing_token={:?}",
-            ticket.catalog, ticket.fencing_token
-        );
-
-        // Validate fencing token if provided
-        if let Some(token) = ticket.fencing_token {
-            self.validate_fencing_token(token, &ticket.catalog, ticket.partition_key.as_deref())
-                .await?;
-        }
+        debug!("DoPut legacy write: catalog={}", ticket.catalog);
 
         // Process batches with line_protocol column
         let mut total_points = 0u64;
@@ -560,65 +529,6 @@ impl DataNodeFlightService {
         };
         let output = stream::once(async { Ok(result) });
         Ok(Response::new(Box::pin(output)))
-    }
-
-    /// Validate fencing token against Meta service
-    async fn validate_fencing_token(
-        &self,
-        token: u64,
-        catalog: &str,
-        partition_key: Option<&str>,
-    ) -> Result<(), Status> {
-        if let Some(ref meta_client) = self.meta_client {
-            // Use partition_key if provided, otherwise fall back to catalog-level lock
-            let lock_key = partition_key
-                .map(|pk| format!("/partitions/{}", pk))
-                .unwrap_or_else(|| format!("/partitions/{}", catalog));
-
-            match meta_client.get_lock(&lock_key).await {
-                Ok(Some(lock_info)) => {
-                    if lock_info.fencing_token != token {
-                        warn!(
-                            "Stale fencing token for {}: received {} but current is {}",
-                            lock_key, token, lock_info.fencing_token
-                        );
-                        return Err(Status::failed_precondition(format!(
-                            "Stale fencing token: write rejected to prevent split-brain. \
-                             Received token {} but partition lock has token {}",
-                            token, lock_info.fencing_token
-                        )));
-                    }
-                    debug!(
-                        "Fencing token {} validated for partition {}",
-                        token, lock_key
-                    );
-                }
-                Ok(None) => {
-                    warn!(
-                        "No lock held for partition {}, rejecting write with token {}",
-                        lock_key, token
-                    );
-                    return Err(Status::failed_precondition(format!(
-                        "No lock held for partition {}. The Router may have lost its lock.",
-                        lock_key
-                    )));
-                }
-                Err(e) => {
-                    // Meta service unavailable - fail-open with warning
-                    warn!(
-                        "Failed to validate fencing token for {}: {}. Allowing write (fail-open).",
-                        lock_key, e
-                    );
-                }
-            }
-        } else {
-            // No meta client - standalone mode, skip validation
-            debug!(
-                "Fencing token {} provided but no meta client (standalone mode)",
-                token
-            );
-        }
-        Ok(())
     }
 
     /// Handle replication write from leader to standby

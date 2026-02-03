@@ -65,9 +65,6 @@ pub struct DistributedQueryPlan {
     /// Table-level routing: table → owner node_id (RECOMMENDED)
     /// When set, routes each table's query to its owner node
     pub table_owners: Option<HashMap<String, String>>,
-    /// File-based routing: node_id → file paths (DEPRECATED)
-    /// When set, each node receives only its own files for maximum cache efficiency
-    pub node_files: Option<HashMap<String, Vec<String>>>,
 }
 
 /// Table reference in a query
@@ -282,11 +279,9 @@ impl QueryCoordinator {
                 let table_key = TableKey::new(catalog, &table.schema, &table.table);
 
                 // Check if this table is distributed (writes go to multiple nodes)
-                let distribution_percent = self.shard_cache.get_distribution_percent(
-                    catalog,
-                    &table.schema,
-                    &table.table,
-                );
+                let distribution_percent =
+                    self.shard_cache
+                        .get_distribution_percent(catalog, &table.schema, &table.table);
 
                 if distribution_percent == 100 {
                     // Fully distributed: query ALL primary nodes
@@ -348,7 +343,11 @@ impl QueryCoordinator {
                 }
 
                 // Cache miss - query Meta
-                match meta_client.get_table_owner(catalog, &table.schema, &table.table).await {
+                // Table in SQL are countable, performance acceptable
+                match meta_client
+                    .get_table_owner(catalog, &table.schema, &table.table)
+                    .await
+                {
                     Ok(Some(table_meta)) => {
                         // Get all owners for scatter-gather
                         let all_owners = table_meta.all_owners();
@@ -404,13 +403,13 @@ impl QueryCoordinator {
                         }
                     }
                     Ok(None) => {
-                        debug!("Table {} not found in Meta, will broadcast", table_key.to_path());
+                        debug!(
+                            "Table {} not found in Meta, will broadcast",
+                            table_key.to_path()
+                        );
                     }
                     Err(e) => {
-                        warn!(
-                            "Failed to get table owner from Meta: {}, will broadcast",
-                            e
-                        );
+                        warn!("Failed to get table owner from Meta: {}, will broadcast", e);
                     }
                 }
             }
@@ -457,7 +456,6 @@ impl QueryCoordinator {
             target_nodes,
             needs_aggregation,
             table_owners,
-            node_files: None, // Deprecated: not using file-based routing
         })
     }
 
@@ -528,17 +526,11 @@ impl QueryCoordinator {
 
                             if is_connection_error && !fallback_nodes.is_empty() {
                                 // Try fallback nodes (any node can read from object storage)
-                                warn!(
-                                    "Table owner {} unreachable, trying fallback nodes",
-                                    node_id
-                                );
+                                warn!("Table owner {} unreachable, trying fallback nodes", node_id);
 
                                 for fallback_node in &fallback_nodes {
                                     debug!("Retrying query on fallback node {}", fallback_node);
-                                    match pool
-                                        .query(fallback_node, &catalog, &sql, None)
-                                        .await
-                                    {
+                                    match pool.query(fallback_node, &catalog, &sql, None).await {
                                         Ok(batches) => {
                                             let total_rows: usize =
                                                 batches.iter().map(|b| b.num_rows()).sum();
@@ -558,10 +550,7 @@ impl QueryCoordinator {
                                     }
                                 }
                                 // All fallbacks failed
-                                error!(
-                                    "Query failed on {} and all fallback nodes: {}",
-                                    node_id, e
-                                );
+                                error!("Query failed on {} and all fallback nodes: {}", node_id, e);
                                 Err(format!(
                                     "Failed to query {} (and {} fallbacks): {}",
                                     node_id,
