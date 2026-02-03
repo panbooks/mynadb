@@ -11,7 +11,9 @@
 //! - Single routing lookup per query (scatter-gather for multi-owner)
 //! - Excellent cache locality for time-series workloads
 
-use crate::meta::types::{keys, Event, EventType, MetaResponse, NodeState, TableMeta, TableStatsDelta};
+use crate::meta::types::{
+    keys, Event, EventType, MetaResponse, NodeState, TableMeta, TableStatsDelta,
+};
 use tracing::{debug, info, warn};
 
 use super::super::MetaStateMachine;
