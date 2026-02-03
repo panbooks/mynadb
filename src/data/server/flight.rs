@@ -878,12 +878,6 @@ impl FlightService for DataNodeFlightService {
                 files.len(),
                 ticket.sql.chars().take(100).collect::<String>()
             );
-            // File-based routing: Router has already determined this node should read these files.
-            // The files are stored with node_id prefix (e.g., "data-1/mydb/default/cpu/date=.../L0_xxx.parquet")
-            // and this node will find them in its local storage when scanning.
-            //
-            // Future optimization: Implement direct file-list query to avoid directory scanning
-            // and leverage local parquet cache for maximum performance.
             info!(
                 "File-based query from Router: {} files to read for {}",
                 files.len(),
@@ -897,9 +891,52 @@ impl FlightService for DataNodeFlightService {
             );
         }
 
+        // Set legacy prefixes for scale-in support
+        // When cluster scaled in, retired nodes' data remains in S3 under old prefixes.
+        // We fetch legacy_prefixes from Meta and set them on QueryEngine so it can
+        // scan all relevant prefixes (current node + legacy) when registering tables.
+        if let Some(ref meta_client) = self.meta_client {
+            let table_refs = crate::query::sql_utils::extract_table_references(
+                &ticket.sql,
+                &ticket.catalog,
+            );
+
+            for (catalog, schema, table) in &table_refs {
+                match meta_client.get_table_owner(catalog, schema, table).await {
+                    Ok(Some(table_meta)) => {
+                        if !table_meta.legacy_prefixes.is_empty() {
+                            self.query_engine
+                                .set_legacy_prefixes(
+                                    catalog,
+                                    schema,
+                                    table,
+                                    table_meta.legacy_prefixes.clone(),
+                                )
+                                .await;
+                            debug!(
+                                "Set {} legacy prefixes for {}.{}.{}: {:?}",
+                                table_meta.legacy_prefixes.len(),
+                                catalog,
+                                schema,
+                                table,
+                                table_meta.legacy_prefixes
+                            );
+                        }
+                    }
+                    Ok(None) => {} // Table not in Meta, no legacy prefixes
+                    Err(e) => {
+                        warn!(
+                            "Failed to get legacy prefixes for {}.{}.{}: {}",
+                            catalog, schema, table, e
+                        );
+                    }
+                }
+            }
+        }
+
         // Execute query
-        // Note: For file-based routing, the files are already local to this node (prefixed with node_id).
-        // The QueryEngine will find them during table registration/scanning.
+        // QueryEngine now uses legacy prefixes (if set) when registering tables,
+        // creating MultiUnionTableProvider to scan all relevant S3 prefixes.
         let df_batches = self
             .query_engine
             .execute_query_with_db(&ticket.sql, &ticket.catalog)
