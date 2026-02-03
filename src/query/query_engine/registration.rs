@@ -288,6 +288,10 @@ impl QueryEngine {
     }
 
     /// Register a table using custom ParquetTableProvider (consolidated method)
+    ///
+    /// This method works with both local filesystem and object storage (S3/MinIO/OSS).
+    /// When Storage is available, it uses ObjectStore for unified file discovery.
+    /// Falls back to local filesystem operations when Storage is not configured.
     async fn register_table_custom(
         &self,
         catalog_name: &str,
@@ -296,22 +300,49 @@ impl QueryEngine {
         table_path: &str,
         partitioned: bool,
     ) -> Result<(), String> {
-        let local_path = table_path.strip_prefix("file://").unwrap_or(table_path);
         let full_name = format!("{}.{}.{}", catalog_name, schema_name, table_name);
 
         let config = ParquetTableConfig::new(full_name.clone())
             .with_partitioned(partitioned)
             .with_batch_size(8192);
 
-        let mut provider = ParquetTableProvider::try_new(local_path, config)
-            .map_err(|e| format!("Failed to create table provider for '{}': {}", full_name, e))?;
+        // Use ObjectStore-based async constructor when Storage is available
+        let mut provider = if let Some(ref storage) = self.storage {
+            // Extract the path from the URL (remove scheme like file://, s3://)
+            let base_path = Self::extract_path_from_url(table_path);
 
-        // Add parquet cache for cluster mode (object storage)
+            ParquetTableProvider::try_new_async(storage.object_store(), base_path, config)
+                .await
+                .map_err(|e| format!("Failed to create table provider for '{}': {}", full_name, e))?
+        } else {
+            // Fallback to sync local filesystem constructor
+            let local_path = table_path.strip_prefix("file://").unwrap_or(table_path);
+            ParquetTableProvider::try_new(local_path, config)
+                .map_err(|e| format!("Failed to create table provider for '{}': {}", full_name, e))?
+        };
+
+        // Add parquet cache for cluster mode
         if let Some(ref cache) = self.parquet_cache {
             provider = provider.with_parquet_cache(cache.clone());
         }
 
         self.register_provider(catalog_name, schema_name, table_name, Arc::new(provider))
+    }
+
+    /// Extract the path from a URL (removes scheme like file://, s3://)
+    fn extract_path_from_url(url: &str) -> String {
+        if let Some(rest) = url.strip_prefix("file://") {
+            rest.to_string()
+        } else if let Some(rest) = url.strip_prefix("s3://") {
+            // For S3, remove bucket name - path starts after first /
+            if let Some(pos) = rest.find('/') {
+                rest[pos..].to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            url.to_string()
+        }
     }
 
     /// Register a partitioned table - dispatches based on config
