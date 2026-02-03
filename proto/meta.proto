@@ -195,6 +195,7 @@ message TableMeta {
     int64 created_at = 12;
     int64 last_modified = 13;
     uint64 version = 14;                // For optimistic concurrency
+    repeated string legacy_prefixes = 15; // Storage prefixes from retired nodes (scale-in)
 }
 
 // Statistics delta for updating table stats
