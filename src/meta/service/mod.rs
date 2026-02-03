@@ -4,4 +4,4 @@ pub mod grpc;
 pub mod http;
 pub mod meta_node;
 
-pub use meta_node::MetaNode;
+pub use meta_node::{MetaMetrics, MetaNode};
