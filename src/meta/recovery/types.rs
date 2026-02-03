@@ -479,13 +479,11 @@ mod tests {
             total_primaries: 10,
             protected_primaries: 8,
             unprotected_primaries: 2,
-            unprotected_list: vec![
-                UnprotectedPrimary {
-                    primary_id: "primary-1".to_string(),
-                    since: 1704067200,
-                    reason: "Standby crashed".to_string(),
-                },
-            ],
+            unprotected_list: vec![UnprotectedPrimary {
+                primary_id: "primary-1".to_string(),
+                since: 1704067200,
+                reason: "Standby crashed".to_string(),
+            }],
             spare_standbys_available: 0,
             status: ClusterHealthStatus::Degraded,
         };

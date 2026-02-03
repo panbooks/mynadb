@@ -404,8 +404,7 @@ mod tests {
 
     #[test]
     fn test_partition_prefix() {
-        let prefix =
-            PartitionFilesCache::partition_prefix("mydb", "default", "cpu", "2024-01-15");
+        let prefix = PartitionFilesCache::partition_prefix("mydb", "default", "cpu", "2024-01-15");
         assert_eq!(prefix, "mydb/default/cpu/date=2024-01-15/");
     }
 }

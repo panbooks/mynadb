@@ -76,7 +76,10 @@ impl ContinuousAggregateRewriter {
             .ok()?;
 
         if matches.is_empty() {
-            debug!("No matching aggregates found for {}", query_info.source_table);
+            debug!(
+                "No matching aggregates found for {}",
+                query_info.source_table
+            );
             return None;
         }
 
@@ -192,7 +195,15 @@ impl ContinuousAggregateRewriter {
         let sql_lower = sql.to_lowercase();
 
         // Look for common aggregate functions
-        for func_name in &["avg", "sum", "count", "min", "max", "first_value", "last_value"] {
+        for func_name in &[
+            "avg",
+            "sum",
+            "count",
+            "min",
+            "max",
+            "first_value",
+            "last_value",
+        ] {
             let pattern = format!("{}(", func_name);
             let mut search_pos = 0;
 
@@ -366,7 +377,11 @@ impl ContinuousAggregateRewriter {
     }
 
     /// Rewrite a query to use an aggregate
-    fn rewrite_query(&self, query_info: &QueryInfo, aggregate: &AggregateDefinition) -> Option<String> {
+    fn rewrite_query(
+        &self,
+        query_info: &QueryInfo,
+        aggregate: &AggregateDefinition,
+    ) -> Option<String> {
         let original = &query_info.original_sql;
 
         // Simple rewrite: replace source table with aggregate table
@@ -512,9 +527,15 @@ mod tests {
         let aggs = rewriter.extract_aggregates(sql);
 
         assert_eq!(aggs.len(), 3);
-        assert!(aggs.iter().any(|(f, c)| *f == AggregateFunction::Avg && c == "cpu"));
-        assert!(aggs.iter().any(|(f, c)| *f == AggregateFunction::Max && c == "memory"));
-        assert!(aggs.iter().any(|(f, c)| *f == AggregateFunction::Count && c == "*"));
+        assert!(aggs
+            .iter()
+            .any(|(f, c)| *f == AggregateFunction::Avg && c == "cpu"));
+        assert!(aggs
+            .iter()
+            .any(|(f, c)| *f == AggregateFunction::Max && c == "memory"));
+        assert!(aggs
+            .iter()
+            .any(|(f, c)| *f == AggregateFunction::Count && c == "*"));
     }
 
     #[test]

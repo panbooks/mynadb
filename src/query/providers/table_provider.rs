@@ -226,10 +226,12 @@ impl ParquetTableProvider {
                     let path_str = meta.location.to_string();
                     if path_str.ends_with(".parquet") {
                         // Found a parquet file, infer schema from it
-                        let schema = Self::infer_schema_from_path(object_store, &meta.location).await?;
+                        let schema =
+                            Self::infer_schema_from_path(object_store, &meta.location).await?;
 
                         // Add partition column to schema
-                        let mut fields: Vec<Field> = schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+                        let mut fields: Vec<Field> =
+                            schema.fields().iter().map(|f| f.as_ref().clone()).collect();
                         if !fields.iter().any(|f| f.name() == &config.partition_column) {
                             fields.push(Field::new(&config.partition_column, DataType::Utf8, true));
                         }
@@ -243,7 +245,11 @@ impl ParquetTableProvider {
         }
 
         // No parquet files found - return minimal schema with partition column
-        Ok(Schema::new(vec![Field::new(&config.partition_column, DataType::Utf8, true)]))
+        Ok(Schema::new(vec![Field::new(
+            &config.partition_column,
+            DataType::Utf8,
+            true,
+        )]))
     }
 
     /// Infer schema from a specific parquet file path
@@ -254,10 +260,14 @@ impl ParquetTableProvider {
         use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
         // Fetch the file content
-        let get_result = object_store.get(path).await
+        let get_result = object_store
+            .get(path)
+            .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let bytes = get_result.bytes().await
+        let bytes = get_result
+            .bytes()
+            .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         // Build reader and get schema
@@ -278,8 +288,8 @@ impl ParquetTableProvider {
         config: &ParquetTableConfig,
         filters: &[Expr],
     ) -> Result<Vec<ParquetFileInfo>> {
-        use object_store::path::Path as ObjectPath;
         use futures::TryStreamExt;
+        use object_store::path::Path as ObjectPath;
 
         let base_prefix = ObjectPath::from(base_path.trim_start_matches('/'));
 
@@ -287,7 +297,9 @@ impl ParquetTableProvider {
         let partition_filters = Self::extract_partition_filters(&config.partition_column, filters);
 
         // List partition directories using list_with_delimiter
-        let list_result = object_store.list_with_delimiter(Some(&base_prefix)).await
+        let list_result = object_store
+            .list_with_delimiter(Some(&base_prefix))
+            .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let mut files = Vec::new();
@@ -295,7 +307,8 @@ impl ParquetTableProvider {
 
         // Process each partition directory
         for prefix in list_result.common_prefixes {
-            let dir_name = prefix.as_ref()
+            let dir_name = prefix
+                .as_ref()
                 .trim_end_matches('/')
                 .rsplit('/')
                 .next()
@@ -312,7 +325,9 @@ impl ParquetTableProvider {
                 .to_string();
 
             // Apply partition filter pruning
-            if !partition_filters.is_empty() && !Self::matches_partition_filter(&partition_value, &partition_filters) {
+            if !partition_filters.is_empty()
+                && !Self::matches_partition_filter(&partition_value, &partition_filters)
+            {
                 debug!(
                     "Pruning partition {} (doesn't match filters)",
                     partition_value
@@ -322,7 +337,9 @@ impl ParquetTableProvider {
 
             // List files in this partition
             let partition_files = object_store.list(Some(&prefix));
-            let objects: Vec<_> = partition_files.try_collect().await
+            let objects: Vec<_> = partition_files
+                .try_collect()
+                .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
             for meta in objects {
@@ -467,8 +484,11 @@ impl ParquetTableProvider {
 
         // Add partition column to schema
         let partition_field = Field::new(&config.partition_column, DataType::Utf8, true);
-        let mut fields: Vec<Field> =
-            base_schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+        let mut fields: Vec<Field> = base_schema
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
 
         // Only add if not already present
         if !fields.iter().any(|f| f.name() == &config.partition_column) {

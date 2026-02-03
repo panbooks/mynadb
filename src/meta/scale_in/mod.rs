@@ -166,7 +166,11 @@ impl ScaleInManager {
 
         // Check 3: No nodes already retiring
         if !cluster_state.retiring.is_empty() {
-            let retiring_ids: Vec<_> = cluster_state.retiring.iter().map(|n| n.node_id.clone()).collect();
+            let retiring_ids: Vec<_> = cluster_state
+                .retiring
+                .iter()
+                .map(|n| n.node_id.clone())
+                .collect();
             return Err(ScaleInError::PreFlightCheckFailed {
                 reason: format!(
                     "Cannot start new scale-in while {} nodes are already retiring",
@@ -274,12 +278,11 @@ impl ScaleInManager {
         }
 
         // Count tables per node (by primary owner)
-        let mut tables_per_node: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut tables_per_node: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for table in &tables {
             if let Some(primary) = table.primary_owner() {
-                *tables_per_node
-                    .entry(primary.to_string())
-                    .or_insert(0) += 1;
+                *tables_per_node.entry(primary.to_string()).or_insert(0) += 1;
             }
         }
 

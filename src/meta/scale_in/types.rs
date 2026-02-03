@@ -56,13 +56,13 @@ impl Default for ScaleInConfig {
             primary_standby_ratio: 2,
             min_primaries: 1,
             min_standbys: 0,
-            migration_timeout_secs: 300,      // 5 minutes
-            flush_timeout_secs: 60,           // 1 minute
+            migration_timeout_secs: 300, // 5 minutes
+            flush_timeout_secs: 60,      // 1 minute
             force_flush: true,
             strategy: ScaleInStrategy::LeastLoaded,
             pre_flight_check_enabled: true,
-            health_check_interval_ms: 1000,   // 1 second
-            max_heartbeat_age_secs: 30,       // 30 seconds
+            health_check_interval_ms: 1000, // 1 second
+            max_heartbeat_age_secs: 30,     // 30 seconds
             abort_on_standby_failure: true,
         }
     }
@@ -321,10 +321,7 @@ pub enum ScaleInOperation {
     RemoveStandbyFromTables { standby_node_id: String },
 
     /// Wait for node to finish draining
-    WaitForDrain {
-        node_id: String,
-        timeout_secs: u64,
-    },
+    WaitForDrain { node_id: String, timeout_secs: u64 },
 }
 
 /// A table migration (moving table ownership from one node to another)
@@ -481,16 +478,10 @@ pub enum ScaleInError {
     HAViolation(String),
 
     /// Table migration failed
-    MigrationFailed {
-        table: String,
-        reason: String,
-    },
+    MigrationFailed { table: String, reason: String },
 
     /// Node retirement failed
-    RetirementFailed {
-        node_id: String,
-        reason: String,
-    },
+    RetirementFailed { node_id: String, reason: String },
 
     /// Timeout during operation
     Timeout {

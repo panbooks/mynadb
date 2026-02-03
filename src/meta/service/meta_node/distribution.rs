@@ -90,9 +90,13 @@ impl MetaNode {
     }
 
     /// List all distribution configs (optionally filtered by catalog)
-    pub async fn list_distribution_configs(&self, catalog: Option<&str>) -> Vec<DistributionConfig> {
+    pub async fn list_distribution_configs(
+        &self,
+        catalog: Option<&str>,
+    ) -> Vec<DistributionConfig> {
         if let Some(cat) = catalog {
-            self.state_machine.list_distribution_configs_for_catalog(cat)
+            self.state_machine
+                .list_distribution_configs_for_catalog(cat)
         } else {
             self.state_machine.list_distribution_configs()
         }

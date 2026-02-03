@@ -8,7 +8,9 @@ use crate::query::cache::hot_partition_cache::{
     HotPartitionCache, HotPartitionCacheConfig, SharedHotPartitionCache,
 };
 use crate::query::cache::metadata_cache::TableMetadataCache;
-use crate::query::cache::query_cache::{QueryCacheConfig, QueryResultCache, SharedQueryResultCache};
+use crate::query::cache::query_cache::{
+    QueryCacheConfig, QueryResultCache, SharedQueryResultCache,
+};
 use crate::query::create_custom_session_state;
 use crate::query::functions::{
     create_first_value_udaf, create_last_value_udaf, create_time_bucket_udf,
@@ -272,7 +274,13 @@ impl QueryEngine {
     // ========================================================================
 
     /// Set legacy prefixes for a table (from retired nodes during scale-in)
-    pub async fn set_legacy_prefixes(&self, catalog: &str, schema: &str, table: &str, prefixes: Vec<String>) {
+    pub async fn set_legacy_prefixes(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        prefixes: Vec<String>,
+    ) {
         let key = (catalog.to_string(), schema.to_string(), table.to_string());
         let mut map = self.legacy_prefixes.write().await;
         if prefixes.is_empty() {
@@ -283,14 +291,23 @@ impl QueryEngine {
     }
 
     /// Get legacy prefixes for a table
-    pub async fn get_legacy_prefixes(&self, catalog: &str, schema: &str, table: &str) -> Vec<String> {
+    pub async fn get_legacy_prefixes(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Vec<String> {
         let key = (catalog.to_string(), schema.to_string(), table.to_string());
         let map = self.legacy_prefixes.read().await;
         map.get(&key).cloned().unwrap_or_default()
     }
 
     /// Set legacy prefixes for all tables in a catalog (bulk update from ShardCache)
-    pub async fn set_catalog_legacy_prefixes(&self, catalog: &str, table_prefixes: HashMap<(String, String), Vec<String>>) {
+    pub async fn set_catalog_legacy_prefixes(
+        &self,
+        catalog: &str,
+        table_prefixes: HashMap<(String, String), Vec<String>>,
+    ) {
         let mut map = self.legacy_prefixes.write().await;
         for ((schema, table), prefixes) in table_prefixes {
             let key = (catalog.to_string(), schema, table);
@@ -303,7 +320,10 @@ impl QueryEngine {
     }
 
     /// Get all legacy prefixes for a catalog (returns map of (schema, table) -> prefixes)
-    pub async fn get_catalog_legacy_prefixes(&self, catalog: &str) -> HashMap<(String, String), Vec<String>> {
+    pub async fn get_catalog_legacy_prefixes(
+        &self,
+        catalog: &str,
+    ) -> HashMap<(String, String), Vec<String>> {
         let map = self.legacy_prefixes.read().await;
         map.iter()
             .filter(|(k, _)| k.0 == catalog)

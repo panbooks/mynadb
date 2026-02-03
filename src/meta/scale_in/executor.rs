@@ -72,10 +72,7 @@ impl ScaleInExecutor {
     ///
     /// With table-level routing, all Standbys back up all Primaries at the
     /// node level, so we check all active Standbys.
-    fn check_standby_health(
-        &self,
-        retiring_primaries: &[String],
-    ) -> Result<(), ScaleInError> {
+    fn check_standby_health(&self, retiring_primaries: &[String]) -> Result<(), ScaleInError> {
         let sm = self.meta_node.state_machine();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -125,7 +122,10 @@ impl ScaleInExecutor {
                     });
                 }
             } else {
-                error!("SAFETY NET LOST: Standby {} not found in cluster", standby_id);
+                error!(
+                    "SAFETY NET LOST: Standby {} not found in cluster",
+                    standby_id
+                );
                 return Err(ScaleInError::SafetyNetLost {
                     primary_id: String::new(),
                     standby_id: standby_id.clone(),
@@ -319,13 +319,21 @@ impl ScaleInExecutor {
             {
                 // Periodic Standby health check during migration
                 if self.config.abort_on_standby_failure && i % 5 == 0 {
-                    debug!("Health check during migration ({}/{})", i + 1, total_operations);
+                    debug!(
+                        "Health check during migration ({}/{})",
+                        i + 1,
+                        total_operations
+                    );
                     self.check_standby_health(retiring_primaries)?;
                 }
 
                 debug!(
                     "Migrating table {} from {} to {} ({}/{})",
-                    table_key, from_node, to_node, i + 1, total_operations
+                    table_key,
+                    from_node,
+                    to_node,
+                    i + 1,
+                    total_operations
                 );
 
                 match self
@@ -496,7 +504,10 @@ impl ScaleInExecutor {
                     retired.push(node_id.clone());
                 }
                 Err(e) => {
-                    error!("Failed to complete retirement for Standby {}: {}", node_id, e);
+                    error!(
+                        "Failed to complete retirement for Standby {}: {}",
+                        node_id, e
+                    );
                     retired.push(node_id.clone()); // Partial success
                 }
             }
@@ -507,7 +518,8 @@ impl ScaleInExecutor {
 
     /// Wait for a node to finish draining
     async fn wait_for_drain(&self, node_id: &str, timeout_secs: u64) -> Result<(), ScaleInError> {
-        self.wait_for_drain_with_health_check(node_id, timeout_secs, &[]).await
+        self.wait_for_drain_with_health_check(node_id, timeout_secs, &[])
+            .await
     }
 
     /// Wait for a node to finish draining with periodic Standby health checks

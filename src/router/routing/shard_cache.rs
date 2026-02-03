@@ -114,7 +114,6 @@ impl PartitionKey {
     }
 }
 
-
 /// Table key for routing (table-level routing)
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct TableKey {
@@ -483,7 +482,10 @@ impl ShardCache {
             return Some(selected.clone());
         }
 
-        warn!("No active Primary nodes available for table {}", key.to_path());
+        warn!(
+            "No active Primary nodes available for table {}",
+            key.to_path()
+        );
         None
     }
 
@@ -674,10 +676,7 @@ impl ShardCache {
         for key in keys_to_remove {
             self.distribution_configs.remove(&key);
         }
-        debug!(
-            "Invalidated distribution configs for catalog: {}",
-            catalog
-        );
+        debug!("Invalidated distribution configs for catalog: {}", catalog);
     }
 
     /// Clear all distribution configs from cache
@@ -950,16 +949,15 @@ mod tests {
             let cache = create_test_cache();
 
             // Set catalog-level config
-            let config = DistributionConfig::new(
-                "mydb".to_string(),
-                "".to_string(),
-                "".to_string(),
-                100,
-            );
+            let config =
+                DistributionConfig::new("mydb".to_string(), "".to_string(), "".to_string(), 100);
             cache.set_distribution_config(&config);
 
             // Should inherit catalog-level config
-            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "cpu"), 100);
+            assert_eq!(
+                cache.get_distribution_percent("mydb", "metrics", "cpu"),
+                100
+            );
             assert_eq!(cache.get_distribution_percent("mydb", "logs", "app"), 100);
             assert_eq!(cache.get_distribution_percent("mydb", "", ""), 100);
 
@@ -1042,12 +1040,8 @@ mod tests {
             let cache = create_test_cache();
 
             // Set catalog-level config: 100%
-            let catalog_config = DistributionConfig::new(
-                "mydb".to_string(),
-                "".to_string(),
-                "".to_string(),
-                100,
-            );
+            let catalog_config =
+                DistributionConfig::new("mydb".to_string(), "".to_string(), "".to_string(), 100);
             cache.set_distribution_config(&catalog_config);
 
             // Set schema-level config: 25% (override)
@@ -1071,12 +1065,8 @@ mod tests {
             let cache = create_test_cache();
 
             // Set all three levels
-            let catalog_config = DistributionConfig::new(
-                "mydb".to_string(),
-                "".to_string(),
-                "".to_string(),
-                100,
-            );
+            let catalog_config =
+                DistributionConfig::new("mydb".to_string(), "".to_string(), "".to_string(), 100);
             cache.set_distribution_config(&catalog_config);
 
             let schema_config = DistributionConfig::new(
@@ -1155,7 +1145,10 @@ mod tests {
                 100,
             );
             cache.set_distribution_config(&config);
-            assert_eq!(cache.get_distribution_percent("mydb", "metrics", "cpu"), 100);
+            assert_eq!(
+                cache.get_distribution_percent("mydb", "metrics", "cpu"),
+                100
+            );
 
             // Remove config
             cache.remove_distribution_config("mydb", "metrics", "cpu");
@@ -1167,9 +1160,12 @@ mod tests {
             let cache = create_test_cache();
 
             // Set multiple configs
-            let config1 = DistributionConfig::new("db1".to_string(), "".to_string(), "".to_string(), 100);
-            let config2 = DistributionConfig::new("db2".to_string(), "s".to_string(), "".to_string(), 50);
-            let config3 = DistributionConfig::new("db3".to_string(), "s".to_string(), "t".to_string(), 25);
+            let config1 =
+                DistributionConfig::new("db1".to_string(), "".to_string(), "".to_string(), 100);
+            let config2 =
+                DistributionConfig::new("db2".to_string(), "s".to_string(), "".to_string(), 50);
+            let config3 =
+                DistributionConfig::new("db3".to_string(), "s".to_string(), "t".to_string(), 25);
 
             cache.set_distribution_config(&config1);
             cache.set_distribution_config(&config2);
@@ -1190,8 +1186,14 @@ mod tests {
         fn test_list_distribution_configs() {
             let cache = create_test_cache();
 
-            let config1 = DistributionConfig::new("mydb".to_string(), "".to_string(), "".to_string(), 100);
-            let config2 = DistributionConfig::new("mydb".to_string(), "metrics".to_string(), "".to_string(), 50);
+            let config1 =
+                DistributionConfig::new("mydb".to_string(), "".to_string(), "".to_string(), 100);
+            let config2 = DistributionConfig::new(
+                "mydb".to_string(),
+                "metrics".to_string(),
+                "".to_string(),
+                50,
+            );
 
             cache.set_distribution_config(&config1);
             cache.set_distribution_config(&config2);
@@ -1210,10 +1212,22 @@ mod tests {
             let cache = create_test_cache();
 
             // Set configs for multiple catalogs
-            let config1 = DistributionConfig::new("mydb".to_string(), "".to_string(), "".to_string(), 100);
-            let config2 = DistributionConfig::new("mydb".to_string(), "metrics".to_string(), "".to_string(), 50);
-            let config3 = DistributionConfig::new("mydb".to_string(), "metrics".to_string(), "cpu".to_string(), 25);
-            let config4 = DistributionConfig::new("other".to_string(), "".to_string(), "".to_string(), 75);
+            let config1 =
+                DistributionConfig::new("mydb".to_string(), "".to_string(), "".to_string(), 100);
+            let config2 = DistributionConfig::new(
+                "mydb".to_string(),
+                "metrics".to_string(),
+                "".to_string(),
+                50,
+            );
+            let config3 = DistributionConfig::new(
+                "mydb".to_string(),
+                "metrics".to_string(),
+                "cpu".to_string(),
+                25,
+            );
+            let config4 =
+                DistributionConfig::new("other".to_string(), "".to_string(), "".to_string(), 75);
 
             cache.set_distribution_config(&config1);
             cache.set_distribution_config(&config2);
@@ -1239,7 +1253,8 @@ mod tests {
             let stats = cache.stats();
             assert_eq!(stats.distribution_config_count, 0);
 
-            let config = DistributionConfig::new("mydb".to_string(), "".to_string(), "".to_string(), 100);
+            let config =
+                DistributionConfig::new("mydb".to_string(), "".to_string(), "".to_string(), 100);
             cache.set_distribution_config(&config);
 
             let stats = cache.stats();

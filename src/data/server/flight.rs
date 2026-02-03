@@ -217,10 +217,7 @@ impl DataNodeFlightService {
     }
 
     /// Set the in-flight queries counter (shared with HTTP API for status reporting)
-    pub fn with_in_flight_queries(
-        mut self,
-        counter: Arc<std::sync::atomic::AtomicU64>,
-    ) -> Self {
+    pub fn with_in_flight_queries(mut self, counter: Arc<std::sync::atomic::AtomicU64>) -> Self {
         self.in_flight_queries = counter;
         self
     }
@@ -799,10 +796,8 @@ impl FlightService for DataNodeFlightService {
         // This distributes legacy data scanning across all surviving primary nodes,
         // preventing any single node from becoming a bottleneck.
         if let Some(ref meta_client) = self.meta_client {
-            let table_refs = crate::query::sql_utils::extract_table_references(
-                &ticket.sql,
-                &ticket.catalog,
-            );
+            let table_refs =
+                crate::query::sql_utils::extract_table_references(&ticket.sql, &ticket.catalog);
 
             // Get all primary node IDs for consistent hash assignment
             // Only fetch once per query, not per table
@@ -823,7 +818,10 @@ impl FlightService for DataNodeFlightService {
                     ids
                 }
                 Err(e) => {
-                    warn!("Failed to list primary nodes for legacy prefix assignment: {}", e);
+                    warn!(
+                        "Failed to list primary nodes for legacy prefix assignment: {}",
+                        e
+                    );
                     Vec::new()
                 }
             };
@@ -846,7 +844,12 @@ impl FlightService for DataNodeFlightService {
 
                             if !my_prefixes.is_empty() {
                                 self.query_engine
-                                    .set_legacy_prefixes(catalog, schema, table, my_prefixes.clone())
+                                    .set_legacy_prefixes(
+                                        catalog,
+                                        schema,
+                                        table,
+                                        my_prefixes.clone(),
+                                    )
                                     .await;
                                 debug!(
                                     "Set {}/{} legacy prefixes for {}.{}.{} (this node: {}): {:?}",
@@ -1214,7 +1217,9 @@ impl FlightService for DataNodeFlightService {
                     "num_tables": cache_stats.num_measurements,
                 });
                 let result = arrow_flight::Result {
-                    body: serde_json::to_vec(&response_json).unwrap_or_default().into(),
+                    body: serde_json::to_vec(&response_json)
+                        .unwrap_or_default()
+                        .into(),
                 };
                 Ok(Response::new(Box::pin(stream::once(async { Ok(result) }))))
             }
@@ -1254,8 +1259,8 @@ impl FlightService for DataNodeFlightService {
                 // Handle FlushCheckpoint from Primary - Standby clears cache for flushed sequences
                 use crate::data::replication::types::{FlushCheckpoint, FlushCheckpointResponse};
 
-                let checkpoint: FlushCheckpoint = serde_json::from_slice(&action.body)
-                    .map_err(|e| {
+                let checkpoint: FlushCheckpoint =
+                    serde_json::from_slice(&action.body).map_err(|e| {
                         Status::invalid_argument(format!("Invalid FlushCheckpoint: {}", e))
                     })?;
 

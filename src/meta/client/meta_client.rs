@@ -499,7 +499,11 @@ impl MetaClient {
             .await?;
 
         if response.success {
-            Ok((response.already_exists, response.current_owner, response.version))
+            Ok((
+                response.already_exists,
+                response.current_owner,
+                response.version,
+            ))
         } else {
             Err(response.error)
         }
@@ -568,7 +572,11 @@ impl MetaClient {
             .await?;
 
         if response.success {
-            Ok((response.already_owner, response.all_owners, response.version))
+            Ok((
+                response.already_owner,
+                response.all_owners,
+                response.version,
+            ))
         } else {
             Err(response.error)
         }
@@ -643,7 +651,12 @@ impl MetaClient {
     }
 
     /// Remove a table from the registry
-    pub async fn remove_table(&self, catalog: &str, schema: &str, table: &str) -> Result<(), String> {
+    pub async fn remove_table(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<(), String> {
         let request = proto::RemoveTableRequest {
             catalog: catalog.to_string(),
             schema: schema.to_string(),
@@ -728,7 +741,12 @@ impl MetaClient {
         let response = self
             .with_retry("list_tables_for_node", |mut client| {
                 let req = request.clone();
-                async move { client.list_tables_for_node(req).await.map(|r| r.into_inner()) }
+                async move {
+                    client
+                        .list_tables_for_node(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
             })
             .await?;
 
@@ -1392,10 +1410,7 @@ impl MetaClient {
     }
 
     /// Remove a standby from node-level pairing (for Standby scale-in)
-    pub async fn remove_standby_from_tables(
-        &self,
-        standby_node_id: &str,
-    ) -> Result<usize, String> {
+    pub async fn remove_standby_from_tables(&self, standby_node_id: &str) -> Result<usize, String> {
         let request = proto::RemoveStandbyFromTablesRequest {
             standby_node_id: standby_node_id.to_string(),
         };

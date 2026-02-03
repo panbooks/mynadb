@@ -2,7 +2,9 @@
 //!
 //! Handles node registration, heartbeat, deregistration, and state updates.
 
-use crate::meta::types::{keys, DataNodeMode, EventType, LeaseInfo, MetaResponse, NodeInfo, NodeRole, NodeState};
+use crate::meta::types::{
+    keys, DataNodeMode, EventType, LeaseInfo, MetaResponse, NodeInfo, NodeRole, NodeState,
+};
 use tracing::{info, warn};
 
 use super::super::MetaStateMachine;
@@ -44,7 +46,9 @@ impl MetaStateMachine {
             } else {
                 // New node: assign mode based on ratio
                 let (primary_count, standby_count) = self.count_data_nodes_by_mode();
-                let assigned_mode = self.standby_config.mode_for_new_node(primary_count, standby_count);
+                let assigned_mode = self
+                    .standby_config
+                    .mode_for_new_node(primary_count, standby_count);
                 info.mode = Some(assigned_mode);
 
                 info!(
@@ -55,7 +59,10 @@ impl MetaStateMachine {
         }
 
         // Node-level standby pairing (only for new nodes, not re-registration)
-        if info.role == NodeRole::Data && info.backing_standby.is_none() && info.backed_primaries.is_empty() {
+        if info.role == NodeRole::Data
+            && info.backing_standby.is_none()
+            && info.backed_primaries.is_empty()
+        {
             match info.mode {
                 Some(DataNodeMode::Primary) => {
                     // Find an available Standby for this Primary
@@ -176,8 +183,7 @@ impl MetaStateMachine {
                 Err(e) => {
                     warn!(
                         "heartbeat: failed to deserialize lease {}: {}",
-                        lease_key,
-                        e
+                        lease_key, e
                     );
                     false
                 }
@@ -185,8 +191,7 @@ impl MetaStateMachine {
             Ok(None) => {
                 warn!(
                     "heartbeat: lease not found - key={}, lease_id={}",
-                    lease_key,
-                    lease_id
+                    lease_key, lease_id
                 );
                 false
             }

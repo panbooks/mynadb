@@ -71,7 +71,10 @@ pub fn build_router(state: MetaHttpState) -> Router {
         .route("/cluster/scale-in/execute", post(execute_scale_in))
         // Enhanced scale-in endpoints with Golden Rule enforcement
         .route("/cluster/scale-in/plan", post(plan_scale_in))
-        .route("/cluster/scale-in/execute-plan", post(execute_scale_in_plan))
+        .route(
+            "/cluster/scale-in/execute-plan",
+            post(execute_scale_in_plan),
+        )
         // Distribution config endpoints
         .route("/distribution", get(list_distribution_configs))
         .route("/distribution/config", get(get_distribution_config))
@@ -1007,7 +1010,12 @@ async fn set_distribution_config(
 
     match state
         .meta_node
-        .set_distribution_config(&request.catalog, &request.schema, &request.table, request.percent)
+        .set_distribution_config(
+            &request.catalog,
+            &request.schema,
+            &request.table,
+            request.percent,
+        )
         .await
     {
         Ok(response) => match response {
@@ -1198,7 +1206,10 @@ async fn list_distribution_configs(
         .list_distribution_configs(query.catalog.as_deref())
         .await;
 
-    let infos: Vec<DistributionConfigInfo> = configs.into_iter().map(DistributionConfigInfo::from).collect();
+    let infos: Vec<DistributionConfigInfo> = configs
+        .into_iter()
+        .map(DistributionConfigInfo::from)
+        .collect();
 
     (StatusCode::OK, Json(infos))
 }

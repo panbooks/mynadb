@@ -4,8 +4,8 @@
 
 use crate::query::cache::query_cache::QueryCacheKey;
 use crate::query::sql_utils::{
-    extract_optimization_info, extract_table_references, extract_time_range, inject_date_predicates,
-    qualify_table_names, summarize_plan,
+    extract_optimization_info, extract_table_references, extract_time_range,
+    inject_date_predicates, qualify_table_names, summarize_plan,
 };
 use crate::query::timeseries::{FillOption, FillProcessor, GroupByTimeTransformer};
 use crate::query::types::{QueryAnalysis, QueryExplainResult};

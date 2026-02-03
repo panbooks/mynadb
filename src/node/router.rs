@@ -100,7 +100,10 @@ pub async fn start(config_path: &str) {
             async move {
                 // Wait a short time for any pending registrations
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                if let Err(e) = cache_handler_for_resync.resync_from_meta(&meta_client).await {
+                if let Err(e) = cache_handler_for_resync
+                    .resync_from_meta(&meta_client)
+                    .await
+                {
                     warn!("Failed to resync from Meta: {}", e);
                 }
             }

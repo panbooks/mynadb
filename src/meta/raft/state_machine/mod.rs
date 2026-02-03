@@ -196,7 +196,6 @@ impl MetaStateMachine {
             // ================================================================
             // Table-Level Operations (Recommended for routing)
             // ================================================================
-
             MetaCommand::RegisterTable {
                 catalog,
                 schema,
@@ -307,9 +306,7 @@ impl MetaStateMachine {
                 node_id,
                 tables_reassigned,
                 memtable_rows_remaining,
-            } => {
-                self.update_retire_status(&node_id, tables_reassigned, memtable_rows_remaining)
-            }
+            } => self.update_retire_status(&node_id, tables_reassigned, memtable_rows_remaining),
 
             // Recovery operations (failover without promotion)
             MetaCommand::TriggerStandbyFlush {
@@ -322,10 +319,9 @@ impl MetaStateMachine {
                 primary_ids,
             } => self.assign_standby_to_primaries(&standby_id, &primary_ids),
 
-            MetaCommand::MarkPrimaryUnprotected {
-                primary_id,
-                reason,
-            } => self.mark_primary_unprotected(&primary_id, &reason),
+            MetaCommand::MarkPrimaryUnprotected { primary_id, reason } => {
+                self.mark_primary_unprotected(&primary_id, &reason)
+            }
 
             MetaCommand::RedistributeTables {
                 crashed_primary_id,

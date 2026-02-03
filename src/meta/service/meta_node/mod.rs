@@ -165,7 +165,9 @@ pub struct MetaMetrics {
 mod tests {
     use super::*;
     use crate::meta::raft::MetaStateMachine;
-    use crate::meta::types::{keys, DataNodeMode, MetaCommand, MetaResponse, NodeInfo, NodeRole, NodeState};
+    use crate::meta::types::{
+        keys, DataNodeMode, MetaCommand, MetaResponse, NodeInfo, NodeRole, NodeState,
+    };
 
     /// Test that sled::Db clones share the same underlying data
     #[test]

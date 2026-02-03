@@ -102,10 +102,7 @@ impl MetaNode {
                 continue;
             }
 
-            debug!(
-                "Table {} has dead owners: {:?}",
-                table_path, dead_owners
-            );
+            debug!("Table {} has dead owners: {:?}", table_path, dead_owners);
 
             // Remove dead owners
             if auto_remove {
@@ -153,17 +150,11 @@ impl MetaNode {
                     };
                     match self.apply_command(cmd).await {
                         Ok(_) => {
-                            info!(
-                                "Reassigned orphaned table {} to {}",
-                                table_path, new_owner
-                            );
+                            info!("Reassigned orphaned table {} to {}", table_path, new_owner);
                             tables_reassigned += 1;
                         }
                         Err(e) => {
-                            warn!(
-                                "Failed to reassign orphaned table {}: {}",
-                                table_path, e
-                            );
+                            warn!("Failed to reassign orphaned table {}: {}", table_path, e);
                         }
                     }
                 }

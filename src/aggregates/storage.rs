@@ -127,7 +127,11 @@ impl AggregateStorage {
                             cache.insert(name, def);
                         }
                         Err(e) => {
-                            warn!("Failed to load aggregate definition {}: {}", path.display(), e);
+                            warn!(
+                                "Failed to load aggregate definition {}: {}",
+                                path.display(),
+                                e
+                            );
                         }
                     }
                 }
@@ -289,8 +293,7 @@ impl AggregateStorage {
             let path = self.definition_path(name);
             let content = serde_json::to_string_pretty(&*def)
                 .map_err(|e| format!("Failed to serialize: {}", e))?;
-            std::fs::write(&path, content)
-                .map_err(|e| format!("Failed to write: {}", e))?;
+            std::fs::write(&path, content).map_err(|e| format!("Failed to write: {}", e))?;
 
             debug!("Updated aggregate {} state to {:?}", name, state);
             Ok(())

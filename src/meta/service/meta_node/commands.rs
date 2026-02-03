@@ -50,7 +50,11 @@ impl MetaNode {
     }
 
     /// Forward a command to the leader node
-    pub(crate) async fn forward_to_leader(&self, leader_id: NodeId, cmd: MetaCommand) -> Result<u64, String> {
+    pub(crate) async fn forward_to_leader(
+        &self,
+        leader_id: NodeId,
+        cmd: MetaCommand,
+    ) -> Result<u64, String> {
         // Get a gRPC channel to the leader
         let channel = self
             .network

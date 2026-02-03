@@ -347,4 +347,3 @@ pub fn stop(config_path: &str) {
     let config = Config::load_or_default(config_path);
     common::stop_node(&config.storage.data_dir, NODE_TYPE);
 }
-

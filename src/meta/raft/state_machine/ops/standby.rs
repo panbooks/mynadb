@@ -76,7 +76,10 @@ impl MetaStateMachine {
         let key = format!("{}{}", keys::PREFIX_NODE, standby_id);
         if let Ok(Some(data)) = self.db.get(key.as_bytes()) {
             if let Ok(mut standby_info) = bincode::deserialize::<NodeInfo>(&data) {
-                if !standby_info.backed_primaries.contains(&primary_id.to_string()) {
+                if !standby_info
+                    .backed_primaries
+                    .contains(&primary_id.to_string())
+                {
                     standby_info.backed_primaries.push(primary_id.to_string());
                     let _ = self
                         .db

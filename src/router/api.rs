@@ -604,15 +604,13 @@ pub async fn list_partitions_handler(
                         if let Some(part_name) = partition["partition"].as_str() {
                             // If this partition already exists, merge file_count and size
                             if let Some(existing) = partition_map.get_mut(part_name) {
-                                let existing_count =
-                                    existing["file_count"].as_u64().unwrap_or(0);
+                                let existing_count = existing["file_count"].as_u64().unwrap_or(0);
                                 let new_count = partition["file_count"].as_u64().unwrap_or(0);
                                 let existing_size = existing["size_mb"].as_f64().unwrap_or(0.0);
                                 let new_size = partition["size_mb"].as_f64().unwrap_or(0.0);
                                 existing["file_count"] =
                                     serde_json::json!(existing_count + new_count);
-                                existing["size_mb"] =
-                                    serde_json::json!(existing_size + new_size);
+                                existing["size_mb"] = serde_json::json!(existing_size + new_size);
                             } else {
                                 partition_map.insert(part_name.to_string(), partition.clone());
                             }

@@ -47,7 +47,10 @@ impl Compactor {
     }
 
     /// List all parquet files with level information
-    pub(crate) fn list_parquet_file_infos(&self, dir: &str) -> Result<Vec<ParquetFileInfo>, String> {
+    pub(crate) fn list_parquet_file_infos(
+        &self,
+        dir: &str,
+    ) -> Result<Vec<ParquetFileInfo>, String> {
         let entries = fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))?;
 
         let mut file_infos = Vec::new();

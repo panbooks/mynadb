@@ -29,9 +29,7 @@ pub use types::*;
 
 use crate::meta::config::{FailoverConfig, StandbyConfig};
 use crate::meta::service::MetaNode;
-use crate::meta::types::{
-    DataNodeMode, MetaCommand, NodeRole, NodeState,
-};
+use crate::meta::types::{DataNodeMode, MetaCommand, NodeRole, NodeState};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -83,17 +81,26 @@ impl RecoveryManager {
 
         match node_mode {
             Some(DataNodeMode::Primary) => {
-                info!("Recovery: Node {} was a Primary, starting Primary recovery", node_id);
+                info!(
+                    "Recovery: Node {} was a Primary, starting Primary recovery",
+                    node_id
+                );
                 self.handle_primary_crash(node_id, start).await
             }
             Some(DataNodeMode::Standby) => {
-                info!("Recovery: Node {} was a Standby, starting Standby recovery", node_id);
+                info!(
+                    "Recovery: Node {} was a Standby, starting Standby recovery",
+                    node_id
+                );
                 self.handle_standby_crash(node_id, start).await
             }
             None => {
                 // Unknown node type, check if it was a spare Standby
                 if self.is_spare_standby(node_id) {
-                    info!("Recovery: Node {} was a spare Standby, no recovery needed", node_id);
+                    info!(
+                        "Recovery: Node {} was a spare Standby, no recovery needed",
+                        node_id
+                    );
                     Ok(RecoveryResult {
                         crashed_node_id: node_id.to_string(),
                         success: true,
@@ -109,7 +116,10 @@ impl RecoveryManager {
                         warnings: vec![],
                     })
                 } else {
-                    warn!("Recovery: Unknown node type for {}, skipping recovery", node_id);
+                    warn!(
+                        "Recovery: Unknown node type for {}, skipping recovery",
+                        node_id
+                    );
                     Ok(RecoveryResult {
                         crashed_node_id: node_id.to_string(),
                         success: true,
@@ -150,7 +160,10 @@ impl RecoveryManager {
         // Step 2: Get tables owned by crashed Primary
         let tables = self.get_primary_tables(primary_id);
         if tables.is_empty() {
-            info!("Recovery: Primary {} had no tables, no redistribution needed", primary_id);
+            info!(
+                "Recovery: Primary {} had no tables, no redistribution needed",
+                primary_id
+            );
             return Ok(RecoveryResult {
                 crashed_node_id: primary_id.to_string(),
                 success: true,
@@ -175,7 +188,10 @@ impl RecoveryManager {
 
         // Step 3: Trigger Standby to flush Primary's data
         if self.failover_config.flush_on_primary_crash {
-            info!("Recovery: Triggering Standby {} to flush Primary {} data", standby_id, primary_id);
+            info!(
+                "Recovery: Triggering Standby {} to flush Primary {} data",
+                standby_id, primary_id
+            );
             self.trigger_standby_flush(&standby_id, primary_id).await?;
         }
 
@@ -286,7 +302,10 @@ impl RecoveryManager {
                     ));
                 }
                 Err(e) => {
-                    warn!("Recovery: Failed to assign spare: {}. Primaries unprotected.", e);
+                    warn!(
+                        "Recovery: Failed to assign spare: {}. Primaries unprotected.",
+                        e
+                    );
                 }
             }
         }
@@ -421,10 +440,7 @@ impl RecoveryManager {
         let sm = self.meta_node.state_machine();
         let tables = sm.list_tables_for_node(primary_id);
 
-        tables
-            .iter()
-            .map(|t| t.table_key())
-            .collect()
+        tables.iter().map(|t| t.table_key()).collect()
     }
 
     /// Get remaining active Primaries (excluding crashed one)
@@ -434,9 +450,7 @@ impl RecoveryManager {
 
         nodes
             .iter()
-            .filter(|n| {
-                n.mode == Some(DataNodeMode::Primary) && n.node_id != exclude_primary
-            })
+            .filter(|n| n.mode == Some(DataNodeMode::Primary) && n.node_id != exclude_primary)
             .map(|n| n.node_id.clone())
             .collect()
     }
@@ -874,9 +888,7 @@ impl RecoveryManager {
         // A spare standby is one not backing any primaries
         nodes
             .iter()
-            .filter(|n| {
-                n.mode == Some(DataNodeMode::Standby) && n.backed_primaries.is_empty()
-            })
+            .filter(|n| n.mode == Some(DataNodeMode::Standby) && n.backed_primaries.is_empty())
             .count()
     }
 }

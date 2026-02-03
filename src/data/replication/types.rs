@@ -325,11 +325,7 @@ impl FlushCheckpoint {
         }
     }
 
-    pub fn for_partition(
-        source_node_id: String,
-        partition_key: String,
-        flushed_seq: u64,
-    ) -> Self {
+    pub fn for_partition(source_node_id: String, partition_key: String, flushed_seq: u64) -> Self {
         Self {
             source_node_id,
             partition_key: Some(partition_key),
@@ -444,8 +440,7 @@ mod tests {
 
     #[test]
     fn test_flush_checkpoint_with_metrics() {
-        let checkpoint =
-            FlushCheckpoint::with_metrics("node-1".to_string(), 200, 5, 10000);
+        let checkpoint = FlushCheckpoint::with_metrics("node-1".to_string(), 200, 5, 10000);
 
         assert_eq!(checkpoint.source_node_id, "node-1");
         assert_eq!(checkpoint.flushed_seq, 200);

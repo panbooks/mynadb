@@ -312,10 +312,7 @@ fn bench_scan_prefix(c: &mut Criterion) {
         let _ = db.flush();
 
         // Scan all files for a specific table (approx count/1000 entries)
-        let prefix = format!(
-            "{}catalog_0/schema_0/table_0/",
-            keys::PREFIX_FILE
-        );
+        let prefix = format!("{}catalog_0/schema_0/table_0/", keys::PREFIX_FILE);
 
         group.bench_with_input(
             BenchmarkId::new("single_table_files", count),

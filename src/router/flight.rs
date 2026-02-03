@@ -78,14 +78,6 @@ impl FlightService for RouterFlightService {
 
         debug!("Router Flight get_flight_info: {}", cmd);
 
-        // Get current database
-        let db = self
-            .current_db
-            .read()
-            .await
-            .clone()
-            .unwrap_or_else(|| "default".to_string());
-
         // Plan the query to get schema info
         // For now, return a basic FlightInfo
         let flight_info = FlightInfo {

@@ -5,7 +5,9 @@
 use super::MetaNode;
 use crate::meta::proto;
 use crate::meta::raft::NodeId;
-use crate::meta::types::{MetaCommand, MetaResponse, NodeState, RetireStatus, ScaleInRecommendation};
+use crate::meta::types::{
+    MetaCommand, MetaResponse, NodeState, RetireStatus, ScaleInRecommendation,
+};
 use openraft::error::{ClientWriteError, RaftError};
 use tracing::debug;
 
@@ -27,8 +29,7 @@ impl MetaNode {
         match result {
             Ok(response) => match response.data {
                 MetaResponse::RetireStarted {
-                    tables_to_reassign,
-                    ..
+                    tables_to_reassign, ..
                 } => Ok(tables_to_reassign),
                 MetaResponse::DataNodeNotFound { node_id } => {
                     Err(format!("Node {} not found", node_id))
@@ -90,8 +91,7 @@ impl MetaNode {
                     .map_err(|e| format!("Failed to deserialize response: {}", e))?;
                 match meta_resp {
                     MetaResponse::RetireStarted {
-                        tables_to_reassign,
-                        ..
+                        tables_to_reassign, ..
                     } => Ok(tables_to_reassign),
                     MetaResponse::Error { message } => Err(message),
                     _ => Err("Unexpected response".to_string()),
@@ -152,7 +152,7 @@ impl MetaNode {
             state: node.state,
             started_at: node.last_heartbeat, // Approximate with last_heartbeat for now
             tables_total,
-            tables_reassigned: 0,   // Would need additional tracking
+            tables_reassigned: 0,       // Would need additional tracking
             memtable_rows_remaining: 0, // Would need to query data node
             estimated_completion_secs: 0,
         })
