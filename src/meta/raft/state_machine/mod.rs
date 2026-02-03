@@ -292,41 +292,6 @@ impl MetaStateMachine {
 
             MetaCommand::ExpireLeases => self.expire_leases(),
 
-            // Partition replica operations (warm standby)
-            MetaCommand::AssignReplica {
-                partition_key,
-                leader_node_id,
-                standby_node_ids,
-                replication_factor,
-            } => self.assign_replica(
-                &partition_key,
-                &leader_node_id,
-                standby_node_ids,
-                replication_factor,
-            ),
-
-            // PromoteStandby removed - using No-Promotion architecture
-
-            MetaCommand::UpdateReplicaState {
-                partition_key,
-                state,
-                last_replicated_seq,
-                replication_lag_ms,
-            } => self.update_replica_state(
-                &partition_key,
-                state,
-                last_replicated_seq,
-                replication_lag_ms,
-            ),
-
-            MetaCommand::RemoveReplica { partition_key } => self.remove_replica(&partition_key),
-
-            MetaCommand::AutoAssignReplica { partition_key } => {
-                self.auto_assign_replica(&partition_key)
-            }
-
-            MetaCommand::RebalanceOnNodeJoin { node_id } => self.rebalance_on_node_join(&node_id),
-
             // Cold Standby Architecture: Data node mode management
             // PromoteDataNode removed - using No-Promotion architecture
             // UpdateDataNodeMode removed - No-Promotion architecture (mode set at registration)
@@ -336,24 +301,14 @@ impl MetaStateMachine {
 
             MetaCommand::CompleteRetire { node_id } => self.complete_retire(&node_id),
 
-            MetaCommand::ReassignPartitionForRetire {
-                partition_key,
-                from_node_id,
-                to_node_id,
-            } => self.reassign_partition_for_retire(&partition_key, &from_node_id, &to_node_id),
-
             MetaCommand::CancelRetire { node_id } => self.cancel_retire(&node_id),
 
             MetaCommand::UpdateRetireStatus {
                 node_id,
-                partitions_reassigned,
+                tables_reassigned,
                 memtable_rows_remaining,
             } => {
-                self.update_retire_status(&node_id, partitions_reassigned, memtable_rows_remaining)
-            }
-
-            MetaCommand::RemoveStandbyFromReplicas { standby_node_id } => {
-                self.remove_standby_from_replicas(&standby_node_id)
+                self.update_retire_status(&node_id, tables_reassigned, memtable_rows_remaining)
             }
 
             // Recovery operations (failover without promotion)
@@ -367,13 +322,12 @@ impl MetaStateMachine {
                 primary_ids,
             } => self.assign_standby_to_primaries(&standby_id, &primary_ids),
 
-            MetaCommand::MarkPartitionUnprotected {
-                partition_key,
+            MetaCommand::MarkPrimaryUnprotected {
                 primary_id,
                 reason,
-            } => self.mark_partition_unprotected(&partition_key, &primary_id, &reason),
+            } => self.mark_primary_unprotected(&primary_id, &reason),
 
-            MetaCommand::RedistributePartitions {
+            MetaCommand::RedistributeTables {
                 crashed_primary_id,
                 target_primaries,
             } => self.redistribute_partitions(&crashed_primary_id, &target_primaries),
@@ -382,11 +336,9 @@ impl MetaStateMachine {
 
     // NOTE: Operation implementations have been moved to the ops/ submodule:
     // - ops/node.rs: Node operations (register_node, heartbeat, deregister_node, update_node_state)
-    // - ops/file.rs: File operations (register_files, remove_files)
     // - ops/lock.rs: Lock operations (acquire_lock, release_lock, renew_lock)
     // - ops/election.rs: Election operations (campaign, resign)
     // - ops/event.rs: Event operations (publish_event, subscribe_events, expire_leases)
-    // - ops/replica.rs: Replica operations (assign_replica, update_replica_state, etc.)
     // - ops/standby.rs: Standby pairing operations
     // - ops/scale_in.rs: Scale-in/retirement operations
     // - ops/recovery.rs: Recovery operations (failover without promotion)

@@ -13,7 +13,6 @@ pub mod keys {
     pub const PREFIX_LEADER: &str = "/leaders/";
     pub const PREFIX_EVENT: &str = "/events/";
     pub const PREFIX_LEASE: &str = "/leases/";
-    pub const PREFIX_REPLICA: &str = "/replicas/";
     pub const PREFIX_DISTRIBUTION: &str = "/distribution/";
     pub const META_SEQUENCE: &str = "/meta/sequence";
     pub const META_FENCING: &str = "/meta/fencing";
@@ -81,9 +80,9 @@ pub enum NodeState {
     Draining = 3,
     Inactive = 4,
     /// Scale-in: Node is retiring, no new writes, flushing memtable to S3
-    /// Partitions being reassigned to other nodes
+    /// Tables being reassigned to other nodes
     Retiring = 5,
-    /// Scale-in complete: Memtable empty, all partitions reassigned, safe to stop
+    /// Scale-in complete: Memtable empty, all tables reassigned, safe to stop
     Drained = 6,
 }
 
@@ -873,105 +872,6 @@ impl LeaseInfo {
     }
 }
 
-/// Replica state for warm standby replication
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[repr(u8)]
-pub enum ReplicaState {
-    /// Standby is fully caught up with leader
-    InSync = 0,
-    /// Standby is behind, receiving data
-    CatchingUp = 1,
-    /// Standby is unreachable
-    Offline = 2,
-}
-
-impl From<i32> for ReplicaState {
-    fn from(v: i32) -> Self {
-        match v {
-            0 => ReplicaState::InSync,
-            1 => ReplicaState::CatchingUp,
-            2 => ReplicaState::Offline,
-            _ => ReplicaState::Offline,
-        }
-    }
-}
-
-impl From<ReplicaState> for i32 {
-    fn from(state: ReplicaState) -> Self {
-        state as i32
-    }
-}
-
-/// Partition replica information for warm standby replication
-///
-/// Each partition has a leader node that handles writes and flushes to Parquet,
-/// and one or more standby nodes that maintain in-memory copies for instant failover.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PartitionReplica {
-    /// Partition key: "catalog/schema/table/date=YYYY-MM-DD"
-    pub partition_key: String,
-    /// Current leader node ID (handles writes, flushes to Parquet)
-    pub leader_node_id: String,
-    /// Standby node IDs (maintain memtable copies, no flush)
-    pub standby_node_ids: Vec<String>,
-    /// Replication factor (1 = no standby, 2 = 1 standby, 3 = 2 standbys)
-    pub replication_factor: u8,
-    /// Last sequence number replicated to standbys
-    pub last_replicated_seq: u64,
-    /// Replication lag in milliseconds
-    pub replication_lag_ms: u64,
-    /// Current replica state
-    pub state: ReplicaState,
-    /// When this replica assignment was created
-    pub created_at: i64,
-    /// When leader was last confirmed healthy
-    pub leader_last_seen: i64,
-}
-
-impl PartitionReplica {
-    pub fn new(
-        partition_key: String,
-        leader_node_id: String,
-        standby_node_ids: Vec<String>,
-        replication_factor: u8,
-    ) -> Self {
-        let now = current_timestamp_ms();
-        Self {
-            partition_key,
-            leader_node_id,
-            standby_node_ids,
-            replication_factor,
-            last_replicated_seq: 0,
-            replication_lag_ms: 0,
-            state: ReplicaState::CatchingUp,
-            created_at: now,
-            leader_last_seen: now,
-        }
-    }
-
-    /// Generate storage key for this partition replica
-    pub fn storage_key(&self) -> String {
-        format!("{}{}", keys::PREFIX_REPLICA, self.partition_key)
-    }
-
-    /// Generate prefix for listing all replicas
-    pub fn prefix() -> String {
-        keys::PREFIX_REPLICA.to_string()
-    }
-
-    /// Check if this partition has a healthy standby for failover
-    pub fn has_healthy_standby(&self) -> bool {
-        !self.standby_node_ids.is_empty() && self.state == ReplicaState::InSync
-    }
-
-    /// Get the first standby for failover (if any)
-    pub fn first_standby(&self) -> Option<&String> {
-        self.standby_node_ids.first()
-    }
-
-    // Note: promote_standby() removed - using No-Promotion architecture
-    // Standby nodes never promote to Primary; K8s handles node replacement
-}
 
 /// Status of a node retirement (scale-in) operation
 ///
@@ -985,10 +885,10 @@ pub struct RetireStatus {
     pub state: NodeState,
     /// When retirement started (Unix timestamp ms)
     pub started_at: i64,
-    /// Total partitions this node was leading
-    pub partitions_total: usize,
-    /// Number of partitions already reassigned to other nodes
-    pub partitions_reassigned: usize,
+    /// Total tables this node was owning
+    pub tables_total: usize,
+    /// Number of tables already reassigned to other nodes
+    pub tables_reassigned: usize,
     /// Remaining rows in memtable (0 when fully flushed to S3)
     pub memtable_rows_remaining: u64,
     /// Estimated seconds until retirement completes
@@ -996,29 +896,29 @@ pub struct RetireStatus {
 }
 
 impl RetireStatus {
-    pub fn new(node_id: String, partitions_total: usize) -> Self {
+    pub fn new(node_id: String, tables_total: usize) -> Self {
         Self {
             node_id,
             state: NodeState::Retiring,
             started_at: current_timestamp_ms(),
-            partitions_total,
-            partitions_reassigned: 0,
+            tables_total,
+            tables_reassigned: 0,
             memtable_rows_remaining: 0,
             estimated_completion_secs: 0,
         }
     }
 
-    /// Check if retirement is complete (all partitions reassigned, memtable empty)
+    /// Check if retirement is complete (all tables reassigned, memtable empty)
     pub fn is_complete(&self) -> bool {
-        self.partitions_reassigned >= self.partitions_total && self.memtable_rows_remaining == 0
+        self.tables_reassigned >= self.tables_total && self.memtable_rows_remaining == 0
     }
 
     /// Calculate progress percentage (0-100)
     pub fn progress_percent(&self) -> u8 {
-        if self.partitions_total == 0 {
+        if self.tables_total == 0 {
             100
         } else {
-            ((self.partitions_reassigned as f64 / self.partitions_total as f64) * 100.0) as u8
+            ((self.tables_reassigned as f64 / self.tables_total as f64) * 100.0) as u8
         }
     }
 }
@@ -1404,42 +1304,6 @@ pub enum MetaCommand {
     // Lease management
     ExpireLeases,
 
-    // Partition replica operations (warm standby)
-    AssignReplica {
-        partition_key: String,
-        leader_node_id: String,
-        standby_node_ids: Vec<String>,
-        replication_factor: u8,
-    },
-    // PromoteStandby removed - using No-Promotion architecture
-    UpdateReplicaState {
-        partition_key: String,
-        state: ReplicaState,
-        last_replicated_seq: u64,
-        replication_lag_ms: u64,
-    },
-    RemoveReplica {
-        partition_key: String,
-    },
-
-    /// Auto-assign replica for a partition using ReplicaAssigner
-    ///
-    /// Called when a new partition is first written to.
-    /// Meta will automatically select leader and standbys based on:
-    /// - Load balancing (least-loaded node as leader)
-    /// - Zone-awareness (standbys in different zones)
-    /// - Replication factor from config
-    AutoAssignReplica {
-        partition_key: String,
-    },
-
-    /// Rebalance replicas after a node joins
-    ///
-    /// Adds missing standbys to under-replicated partitions.
-    RebalanceOnNodeJoin {
-        node_id: String,
-    },
-
     // PromoteDataNode removed - using No-Promotion architecture
     // Standby nodes never promote to Primary; K8s handles node replacement
 
@@ -1460,23 +1324,11 @@ pub enum MetaCommand {
     /// Mark a node as fully drained (scale-in complete)
     ///
     /// Called when:
-    /// - All partitions have been reassigned
+    /// - All tables have been reassigned
     /// - Memtable has been flushed to S3
     /// - Node is safe to stop
     CompleteRetire {
         node_id: String,
-    },
-
-    /// Reassign a partition from a retiring node to another Primary
-    ///
-    /// For Object Store clusters:
-    /// - New leader takes over writes for this partition
-    /// - Old data remains in S3 at the retiring node's prefix
-    /// - New leader can read old data from S3 (any node can read any prefix)
-    ReassignPartitionForRetire {
-        partition_key: String,
-        from_node_id: String,
-        to_node_id: String,
     },
 
     /// Cancel a node retirement (scale-in abort)
@@ -1492,17 +1344,8 @@ pub enum MetaCommand {
     /// Updates progress information during retirement.
     UpdateRetireStatus {
         node_id: String,
-        partitions_reassigned: usize,
+        tables_reassigned: usize,
         memtable_rows_remaining: u64,
-    },
-
-    /// Remove a standby from partition replicas (for Standby scale-in)
-    ///
-    /// When scaling in a Standby node:
-    /// - Remove it from all partition's standby_node_ids
-    /// - Stop replication streams to this node
-    RemoveStandbyFromReplicas {
-        standby_node_id: String,
     },
 
     // Recovery operations (failover without promotion)
@@ -1517,7 +1360,7 @@ pub enum MetaCommand {
         crashed_primary_id: String,
     },
 
-    /// Assign a spare Standby to back specific Primaries
+    /// Assign a spare Standby to back specific Primaries (node-level pairing)
     ///
     /// When an active Standby crashes:
     /// 1. Find spare Standby from pool
@@ -1528,25 +1371,24 @@ pub enum MetaCommand {
         primary_ids: Vec<String>,
     },
 
-    /// Mark a partition as unprotected (no Standby backup)
+    /// Mark a Primary as unprotected (no Standby backup)
     ///
     /// Used when:
     /// - A Standby crashes and no spare is available
     /// - Primary has no replication target
     /// - Emits warning based on unprotected_write_policy
-    MarkPartitionUnprotected {
-        partition_key: String,
+    MarkPrimaryUnprotected {
         primary_id: String,
         reason: String,
     },
 
-    /// Redistribute partitions from a crashed Primary to remaining Primaries
+    /// Redistribute tables from a crashed Primary to remaining Primaries
     ///
     /// Called during Primary crash recovery (No-Promotion architecture):
-    /// 1. Get all partitions owned by crashed Primary
+    /// 1. Get all tables owned by crashed Primary
     /// 2. Distribute evenly to remaining active Primaries
-    /// 3. Update replica assignments
-    RedistributePartitions {
+    /// 3. Update table ownership
+    RedistributeTables {
         crashed_primary_id: String,
         target_primaries: Vec<String>,
     },
@@ -1697,36 +1539,7 @@ pub enum MetaResponse {
     EventPublished {
         sequence: u64,
     },
-    ReplicaAssigned {
-        partition_key: String,
-        leader_node_id: String,
-    },
-    // StandbyPromoted removed - using No-Promotion architecture
-    ReplicaUpdated {
-        partition_key: String,
-    },
-    ReplicaRemoved {
-        partition_key: String,
-    },
-    ReplicaNotFound {
-        partition_key: String,
-    },
-    // NoStandbyAvailable removed - using No-Promotion architecture
-    ReplicaAutoAssigned {
-        partition_key: String,
-        leader_node_id: String,
-        standby_node_ids: Vec<String>,
-        replication_factor: u8,
-    },
-    ReplicaAlreadyExists {
-        partition_key: String,
-    },
     NoDataNodesAvailable,
-    RebalanceCompleted {
-        updated_count: usize,
-    },
-    // DataNodePromoted removed - using No-Promotion architecture
-    // DataNodeModeUpdated removed - No-Promotion architecture (mode set at registration)
     /// Data node not found
     DataNodeNotFound {
         node_id: String,
@@ -1736,7 +1549,7 @@ pub enum MetaResponse {
     /// Node retirement started successfully
     RetireStarted {
         node_id: String,
-        partitions_to_reassign: usize,
+        tables_to_reassign: usize,
     },
     /// Node retirement completed, safe to stop
     RetireCompleted {
@@ -1751,13 +1564,13 @@ pub enum MetaResponse {
         node_id: String,
         progress_percent: u8,
     },
-    /// Partition reassigned from retiring node
-    PartitionReassigned {
-        partition_key: String,
+    /// Table reassigned from retiring node
+    TableReassignedForRetire {
+        table_key: String,
         from_node_id: String,
         to_node_id: String,
     },
-    /// Cannot retire node - no other nodes to take partitions
+    /// Cannot retire node - no other nodes to take tables
     CannotRetireNoAlternative {
         node_id: String,
         reason: String,
@@ -1766,11 +1579,6 @@ pub enum MetaResponse {
     NodeNotRetirable {
         node_id: String,
         current_state: NodeState,
-    },
-    /// Standby removed from all replicas
-    StandbyRemovedFromReplicas {
-        standby_node_id: String,
-        partitions_affected: usize,
     },
     /// Scale-in recommendation generated
     ScaleInRecommended {
@@ -1784,22 +1592,21 @@ pub enum MetaResponse {
         crashed_primary_id: String,
     },
 
-    /// Spare Standby assigned to Primaries
+    /// Spare Standby assigned to Primaries (node-level pairing)
     StandbyAssignedToPrimaries {
         standby_id: String,
         primary_ids: Vec<String>,
     },
 
-    /// Partition marked as unprotected (no Standby)
-    PartitionMarkedUnprotected {
-        partition_key: String,
+    /// Primary marked as unprotected (no Standby backup)
+    PrimaryMarkedUnprotected {
         primary_id: String,
     },
 
-    /// Partitions redistributed from crashed Primary
-    PartitionsRedistributed {
+    /// Tables redistributed from crashed Primary
+    TablesRedistributed {
         crashed_primary_id: String,
-        partitions_count: usize,
+        tables_count: usize,
         target_primaries: Vec<String>,
     },
 

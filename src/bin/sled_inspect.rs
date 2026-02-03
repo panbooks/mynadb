@@ -76,18 +76,6 @@ fn main() {
                         }
                     }
                 }
-                // Try to decode as PartitionReplica
-                else if key_str.starts_with("/replicas/") {
-                    if let Ok(replica) =
-                        bincode::deserialize::<mynadb::meta::types::PartitionReplica>(&value)
-                    {
-                        println!("  Decoded PartitionReplica:");
-                        println!("    partition_key: {}", replica.partition_key);
-                        println!("    leader: {}", replica.leader_node_id);
-                    } else {
-                        println!("  (Could not decode as PartitionReplica)");
-                    }
-                }
                 // Show raw for other keys
                 else {
                     if value.len() <= 50 {

@@ -8,11 +8,11 @@ use std::fmt;
 /// Recovery action to perform when a node fails
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RecoveryAction {
-    /// Primary crashed: Standby flushes data, partitions redistributed
+    /// Primary crashed: Standby flushes data, tables redistributed
     PrimaryRecovery {
         crashed_primary_id: String,
         standby_id: String,
-        partitions_to_redistribute: Vec<String>,
+        tables_to_redistribute: Vec<String>,
     },
 
     /// Standby crashed: Assign spare or mark Primary as unprotected
@@ -22,7 +22,7 @@ pub enum RecoveryAction {
         spare_standby_id: Option<String>,
     },
 
-    /// No recovery needed (node had no partitions or was spare)
+    /// No recovery needed (node had no tables or was spare)
     NoRecoveryNeeded { node_id: String, reason: String },
 }
 
@@ -63,16 +63,16 @@ pub enum RecoveryStep {
     /// Waiting for flush to complete
     WaitingForFlush,
 
-    /// Redistributing partitions to remaining Primaries
-    RedistributingPartitions,
+    /// Redistributing tables to remaining Primaries
+    RedistributingTables,
 
     /// Assigning spare Standby
     AssigningSpare,
 
-    /// Updating replica assignments
-    UpdatingReplicas,
+    /// Updating table ownership
+    UpdatingOwnership,
 
-    /// Marking partitions as unprotected
+    /// Marking Primaries as unprotected
     MarkingUnprotected,
 
     /// Finalizing recovery
@@ -85,9 +85,9 @@ impl fmt::Display for RecoveryStep {
             RecoveryStep::Detecting => write!(f, "Detecting failure type"),
             RecoveryStep::FlushingStandby => write!(f, "Triggering Standby flush"),
             RecoveryStep::WaitingForFlush => write!(f, "Waiting for flush"),
-            RecoveryStep::RedistributingPartitions => write!(f, "Redistributing partitions"),
+            RecoveryStep::RedistributingTables => write!(f, "Redistributing tables"),
             RecoveryStep::AssigningSpare => write!(f, "Assigning spare Standby"),
-            RecoveryStep::UpdatingReplicas => write!(f, "Updating replica assignments"),
+            RecoveryStep::UpdatingOwnership => write!(f, "Updating table ownership"),
             RecoveryStep::MarkingUnprotected => write!(f, "Marking unprotected"),
             RecoveryStep::Finalizing => write!(f, "Finalizing"),
         }
@@ -116,8 +116,8 @@ pub enum RecoveryError {
     /// No remaining Primaries to redistribute to
     NoRemainingPrimaries,
 
-    /// Partition redistribution failed
-    RedistributionFailed { partition: String, reason: String },
+    /// Table redistribution failed
+    RedistributionFailed { table_key: String, reason: String },
 
     /// No spare Standby available
     NoSpareAvailable { affected_primaries: Vec<String> },
@@ -164,10 +164,10 @@ impl fmt::Display for RecoveryError {
                 )
             }
             RecoveryError::NoRemainingPrimaries => {
-                write!(f, "No remaining Primaries to redistribute partitions to")
+                write!(f, "No remaining Primaries to redistribute tables to")
             }
-            RecoveryError::RedistributionFailed { partition, reason } => {
-                write!(f, "Failed to redistribute partition {}: {}", partition, reason)
+            RecoveryError::RedistributionFailed { table_key, reason } => {
+                write!(f, "Failed to redistribute table {}: {}", table_key, reason)
             }
             RecoveryError::NoSpareAvailable { affected_primaries } => {
                 write!(
@@ -207,10 +207,10 @@ pub struct RecoveryResult {
     /// Action that was taken
     pub action: RecoveryAction,
 
-    /// Partitions that were redistributed (for Primary crash)
-    pub partitions_redistributed: Vec<String>,
+    /// Tables that were redistributed (for Primary crash)
+    pub tables_redistributed: Vec<String>,
 
-    /// New Primary assignments (partition_key -> new_primary_id)
+    /// New Primary assignments (table_key -> new_primary_id)
     pub new_primary_assignments: Vec<(String, String)>,
 
     /// Spare Standby that was assigned (for Standby crash)
@@ -231,7 +231,7 @@ impl RecoveryResult {
     pub fn primary_recovery_success(
         crashed_primary_id: String,
         standby_id: String,
-        partitions: Vec<String>,
+        tables: Vec<String>,
         new_assignments: Vec<(String, String)>,
         duration_ms: u64,
     ) -> Self {
@@ -241,9 +241,9 @@ impl RecoveryResult {
             action: RecoveryAction::PrimaryRecovery {
                 crashed_primary_id,
                 standby_id,
-                partitions_to_redistribute: partitions.clone(),
+                tables_to_redistribute: tables.clone(),
             },
-            partitions_redistributed: partitions,
+            tables_redistributed: tables,
             new_primary_assignments: new_assignments,
             spare_assigned: None,
             unprotected_primaries: vec![],
@@ -267,7 +267,7 @@ impl RecoveryResult {
                 affected_primaries,
                 spare_standby_id: Some(spare_id.clone()),
             },
-            partitions_redistributed: vec![],
+            tables_redistributed: vec![],
             new_primary_assignments: vec![],
             spare_assigned: Some(spare_id),
             unprotected_primaries: vec![],
@@ -290,7 +290,7 @@ impl RecoveryResult {
                 affected_primaries: affected_primaries.clone(),
                 spare_standby_id: None,
             },
-            partitions_redistributed: vec![],
+            tables_redistributed: vec![],
             new_primary_assignments: vec![],
             spare_assigned: None,
             unprotected_primaries: affected_primaries,
@@ -328,7 +328,7 @@ impl RecoveryResult {
                 affected_primaries,
                 spare_standby_id: None, // No single spare, using flexible assignment
             },
-            partitions_redistributed: vec![],
+            tables_redistributed: vec![],
             new_primary_assignments: vec![],
             spare_assigned: None,
             unprotected_primaries,
@@ -338,29 +338,28 @@ impl RecoveryResult {
     }
 }
 
-/// Information about an unprotected partition
+/// Information about an unprotected Primary (no Standby backup)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnprotectedPartition {
-    pub partition_key: String,
+pub struct UnprotectedPrimary {
     pub primary_id: String,
     pub since: i64, // Timestamp when became unprotected
     pub reason: String,
 }
 
-/// Cluster protection status
+/// Cluster protection status (node-level)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterProtectionStatus {
-    /// Total number of partitions
-    pub total_partitions: usize,
+    /// Total number of Primary nodes
+    pub total_primaries: usize,
 
-    /// Number of protected partitions (have Standby backup)
-    pub protected_partitions: usize,
+    /// Number of protected Primaries (have Standby backup)
+    pub protected_primaries: usize,
 
-    /// Number of unprotected partitions
-    pub unprotected_partitions: usize,
+    /// Number of unprotected Primaries
+    pub unprotected_primaries: usize,
 
-    /// List of unprotected partitions
-    pub unprotected_list: Vec<UnprotectedPartition>,
+    /// List of unprotected Primaries
+    pub unprotected_list: Vec<UnprotectedPrimary>,
 
     /// Number of spare Standbys available
     pub spare_standbys_available: usize,
@@ -372,16 +371,16 @@ pub struct ClusterProtectionStatus {
 /// Overall cluster health status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClusterHealthStatus {
-    /// All partitions protected, spares available
+    /// All Primaries protected, spares available
     Healthy,
 
-    /// All partitions protected, no spares
+    /// All Primaries protected, no spares
     HealthyNoSpares,
 
-    /// Some partitions unprotected
+    /// Some Primaries unprotected
     Degraded,
 
-    /// Many partitions unprotected (>50%)
+    /// Many Primaries unprotected (>50%)
     Critical,
 }
 
@@ -477,12 +476,11 @@ mod tests {
     #[test]
     fn test_cluster_protection_status_init() {
         let status = ClusterProtectionStatus {
-            total_partitions: 10,
-            protected_partitions: 8,
-            unprotected_partitions: 2,
+            total_primaries: 10,
+            protected_primaries: 8,
+            unprotected_primaries: 2,
             unprotected_list: vec![
-                UnprotectedPartition {
-                    partition_key: "db.schema.table:2024-01-01".to_string(),
+                UnprotectedPrimary {
                     primary_id: "primary-1".to_string(),
                     since: 1704067200,
                     reason: "Standby crashed".to_string(),
@@ -492,8 +490,8 @@ mod tests {
             status: ClusterHealthStatus::Degraded,
         };
 
-        assert_eq!(status.protected_partitions, 8);
-        assert_eq!(status.unprotected_partitions, 2);
+        assert_eq!(status.protected_primaries, 8);
+        assert_eq!(status.unprotected_primaries, 2);
         assert_eq!(status.unprotected_list.len(), 1);
         assert_eq!(format!("{}", status.status), "DEGRADED");
     }
