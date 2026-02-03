@@ -189,7 +189,10 @@ impl MetaNode {
             return;
         }
 
-        debug!("Found {} Drained nodes to check for cleanup", drained_nodes.len());
+        debug!(
+            "Found {} Drained nodes to check for cleanup",
+            drained_nodes.len()
+        );
 
         // Single scan: build set of all nodes that still own tables - O(M)
         let all_tables = self.state_machine.list_all_tables();
@@ -208,7 +211,10 @@ impl MetaNode {
                     warn!("Failed to remove Drained node {}: {}", node.node_id, e);
                 } else {
                     removed_count += 1;
-                    debug!("Removed Drained node {} (no remaining table ownership)", node.node_id);
+                    debug!(
+                        "Removed Drained node {} (no remaining table ownership)",
+                        node.node_id
+                    );
                 }
             }
         }

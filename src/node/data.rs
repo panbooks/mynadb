@@ -8,11 +8,15 @@ use super::common;
 use crate::config::Config;
 use crate::data::cache::ParquetLocalCache;
 use crate::data::config::DataNodeConfig;
+use crate::data::replication::ReplicationManager;
 use crate::data::server::api::{start_http_server, DataNodeState};
 use crate::data::server::flight::{start_flight_server, DataNodeFlightService};
 use crate::meta::client::MetaClient;
-use crate::meta::types::{current_timestamp_ms, NodeInfo, NodeRole, NodeState};
+use crate::meta::types::{current_timestamp_ms, Event, EventType, NodeInfo, NodeRole, NodeState};
+use crate::query::query_engine::QueryEngine;
 use crate::storage::cache;
+use crate::storage::storage as storage_mod;
+use crate::storage::wal;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -20,55 +24,122 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
-/// Macro for welcome messages
-macro_rules! welcome {
-    ($($arg:tt)*) => {
-        println!($($arg)*);
-    };
-}
-
 const NODE_TYPE: &str = "data";
 
 /// Start the Data node
 pub async fn start(config_path: &str) {
     let config = Arc::new(Config::load_or_default(config_path));
-
-    // Initialize logging
     common::init_logging(&config);
+    print_welcome_banner();
 
-    welcome!("===============================================");
-    welcome!("  MynaDB Data Node");
-    welcome!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
-    welcome!("===============================================");
-
-    // Load Data-specific config from [data] section or use defaults
     let data_config = config.data.clone().unwrap_or_else(DataNodeConfig::default);
-
     info!(
         "Starting Data node {} on {}",
         data_config.node_id, data_config.advertise_addr
     );
 
-    // Write PID file for stop command
     if let Err(e) = common::write_pid_file(&config.storage.data_dir, NODE_TYPE) {
         error!("Failed to write PID file: {}", e);
         std::process::exit(1);
     }
 
-    // Initialize storage backend
+    // Initialize core components
     let storage = common::init_storage(&config);
-
-    // Initialize WAL
     let wal = common::init_wal(&config, storage.clone()).await;
+    let meta_client = connect_to_meta(&data_config).await;
+    let data_cache = init_data_cache(&config, &data_config, storage.clone(), wal.clone());
 
-    // Connect to Meta service first (needed for file registration during flush)
-    // Use connect_with_node_id so heartbeats use the correct data node ID
-    let meta_client = match MetaClient::connect_with_node_id(
-        &data_config.meta_endpoints,
-        data_config.node_id.clone(),
+    // Register with Meta and start heartbeat
+    let lease_id = Arc::new(AtomicU64::new(0));
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+    let backing_standby_info = register_with_meta(
+        &meta_client,
+        &data_config,
+        Arc::clone(&lease_id),
+        Arc::clone(&shutdown_flag),
     )
-    .await
-    {
+    .await;
+
+    // Initialize query components
+    let parquet_cache = init_parquet_cache(&config, &data_config, storage.clone());
+    let query_engine = common::init_query_engine_with_parquet_cache(
+        &config,
+        storage.clone(),
+        data_cache.clone(),
+        parquet_cache.clone(),
+    );
+    perform_wal_recovery(&wal, &data_cache, &query_engine, &config).await;
+
+    // Initialize replication and background flush
+    let replication_manager = init_replication(&data_config);
+    setup_background_flush(
+        &data_cache,
+        &config,
+        &meta_client,
+        &replication_manager,
+        query_engine.clone(),
+        &data_config.node_id,
+    );
+
+    // Build Flight service
+    let flight_service = build_flight_service(
+        data_cache.clone(),
+        query_engine.clone(),
+        meta_client.clone(),
+        &config,
+        &data_config,
+        parquet_cache.clone(),
+        replication_manager,
+        backing_standby_info,
+    );
+
+    // Spawn background tasks
+    spawn_event_subscriber(
+        meta_client.clone(),
+        data_config.node_id.clone(),
+        data_cache.clone(),
+    );
+    spawn_shutdown_handler(
+        config.storage.data_dir.clone(),
+        meta_client.clone(),
+        Arc::clone(&lease_id),
+        Arc::clone(&shutdown_flag),
+        data_cache.clone(),
+    );
+
+    // Start servers
+    start_servers(
+        &config,
+        &data_config,
+        data_cache,
+        query_engine,
+        meta_client,
+        wal,
+        flight_service,
+    )
+    .await;
+}
+
+/// Stop a running Data node
+pub fn stop(config_path: &str) {
+    let config = Config::load_or_default(config_path);
+    common::stop_node(&config.storage.data_dir, NODE_TYPE);
+}
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+fn print_welcome_banner() {
+    println!("===============================================");
+    println!("  MynaDB Data Node");
+    println!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
+    println!("===============================================");
+}
+
+/// Connect to Meta service with retry
+async fn connect_to_meta(config: &DataNodeConfig) -> Option<Arc<MetaClient>> {
+    match MetaClient::connect_with_node_id(&config.meta_endpoints, config.node_id.clone()).await {
         Ok(client) => {
             info!("Connected to Meta service");
             Some(Arc::new(client))
@@ -80,246 +151,243 @@ pub async fn start(config_path: &str) {
             );
             None
         }
-    };
+    }
+}
 
-    // Initialize data cache with node_id for distributed parallel queries
+/// Initialize data cache
+fn init_data_cache(
+    config: &Config,
+    data_config: &DataNodeConfig,
+    storage: Arc<storage_mod::Storage>,
+    wal: Option<Arc<wal::Wal>>,
+) -> Arc<cache::DataCache> {
     info!(
         "Initializing data cache (max: {}MB, node_id: {})",
         config.cache.max_size_mb, data_config.node_id
     );
-    let data_cache = Arc::new(cache::DataCache::new(
-        storage.clone(),
+    Arc::new(cache::DataCache::new(
+        storage,
         config.cache.max_size_mb,
-        wal.as_ref().map(Arc::clone),
+        wal,
         data_config.node_id.clone(),
-    ));
+    ))
+}
 
-    // NOTE: Background flush is started AFTER query_engine initialization
-    // (see below) to ensure table registrations are refreshed after flush
+/// Register with Meta service and start heartbeat loop
+///
+/// Returns backing_standby info if this is a Primary node with assigned standby
+async fn register_with_meta(
+    meta_client: &Option<Arc<MetaClient>>,
+    config: &DataNodeConfig,
+    lease_id: Arc<AtomicU64>,
+    shutdown_flag: Arc<AtomicBool>,
+) -> Option<(String, String)> {
+    let client = meta_client.as_ref()?;
 
-    // Register with Meta service and start heartbeat
-    let lease_id = Arc::new(AtomicU64::new(0));
-    let shutdown_flag = Arc::new(AtomicBool::new(false));
+    const MAX_RETRIES: u32 = 15;
+    const INITIAL_DELAY_MS: u64 = 500;
 
-    // Store backing_standby info from registration for flight_service
-    // This enables node-level replication where all data goes to one Standby
-    let mut backing_standby_info: Option<(String, String)> = None;
+    for attempt in 0..MAX_RETRIES {
+        let node_info = NodeInfo {
+            node_id: config.node_id.clone(),
+            role: NodeRole::Data,
+            state: NodeState::Active,
+            advertise_addr: config.advertise_addr.clone(),
+            http_addr: None,
+            flight_addr: Some(config.advertise_addr.clone()),
+            registered_at: current_timestamp_ms(),
+            last_heartbeat: current_timestamp_ms(),
+            labels: HashMap::new(),
+            mode: None,
+            backing_standby: None,
+            backed_primaries: vec![],
+        };
 
-    if let Some(ref client) = meta_client {
-        // Register with Meta service (retry with exponential backoff)
-        // This handles the case where data nodes start before Raft leader is elected
-        const MAX_RETRIES: u32 = 15;
-        const INITIAL_DELAY_MS: u64 = 500;
+        match client.register_node(node_info, 10000).await {
+            Ok(result) => {
+                info!(
+                    "Registered with Meta service, lease_id={}, mode={:?}, backing_standby={:?} (attempt {})",
+                    result.lease_id,
+                    result.assigned_mode,
+                    result.backing_standby.as_ref().map(|(id, _)| id),
+                    attempt + 1
+                );
+                lease_id.store(result.lease_id, Ordering::SeqCst);
 
-        for attempt in 0..MAX_RETRIES {
-            let node_info = NodeInfo {
-                node_id: data_config.node_id.clone(),
-                role: NodeRole::Data,
-                state: NodeState::Active, // Register as Active so router can find us immediately
-                advertise_addr: data_config.advertise_addr.clone(),
-                http_addr: None,
-                flight_addr: Some(data_config.advertise_addr.clone()),
-                registered_at: current_timestamp_ms(),
-                last_heartbeat: current_timestamp_ms(),
-                labels: HashMap::new(),
-                mode: None, // Mode auto-assigned by Meta based on standby ratio
-                // Node-level standby pairing - assigned by Meta during registration
-                backing_standby: None,
-                backed_primaries: vec![],
-            };
+                // Start heartbeat loop
+                let client_clone = Arc::clone(client);
+                let lease_id_clone = Arc::clone(&lease_id);
+                let shutdown_clone = Arc::clone(&shutdown_flag);
+                tokio::spawn(async move {
+                    heartbeat_loop(client_clone, lease_id_clone, shutdown_clone).await;
+                });
 
-            // Register with 10 second lease TTL (faster failure detection)
-            match client.register_node(node_info, 10000).await {
-                Ok(result) => {
+                // Return backing_standby info if present
+                if let Some((standby_id, standby_addr)) = result.backing_standby {
                     info!(
-                        "Registered with Meta service, lease_id={}, mode={:?}, backing_standby={:?} (attempt {})",
-                        result.lease_id,
-                        result.assigned_mode,
-                        result.backing_standby.as_ref().map(|(id, _)| id),
-                        attempt + 1
+                        "Node-level standby: This Primary is backed by {} at {}",
+                        standby_id, standby_addr
                     );
-                    lease_id.store(result.lease_id, Ordering::SeqCst);
-
-                    // Store backing_standby info for flight service
-                    if let Some((standby_id, standby_addr)) = result.backing_standby {
-                        info!(
-                            "Node-level standby: This Primary is backed by {} at {}",
-                            standby_id, standby_addr
-                        );
-                        backing_standby_info = Some((standby_id, standby_addr));
-                    }
-
-                    // Start heartbeat loop
-                    let client_clone = Arc::clone(client);
-                    let lease_id_clone = Arc::clone(&lease_id);
-                    let shutdown_clone = Arc::clone(&shutdown_flag);
-                    tokio::spawn(async move {
-                        heartbeat_loop(client_clone, lease_id_clone, shutdown_clone).await;
-                    });
-                    break;
+                    return Some((standby_id, standby_addr));
                 }
-                Err(e) => {
-                    if attempt < MAX_RETRIES - 1 {
-                        let delay = INITIAL_DELAY_MS * (1 << attempt.min(5)); // Cap at 16 seconds
-                        info!(
-                            "Failed to register with Meta ({}), retrying in {}ms (attempt {}/{})",
-                            e,
-                            delay,
-                            attempt + 1,
-                            MAX_RETRIES
-                        );
-                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                    } else {
-                        warn!(
-                            "Failed to register with Meta service after {} attempts: {}",
-                            MAX_RETRIES, e
-                        );
-                    }
+                return None;
+            }
+            Err(e) => {
+                if attempt < MAX_RETRIES - 1 {
+                    let delay = INITIAL_DELAY_MS * (1 << attempt.min(5));
+                    info!(
+                        "Failed to register with Meta ({}), retrying in {}ms (attempt {}/{})",
+                        e,
+                        delay,
+                        attempt + 1,
+                        MAX_RETRIES
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                } else {
+                    warn!(
+                        "Failed to register with Meta service after {} attempts: {}",
+                        MAX_RETRIES, e
+                    );
                 }
             }
         }
     }
+    None
+}
 
-    // Initialize parquet local cache for cluster mode (if configured)
-    // This must be done before query engine initialization
-    let parquet_cache: Option<Arc<ParquetLocalCache>> = if let Some(cache_size_mb) =
-        config.cache.parquet_cache_mb
-    {
-        info!(
-            "Initializing parquet local cache (max: {}MB, node_id: {})",
-            cache_size_mb, data_config.node_id
-        );
-        let cache_dir = PathBuf::from(&config.storage.data_dir).join("_parquet_cache");
-        let cache = ParquetLocalCache::new(cache_dir, cache_size_mb, data_config.node_id.clone())
-            .with_storage(storage.clone());
+/// Initialize parquet local cache for cluster mode
+fn init_parquet_cache(
+    config: &Config,
+    data_config: &DataNodeConfig,
+    storage: Arc<storage_mod::Storage>,
+) -> Option<Arc<ParquetLocalCache>> {
+    let cache_size_mb = config.cache.parquet_cache_mb?;
 
-        // Scan existing cache directory to rebuild tracking
-        let cache = Arc::new(cache);
-        let cache_for_scan = cache.clone();
-        tokio::spawn(async move {
-            if let Ok(count) = cache_for_scan.scan_existing().await {
-                if count > 0 {
-                    info!(
-                        "Parquet cache warmed up: {} files from previous session",
-                        count
-                    );
-                }
-            }
-        });
-
-        Some(cache)
-    } else {
-        None
-    };
-
-    // Initialize query engine for local query execution (with parquet cache if available)
-    let query_engine = common::init_query_engine_with_parquet_cache(
-        &config,
-        storage.clone(),
-        data_cache.clone(),
-        parquet_cache.clone(),
+    info!(
+        "Initializing parquet local cache (max: {}MB, node_id: {})",
+        cache_size_mb, data_config.node_id
     );
 
-    // WAL Recovery - replay unflushed writes before accepting new data
+    let cache_dir = PathBuf::from(&config.storage.data_dir).join("_parquet_cache");
+    let cache = ParquetLocalCache::new(cache_dir, cache_size_mb, data_config.node_id.clone())
+        .with_storage(storage);
+
+    let cache = Arc::new(cache);
+    let cache_for_scan = cache.clone();
+    tokio::spawn(async move {
+        if let Ok(count) = cache_for_scan.scan_existing().await {
+            if count > 0 {
+                info!(
+                    "Parquet cache warmed up: {} files from previous session",
+                    count
+                );
+            }
+        }
+    });
+
+    Some(cache)
+}
+
+/// Perform WAL recovery
+async fn perform_wal_recovery(
+    wal: &Option<Arc<wal::Wal>>,
+    data_cache: &Arc<cache::DataCache>,
+    query_engine: &Arc<QueryEngine>,
+    config: &Arc<Config>,
+) {
     if let Some(ref wal_arc) = wal {
-        welcome!("  Replaying WAL files...");
-        common::perform_wal_recovery(wal_arc, &data_cache, &query_engine, &config).await;
-        welcome!("  WAL recovery complete");
+        println!("  Replaying WAL files...");
+        common::perform_wal_recovery(wal_arc, data_cache, query_engine, config).await;
+        println!("  WAL recovery complete");
     } else {
         info!("WAL disabled, skipping recovery");
     }
+}
 
-    // Initialize replication manager if enabled (BEFORE background flush setup)
-    // This allows the flush callback to broadcast FlushCheckpoint to standbys
-    let replication_manager: Option<Arc<crate::data::replication::ReplicationManager>> =
-        if data_config.replication.enabled {
-            use crate::data::replication::{
-                ReplicationConfig as ReplicationTypesConfig, ReplicationManager,
-            };
+/// Initialize replication manager
+fn init_replication(config: &DataNodeConfig) -> Option<Arc<ReplicationManager>> {
+    if !config.replication.enabled {
+        return None;
+    }
 
-            let replication_config = ReplicationTypesConfig::from(&data_config.replication);
-            let replication_manager = Arc::new(ReplicationManager::new(
-                data_config.node_id.clone(),
-                replication_config,
-            ));
+    use crate::data::replication::ReplicationConfig as ReplicationTypesConfig;
 
-            info!(
-                "Replication enabled: mode={}, batch_interval={}ms",
-                data_config.replication.mode, data_config.replication.batch_interval_ms
-            );
+    let replication_config = ReplicationTypesConfig::from(&config.replication);
+    let manager = Arc::new(ReplicationManager::new(
+        config.node_id.clone(),
+        replication_config,
+    ));
 
-            Some(replication_manager)
-        } else {
-            None
-        };
+    info!(
+        "Replication enabled: mode={}, batch_interval={}ms",
+        config.replication.mode, config.replication.batch_interval_ms
+    );
 
-    // Start background flush with appropriate registration
-    // Must be done AFTER query_engine is created so we can refresh tables after flush
-    match (&meta_client, &replication_manager) {
+    Some(manager)
+}
+
+/// Setup background flush with appropriate mode
+fn setup_background_flush(
+    data_cache: &Arc<cache::DataCache>,
+    config: &Config,
+    meta_client: &Option<Arc<MetaClient>>,
+    replication_manager: &Option<Arc<ReplicationManager>>,
+    query_engine: Arc<QueryEngine>,
+    node_id: &str,
+) {
+    match (meta_client, replication_manager) {
         (Some(client), Some(repl_manager)) => {
-            // With Meta AND replication: Register files, refresh tables, AND broadcast FlushCheckpoint
             common::start_background_flush_with_replication(
-                (*data_cache).clone(),
+                (**data_cache).clone(),
                 config.cache.flush_interval_secs,
                 Arc::clone(client),
-                query_engine.clone(),
+                query_engine,
                 Arc::clone(repl_manager),
-                data_config.node_id.clone(),
+                node_id.to_string(),
             );
             info!("Background flush enabled with replication checkpoint broadcast");
         }
         (Some(client), None) => {
-            // With Meta: Use table-level routing (register table + update stats)
             common::start_background_flush_with_table_routing(
-                (*data_cache).clone(),
+                (**data_cache).clone(),
                 config.cache.flush_interval_secs,
                 Arc::clone(client),
-                query_engine.clone(),
-                data_config.node_id.clone(),
+                query_engine,
+                node_id.to_string(),
             );
         }
         (None, _) => {
-            // Without Meta: Simple flush without registration
-            (*data_cache)
+            (**data_cache)
                 .clone()
                 .start_background_flush(config.cache.flush_interval_secs);
         }
     }
+}
 
-    // Clone meta_client before moving to FlightService (needed for shutdown, event subscription, and HTTP API)
-    let meta_client_for_shutdown = meta_client.clone();
-    let meta_client_for_events = meta_client.clone();
-    let meta_client_for_http = meta_client.clone();
-
-    // Initialize database manager for partition operations
+/// Build the Flight service with all components
+#[allow(clippy::too_many_arguments)]
+fn build_flight_service(
+    data_cache: Arc<cache::DataCache>,
+    query_engine: Arc<QueryEngine>,
+    meta_client: Option<Arc<MetaClient>>,
+    config: &Config,
+    data_config: &DataNodeConfig,
+    parquet_cache: Option<Arc<ParquetLocalCache>>,
+    replication_manager: Option<Arc<ReplicationManager>>,
+    backing_standby_info: Option<(String, String)>,
+) -> DataNodeFlightService {
     let db_manager = Arc::new(
         crate::jobs::database_manager::DatabaseManager::with_storage_and_node_id(
             &config.storage.data_dir,
-            storage.clone(),
+            common::init_storage(config),
             &data_config.node_id,
         ),
     );
-    let db_manager_for_http = db_manager.clone();
 
-    // Clone components for HTTP API (before they're moved to Flight service)
-    let data_cache_for_http = data_cache.clone();
-    let data_cache_for_shutdown = data_cache.clone();
-    let data_cache_for_recovery = data_cache.clone();
-    let query_engine_for_http = query_engine.clone();
-    let config_for_http = config.clone();
-    let wal_for_http = wal.clone();
+    let is_retiring = Arc::new(AtomicBool::new(false));
+    let in_flight_queries = Arc::new(AtomicU64::new(0));
 
-    // Create shared is_retiring flag (used by both Flight and HTTP services)
-    // When true, the node rejects new writes to allow graceful scale-in
-    let is_retiring = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let is_retiring_for_http = Arc::clone(&is_retiring);
-
-    // Create shared in_flight_queries counter (used by Flight, shared with HTTP for status)
-    let in_flight_queries = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let in_flight_queries_for_http = Arc::clone(&in_flight_queries);
-
-    // Create Flight service (replaces gRPC)
-    let mut flight_service = DataNodeFlightService::new(
+    let mut service = DataNodeFlightService::new(
         data_cache,
         query_engine,
         meta_client,
@@ -330,264 +398,330 @@ pub async fn start(config_path: &str) {
     .with_is_retiring(is_retiring)
     .with_in_flight_queries(in_flight_queries);
 
-    // Add parquet cache if available
-    if let Some(ref cache) = parquet_cache {
-        flight_service = flight_service.with_parquet_cache(cache.clone());
+    if let Some(cache) = parquet_cache {
+        service = service.with_parquet_cache(cache);
     }
 
-    // Add replication manager to flight service if enabled
-    if let Some(ref repl_manager) = replication_manager {
-        flight_service = flight_service.with_replication_manager(Arc::clone(repl_manager));
+    if let Some(repl_manager) = replication_manager {
+        service = service.with_replication_manager(repl_manager);
     }
 
-    // Set backing standby for node-level replication
     if let Some((standby_id, standby_addr)) = backing_standby_info {
-        flight_service = flight_service.with_backing_standby(standby_id, standby_addr);
+        service = service.with_backing_standby(standby_id, standby_addr);
     }
 
-    // Clone for event subscription task
-    let _replication_manager_for_events = replication_manager;
+    service
+}
 
-    // Subscribe to recovery events from Meta
-    // This handles recovery flush triggers when a Primary crashes
-    if let Some(ref client) = meta_client_for_events {
-        use crate::meta::types::EventType;
+/// Spawn event subscriber for recovery and state change events
+fn spawn_event_subscriber(
+    meta_client: Option<Arc<MetaClient>>,
+    node_id: String,
+    data_cache: Arc<cache::DataCache>,
+) {
+    let client = match meta_client {
+        Some(c) => c,
+        None => return,
+    };
 
-        let node_id = data_config.node_id.clone();
-        let meta_client_for_sub = Arc::clone(client);
-        let data_cache_for_sub = data_cache_for_recovery;
+    tokio::spawn(async move {
+        event_subscription_loop(client, node_id, data_cache).await;
+    });
+}
 
-        tokio::spawn(async move {
-            // Subscribe to recovery events
-            let topics = vec!["recovery".to_string(), "nodes".to_string()];
-            let mut retry_count: u32 = 0;
-            const MAX_RETRY_DELAY_SECS: u64 = 30;
+/// Event subscription loop - handles recovery and retire events
+async fn event_subscription_loop(
+    meta_client: Arc<MetaClient>,
+    node_id: String,
+    data_cache: Arc<cache::DataCache>,
+) {
+    let topics = vec!["recovery".to_string(), "nodes".to_string()];
+    let mut retry_count: u32 = 0;
+    const MAX_RETRY_DELAY_SECS: u64 = 30;
 
-            loop {
-                match meta_client_for_sub.subscribe(topics.clone(), 0).await {
-                    Ok(mut rx) => {
-                        retry_count = 0; // Reset on successful connection
-                        info!("Subscribed to recovery events from Meta");
+    loop {
+        match meta_client.subscribe(topics.clone(), 0).await {
+            Ok(mut rx) => {
+                retry_count = 0;
+                info!("Subscribed to recovery events from Meta");
 
-                        while let Some(event) = rx.recv().await {
-                            match event.event_type {
-                                EventType::FlushForRecovery => {
-                                    // Recovery event: Standby needs to flush crashed Primary's data
-                                    if let Ok(payload) =
-                                        serde_json::from_slice::<serde_json::Value>(&event.payload)
-                                    {
-                                        let standby_id = payload
-                                            .get("standby_id")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("");
-                                        let crashed_primary_id = payload
-                                            .get("crashed_primary_id")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("");
-
-                                        // Only process if this event is for us
-                                        if standby_id == node_id {
-                                            warn!(
-                                                "RECOVERY: Received flush trigger for crashed Primary {}. Flushing all data...",
-                                                crashed_primary_id
-                                            );
-
-                                            // Trigger immediate flush of all cached data
-                                            match data_cache_for_sub.flush().await {
-                                                Ok(results) => {
-                                                    let total_files = results.len();
-                                                    let total_rows: u64 =
-                                                        results.iter().map(|r| r.row_count).sum();
-                                                    info!(
-                                                        "RECOVERY: Flush complete for crashed Primary {}. Wrote {} files, {} rows",
-                                                        crashed_primary_id, total_files, total_rows
-                                                    );
-                                                }
-                                                Err(e) => {
-                                                    error!(
-                                                        "RECOVERY: Flush failed for crashed Primary {}: {}",
-                                                        crashed_primary_id, e
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                EventType::NodeStateChanged => {
-                                    // Handle retire event: flush data before node is marked as retiring
-                                    if let Ok(payload) =
-                                        serde_json::from_slice::<serde_json::Value>(&event.payload)
-                                    {
-                                        let event_node_id = payload
-                                            .get("node_id")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("");
-                                        let new_state = payload
-                                            .get("new_state")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("");
-
-                                        // Only process retire events for this node
-                                        if event_node_id == node_id && new_state == "Retiring" {
-                                            info!(
-                                                "RETIRE: Received retire event for this node. Flushing memtable data..."
-                                            );
-
-                                            // Trigger immediate flush to persist all memtable data
-                                            // This ensures no data loss when the node is scaled in
-                                            match data_cache_for_sub.flush().await {
-                                                Ok(results) => {
-                                                    let total_files = results.len();
-                                                    let total_rows: u64 =
-                                                        results.iter().map(|r| r.row_count).sum();
-                                                    info!(
-                                                        "RETIRE: Pre-retire flush complete. Wrote {} files, {} rows",
-                                                        total_files, total_rows
-                                                    );
-                                                }
-                                                Err(e) => {
-                                                    error!(
-                                                        "RETIRE: Pre-retire flush failed: {}",
-                                                        e
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        warn!("Event subscription ended, reconnecting...");
-                    }
-                    Err(e) => {
-                        let delay = std::cmp::min(1 << retry_count, MAX_RETRY_DELAY_SECS);
-                        warn!(
-                            "Failed to subscribe to events: {}. Retrying in {}s...",
-                            e, delay
-                        );
-                        tokio::time::sleep(Duration::from_secs(delay)).await;
-                        retry_count = retry_count.saturating_add(1);
-                    }
+                while let Some(event) = rx.recv().await {
+                    handle_meta_event(&event, &node_id, &data_cache).await;
                 }
+                warn!("Event subscription ended, reconnecting...");
             }
-        });
+            Err(e) => {
+                let delay = std::cmp::min(1 << retry_count, MAX_RETRY_DELAY_SECS);
+                warn!(
+                    "Failed to subscribe to events: {}. Retrying in {}s...",
+                    e, delay
+                );
+                tokio::time::sleep(Duration::from_secs(delay)).await;
+                retry_count = retry_count.saturating_add(1);
+            }
+        }
+    }
+}
+
+/// Handle individual Meta events
+async fn handle_meta_event(event: &Event, node_id: &str, data_cache: &Arc<cache::DataCache>) {
+    match event.event_type {
+        EventType::FlushForRecovery => {
+            handle_recovery_flush_event(event, node_id, data_cache).await;
+        }
+        EventType::NodeStateChanged => {
+            handle_node_state_changed_event(event, node_id, data_cache).await;
+        }
+        _ => {}
+    }
+}
+
+/// Handle FlushForRecovery event - Standby flushes crashed Primary's data
+async fn handle_recovery_flush_event(
+    event: &Event,
+    node_id: &str,
+    data_cache: &Arc<cache::DataCache>,
+) {
+    let payload = match serde_json::from_slice::<serde_json::Value>(&event.payload) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    let standby_id = payload
+        .get("standby_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let crashed_primary_id = payload
+        .get("crashed_primary_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if standby_id != node_id {
+        return;
     }
 
-    // Start Flight server
-    let addr = data_config.advertise_addr.parse().expect("Invalid address");
-    welcome!("  Data node started on {}", data_config.advertise_addr);
-    welcome!("  Protocol: Arrow Flight");
+    warn!(
+        "RECOVERY: Received flush trigger for crashed Primary {}. Flushing all data...",
+        crashed_primary_id
+    );
 
-    // Start HTTP server for health checks and monitoring (if port > 0)
-    let http_port = data_config.http_port;
-    if http_port > 0 {
-        let http_state = DataNodeState {
-            node_id: data_config.node_id.clone(),
-            start_time: Instant::now(),
-            cache: data_cache_for_http,
-            meta_client: meta_client_for_http,
-            is_retiring: is_retiring_for_http, // Shared with Flight service
-            retire_status: Arc::new(parking_lot::RwLock::new(None)),
-            query_engine: Some(query_engine_for_http),
-            config: Some(config_for_http),
-            wal: wal_for_http,
-            compactor: None, // Compaction handled by leader node in cluster mode
-            db_manager: Some(db_manager_for_http),
-            in_flight_queries: Some(in_flight_queries_for_http), // Shared with Flight service
-        };
+    match data_cache.flush().await {
+        Ok(results) => {
+            let total_files = results.len();
+            let total_rows: u64 = results.iter().map(|r| r.row_count).sum();
+            info!(
+                "RECOVERY: Flush complete for crashed Primary {}. Wrote {} files, {} rows",
+                crashed_primary_id, total_files, total_rows
+            );
+        }
+        Err(e) => {
+            error!(
+                "RECOVERY: Flush failed for crashed Primary {}: {}",
+                crashed_primary_id, e
+            );
+        }
+    }
+}
+
+/// Handle NodeStateChanged event - flush data when node is retiring
+async fn handle_node_state_changed_event(
+    event: &Event,
+    node_id: &str,
+    data_cache: &Arc<cache::DataCache>,
+) {
+    let payload = match serde_json::from_slice::<serde_json::Value>(&event.payload) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    let event_node_id = payload
+        .get("node_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let new_state = payload
+        .get("new_state")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if event_node_id != node_id || new_state != "Retiring" {
+        return;
+    }
+
+    info!("RETIRE: Received retire event for this node. Flushing memtable data...");
+
+    match data_cache.flush().await {
+        Ok(results) => {
+            let total_files = results.len();
+            let total_rows: u64 = results.iter().map(|r| r.row_count).sum();
+            info!(
+                "RETIRE: Pre-retire flush complete. Wrote {} files, {} rows",
+                total_files, total_rows
+            );
+        }
+        Err(e) => {
+            error!("RETIRE: Pre-retire flush failed: {}", e);
+        }
+    }
+}
+
+/// Spawn shutdown handler for graceful shutdown
+fn spawn_shutdown_handler(
+    data_dir: String,
+    meta_client: Option<Arc<MetaClient>>,
+    lease_id: Arc<AtomicU64>,
+    shutdown_flag: Arc<AtomicBool>,
+    data_cache: Arc<cache::DataCache>,
+) {
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        info!("Received shutdown signal, cleaning up...");
+
+        shutdown_flag.store(true, Ordering::SeqCst);
+
+        // Flush memtable data
+        flush_on_shutdown(&data_cache).await;
+
+        // Deregister from Meta
+        deregister_on_shutdown(&meta_client, &lease_id).await;
+
+        common::remove_pid_file(&data_dir, NODE_TYPE);
+        std::process::exit(0);
+    });
+}
+
+/// Flush memtable data on shutdown
+async fn flush_on_shutdown(data_cache: &Arc<cache::DataCache>) {
+    let cache_stats = data_cache.stats().await;
+    if cache_stats.total_rows == 0 {
+        info!("Shutdown: memtable empty, no flush needed");
+        return;
+    }
+
+    info!(
+        "Shutdown: flushing {} rows from memtable to disk...",
+        cache_stats.total_rows
+    );
+
+    let flush_start = Instant::now();
+    match data_cache.flush().await {
+        Ok(files_written) => {
+            info!(
+                "Shutdown: flushed {} files in {:?}",
+                files_written.len(),
+                flush_start.elapsed()
+            );
+        }
+        Err(e) => {
+            error!("Shutdown: failed to flush memtable: {}", e);
+        }
+    }
+}
+
+/// Deregister from Meta on shutdown
+async fn deregister_on_shutdown(meta_client: &Option<Arc<MetaClient>>, lease_id: &Arc<AtomicU64>) {
+    let client = match meta_client {
+        Some(c) => c,
+        None => return,
+    };
+
+    let id = lease_id.load(Ordering::SeqCst);
+    if id == 0 {
+        return;
+    }
+
+    match client.deregister_node(id).await {
+        Ok(_) => info!("Deregistered from Meta service"),
+        Err(e) => warn!("Failed to deregister from Meta service: {}", e),
+    }
+}
+
+/// Start HTTP and Flight servers
+async fn start_servers(
+    config: &Config,
+    data_config: &DataNodeConfig,
+    data_cache: Arc<cache::DataCache>,
+    query_engine: Arc<QueryEngine>,
+    meta_client: Option<Arc<MetaClient>>,
+    wal: Option<Arc<wal::Wal>>,
+    flight_service: DataNodeFlightService,
+) {
+    let addr = data_config.advertise_addr.parse().expect("Invalid address");
+
+    println!("  Data node started on {}", data_config.advertise_addr);
+    println!("  Protocol: Arrow Flight");
+
+    // Start HTTP server if enabled
+    if data_config.http_port > 0 {
+        let http_state = create_http_state(
+            config,
+            data_config,
+            data_cache,
+            query_engine,
+            meta_client,
+            wal,
+        );
+        let http_port = data_config.http_port;
         tokio::spawn(async move {
             if let Err(e) = start_http_server("0.0.0.0", http_port, http_state).await {
                 error!("Data node HTTP server failed: {}", e);
             }
         });
-        welcome!("  HTTP API on port {}", http_port);
+        println!("  HTTP API on port {}", data_config.http_port);
     }
 
-    welcome!("===============================================");
+    println!("===============================================");
 
-    // Set up signal handler for graceful shutdown
-    let data_dir = config.storage.data_dir.clone();
-    let shutdown_meta_client = meta_client_for_shutdown;
-    let shutdown_lease_id = Arc::clone(&lease_id);
-    let shutdown_flag_clone = Arc::clone(&shutdown_flag);
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        info!("Received shutdown signal, cleaning up...");
-
-        // Signal heartbeat loop to stop
-        shutdown_flag_clone.store(true, Ordering::SeqCst);
-
-        // Flush memtable data to disk before shutdown
-        // This ensures no data loss on graceful shutdown
-        let cache_stats = data_cache_for_shutdown.stats().await;
-        if cache_stats.total_rows > 0 {
-            info!(
-                "Shutdown: flushing {} rows from memtable to disk...",
-                cache_stats.total_rows
-            );
-            let flush_start = Instant::now();
-            match data_cache_for_shutdown.flush().await {
-                Ok(files_written) => {
-                    info!(
-                        "Shutdown: flushed {} files in {:?}",
-                        files_written.len(),
-                        flush_start.elapsed()
-                    );
-                }
-                Err(e) => {
-                    error!("Shutdown: failed to flush memtable: {}", e);
-                }
-            }
-        } else {
-            info!("Shutdown: memtable empty, no flush needed");
-        }
-
-        // Deregister from Meta service
-        if let Some(ref client) = shutdown_meta_client {
-            let id = shutdown_lease_id.load(Ordering::SeqCst);
-            if id > 0 {
-                if let Err(e) = client.deregister_node(id).await {
-                    warn!("Failed to deregister from Meta service: {}", e);
-                } else {
-                    info!("Deregistered from Meta service");
-                }
-            }
-        }
-
-        common::remove_pid_file(&data_dir, NODE_TYPE);
-        std::process::exit(0);
-    });
-
+    // Start Flight server (blocking)
     if let Err(e) = start_flight_server(addr, flight_service).await {
         error!("Data Flight server failed: {}", e);
         common::remove_pid_file(&config.storage.data_dir, NODE_TYPE);
     }
 }
 
-/// Stop a running Data node
-pub fn stop(config_path: &str) {
-    let config = Config::load_or_default(config_path);
-    common::stop_node(&config.storage.data_dir, NODE_TYPE);
+/// Create HTTP server state
+fn create_http_state(
+    config: &Config,
+    data_config: &DataNodeConfig,
+    data_cache: Arc<cache::DataCache>,
+    query_engine: Arc<QueryEngine>,
+    meta_client: Option<Arc<MetaClient>>,
+    wal: Option<Arc<wal::Wal>>,
+) -> DataNodeState {
+    let db_manager = Arc::new(
+        crate::jobs::database_manager::DatabaseManager::with_storage_and_node_id(
+            &config.storage.data_dir,
+            common::init_storage(config),
+            &data_config.node_id,
+        ),
+    );
+
+    DataNodeState {
+        node_id: data_config.node_id.clone(),
+        start_time: Instant::now(),
+        cache: data_cache,
+        meta_client,
+        is_retiring: Arc::new(AtomicBool::new(false)),
+        retire_status: Arc::new(parking_lot::RwLock::new(None)),
+        query_engine: Some(query_engine),
+        config: Some(Arc::new(config.clone())),
+        wal,
+        compactor: None,
+        db_manager: Some(db_manager),
+        in_flight_queries: Some(Arc::new(AtomicU64::new(0))),
+    }
 }
 
 /// Heartbeat loop to keep the lease alive with Meta service
-///
-/// Sends heartbeats every 2 seconds to maintain the 10-second lease.
-/// This gives us 5 heartbeat attempts before lease expires, providing
-/// resilience against temporary network issues.
 async fn heartbeat_loop(
     client: Arc<MetaClient>,
     lease_id: Arc<AtomicU64>,
     shutdown: Arc<AtomicBool>,
 ) {
-    // Heartbeat every 2 seconds (5 attempts within 10s lease TTL)
     let mut interval = tokio::time::interval(Duration::from_secs(2));
 
     loop {
         interval.tick().await;
 
-        // Check if shutdown was requested
         if shutdown.load(Ordering::SeqCst) {
             info!("Heartbeat loop stopping due to shutdown");
             break;
@@ -595,12 +729,11 @@ async fn heartbeat_loop(
 
         let id = lease_id.load(Ordering::SeqCst);
         if id == 0 {
-            continue; // Not registered yet
+            continue;
         }
 
         match client.heartbeat(id).await {
             Ok(next_interval_ms) => {
-                // Adjust interval if server suggests different timing
                 if next_interval_ms > 0 && next_interval_ms != 2000 {
                     interval =
                         tokio::time::interval(Duration::from_millis(next_interval_ms as u64));
@@ -608,7 +741,6 @@ async fn heartbeat_loop(
             }
             Err(e) => {
                 warn!("Heartbeat failed: {}. Will retry...", e);
-                // Could implement re-registration logic here if needed
             }
         }
     }
