@@ -40,6 +40,8 @@ use std::sync::Arc;
 use tracing::debug;
 
 /// Configuration for the Parquet table provider
+///
+/// All tables are partitioned by date (Hive-style: date=YYYY-MM-DD)
 #[derive(Debug, Clone)]
 pub struct ParquetTableConfig {
     /// Enable filter pushdown to Parquet reader
@@ -50,8 +52,6 @@ pub struct ParquetTableConfig {
     pub table_name: String,
     /// Batch size for reading
     pub batch_size: usize,
-    /// Whether the table is partitioned
-    pub partitioned: bool,
     /// Partition column name (default: "date")
     pub partition_column: String,
 }
@@ -63,7 +63,6 @@ impl Default for ParquetTableConfig {
             projection_pushdown: true,
             table_name: "parquet_table".to_string(),
             batch_size: 8192,
-            partitioned: false,
             partition_column: "date".to_string(),
         }
     }
@@ -75,11 +74,6 @@ impl ParquetTableConfig {
             table_name: table_name.into(),
             ..Default::default()
         }
-    }
-
-    pub fn with_partitioned(mut self, partitioned: bool) -> Self {
-        self.partitioned = partitioned;
-        self
     }
 
     pub fn with_batch_size(mut self, batch_size: usize) -> Self {
@@ -234,15 +228,12 @@ impl ParquetTableProvider {
                         // Found a parquet file, infer schema from it
                         let schema = Self::infer_schema_from_path(object_store, &meta.location).await?;
 
-                        // Add partition column if needed
-                        if config.partitioned {
-                            let mut fields: Vec<Field> = schema.fields().iter().map(|f| f.as_ref().clone()).collect();
-                            if !fields.iter().any(|f| f.name() == &config.partition_column) {
-                                fields.push(Field::new(&config.partition_column, DataType::Utf8, true));
-                            }
-                            return Ok(Schema::new(fields));
+                        // Add partition column to schema
+                        let mut fields: Vec<Field> = schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+                        if !fields.iter().any(|f| f.name() == &config.partition_column) {
+                            fields.push(Field::new(&config.partition_column, DataType::Utf8, true));
                         }
-                        return Ok(schema);
+                        return Ok(Schema::new(fields));
                     }
                 }
                 Err(e) => {
@@ -251,12 +242,8 @@ impl ParquetTableProvider {
             }
         }
 
-        // No parquet files found - return minimal schema
-        if config.partitioned {
-            Ok(Schema::new(vec![Field::new(&config.partition_column, DataType::Utf8, true)]))
-        } else {
-            Ok(Schema::empty())
-        }
+        // No parquet files found - return minimal schema with partition column
+        Ok(Schema::new(vec![Field::new(&config.partition_column, DataType::Utf8, true)]))
     }
 
     /// Infer schema from a specific parquet file path
@@ -292,32 +279,15 @@ impl ParquetTableProvider {
         filters: &[Expr],
     ) -> Result<Vec<ParquetFileInfo>> {
         use object_store::path::Path as ObjectPath;
+        use futures::TryStreamExt;
 
         let base_prefix = ObjectPath::from(base_path.trim_start_matches('/'));
-
-        if config.partitioned {
-            // For partitioned tables, discover partitions first and prune
-            Self::discover_partitioned_files(object_store, &base_prefix, config, filters).await
-        } else {
-            // For non-partitioned tables, list all parquet files
-            Self::discover_flat_files(object_store, &base_prefix).await
-        }
-    }
-
-    /// Discover files in partitioned table with filter pruning
-    async fn discover_partitioned_files(
-        object_store: &Arc<dyn ObjectStore>,
-        base_prefix: &object_store::path::Path,
-        config: &ParquetTableConfig,
-        filters: &[Expr],
-    ) -> Result<Vec<ParquetFileInfo>> {
-        use futures::TryStreamExt;
 
         // Extract partition filters for pruning
         let partition_filters = Self::extract_partition_filters(&config.partition_column, filters);
 
         // List partition directories using list_with_delimiter
-        let list_result = object_store.list_with_delimiter(Some(base_prefix)).await
+        let list_result = object_store.list_with_delimiter(Some(&base_prefix)).await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let mut files = Vec::new();
@@ -376,36 +346,8 @@ impl ParquetTableProvider {
         Ok(files)
     }
 
-    /// Discover files in non-partitioned table
-    async fn discover_flat_files(
-        object_store: &Arc<dyn ObjectStore>,
-        base_prefix: &object_store::path::Path,
-    ) -> Result<Vec<ParquetFileInfo>> {
-        use futures::TryStreamExt;
-
-        let list_result = object_store.list(Some(base_prefix));
-        let objects: Vec<_> = list_result.try_collect().await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let mut files = Vec::new();
-        for meta in objects {
-            let path_str = meta.location.to_string();
-            if !path_str.ends_with(".parquet") {
-                continue;
-            }
-
-            files.push(ParquetFileInfo {
-                path: PathBuf::from(&path_str),
-                partition_values: HashMap::new(),
-                file_size: meta.size as u64,
-            });
-        }
-
-        files.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(files)
-    }
-
     /// Discover Parquet files in the table directory (sync, local filesystem only)
+    /// All tables are partitioned by date (Hive-style: date=YYYY-MM-DD)
     fn discover_files(
         base_path: &Path,
         config: &ParquetTableConfig,
@@ -416,13 +358,8 @@ impl ParquetTableProvider {
             return Ok(files);
         }
 
-        if config.partitioned {
-            // Scan for Hive-style partitions (date=YYYY-MM-DD)
-            Self::scan_partitioned_dir(base_path, config, &mut files)?;
-        } else {
-            // Scan for Parquet files directly
-            Self::scan_flat_dir(base_path, &mut files)?;
-        }
+        // Scan for Hive-style partitions (date=YYYY-MM-DD)
+        Self::scan_partitioned_dir(base_path, config, &mut files)?;
 
         files.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(files)
@@ -501,34 +438,6 @@ impl ParquetTableProvider {
         Ok(())
     }
 
-    /// Scan a flat directory for Parquet files
-    fn scan_flat_dir(base_path: &Path, files: &mut Vec<ParquetFileInfo>) -> Result<()> {
-        let entries =
-            std::fs::read_dir(base_path).map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        for entry in entries {
-            let entry = entry.map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let path = entry.path();
-
-            if path.is_file() {
-                if let Some(ext) = path.extension() {
-                    if ext == "parquet" {
-                        let metadata = std::fs::metadata(&path)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                        files.push(ParquetFileInfo {
-                            path,
-                            partition_values: HashMap::new(),
-                            file_size: metadata.len(),
-                        });
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     /// Discover files and infer schema from the first Parquet file
     fn discover_files_and_schema(
         base_path: &Path,
@@ -537,16 +446,12 @@ impl ParquetTableProvider {
         let files = Self::discover_files(base_path, config)?;
 
         if files.is_empty() {
-            // Return empty schema if no files
-            let schema = if config.partitioned {
-                Schema::new(vec![Field::new(
-                    &config.partition_column,
-                    DataType::Utf8,
-                    true,
-                )])
-            } else {
-                Schema::empty()
-            };
+            // Return minimal schema with partition column
+            let schema = Schema::new(vec![Field::new(
+                &config.partition_column,
+                DataType::Utf8,
+                true,
+            )]);
             return Ok((files, schema));
         }
 
@@ -558,20 +463,18 @@ impl ParquetTableProvider {
         let reader = ParquetRecordBatchReaderBuilder::try_new(file)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let mut schema = reader.schema().as_ref().clone();
+        let base_schema = reader.schema().as_ref().clone();
 
-        // Add partition column to schema if partitioned
-        if config.partitioned {
-            let partition_field = Field::new(&config.partition_column, DataType::Utf8, true);
-            let mut fields: Vec<Field> =
-                schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+        // Add partition column to schema
+        let partition_field = Field::new(&config.partition_column, DataType::Utf8, true);
+        let mut fields: Vec<Field> =
+            base_schema.fields().iter().map(|f| f.as_ref().clone()).collect();
 
-            // Only add if not already present
-            if !fields.iter().any(|f| f.name() == &config.partition_column) {
-                fields.push(partition_field);
-            }
-            schema = Schema::new(fields);
+        // Only add if not already present
+        if !fields.iter().any(|f| f.name() == &config.partition_column) {
+            fields.push(partition_field);
         }
+        let schema = Schema::new(fields);
 
         Ok((files, schema))
     }
@@ -926,13 +829,9 @@ impl TableProvider for ParquetTableProvider {
             let base_path = self.base_path.to_string_lossy().to_string();
             Self::discover_files_for_scan(object_store, &base_path, &self.config, filters).await?
         } else {
-            // Use pre-discovered files (local filesystem)
+            // Use pre-discovered files (local filesystem) with partition filter pruning
             let all_files = self.files.read().clone();
-            if self.config.partitioned {
-                Self::filter_files_by_partition(&all_files, &self.config.partition_column, filters)
-            } else {
-                all_files
-            }
+            Self::filter_files_by_partition(&all_files, &self.config.partition_column, filters)
         };
 
         debug!(
@@ -1094,7 +993,6 @@ impl ExecutionPlan for ParquetExecPlan {
         let batch_size = self.config.batch_size;
         let limit = self.limit;
         let partition_column = self.config.partition_column.clone();
-        let partitioned = self.config.partitioned;
         let filters = self.filters.clone();
         let parquet_cache = self.parquet_cache.clone();
 
@@ -1115,7 +1013,6 @@ impl ExecutionPlan for ParquetExecPlan {
                         batch_size,
                         limit,
                         &partition_column,
-                        partitioned,
                         &filters,
                         parquet_cache.as_ref(),
                     )
@@ -1142,8 +1039,7 @@ impl ExecutionPlan for ParquetExecPlan {
 /// - `_projection`: Original projection indices (unused - we use target_schema instead)
 /// - `batch_size`: Batch size for reading
 /// - `limit`: Optional row limit
-/// - `partition_column`: Name of the partition column
-/// - `partitioned`: Whether this is a partitioned table
+/// - `partition_column`: Name of the partition column (default: "date")
 /// - `filters`: Pushed-down filter expressions for bloom filter and predicate pushdown
 /// - `parquet_cache`: Optional local cache for remote files (cluster mode)
 async fn read_parquet_file(
@@ -1153,7 +1049,6 @@ async fn read_parquet_file(
     batch_size: usize,
     limit: Option<usize>,
     partition_column: &str,
-    partitioned: bool,
     filters: &[Expr],
     parquet_cache: Option<&Arc<crate::data::cache::ParquetLocalCache>>,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>> {
@@ -1246,49 +1141,16 @@ async fn read_parquet_file(
     let result_batches: Vec<Result<RecordBatch>> = batches
         .into_iter()
         .map(|batch| {
-            if partitioned {
-                add_partition_column(
-                    &batch,
-                    &target_schema,
-                    partition_column,
-                    partition_value.as_deref(),
-                )
-            } else {
-                // For non-partitioned tables, ensure schema matches
-                if batch.schema() == target_schema {
-                    Ok(batch)
-                } else {
-                    // Reproject to target schema
-                    reproject_batch(&batch, &target_schema)
-                }
-            }
+            add_partition_column(
+                &batch,
+                &target_schema,
+                partition_column,
+                partition_value.as_deref(),
+            )
         })
         .collect();
 
     Ok(Box::pin(stream::iter(result_batches)))
-}
-
-/// Reproject a batch to match target schema by selecting columns by name
-fn reproject_batch(batch: &RecordBatch, target_schema: &SchemaRef) -> Result<RecordBatch> {
-    let columns: Result<Vec<Arc<dyn datafusion::arrow::array::Array>>> = target_schema
-        .fields()
-        .iter()
-        .map(|field| {
-            batch
-                .schema()
-                .index_of(field.name())
-                .map(|idx| batch.column(idx).clone())
-                .map_err(|_| {
-                    DataFusionError::Internal(format!(
-                        "Field '{}' not found in batch",
-                        field.name()
-                    ))
-                })
-        })
-        .collect();
-
-    RecordBatch::try_new(target_schema.clone(), columns?)
-        .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 /// Add partition column to a record batch
@@ -1416,7 +1278,7 @@ mod tests {
     fn test_discover_partitioned_directory() {
         let temp_dir = TempDir::new().unwrap();
 
-        // Create partitioned structure
+        // Create partitioned structure (all tables are partitioned by date)
         let part1 = temp_dir.path().join("date=2024-01-01");
         let part2 = temp_dir.path().join("date=2024-01-02");
         std::fs::create_dir_all(&part1).unwrap();
@@ -1425,47 +1287,12 @@ mod tests {
         create_test_parquet(&part1, "data.parquet", 1);
         create_test_parquet(&part2, "data.parquet", 10);
 
-        let config = ParquetTableConfig::new("test").with_partitioned(true);
+        let config = ParquetTableConfig::new("test");
         let provider = ParquetTableProvider::try_new(temp_dir.path(), config).unwrap();
 
         assert_eq!(provider.file_count(), 2);
         // Schema should include date partition column
         assert!(provider.schema().field_with_name("date").is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_query_flat_table() {
-        let temp_dir = TempDir::new().unwrap();
-        create_test_parquet(temp_dir.path(), "data.parquet", 1);
-
-        let config = ParquetTableConfig::new("test_table");
-        let provider = ParquetTableProvider::try_new(temp_dir.path(), config).unwrap();
-
-        let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
-
-        let df = ctx.sql("SELECT * FROM test").await.unwrap();
-        let results = df.collect().await.unwrap();
-
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].num_rows(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_query_with_projection() {
-        let temp_dir = TempDir::new().unwrap();
-        create_test_parquet(temp_dir.path(), "data.parquet", 1);
-
-        let config = ParquetTableConfig::new("test_table");
-        let provider = ParquetTableProvider::try_new(temp_dir.path(), config).unwrap();
-
-        let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
-
-        let df = ctx.sql("SELECT name FROM test").await.unwrap();
-        let results = df.collect().await.unwrap();
-
-        assert_eq!(results[0].num_columns(), 1);
     }
 
     #[tokio::test]
@@ -1476,7 +1303,7 @@ mod tests {
         std::fs::create_dir_all(&part1).unwrap();
         create_test_parquet(&part1, "data.parquet", 1);
 
-        let config = ParquetTableConfig::new("test_table").with_partitioned(true);
+        let config = ParquetTableConfig::new("test_table");
         let provider = ParquetTableProvider::try_new(temp_dir.path(), config).unwrap();
 
         let ctx = SessionContext::new();
@@ -1488,5 +1315,25 @@ mod tests {
         assert!(!results.is_empty());
         // Should have both id and date columns
         assert_eq!(results[0].num_columns(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_query_with_projection() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let part1 = temp_dir.path().join("date=2024-01-01");
+        std::fs::create_dir_all(&part1).unwrap();
+        create_test_parquet(&part1, "data.parquet", 1);
+
+        let config = ParquetTableConfig::new("test_table");
+        let provider = ParquetTableProvider::try_new(temp_dir.path(), config).unwrap();
+
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(provider)).unwrap();
+
+        let df = ctx.sql("SELECT name FROM test").await.unwrap();
+        let results = df.collect().await.unwrap();
+
+        assert_eq!(results[0].num_columns(), 1);
     }
 }
