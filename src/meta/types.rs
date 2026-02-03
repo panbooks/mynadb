@@ -1028,14 +1028,13 @@ pub enum EventType {
     NodeJoined = 1,
     NodeLeft = 2,
     NodeStateChanged = 3,
-    FilesRegistered = 4,
-    FilesRemoved = 5,
-    LeaderChanged = 6,
-    CacheInvalidate = 7,
-    SchemaChanged = 8,
+    // Note: IDs 4-5 were previously used for file-level events (FilesRegistered, FilesRemoved)
     // Note: IDs 9-12 were previously used for partition-level replica events
     // (ReplicaAssigned, ReplicaPromoted, ReplicaStateChanged, DataNodeModeChanged)
     // These have been removed as part of the table-level routing migration.
+    LeaderChanged = 6,
+    CacheInvalidate = 7,
+    SchemaChanged = 8,
     /// Standby needs to flush data for crashed Primary (Recovery)
     ///
     /// Published when a Primary crashes and its Standby needs to flush replicated data.
@@ -1080,8 +1079,7 @@ impl From<i32> for EventType {
             1 => EventType::NodeJoined,
             2 => EventType::NodeLeft,
             3 => EventType::NodeStateChanged,
-            4 => EventType::FilesRegistered,
-            5 => EventType::FilesRemoved,
+            // 4-5 reserved (formerly file events, now removed)
             6 => EventType::LeaderChanged,
             7 => EventType::CacheInvalidate,
             8 => EventType::SchemaChanged,

@@ -413,6 +413,48 @@ pub async fn start(config_path: &str) {
                                         }
                                     }
                                 }
+                                EventType::NodeStateChanged => {
+                                    // Handle retire event: flush data before node is marked as retiring
+                                    if let Ok(payload) =
+                                        serde_json::from_slice::<serde_json::Value>(&event.payload)
+                                    {
+                                        let event_node_id = payload
+                                            .get("node_id")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        let new_state = payload
+                                            .get("new_state")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+
+                                        // Only process retire events for this node
+                                        if event_node_id == node_id && new_state == "Retiring" {
+                                            info!(
+                                                "RETIRE: Received retire event for this node. Flushing memtable data..."
+                                            );
+
+                                            // Trigger immediate flush to persist all memtable data
+                                            // This ensures no data loss when the node is scaled in
+                                            match data_cache_for_sub.flush().await {
+                                                Ok(results) => {
+                                                    let total_files = results.len();
+                                                    let total_rows: u64 =
+                                                        results.iter().map(|r| r.row_count).sum();
+                                                    info!(
+                                                        "RETIRE: Pre-retire flush complete. Wrote {} files, {} rows",
+                                                        total_files, total_rows
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    error!(
+                                                        "RETIRE: Pre-retire flush failed: {}",
+                                                        e
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 _ => {}
                             }
                         }

@@ -221,12 +221,6 @@ impl CacheInvalidationHandler {
                 EventType::NodeStateChanged => {
                     Self::handle_node_updated(&shard_cache, &data_node_pool, &event);
                 }
-                EventType::FilesRegistered => {
-                    Self::handle_files_registered(&shard_cache, &event);
-                }
-                EventType::FilesRemoved => {
-                    Self::handle_files_removed(&shard_cache, &event);
-                }
                 EventType::LeaderChanged => {
                     info!("Leader changed event received");
                 }
@@ -411,46 +405,6 @@ impl CacheInvalidationHandler {
                 }
             }
         }
-    }
-
-    /// Handle table registered event (table-level routing)
-    ///
-    /// Updates the shard cache with table ownership information.
-    fn handle_files_registered(shard_cache: &ShardCache, event: &MetaEvent) {
-        if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
-            // Handle table registration events
-            let catalog = payload["catalog"].as_str().unwrap_or_default();
-            let schema = payload["schema"].as_str().unwrap_or_default();
-            let table = payload["table"].as_str().unwrap_or_default();
-            let owner_node_id = payload["owner_node_id"]
-                .as_str()
-                .or_else(|| payload["created_by"].as_str())
-                .unwrap_or_default();
-            let version = payload["version"].as_u64().unwrap_or(1);
-
-            if !catalog.is_empty() && !table.is_empty() && !owner_node_id.is_empty() {
-                let key = TableKey::new(catalog, schema, table);
-                debug!(
-                    "Table registered: {} -> {} (v{})",
-                    key.to_path(),
-                    owner_node_id,
-                    version
-                );
-
-                // Update table owner for routing
-                shard_cache.set_table_owner(&key, owner_node_id.to_string(), version);
-            }
-        }
-    }
-
-    /// Handle files removed event (no-op for table-level routing)
-    fn handle_files_removed(_shard_cache: &ShardCache, event: &MetaEvent) {
-        // With table-level routing, file removal doesn't affect routing
-        // Tables are only removed when explicitly dropped
-        debug!(
-            "Files removed event (no-op for table routing): seq={}",
-            event.sequence
-        );
     }
 
     /// Handle distribution config changed event
