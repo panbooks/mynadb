@@ -348,19 +348,18 @@ pub async fn start(config_path: &str) {
     // Clone for event subscription task
     let _replication_manager_for_events = replication_manager;
 
-    // Subscribe to replica and recovery events from Meta
-    // This keeps replica_cache updated and handles recovery flush triggers
+    // Subscribe to recovery events from Meta
+    // This handles recovery flush triggers when a Primary crashes
     if let Some(ref client) = meta_client_for_events {
-        use crate::meta::types::{EventType, PartitionReplica};
+        use crate::meta::types::EventType;
 
-        let replica_cache = flight_service.replica_cache();
         let node_id = data_config.node_id.clone();
         let meta_client_for_sub = Arc::clone(client);
         let data_cache_for_sub = data_cache_for_recovery;
 
         tokio::spawn(async move {
-            // Subscribe to replica and recovery events
-            let topics = vec!["replicas".to_string(), "recovery".to_string()];
+            // Subscribe to recovery events
+            let topics = vec!["recovery".to_string(), "nodes".to_string()];
             let mut retry_count: u32 = 0;
             const MAX_RETRY_DELAY_SECS: u64 = 30;
 
@@ -368,53 +367,10 @@ pub async fn start(config_path: &str) {
                 match meta_client_for_sub.subscribe(topics.clone(), 0).await {
                     Ok(mut rx) => {
                         retry_count = 0; // Reset on successful connection
-                        info!("Subscribed to replica and recovery events from Meta");
+                        info!("Subscribed to recovery events from Meta");
 
                         while let Some(event) = rx.recv().await {
                             match event.event_type {
-                                EventType::ReplicaAssigned | EventType::ReplicaPromoted => {
-                                    // Parse and cache the replica info
-                                    match serde_json::from_slice::<PartitionReplica>(&event.payload)
-                                    {
-                                        Ok(replica) => {
-                                            let is_leader = replica.leader_node_id == node_id;
-                                            let is_standby =
-                                                replica.standby_node_ids.contains(&node_id);
-
-                                            if is_leader || is_standby {
-                                                info!(
-                                                    "Replica event for {}: leader={}, standbys={:?} (I'm {})",
-                                                    replica.partition_key,
-                                                    replica.leader_node_id,
-                                                    replica.standby_node_ids,
-                                                    if is_leader { "leader" } else { "standby" }
-                                                );
-
-                                                // Note: ReplicaPromoted event is no longer used for promotion
-                                                // (No-Promotion architecture). Just update the replica cache.
-
-                                                replica_cache
-                                                    .insert(replica.partition_key.clone(), replica);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            warn!("Failed to parse replica event: {}", e);
-                                        }
-                                    }
-                                }
-                                EventType::ReplicaStateChanged => {
-                                    // Update cached replica state
-                                    if let Ok(replica) =
-                                        serde_json::from_slice::<PartitionReplica>(&event.payload)
-                                    {
-                                        if replica.leader_node_id == node_id
-                                            || replica.standby_node_ids.contains(&node_id)
-                                        {
-                                            replica_cache
-                                                .insert(replica.partition_key.clone(), replica);
-                                        }
-                                    }
-                                }
                                 EventType::FlushForRecovery => {
                                     // Recovery event: Standby needs to flush crashed Primary's data
                                     if let Ok(payload) =

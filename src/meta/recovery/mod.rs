@@ -8,17 +8,17 @@
 //!
 //! ```text
 //! 1. Detect Primary crash (lease expired)
-//! 2. Find Standby backing the crashed Primary
+//! 2. Find Standby backing the crashed Primary (node-level pairing)
 //! 3. Trigger Standby to flush crashed Primary's replicated data
-//! 4. Redistribute partitions to remaining Primaries
-//! 5. Update replica assignments
+//! 4. Redistribute tables to remaining Primaries
+//! 5. Update table ownership
 //! ```
 //!
 //! ## Standby Crash
 //!
 //! ```text
 //! 1. Detect Standby crash (lease expired)
-//! 2. Find Primaries that were backed by this Standby
+//! 2. Find Primaries that were backed by this Standby (node-level pairing)
 //! 3. If spare Standby available: assign it to affected Primaries
 //! 4. If no spare: mark Primaries as unprotected, emit warning
 //! ```
@@ -73,12 +73,12 @@ impl RecoveryManager {
         // Get node info (might already be deregistered)
         let node_info = sm.get_node(node_id);
 
-        // Determine node type from mode or from replica assignments
+        // Determine node type from mode or from table ownership
         let node_mode = if let Some(ref info) = node_info {
             info.mode
         } else {
-            // Node already deregistered, check replica assignments
-            self.detect_node_mode_from_replicas(node_id)
+            // Node already deregistered, check table ownership
+            self.detect_node_mode_from_tables(node_id)
         };
 
         match node_mode {
@@ -99,9 +99,9 @@ impl RecoveryManager {
                         success: true,
                         action: RecoveryAction::NoRecoveryNeeded {
                             node_id: node_id.to_string(),
-                            reason: "Spare Standby, no partitions affected".to_string(),
+                            reason: "Spare Standby, no tables affected".to_string(),
                         },
-                        partitions_redistributed: vec![],
+                        tables_redistributed: vec![],
                         new_primary_assignments: vec![],
                         spare_assigned: None,
                         unprotected_primaries: vec![],
@@ -117,7 +117,7 @@ impl RecoveryManager {
                             node_id: node_id.to_string(),
                             reason: "Unknown node type".to_string(),
                         },
-                        partitions_redistributed: vec![],
+                        tables_redistributed: vec![],
                         new_primary_assignments: vec![],
                         spare_assigned: None,
                         unprotected_primaries: vec![],
@@ -134,7 +134,7 @@ impl RecoveryManager {
     /// Strategy:
     /// 1. Find Standby that was backing this Primary
     /// 2. Trigger Standby to flush the Primary's replicated data
-    /// 3. Redistribute partitions to remaining Primaries
+    /// 3. Redistribute tables to remaining Primaries
     async fn handle_primary_crash(
         &self,
         primary_id: &str,
@@ -147,18 +147,18 @@ impl RecoveryManager {
             standby_id, primary_id
         );
 
-        // Step 2: Get partitions owned by crashed Primary
-        let partitions = self.get_primary_partitions(primary_id);
-        if partitions.is_empty() {
-            info!("Recovery: Primary {} had no partitions, no redistribution needed", primary_id);
+        // Step 2: Get tables owned by crashed Primary
+        let tables = self.get_primary_tables(primary_id);
+        if tables.is_empty() {
+            info!("Recovery: Primary {} had no tables, no redistribution needed", primary_id);
             return Ok(RecoveryResult {
                 crashed_node_id: primary_id.to_string(),
                 success: true,
                 action: RecoveryAction::NoRecoveryNeeded {
                     node_id: primary_id.to_string(),
-                    reason: "Primary had no partitions".to_string(),
+                    reason: "Primary had no tables".to_string(),
                 },
-                partitions_redistributed: vec![],
+                tables_redistributed: vec![],
                 new_primary_assignments: vec![],
                 spare_assigned: None,
                 unprotected_primaries: vec![],
@@ -168,9 +168,9 @@ impl RecoveryManager {
         }
 
         info!(
-            "Recovery: Primary {} had {} partitions to redistribute",
+            "Recovery: Primary {} had {} tables to redistribute",
             primary_id,
-            partitions.len()
+            tables.len()
         );
 
         // Step 3: Trigger Standby to flush Primary's data
@@ -187,32 +187,32 @@ impl RecoveryManager {
         }
 
         info!(
-            "Recovery: Redistributing {} partitions to {} remaining Primaries",
-            partitions.len(),
+            "Recovery: Redistributing {} tables to {} remaining Primaries",
+            tables.len(),
             remaining_primaries.len()
         );
 
-        // Step 5: Redistribute partitions evenly
+        // Step 5: Redistribute tables evenly
         let new_assignments = self
-            .redistribute_partitions(&partitions, &remaining_primaries, primary_id)
+            .redistribute_tables(&tables, &remaining_primaries, primary_id)
             .await?;
 
         // Step 6: Publish recovery event
-        self.publish_recovery_event(primary_id, &partitions, &new_assignments)
+        self.publish_recovery_event(primary_id, &tables, &new_assignments)
             .await;
 
         let duration_ms = start.elapsed().as_millis() as u64;
         info!(
-            "Recovery: Primary {} recovery completed in {}ms. {} partitions redistributed.",
+            "Recovery: Primary {} recovery completed in {}ms. {} tables redistributed.",
             primary_id,
             duration_ms,
-            partitions.len()
+            tables.len()
         );
 
         Ok(RecoveryResult::primary_recovery_success(
             primary_id.to_string(),
             standby_id,
-            partitions,
+            tables,
             new_assignments,
             duration_ms,
         ))
@@ -243,7 +243,7 @@ impl RecoveryManager {
                     node_id: standby_id.to_string(),
                     reason: "Standby had no Primaries assigned".to_string(),
                 },
-                partitions_redistributed: vec![],
+                tables_redistributed: vec![],
                 new_primary_assignments: vec![],
                 spare_assigned: None,
                 unprotected_primaries: vec![],
@@ -327,7 +327,7 @@ impl RecoveryManager {
                             affected_primaries: affected_primaries.clone(),
                             spare_standby_id: None,
                         },
-                        partitions_redistributed: vec![],
+                        tables_redistributed: vec![],
                         new_primary_assignments: vec![],
                         spare_assigned: None,
                         unprotected_primaries: vec![],
@@ -357,7 +357,7 @@ impl RecoveryManager {
                             affected_primaries: affected_primaries.clone(),
                             spare_standby_id: None,
                         },
-                        partitions_redistributed: vec![],
+                        tables_redistributed: vec![],
                         new_primary_assignments: vec![],
                         spare_assigned: None,
                         unprotected_primaries: unassigned,
@@ -416,15 +416,14 @@ impl RecoveryManager {
         })
     }
 
-    /// Get partitions owned by a Primary
-    fn get_primary_partitions(&self, primary_id: &str) -> Vec<String> {
+    /// Get tables owned by a Primary
+    fn get_primary_tables(&self, primary_id: &str) -> Vec<String> {
         let sm = self.meta_node.state_machine();
-        let replicas = sm.list_replicas();
+        let tables = sm.list_tables_for_node(primary_id);
 
-        replicas
+        tables
             .iter()
-            .filter(|r| r.leader_node_id == primary_id)
-            .map(|r| r.partition_key.clone())
+            .map(|t| t.table_key())
             .collect()
     }
 
@@ -505,10 +504,10 @@ impl RecoveryManager {
         Ok(())
     }
 
-    /// Redistribute partitions to remaining Primaries
-    async fn redistribute_partitions(
+    /// Redistribute tables to remaining Primaries
+    async fn redistribute_tables(
         &self,
-        partitions: &[String],
+        tables: &[String],
         target_primaries: &[String],
         crashed_primary: &str,
     ) -> Result<Vec<(String, String)>, RecoveryError> {
@@ -519,29 +518,29 @@ impl RecoveryManager {
             return Err(RecoveryError::NoRemainingPrimaries);
         }
 
-        // Distribute partitions evenly across remaining Primaries
-        for (i, partition) in partitions.iter().enumerate() {
+        // Distribute tables evenly across remaining Primaries
+        for (i, table_key) in tables.iter().enumerate() {
             let target_idx = i % num_targets;
             let target_primary = &target_primaries[target_idx];
 
             debug!(
-                "Recovery: Reassigning partition {} from {} to {}",
-                partition, crashed_primary, target_primary
+                "Recovery: Reassigning table {} from {} to {}",
+                table_key, crashed_primary, target_primary
             );
 
             // Apply reassignment through Raft
             match self
                 .meta_node
-                .reassign_partition_for_retire(partition, crashed_primary, target_primary)
+                .reassign_table_for_retire(table_key, crashed_primary, target_primary)
                 .await
             {
                 Ok(()) => {
-                    assignments.push((partition.clone(), target_primary.clone()));
+                    assignments.push((table_key.clone(), target_primary.clone()));
                 }
                 Err(e) => {
-                    error!("Recovery: Failed to reassign partition {}: {}", partition, e);
+                    error!("Recovery: Failed to reassign table {}: {}", table_key, e);
                     return Err(RecoveryError::RedistributionFailed {
-                        partition: partition.clone(),
+                        table_key: table_key.clone(),
                         reason: e,
                     });
                 }
@@ -549,7 +548,7 @@ impl RecoveryManager {
         }
 
         info!(
-            "Recovery: Redistributed {} partitions to {} Primaries",
+            "Recovery: Redistributed {} tables to {} Primaries",
             assignments.len(),
             num_targets
         );
@@ -557,54 +556,46 @@ impl RecoveryManager {
         Ok(assignments)
     }
 
-    /// Find Primaries that were backed by a Standby
+    /// Find Primaries that were backed by a Standby (node-level pairing)
     fn find_primaries_for_standby(&self, standby_id: &str) -> Vec<String> {
         let sm = self.meta_node.state_machine();
-        let replicas = sm.list_replicas();
 
-        let mut primaries = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-
-        for replica in &replicas {
-            if replica.standby_node_ids.contains(&standby_id.to_string()) {
-                if seen.insert(replica.leader_node_id.clone()) {
-                    primaries.push(replica.leader_node_id.clone());
-                }
-            }
+        // In Cold Standby architecture, standbys track which primaries they back
+        // via the backed_primaries field on NodeInfo
+        if let Some(standby_info) = sm.get_node(standby_id) {
+            return standby_info.backed_primaries.clone();
         }
 
-        primaries
+        // Fallback: scan all primaries to find those backed by this standby
+        let nodes = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
+        nodes
+            .iter()
+            .filter(|n| {
+                n.mode == Some(DataNodeMode::Primary)
+                    && n.backing_standby.as_deref() == Some(standby_id)
+            })
+            .map(|n| n.node_id.clone())
+            .collect()
     }
 
-    /// Find a spare Standby node
+    /// Find a spare Standby node (node-level pairing)
     fn find_spare_standby(&self) -> Option<String> {
         let sm = self.meta_node.state_machine();
 
         // Get all Standby nodes
-        let standbys = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
-        let standby_nodes: Vec<_> = standbys
-            .iter()
-            .filter(|n| n.mode == Some(DataNodeMode::Standby))
-            .collect();
+        let nodes = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
 
-        // Get replicas to find which Standbys are assigned
-        let replicas = sm.list_replicas();
-        let assigned_standbys: std::collections::HashSet<_> = replicas
-            .iter()
-            .flat_map(|r| r.standby_node_ids.iter().cloned())
-            .collect();
-
-        // Find a Standby that's not assigned to any Primary
-        for standby in standby_nodes {
-            if !assigned_standbys.contains(&standby.node_id) {
-                return Some(standby.node_id.clone());
+        // Find a Standby that's not backing any Primaries
+        for node in nodes {
+            if node.mode == Some(DataNodeMode::Standby) && node.backed_primaries.is_empty() {
+                return Some(node.node_id.clone());
             }
         }
 
         None
     }
 
-    /// Find Standbys with capacity to take more Primaries (flexible assignment)
+    /// Find Standbys with capacity to take more Primaries (node-level pairing)
     ///
     /// Returns a list of (standby_id, available_capacity) sorted by capacity descending.
     fn find_standbys_with_capacity(&self, exclude_standby: &str) -> Vec<(String, usize)> {
@@ -612,33 +603,18 @@ impl RecoveryManager {
         let max_ratio = self.standby_config.max_primary_standby_ratio as usize;
 
         // Get all active Standby nodes (excluding the crashed one)
-        let standbys = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
-        let standby_nodes: Vec<_> = standbys
-            .iter()
-            .filter(|n| {
-                n.mode == Some(DataNodeMode::Standby) && n.node_id != exclude_standby
-            })
-            .collect();
+        let nodes = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
 
-        // Count how many Primaries each Standby is backing
-        let replicas = sm.list_replicas();
-        let mut standby_load: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-
-        for replica in &replicas {
-            for standby_id in &replica.standby_node_ids {
-                *standby_load.entry(standby_id.clone()).or_insert(0) += 1;
-            }
-        }
-
-        // Find Standbys with available capacity
+        // Find Standbys with available capacity based on backed_primaries count
         let mut standbys_with_capacity: Vec<(String, usize)> = Vec::new();
 
-        for standby in standby_nodes {
-            let current_load = standby_load.get(&standby.node_id).copied().unwrap_or(0);
-            if current_load < max_ratio {
-                let available = max_ratio - current_load;
-                standbys_with_capacity.push((standby.node_id.clone(), available));
+        for node in nodes {
+            if node.mode == Some(DataNodeMode::Standby) && node.node_id != exclude_standby {
+                let current_load = node.backed_primaries.len();
+                if current_load < max_ratio {
+                    let available = max_ratio - current_load;
+                    standbys_with_capacity.push((node.node_id.clone(), available));
+                }
             }
         }
 
@@ -726,18 +702,22 @@ impl RecoveryManager {
         (assigned, unassigned)
     }
 
-    /// Check if a node was a spare Standby
+    /// Check if a node was a spare Standby (node-level pairing)
     fn is_spare_standby(&self, node_id: &str) -> bool {
         let sm = self.meta_node.state_machine();
-        let replicas = sm.list_replicas();
 
-        // Check if this node was assigned to any partition
-        for replica in &replicas {
-            if replica.leader_node_id == node_id || replica.standby_node_ids.contains(&node_id.to_string()) {
+        // A spare standby is one that isn't backing any primaries
+        if let Some(node) = sm.get_node(node_id) {
+            if node.mode == Some(DataNodeMode::Standby) {
+                return node.backed_primaries.is_empty();
+            }
+            // Primaries are never "spare"
+            if node.mode == Some(DataNodeMode::Primary) {
                 return false;
             }
         }
 
+        // Unknown node - could be spare
         true
     }
 
@@ -778,21 +758,25 @@ impl RecoveryManager {
             standby_id
         );
 
-        if let Err(e) = self.meta_node.remove_standby_from_replicas(standby_id).await {
-            warn!("Recovery: Failed to remove Standby from replicas: {}", e);
+        if let Err(e) = self.meta_node.remove_standby_from_tables(standby_id).await {
+            warn!("Recovery: Failed to remove Standby from tables: {}", e);
         }
     }
 
-    /// Detect node mode from replica assignments
-    fn detect_node_mode_from_replicas(&self, node_id: &str) -> Option<DataNodeMode> {
+    /// Detect node mode from node info or table ownership
+    fn detect_node_mode_from_tables(&self, node_id: &str) -> Option<DataNodeMode> {
         let sm = self.meta_node.state_machine();
-        let replicas = sm.list_replicas();
 
-        for replica in &replicas {
-            if replica.leader_node_id == node_id {
-                return Some(DataNodeMode::Primary);
-            }
-            if replica.standby_node_ids.contains(&node_id.to_string()) {
+        // Check if this node owns any tables (Primary indication)
+        let tables = sm.list_tables_for_node(node_id);
+        if !tables.is_empty() {
+            return Some(DataNodeMode::Primary);
+        }
+
+        // Check all active nodes to see if any have this as backing_standby
+        let nodes = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
+        for node in nodes {
+            if node.backing_standby.as_deref() == Some(node_id) {
                 return Some(DataNodeMode::Standby);
             }
         }
@@ -828,10 +812,10 @@ impl RecoveryManager {
         // that monitoring systems can subscribe to
     }
 
-    /// Get cluster protection status
+    /// Get cluster protection status (node-level pairing)
     pub fn get_protection_status(&self) -> ClusterProtectionStatus {
         let sm = self.meta_node.state_machine();
-        let replicas = sm.list_replicas();
+        let nodes = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
 
         let mut protected = 0;
         let mut unprotected_list = Vec::new();
@@ -841,20 +825,22 @@ impl RecoveryManager {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        for replica in &replicas {
-            if replica.standby_node_ids.is_empty() {
-                unprotected_list.push(UnprotectedPartition {
-                    partition_key: replica.partition_key.clone(),
-                    primary_id: replica.leader_node_id.clone(),
-                    since: now,
-                    reason: "No Standby assigned".to_string(),
-                });
-            } else {
-                protected += 1;
+        // Check each Primary node for protection status
+        for node in &nodes {
+            if node.mode == Some(DataNodeMode::Primary) {
+                if node.backing_standby.is_some() {
+                    protected += 1;
+                } else {
+                    unprotected_list.push(UnprotectedPrimary {
+                        primary_id: node.node_id.clone(),
+                        since: now,
+                        reason: "No Standby assigned".to_string(),
+                    });
+                }
             }
         }
 
-        let total = replicas.len();
+        let total_primaries = protected + unprotected_list.len();
         let unprotected = unprotected_list.len();
         let spare_count = self.count_spare_standbys();
 
@@ -864,41 +850,33 @@ impl RecoveryManager {
             } else {
                 ClusterHealthStatus::HealthyNoSpares
             }
-        } else if unprotected * 2 > total {
+        } else if unprotected * 2 > total_primaries {
             ClusterHealthStatus::Critical
         } else {
             ClusterHealthStatus::Degraded
         };
 
         ClusterProtectionStatus {
-            total_partitions: total,
-            protected_partitions: protected,
-            unprotected_partitions: unprotected,
+            total_primaries,
+            protected_primaries: protected,
+            unprotected_primaries: unprotected,
             unprotected_list,
             spare_standbys_available: spare_count,
             status,
         }
     }
 
-    /// Count available spare Standbys
+    /// Count available spare Standbys (node-level pairing)
     fn count_spare_standbys(&self) -> usize {
         let sm = self.meta_node.state_machine();
+        let nodes = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
 
-        let standbys = sm.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
-        let standby_nodes: Vec<_> = standbys
+        // A spare standby is one not backing any primaries
+        nodes
             .iter()
-            .filter(|n| n.mode == Some(DataNodeMode::Standby))
-            .collect();
-
-        let replicas = sm.list_replicas();
-        let assigned_standbys: std::collections::HashSet<_> = replicas
-            .iter()
-            .flat_map(|r| r.standby_node_ids.iter().cloned())
-            .collect();
-
-        standby_nodes
-            .iter()
-            .filter(|n| !assigned_standbys.contains(&n.node_id))
+            .filter(|n| {
+                n.mode == Some(DataNodeMode::Standby) && n.backed_primaries.is_empty()
+            })
             .count()
     }
 }
@@ -925,8 +903,8 @@ mod tests {
             "Triggering Standby flush"
         );
         assert_eq!(
-            format!("{}", RecoveryStep::RedistributingPartitions),
-            "Redistributing partitions"
+            format!("{}", RecoveryStep::RedistributingTables),
+            "Redistributing tables"
         );
     }
 
@@ -944,7 +922,7 @@ mod tests {
         );
 
         assert!(result.success);
-        assert_eq!(result.partitions_redistributed.len(), 2);
+        assert_eq!(result.tables_redistributed.len(), 2);
         assert_eq!(result.new_primary_assignments.len(), 2);
         assert!(result.unprotected_primaries.is_empty());
     }

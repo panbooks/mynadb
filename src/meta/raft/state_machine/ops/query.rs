@@ -2,7 +2,7 @@
 //!
 //! Read-only operations for querying state machine data.
 
-use crate::meta::types::{keys, Event, LeaderInfo, LockInfo, NodeInfo, NodeRole, NodeState, PartitionReplica};
+use crate::meta::types::{keys, Event, LeaderInfo, LockInfo, NodeInfo, NodeRole, NodeState};
 use std::sync::atomic::Ordering;
 
 use super::super::MetaStateMachine;
@@ -118,39 +118,5 @@ impl MetaStateMachine {
     /// Get current event sequence
     pub fn current_sequence(&self) -> u64 {
         self.event_sequence.load(Ordering::SeqCst)
-    }
-
-    /// Get partition replica info
-    pub fn get_replica(&self, partition_key: &str) -> Option<PartitionReplica> {
-        let storage_key = format!("{}{}", keys::PREFIX_REPLICA, partition_key);
-        self.db
-            .get(storage_key.as_bytes())
-            .ok()
-            .flatten()
-            .and_then(|data| bincode::deserialize(&data).ok())
-    }
-
-    /// List all partition replicas
-    pub fn list_replicas(&self) -> Vec<PartitionReplica> {
-        let prefix = keys::PREFIX_REPLICA;
-        let mut replicas = Vec::new();
-
-        for item in self.db.scan_prefix(prefix) {
-            if let Ok((_, v)) = item {
-                if let Ok(replica) = bincode::deserialize::<PartitionReplica>(&v) {
-                    replicas.push(replica);
-                }
-            }
-        }
-
-        replicas
-    }
-
-    /// Get replicas by leader node ID
-    pub fn get_replicas_by_leader(&self, leader_node_id: &str) -> Vec<PartitionReplica> {
-        self.list_replicas()
-            .into_iter()
-            .filter(|r| r.leader_node_id == leader_node_id)
-            .collect()
     }
 }

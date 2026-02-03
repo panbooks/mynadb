@@ -72,8 +72,8 @@ service MetaService {
     rpc CompleteRetire(CompleteRetireRequest) returns (CompleteRetireResponse);
     rpc CancelRetire(CancelRetireRequest) returns (CancelRetireResponse);
     rpc GetRetireStatus(GetRetireStatusRequest) returns (GetRetireStatusResponse);
-    rpc ReassignPartitionForRetire(ReassignPartitionForRetireRequest) returns (ReassignPartitionForRetireResponse);
-    rpc RemoveStandbyFromReplicas(RemoveStandbyFromReplicasRequest) returns (RemoveStandbyFromReplicasResponse);
+    rpc ReassignTableForRetire(ReassignTableForRetireRequest) returns (ReassignTableForRetireResponse);
+    rpc RemoveStandbyFromTables(RemoveStandbyFromTablesRequest) returns (RemoveStandbyFromTablesResponse);
     rpc RecommendScaleIn(RecommendScaleInRequest) returns (RecommendScaleInResponse);
 }
 
@@ -507,18 +507,11 @@ enum EventType {
     EVENT_TYPE_LEADER_CHANGED = 6;
     EVENT_TYPE_CACHE_INVALIDATE = 7;
     EVENT_TYPE_SCHEMA_CHANGED = 8;
-    EVENT_TYPE_REPLICA_ASSIGNED = 9;
-    EVENT_TYPE_REPLICA_PROMOTED = 10;
-    EVENT_TYPE_REPLICA_STATE_CHANGED = 11;
-    // Cold Standby Architecture: Standby node promoted to Primary
+    // 9-11 reserved (formerly replica events, removed)
+    // Cold Standby Architecture: Data node mode changed
     EVENT_TYPE_DATA_NODE_MODE_CHANGED = 12;
-}
-
-// Replica state for partition replication
-enum ReplicaState {
-    REPLICA_STATE_IN_SYNC = 0;      // Standby fully caught up with leader
-    REPLICA_STATE_CATCHING_UP = 1;  // Standby behind, receiving data
-    REPLICA_STATE_OFFLINE = 2;      // Standby unreachable
+    // Table ownership changed (scale-in, failover)
+    EVENT_TYPE_TABLE_OWNERSHIP_CHANGED = 13;
 }
 
 message Event {
@@ -545,23 +538,6 @@ message PublishResponse {
     bool success = 1;
     uint64 sequence = 2;
     string error = 3;
-}
-
-// ============================================================================
-// Partition Replica Management
-// ============================================================================
-
-// Partition replica information
-message PartitionReplicaInfo {
-    string partition_key = 1;           // "catalog/schema/table/date=YYYY-MM-DD"
-    string leader_node_id = 2;          // Node handling writes and flushes
-    repeated string standby_node_ids = 3; // Nodes with in-memory copies
-    uint32 replication_factor = 4;      // 1=no standby, 2=1 standby, etc.
-    ReplicaState state = 5;             // Current replication state
-    uint64 last_replicated_seq = 6;     // Last sequence number replicated
-    uint64 replication_lag_ms = 7;      // Replication lag in milliseconds
-    int64 created_at = 8;               // Creation timestamp (ms since epoch)
-    int64 leader_last_seen = 9;         // Last leader heartbeat timestamp
 }
 
 // ============================================================================
@@ -655,7 +631,7 @@ message GetDataNodeModeResponse {
 // ============================================================================
 
 // Start retiring a node (scale-in)
-// Marks the node as Retiring: no new writes, begins partition reassignment
+// Marks the node as Retiring: no new writes, begins table reassignment
 message StartRetireRequest {
     string node_id = 1;
 }
@@ -663,7 +639,7 @@ message StartRetireRequest {
 message StartRetireResponse {
     bool success = 1;
     string error = 2;
-    uint32 partitions_to_reassign = 3;  // Number of partitions to transfer
+    uint32 tables_to_reassign = 3;  // Number of tables to transfer
 }
 
 // Mark a node as fully drained (scale-in complete)
@@ -696,34 +672,34 @@ message GetRetireStatusResponse {
     string node_id = 2;
     NodeState state = 3;
     int64 started_at = 4;
-    uint32 partitions_total = 5;
-    uint32 partitions_reassigned = 6;
+    uint32 tables_total = 5;
+    uint32 tables_reassigned = 6;
     uint64 memtable_rows_remaining = 7;
     uint32 progress_percent = 8;
     string error = 9;
 }
 
-// Reassign a partition from a retiring node to another Primary
-message ReassignPartitionForRetireRequest {
-    string partition_key = 1;
+// Reassign a table from a retiring node to another Primary
+message ReassignTableForRetireRequest {
+    string table_key = 1;           // "catalog/schema/table" format
     string from_node_id = 2;
     string to_node_id = 3;
 }
 
-message ReassignPartitionForRetireResponse {
+message ReassignTableForRetireResponse {
     bool success = 1;
     string error = 2;
 }
 
-// Remove a standby from all partition replicas (for Standby scale-in)
-message RemoveStandbyFromReplicasRequest {
+// Remove a standby from node-level pairing (for Standby scale-in)
+message RemoveStandbyFromTablesRequest {
     string standby_node_id = 1;
 }
 
-message RemoveStandbyFromReplicasResponse {
+message RemoveStandbyFromTablesResponse {
     bool success = 1;
     string error = 2;
-    uint32 partitions_affected = 3;
+    uint32 tables_affected = 3;
 }
 
 // Get recommendations for which nodes to scale in

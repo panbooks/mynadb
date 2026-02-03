@@ -10,7 +10,6 @@ mod lock;
 mod node;
 mod query;
 mod recovery;
-mod replica;
 mod scale_in;
 mod standby;
 mod table;

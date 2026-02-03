@@ -1271,7 +1271,7 @@ impl MetaClient {
 
     /// Start retiring a node (scale-in)
     ///
-    /// Returns the number of partitions that need to be reassigned.
+    /// Returns the number of tables that need to be reassigned.
     pub async fn start_retire(&self, node_id: &str) -> Result<usize, String> {
         let request = proto::StartRetireRequest {
             node_id: node_id.to_string(),
@@ -1285,7 +1285,7 @@ impl MetaClient {
             .await?;
 
         if response.success {
-            Ok(response.partitions_to_reassign as usize)
+            Ok(response.tables_to_reassign as usize)
         } else {
             Err(response.error)
         }
@@ -1349,8 +1349,8 @@ impl MetaClient {
                 node_id: response.node_id,
                 state: NodeState::from(response.state),
                 started_at: response.started_at,
-                partitions_total: response.partitions_total as usize,
-                partitions_reassigned: response.partitions_reassigned as usize,
+                tables_total: response.tables_total as usize,
+                tables_reassigned: response.tables_reassigned as usize,
                 memtable_rows_remaining: response.memtable_rows_remaining,
                 estimated_completion_secs: 0,
             })
@@ -1359,25 +1359,25 @@ impl MetaClient {
         }
     }
 
-    /// Reassign a partition from a retiring node to another Primary
-    pub async fn reassign_partition_for_retire(
+    /// Reassign a table from a retiring node to another Primary
+    pub async fn reassign_table_for_retire(
         &self,
-        partition_key: &str,
+        table_key: &str,
         from_node_id: &str,
         to_node_id: &str,
     ) -> Result<(), String> {
-        let request = proto::ReassignPartitionForRetireRequest {
-            partition_key: partition_key.to_string(),
+        let request = proto::ReassignTableForRetireRequest {
+            table_key: table_key.to_string(),
             from_node_id: from_node_id.to_string(),
             to_node_id: to_node_id.to_string(),
         };
 
         let response = self
-            .with_retry("reassign_partition_for_retire", |mut client| {
+            .with_retry("reassign_table_for_retire", |mut client| {
                 let req = request.clone();
                 async move {
                     client
-                        .reassign_partition_for_retire(req)
+                        .reassign_table_for_retire(req)
                         .await
                         .map(|r| r.into_inner())
                 }
@@ -1391,21 +1391,21 @@ impl MetaClient {
         }
     }
 
-    /// Remove a standby from all partition replicas (for Standby scale-in)
-    pub async fn remove_standby_from_replicas(
+    /// Remove a standby from node-level pairing (for Standby scale-in)
+    pub async fn remove_standby_from_tables(
         &self,
         standby_node_id: &str,
     ) -> Result<usize, String> {
-        let request = proto::RemoveStandbyFromReplicasRequest {
+        let request = proto::RemoveStandbyFromTablesRequest {
             standby_node_id: standby_node_id.to_string(),
         };
 
         let response = self
-            .with_retry("remove_standby_from_replicas", |mut client| {
+            .with_retry("remove_standby_from_tables", |mut client| {
                 let req = request.clone();
                 async move {
                     client
-                        .remove_standby_from_replicas(req)
+                        .remove_standby_from_tables(req)
                         .await
                         .map(|r| r.into_inner())
                 }
@@ -1413,7 +1413,7 @@ impl MetaClient {
             .await?;
 
         if response.success {
-            Ok(response.partitions_affected as usize)
+            Ok(response.tables_affected as usize)
         } else {
             Err(response.error)
         }
@@ -1466,21 +1466,6 @@ fn proto_to_distribution_config(c: &proto::DistributionConfig) -> DistributionCo
         created_at: c.created_at,
         last_modified: c.last_modified,
         version: c.version,
-    }
-}
-
-/// Helper function to convert proto PartitionReplicaInfo to PartitionReplica
-fn proto_to_partition_replica(r: &proto::PartitionReplicaInfo) -> PartitionReplica {
-    PartitionReplica {
-        partition_key: r.partition_key.clone(),
-        leader_node_id: r.leader_node_id.clone(),
-        standby_node_ids: r.standby_node_ids.clone(),
-        replication_factor: r.replication_factor as u8,
-        last_replicated_seq: r.last_replicated_seq,
-        replication_lag_ms: r.replication_lag_ms,
-        state: ReplicaState::from(r.state),
-        created_at: r.created_at,
-        leader_last_seen: r.leader_last_seen,
     }
 }
 

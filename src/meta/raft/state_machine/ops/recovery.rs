@@ -1,6 +1,7 @@
 //! Recovery Operations for MetaStateMachine
 //!
 //! Handles failover and recovery without promotion.
+//! Uses table-level operations for routing and node-level pairing for standby management.
 
 use crate::meta::types::{
     current_timestamp_ms, DataNodeMode, EventType, MetaResponse, NodeRole, NodeState,
@@ -46,55 +47,63 @@ impl MetaStateMachine {
         }
     }
 
-    /// Assign a spare Standby to back specific Primaries
+    /// Assign a spare Standby to back specific Primaries (node-level pairing)
     ///
-    /// Updates the partition replica assignments to include the new Standby.
+    /// Updates the node info to establish Primary-Standby pairing.
     pub(crate) fn assign_standby_to_primaries(&self, standby_id: &str, primary_ids: &[String]) -> MetaResponse {
         info!(
             "Recovery: Assigning spare Standby {} to Primaries: {:?}",
             standby_id, primary_ids
         );
 
-        let replicas = self.list_replicas();
-        let mut updated_count = 0;
+        // Update the Standby node's backed_primaries
+        if let Some(mut standby_info) = self.get_node(standby_id) {
+            for primary_id in primary_ids {
+                if !standby_info.backed_primaries.contains(primary_id) {
+                    standby_info.backed_primaries.push(primary_id.clone());
+                }
+            }
+            standby_info.last_heartbeat = current_timestamp_ms();
 
-        for replica in replicas {
-            // Check if this partition's leader is one of the affected Primaries
-            if primary_ids.contains(&replica.leader_node_id) {
-                let storage_key = replica.storage_key();
+            let key = format!("{}{}", crate::meta::types::keys::PREFIX_NODE, standby_id);
+            let _ = self.db.insert(
+                key.as_bytes(),
+                bincode::serialize(&standby_info).unwrap(),
+            );
+        }
 
-                let mut updated = replica.clone();
-                // Add the new Standby if not already present
-                if !updated.standby_node_ids.contains(&standby_id.to_string()) {
-                    updated.standby_node_ids.push(standby_id.to_string());
+        // Update each Primary's backing_standby
+        for primary_id in primary_ids {
+            if let Some(mut primary_info) = self.get_node(primary_id) {
+                if primary_info.backing_standby.is_none() {
+                    primary_info.backing_standby = Some(standby_id.to_string());
+                    primary_info.last_heartbeat = current_timestamp_ms();
 
+                    let key = format!("{}{}", crate::meta::types::keys::PREFIX_NODE, primary_id);
                     let _ = self.db.insert(
-                        storage_key.as_bytes(),
-                        bincode::serialize(&updated).unwrap(),
-                    );
-
-                    updated_count += 1;
-
-                    // Publish event for replication to start
-                    let payload = serde_json::json!({
-                        "partition_key": updated.partition_key,
-                        "leader_node_id": updated.leader_node_id,
-                        "new_standby_id": standby_id,
-                        "action": "start_replication",
-                    });
-                    self.publish_event(
-                        "replicas",
-                        EventType::ReplicaStateChanged,
-                        serde_json::to_vec(&payload).unwrap_or_default(),
-                        "meta",
+                        key.as_bytes(),
+                        bincode::serialize(&primary_info).unwrap(),
                     );
                 }
             }
         }
 
+        // Publish event for replication to start
+        let payload = serde_json::json!({
+            "standby_id": standby_id,
+            "primary_ids": primary_ids,
+            "action": "start_replication",
+        });
+        self.publish_event(
+            "recovery",
+            EventType::NodeStateChanged,
+            serde_json::to_vec(&payload).unwrap_or_default(),
+            "meta",
+        );
+
         info!(
-            "Recovery: Assigned Standby {} to {} partitions across {} Primaries",
-            standby_id, updated_count, primary_ids.len()
+            "Recovery: Assigned Standby {} to {} Primaries",
+            standby_id, primary_ids.len()
         );
 
         MetaResponse::StandbyAssignedToPrimaries {
@@ -103,30 +112,28 @@ impl MetaStateMachine {
         }
     }
 
-    /// Mark a partition as unprotected (no Standby backup)
+    /// Mark a Primary as unprotected (no Standby backup)
     ///
     /// Publishes a warning event that monitoring systems can subscribe to.
-    pub(crate) fn mark_partition_unprotected(
+    pub(crate) fn mark_primary_unprotected(
         &self,
-        partition_key: &str,
         primary_id: &str,
         reason: &str,
     ) -> MetaResponse {
         // Log warning - no event needed, just internal tracking
         warn!(
-            "Recovery: Partition {} on Primary {} is now UNPROTECTED: {}",
-            partition_key, primary_id, reason
+            "Recovery: Primary {} is now UNPROTECTED: {}",
+            primary_id, reason
         );
 
-        MetaResponse::PartitionMarkedUnprotected {
-            partition_key: partition_key.to_string(),
+        MetaResponse::PrimaryMarkedUnprotected {
             primary_id: primary_id.to_string(),
         }
     }
 
-    /// Redistribute partitions from a crashed Primary to remaining Primaries
+    /// Redistribute tables from a crashed Primary to remaining Primaries
     ///
-    /// Evenly distributes partitions across the target Primaries.
+    /// Evenly distributes tables across the target Primaries.
     pub(crate) fn redistribute_partitions(
         &self,
         crashed_primary_id: &str,
@@ -134,7 +141,7 @@ impl MetaStateMachine {
     ) -> MetaResponse {
         if target_primaries.is_empty() {
             error!(
-                "Recovery: Cannot redistribute partitions - no target Primaries available"
+                "Recovery: Cannot redistribute tables - no target Primaries available"
             );
             return MetaResponse::Error {
                 message: "No target Primaries available for redistribution".to_string(),
@@ -142,59 +149,53 @@ impl MetaStateMachine {
         }
 
         info!(
-            "Recovery: Redistributing partitions from crashed Primary {} to {} targets",
+            "Recovery: Redistributing tables from crashed Primary {} to {} targets",
             crashed_primary_id,
             target_primaries.len()
         );
 
-        let replicas = self.list_replicas();
+        // Get all tables owned by the crashed primary
+        let tables = self.list_tables_for_node(crashed_primary_id);
         let mut redistributed_count = 0;
         let num_targets = target_primaries.len();
 
-        for replica in replicas.iter() {
-            if replica.leader_node_id == crashed_primary_id {
-                let target_idx = redistributed_count % num_targets;
-                let new_leader = &target_primaries[target_idx];
-                let storage_key = replica.storage_key();
+        for table in tables.iter() {
+            let target_idx = redistributed_count % num_targets;
+            let new_owner = &target_primaries[target_idx];
 
-                let mut updated = replica.clone();
-                let old_leader = updated.leader_node_id.clone();
-                updated.leader_node_id = new_leader.clone();
+            // Reassign the table to the new owner
+            let _ = self.reassign_table(
+                &table.catalog,
+                &table.schema,
+                &table.table,
+                new_owner,
+            );
 
-                // Remove crashed Primary from standbys if present
-                updated.standby_node_ids.retain(|id| id != crashed_primary_id);
+            redistributed_count += 1;
 
-                let _ = self.db.insert(
-                    storage_key.as_bytes(),
-                    bincode::serialize(&updated).unwrap(),
-                );
-
-                redistributed_count += 1;
-
-                // Publish redistribution event
-                let payload = serde_json::json!({
-                    "partition_key": updated.partition_key,
-                    "old_leader": old_leader,
-                    "new_leader": new_leader,
-                    "action": "redistributed",
-                });
-                self.publish_event(
-                    "replicas",
-                    EventType::ReplicaPromoted,
-                    serde_json::to_vec(&payload).unwrap_or_default(),
-                    "meta",
-                );
-            }
+            // Publish redistribution event
+            let payload = serde_json::json!({
+                "table_key": table.table_key(),
+                "old_owner": crashed_primary_id,
+                "new_owner": new_owner,
+                "action": "redistributed",
+            });
+            self.publish_event(
+                "tables",
+                EventType::TableReassigned,
+                serde_json::to_vec(&payload).unwrap_or_default(),
+                "meta",
+            );
         }
 
         info!(
-            "Recovery: Redistributed {} partitions from {} to {:?}",
+            "Recovery: Redistributed {} tables from {} to {:?}",
             redistributed_count, crashed_primary_id, target_primaries
         );
 
-        MetaResponse::PartitionsRedistributed {
+        MetaResponse::TablesRedistributed {
             crashed_primary_id: crashed_primary_id.to_string(),
-            partitions_count: redistributed_count,
+            tables_count: redistributed_count,
             target_primaries: target_primaries.to_vec(),
         }
     }
@@ -202,11 +203,11 @@ impl MetaStateMachine {
     /// Recommend nodes for scale-in based on load and redundancy
     ///
     /// Selection criteria for Primaries:
-    /// - Prefer nodes with fewer partitions (least disruption)
+    /// - Prefer nodes with fewer tables (least disruption)
     /// - Ensure at least one Primary remains
     ///
     /// Selection criteria for Standbys:
-    /// - Prefer nodes with most redundancy (other standbys cover same partitions)
+    /// - Prefer nodes backing fewer Primaries
     /// - Ensure minimum standby coverage
     pub fn recommend_scale_in(
         &self,
@@ -216,7 +217,7 @@ impl MetaStateMachine {
         let mut recommendation = ScaleInRecommendation::new();
 
         let active_nodes = self.list_nodes(Some(NodeRole::Data), Some(NodeState::Active));
-        let partition_counts = self.get_partition_counts_per_node();
+        let table_counts = self.get_table_counts_per_node();
 
         // Collect Primary and Standby nodes
         let mut primaries: Vec<_> = active_nodes
@@ -228,11 +229,11 @@ impl MetaStateMachine {
             .filter(|n| n.mode == Some(DataNodeMode::Standby))
             .collect();
 
-        // Sort Primaries by partition count (ascending - prefer least-loaded)
-        primaries.sort_by_key(|n| partition_counts.get(&n.node_id).unwrap_or(&0));
+        // Sort Primaries by table count (ascending - prefer least-loaded)
+        primaries.sort_by_key(|n| table_counts.get(&n.node_id).unwrap_or(&0));
 
-        // For Standbys, we'd ideally sort by redundancy, but for now sort by partition count
-        standbys.sort_by_key(|n| partition_counts.get(&n.node_id).unwrap_or(&0));
+        // Sort Standbys by backed_primaries count (ascending - prefer least-loaded)
+        standbys.sort_by_key(|n| n.backed_primaries.len());
 
         // Recommend Primaries to retire
         let primaries_available = primaries.len();
@@ -243,10 +244,10 @@ impl MetaStateMachine {
             ));
         } else {
             for node in primaries.iter().take(reduce_primaries) {
-                let count = partition_counts.get(&node.node_id).unwrap_or(&0);
+                let count = table_counts.get(&node.node_id).unwrap_or(&0);
                 recommendation.add_primary(
                     node.node_id.clone(),
-                    format!("lowest_partition_count ({} partitions)", count),
+                    format!("lowest_table_count ({} tables)", count),
                 );
             }
         }
@@ -263,29 +264,28 @@ impl MetaStateMachine {
             .iter()
             .take(reduce_standbys.min(standbys_available))
         {
-            let count = partition_counts.get(&node.node_id).unwrap_or(&0);
+            let backed_count = node.backed_primaries.len();
             recommendation.add_standby(
                 node.node_id.clone(),
-                format!("standby_with_coverage ({} partitions)", count),
+                format!("standby_backing {} Primaries", backed_count),
             );
         }
 
         recommendation
     }
 
-    /// Get partition count per node for load balancing
+    /// Get table count per node for load balancing
     ///
-    /// Only counts LEADER partitions, not standbys. This ensures proper
-    /// load distribution: a node with 0 leaders should be preferred over
-    /// a node with 1 leader, even if the first node has 1 standby.
-    pub(crate) fn get_partition_counts_per_node(&self) -> std::collections::HashMap<String, usize> {
-        let replicas = self.list_replicas();
+    /// Counts tables where the node is the primary owner.
+    pub(crate) fn get_table_counts_per_node(&self) -> std::collections::HashMap<String, usize> {
+        let tables = self.list_all_tables();
         let mut counts = std::collections::HashMap::new();
 
-        for replica in replicas {
-            // Only count leader partitions for load balancing.
-            // Standbys are passive and don't affect write load.
-            *counts.entry(replica.leader_node_id.clone()).or_insert(0) += 1;
+        for table in tables {
+            // Count based on primary owner
+            if let Some(owner) = table.primary_owner() {
+                *counts.entry(owner.to_string()).or_insert(0) += 1;
+            }
         }
 
         counts

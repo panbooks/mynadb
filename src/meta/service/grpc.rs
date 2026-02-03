@@ -1188,15 +1188,15 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
         let req = request.into_inner();
 
         match self.node.start_retire(&req.node_id).await {
-            Ok(partitions_to_reassign) => Ok(Response::new(proto::StartRetireResponse {
+            Ok(tables_to_reassign) => Ok(Response::new(proto::StartRetireResponse {
                 success: true,
                 error: String::new(),
-                partitions_to_reassign: partitions_to_reassign as u32,
+                tables_to_reassign: tables_to_reassign as u32,
             })),
             Err(e) => Ok(Response::new(proto::StartRetireResponse {
                 success: false,
                 error: e,
-                partitions_to_reassign: 0,
+                tables_to_reassign: 0,
             })),
         }
     }
@@ -1251,8 +1251,8 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
                     node_id: status.node_id,
                     state: i32::from(status.state),
                     started_at: status.started_at,
-                    partitions_total: status.partitions_total as u32,
-                    partitions_reassigned: status.partitions_reassigned as u32,
+                    tables_total: status.tables_total as u32,
+                    tables_reassigned: status.tables_reassigned as u32,
                     memtable_rows_remaining: status.memtable_rows_remaining,
                     progress_percent: progress as u32,
                     error: String::new(),
@@ -1263,8 +1263,8 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
                 node_id: req.node_id,
                 state: 0,
                 started_at: 0,
-                partitions_total: 0,
-                partitions_reassigned: 0,
+                tables_total: 0,
+                tables_reassigned: 0,
                 memtable_rows_remaining: 0,
                 progress_percent: 0,
                 error: e,
@@ -1272,50 +1272,50 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
         }
     }
 
-    async fn reassign_partition_for_retire(
+    async fn reassign_table_for_retire(
         &self,
-        request: Request<proto::ReassignPartitionForRetireRequest>,
-    ) -> Result<Response<proto::ReassignPartitionForRetireResponse>, Status> {
+        request: Request<proto::ReassignTableForRetireRequest>,
+    ) -> Result<Response<proto::ReassignTableForRetireResponse>, Status> {
         let req = request.into_inner();
 
         match self
             .node
-            .reassign_partition_for_retire(&req.partition_key, &req.from_node_id, &req.to_node_id)
+            .reassign_table_for_retire(&req.table_key, &req.from_node_id, &req.to_node_id)
             .await
         {
-            Ok(()) => Ok(Response::new(proto::ReassignPartitionForRetireResponse {
+            Ok(()) => Ok(Response::new(proto::ReassignTableForRetireResponse {
                 success: true,
                 error: String::new(),
             })),
-            Err(e) => Ok(Response::new(proto::ReassignPartitionForRetireResponse {
+            Err(e) => Ok(Response::new(proto::ReassignTableForRetireResponse {
                 success: false,
                 error: e,
             })),
         }
     }
 
-    async fn remove_standby_from_replicas(
+    async fn remove_standby_from_tables(
         &self,
-        request: Request<proto::RemoveStandbyFromReplicasRequest>,
-    ) -> Result<Response<proto::RemoveStandbyFromReplicasResponse>, Status> {
+        request: Request<proto::RemoveStandbyFromTablesRequest>,
+    ) -> Result<Response<proto::RemoveStandbyFromTablesResponse>, Status> {
         let req = request.into_inner();
 
         match self
             .node
-            .remove_standby_from_replicas(&req.standby_node_id)
+            .remove_standby_from_tables(&req.standby_node_id)
             .await
         {
-            Ok(partitions_affected) => {
-                Ok(Response::new(proto::RemoveStandbyFromReplicasResponse {
+            Ok(tables_affected) => {
+                Ok(Response::new(proto::RemoveStandbyFromTablesResponse {
                     success: true,
                     error: String::new(),
-                    partitions_affected: partitions_affected as u32,
+                    tables_affected: tables_affected as u32,
                 }))
             }
-            Err(e) => Ok(Response::new(proto::RemoveStandbyFromReplicasResponse {
+            Err(e) => Ok(Response::new(proto::RemoveStandbyFromTablesResponse {
                 success: false,
                 error: e,
-                partitions_affected: 0,
+                tables_affected: 0,
             })),
         }
     }
@@ -1366,21 +1366,6 @@ fn distribution_config_to_proto(c: &DistributionConfig) -> proto::DistributionCo
         created_at: c.created_at,
         last_modified: c.last_modified,
         version: c.version,
-    }
-}
-
-/// Helper function to convert PartitionReplica to proto
-fn partition_replica_to_proto(r: &PartitionReplica) -> proto::PartitionReplicaInfo {
-    proto::PartitionReplicaInfo {
-        partition_key: r.partition_key.clone(),
-        leader_node_id: r.leader_node_id.clone(),
-        standby_node_ids: r.standby_node_ids.clone(),
-        replication_factor: r.replication_factor as u32,
-        state: i32::from(r.state),
-        last_replicated_seq: r.last_replicated_seq,
-        replication_lag_ms: r.replication_lag_ms,
-        created_at: r.created_at,
-        leader_last_seen: r.leader_last_seen,
     }
 }
 

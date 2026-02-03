@@ -288,7 +288,7 @@ pub struct RetireResponse {
     pub status: String,
     pub node_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub partitions_to_reassign: Option<usize>,
+    pub tables_to_reassign: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -302,9 +302,9 @@ pub struct RetireStatusResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub partitions_total: Option<usize>,
+    pub tables_total: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub partitions_reassigned: Option<usize>,
+    pub tables_reassigned: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memtable_rows_remaining: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -316,7 +316,7 @@ pub struct RetireStatusResponse {
 /// This endpoint:
 /// 1. Marks the node as Retiring in Meta
 /// 2. Router stops sending new writes to this node
-/// 3. Partitions get reassigned to other nodes
+/// 3. Tables get reassigned to other nodes
 /// 4. Once drained, node can be safely stopped
 async fn retire_node(
     State(state): State<MetaHttpState>,
@@ -324,13 +324,13 @@ async fn retire_node(
     Json(_request): Json<RetireRequest>,
 ) -> impl IntoResponse {
     match state.meta_node.start_retire(&node_id).await {
-        Ok(partitions_to_reassign) => (
+        Ok(tables_to_reassign) => (
             StatusCode::OK,
             Json(RetireResponse {
                 success: true,
                 status: "retiring".to_string(),
                 node_id,
-                partitions_to_reassign: Some(partitions_to_reassign),
+                tables_to_reassign: Some(tables_to_reassign),
                 error: None,
             }),
         ),
@@ -340,7 +340,7 @@ async fn retire_node(
                 success: false,
                 status: "error".to_string(),
                 node_id,
-                partitions_to_reassign: None,
+                tables_to_reassign: None,
                 error: Some(e),
             }),
         ),
@@ -382,13 +382,13 @@ async fn retire_status(
                     } else {
                         None
                     },
-                    partitions_total: if is_retiring {
-                        Some(status.partitions_total)
+                    tables_total: if is_retiring {
+                        Some(status.tables_total)
                     } else {
                         None
                     },
-                    partitions_reassigned: if is_retiring {
-                        Some(status.partitions_reassigned)
+                    tables_reassigned: if is_retiring {
+                        Some(status.tables_reassigned)
                     } else {
                         None
                     },
@@ -408,8 +408,8 @@ async fn retire_status(
                 state: "unknown".to_string(),
                 is_retiring: false,
                 started_at: None,
-                partitions_total: None,
-                partitions_reassigned: None,
+                tables_total: None,
+                tables_reassigned: None,
                 memtable_rows_remaining: None,
                 progress_percent: None,
             }),
@@ -429,7 +429,7 @@ async fn cancel_retire(
                 success: true,
                 status: "active".to_string(),
                 node_id,
-                partitions_to_reassign: None,
+                tables_to_reassign: None,
                 error: None,
             }),
         ),
@@ -439,7 +439,7 @@ async fn cancel_retire(
                 success: false,
                 status: "error".to_string(),
                 node_id,
-                partitions_to_reassign: None,
+                tables_to_reassign: None,
                 error: Some(e),
             }),
         ),

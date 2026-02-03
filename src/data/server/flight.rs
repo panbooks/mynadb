@@ -8,7 +8,7 @@ use crate::config::SchemaConfig;
 use crate::data::cache::ParquetLocalCache;
 use crate::data::replication::ReplicationManager;
 use crate::meta::client::MetaClient;
-use crate::meta::types::{NodeRole, NodeState, PartitionReplica};
+use crate::meta::types::{NodeRole, NodeState};
 use crate::query::query_engine::QueryEngine;
 use crate::storage::cache::DataCache;
 use crate::storage::line_protocol::parse_multiple_lines;
@@ -172,10 +172,6 @@ pub struct DataNodeFlightService {
     /// Sends writes to standby nodes for zero-downtime failover
     replication_manager: Option<Arc<ReplicationManager>>,
 
-    /// Cached partition replicas (partition_key -> PartitionReplica)
-    /// Updated via Meta event subscription for efficient replication routing
-    replica_cache: Arc<DashMap<String, PartitionReplica>>,
-
     /// Database manager for partition operations
     db_manager: Option<Arc<crate::jobs::database_manager::DatabaseManager>>,
 
@@ -212,7 +208,6 @@ impl DataNodeFlightService {
             status: Arc::new(RwLock::new("ready".to_string())),
             parquet_cache: None,
             replication_manager: None,
-            replica_cache: Arc::new(DashMap::new()),
             db_manager: None,
             is_retiring: None,
             in_flight_queries: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -267,11 +262,6 @@ impl DataNodeFlightService {
     ) -> Self {
         self.db_manager = Some(db_manager);
         self
-    }
-
-    /// Get a reference to the replica cache for external event subscription
-    pub fn replica_cache(&self) -> Arc<DashMap<String, PartitionReplica>> {
-        Arc::clone(&self.replica_cache)
     }
 
     /// Set the parquet local cache for cluster mode
