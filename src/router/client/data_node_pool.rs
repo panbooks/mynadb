@@ -3,8 +3,7 @@
 //! Manages Arrow Flight connections to Data nodes with connection pooling.
 
 use super::circuit_breaker::CircuitBreaker;
-use arrow::array::{RecordBatch, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::array::RecordBatch;
 use arrow_flight::{
     decode::FlightRecordBatchStream, encode::FlightDataEncoderBuilder,
     flight_service_client::FlightServiceClient, Action, FlightData, FlightDescriptor, Ticket,
@@ -17,17 +16,6 @@ use std::time::Duration;
 use tonic::transport::Channel;
 use tracing::{debug, info};
 
-/// Write request metadata sent via Flight Ticket
-#[derive(Debug, Serialize, Deserialize)]
-pub struct WriteTicket {
-    pub catalog: String,
-    pub fencing_token: Option<u64>,
-    /// Optional partition key for fencing token validation
-    /// Format: catalog/schema/table/date (e.g., "mydb/default/cpu/2024-01-15")
-    #[serde(default)]
-    pub partition_key: Option<String>,
-}
-
 /// Batch write request metadata sent via Flight Descriptor
 /// Used when Router sends pre-converted RecordBatch to Data node
 #[derive(Debug, Serialize, Deserialize)]
@@ -36,7 +24,6 @@ pub struct BatchWriteTicket {
     pub schema: String,
     pub table: String,
     pub date: i32, // Days since Unix epoch (Date32 format)
-    pub fencing_token: Option<u64>,
 }
 
 /// Query request metadata sent via Flight Ticket
@@ -219,80 +206,6 @@ impl DataNodePool {
         Ok(channel)
     }
 
-    /// Send a write request to a Data node using Flight DoPut
-    pub async fn write(
-        &self,
-        node_id: &str,
-        catalog: &str,
-        line_protocol: &str,
-        fencing_token: Option<u64>,
-        partition_key: Option<String>,
-    ) -> Result<u64, String> {
-        let mut client = self.get_flight_client(node_id).await?;
-
-        // Create write ticket
-        let ticket = WriteTicket {
-            catalog: catalog.to_string(),
-            fencing_token,
-            partition_key,
-        };
-
-        // Create a RecordBatch with line protocol data
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "line_protocol",
-            DataType::Utf8,
-            false,
-        )]));
-        let line_array = StringArray::from(vec![line_protocol]);
-        let batch = RecordBatch::try_new(schema, vec![Arc::new(line_array)])
-            .map_err(|e| format!("Failed to create batch: {}", e))?;
-
-        // Create flight descriptor with write metadata
-        let descriptor = FlightDescriptor::new_cmd(serde_json::to_vec(&ticket).unwrap());
-
-        // Encode the batch as FlightData with descriptor
-        let batch_stream = stream::iter(
-            vec![batch]
-                .into_iter()
-                .map(Ok::<_, arrow_flight::error::FlightError>),
-        );
-
-        let flight_data_stream = FlightDataEncoderBuilder::new()
-            .with_flight_descriptor(Some(descriptor))
-            .build(batch_stream);
-
-        // Collect into Vec<FlightData>
-        let flight_data: Vec<FlightData> = flight_data_stream
-            .try_collect()
-            .await
-            .map_err(|e| format!("Failed to encode flight data: {}", e))?;
-
-        // Send via DoPut
-        let request = tonic::Request::new(stream::iter(flight_data.into_iter()));
-        let response = client
-            .do_put(request)
-            .await
-            .map_err(|e| format!("DoPut failed: {}", e))?;
-
-        // Read response
-        let mut result_stream = response.into_inner();
-        let mut points_written = 0u64;
-
-        while let Some(result) = result_stream.next().await {
-            let put_result = result.map_err(|e| format!("PutResult error: {}", e))?;
-            // Parse the app_metadata JSON to get points_written
-            if let Ok(metadata) =
-                serde_json::from_slice::<serde_json::Value>(&put_result.app_metadata)
-            {
-                if let Some(points) = metadata["points_written"].as_u64() {
-                    points_written = points;
-                }
-            }
-        }
-
-        Ok(points_written)
-    }
-
     /// Send a pre-converted RecordBatch to a Data node using Flight DoPut
     ///
     /// This is the optimized write path where the Router has already parsed
@@ -308,7 +221,6 @@ impl DataNodePool {
         table: &str,
         date: i32,
         batch: RecordBatch,
-        fencing_token: Option<u64>,
     ) -> Result<u64, String> {
         let mut client = self.get_flight_client(node_id).await?;
 
@@ -318,7 +230,6 @@ impl DataNodePool {
             schema: schema.to_string(),
             table: table.to_string(),
             date,
-            fencing_token,
         };
 
         // Create flight descriptor with batch write metadata

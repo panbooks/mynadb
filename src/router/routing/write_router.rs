@@ -365,7 +365,7 @@ impl WriteRouter {
             let batch_clone = batch.clone();
 
             write_futures.push(async move {
-                pool.write_batch(&node_id, &catalog, &schema, &table, date, batch_clone, None)
+                pool.write_batch(&node_id, &catalog, &schema, &table, date, batch_clone)
                     .await
                     .map(|written| (node_id, written))
                     .map_err(|e| (node_id_for_error, e))
@@ -528,7 +528,6 @@ impl WriteRouter {
                     &partition_key.table,
                     partition_key.date_as_i32(),
                     batch.clone(),
-                    None,
                 )
                 .await
             {
