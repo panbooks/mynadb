@@ -4,9 +4,9 @@
 
 use crate::meta::types::{
     current_timestamp_ms, keys, DataNodeMode, EventType, MetaResponse, NodeInfo, NodeRole,
-    NodeState, PartitionReplica,
+    NodeState, PartitionReplica, TableMeta,
 };
-use tracing::info;
+use tracing::{debug, info, warn};
 
 use super::super::MetaStateMachine;
 
@@ -287,6 +287,10 @@ impl MetaStateMachine {
             to_node_id,
         );
 
+        // Record the old leader's node_id as a legacy prefix in the affected table.
+        // This ensures queries can still find data under the old prefix after scale-in.
+        self.record_legacy_prefix_for_partition(partition_key, &old_leader);
+
         MetaResponse::PartitionReassigned {
             partition_key: partition_key.to_string(),
             from_node_id: from_node_id.to_string(),
@@ -436,6 +440,108 @@ impl MetaStateMachine {
         MetaResponse::StandbyRemovedFromReplicas {
             standby_node_id: standby_node_id.to_string(),
             partitions_affected: affected_count,
+        }
+    }
+
+    // ========================================================================
+    // Legacy Prefix Recording (Scale-In Support)
+    // ========================================================================
+
+    /// Record legacy prefix in TableMeta for the table affected by partition reassignment
+    ///
+    /// When a partition is reassigned during scale-in, the old leader's node_id is
+    /// recorded as a legacy prefix. This ensures queries can still find parquet files
+    /// stored under the old prefix (e.g., "data-50/catalog/schema/table/").
+    ///
+    /// # Arguments
+    /// * `partition_key` - Partition key like "{catalog}/{schema}/{table}/date=YYYY-MM-DD"
+    /// * `old_node_id` - The retiring node's ID to record as a legacy prefix
+    fn record_legacy_prefix_for_partition(&self, partition_key: &str, old_node_id: &str) {
+        // Parse partition_key: {catalog}/{schema}/{table}/date=YYYY-MM-DD
+        let parts: Vec<&str> = partition_key.split('/').collect();
+        if parts.len() < 3 {
+            warn!(
+                "Cannot record legacy prefix: invalid partition_key format: {}",
+                partition_key
+            );
+            return;
+        }
+
+        let (catalog, schema, table) = (parts[0], parts[1], parts[2]);
+        let table_key = format!("{}{}/{}/{}", keys::PREFIX_TABLE, catalog, schema, table);
+
+        // Read current TableMeta
+        let table_data = match self.db.get(table_key.as_bytes()) {
+            Ok(Some(data)) => data,
+            Ok(None) => {
+                debug!(
+                    "TableMeta not found for {}/{}/{}, skipping legacy prefix recording",
+                    catalog, schema, table
+                );
+                return;
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to read TableMeta for {}/{}/{}: {}",
+                    catalog, schema, table, e
+                );
+                return;
+            }
+        };
+
+        let mut meta: TableMeta = match bincode::deserialize(&table_data) {
+            Ok(m) => m,
+            Err(e) => {
+                warn!(
+                    "Failed to deserialize TableMeta for {}/{}/{}: {}",
+                    catalog, schema, table, e
+                );
+                return;
+            }
+        };
+
+        // Add the legacy prefix
+        if meta.add_legacy_prefix(old_node_id.to_string()) {
+            // Save updated TableMeta
+            if let Err(e) = self
+                .db
+                .insert(table_key.as_bytes(), bincode::serialize(&meta).unwrap())
+            {
+                warn!(
+                    "Failed to save TableMeta with legacy prefix for {}/{}/{}: {}",
+                    catalog, schema, table, e
+                );
+                return;
+            }
+
+            info!(
+                "Added legacy prefix '{}' to table {}/{}/{} (now has {} legacy prefixes)",
+                old_node_id,
+                catalog,
+                schema,
+                table,
+                meta.legacy_prefixes().len()
+            );
+
+            // Publish event for cache invalidation
+            let payload = serde_json::json!({
+                "catalog": catalog,
+                "schema": schema,
+                "table": table,
+                "legacy_prefix": old_node_id,
+                "all_legacy_prefixes": meta.legacy_prefixes(),
+            });
+            self.publish_event(
+                "tables",
+                EventType::TableLegacyPrefixAdded,
+                serde_json::to_vec(&payload).unwrap_or_default(),
+                old_node_id,
+            );
+        } else {
+            debug!(
+                "Legacy prefix '{}' already exists for table {}/{}/{}",
+                old_node_id, catalog, schema, table
+            );
         }
     }
 }

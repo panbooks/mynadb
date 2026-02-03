@@ -36,6 +36,7 @@ pub use crate::query::cache::hot_partition_cache::HotPartitionCacheStats;
 pub use crate::query::cache::metadata_cache::{CacheStatistics, TableParquetStats};
 pub use crate::query::cache::query_cache::QueryCacheStats;
 pub use crate::query::types::{QueryAnalysis, QueryExplainResult};
+pub use discovery::TableLegacyPrefixes;
 
 /// Default memory limit for query execution (16GB)
 const DEFAULT_MEMORY_LIMIT_BYTES: usize = 16 * 1024 * 1024 * 1024;

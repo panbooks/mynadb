@@ -5,6 +5,7 @@
 use std::collections::HashSet;
 use tracing::debug;
 
+use super::discovery::TableLegacyPrefixes;
 use super::QueryEngine;
 
 impl QueryEngine {
@@ -258,6 +259,185 @@ impl QueryEngine {
                     }
                 }
             }
+        }
+
+        let mut tables: Vec<String> = tables_set.into_iter().collect();
+        tables.sort();
+        Ok(tables)
+    }
+
+    // ========================================================================
+    // Multi-Prefix Listing (Scale-In Support)
+    // ========================================================================
+
+    /// List tables in a catalog with data, scanning all prefixes (current + legacy)
+    pub async fn list_tables_with_data_and_legacy(
+        &self,
+        catalog_name: &str,
+        legacy: &TableLegacyPrefixes,
+    ) -> Vec<String> {
+        let mut tables: HashSet<String> = HashSet::new();
+
+        // Get tables from in-memory cache
+        if let Some(ref cache) = self.write_cache {
+            for (schema, table) in cache.list_cached_tables_in_catalog(catalog_name) {
+                tables.insert(format!("{}.{}.{}", catalog_name, schema, table));
+            }
+        }
+
+        // Get tables from storage (all prefixes)
+        if let Some(ref storage) = self.storage {
+            // Build all prefixes to scan
+            let mut all_prefixes = Vec::new();
+            if let Some(ref cache) = self.write_cache {
+                all_prefixes.push(format!("{}/{}/", cache.node_id(), catalog_name));
+            } else {
+                all_prefixes.push(format!("{}/", catalog_name));
+            }
+            for lp in &legacy.prefixes {
+                all_prefixes.push(format!("{}/{}/", lp, catalog_name));
+            }
+
+            for prefix in &all_prefixes {
+                if let Ok(files) = storage.list(prefix).await {
+                    for file in files {
+                        let relative = file.strip_prefix(prefix).unwrap_or(&file);
+                        let parts: Vec<&str> = relative.split('/').collect();
+                        if parts.len() >= 2 {
+                            let schema_name = parts[0];
+                            let table_name = parts[1];
+                            if !schema_name.is_empty()
+                                && !table_name.is_empty()
+                                && !schema_name.starts_with('.')
+                                && !table_name.starts_with('.')
+                                && !table_name.starts_with("date=")
+                            {
+                                tables.insert(format!(
+                                    "{}.{}.{}",
+                                    catalog_name, schema_name, table_name
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Local filesystem - no legacy prefix support
+            return self.list_tables_with_data(catalog_name).await;
+        }
+
+        let mut result: Vec<String> = tables.into_iter().collect();
+        result.sort();
+        result
+    }
+
+    /// List all schemas in a catalog, scanning all prefixes (current + legacy)
+    pub async fn list_schemas_with_legacy(
+        &self,
+        catalog_name: &str,
+        legacy: &TableLegacyPrefixes,
+    ) -> Result<Vec<String>, String> {
+        let mut schemas_set: HashSet<String> = HashSet::new();
+
+        // Get schemas from in-memory cache
+        if let Some(ref cache) = self.write_cache {
+            for (schema, _table) in cache.list_cached_tables_in_catalog(catalog_name) {
+                schemas_set.insert(schema);
+            }
+        }
+
+        // Get schemas from storage (all prefixes)
+        if let Some(ref storage) = self.storage {
+            // Build all prefixes to scan
+            let mut all_prefixes = Vec::new();
+            if let Some(ref cache) = self.write_cache {
+                all_prefixes.push(format!("{}/{}/", cache.node_id(), catalog_name));
+            } else {
+                all_prefixes.push(format!("{}/", catalog_name));
+            }
+            for lp in &legacy.prefixes {
+                all_prefixes.push(format!("{}/{}/", lp, catalog_name));
+            }
+
+            for prefix in &all_prefixes {
+                if let Ok(files) = storage.list(prefix).await {
+                    for file in files {
+                        let relative = file.strip_prefix(prefix).unwrap_or(&file);
+                        let parts: Vec<&str> = relative.split('/').collect();
+                        if !parts.is_empty() {
+                            let schema_name = parts[0];
+                            if !schema_name.is_empty()
+                                && !schema_name.starts_with('.')
+                                && schema_name != "_system"
+                                && schema_name != "_wal"
+                            {
+                                schemas_set.insert(schema_name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Local filesystem - no legacy prefix support
+            return self.list_schemas(catalog_name).await;
+        }
+
+        let mut schemas: Vec<String> = schemas_set.into_iter().collect();
+        schemas.sort();
+        Ok(schemas)
+    }
+
+    /// List all tables in a catalog.schema, scanning all prefixes (current + legacy)
+    pub async fn list_tables_in_schema_with_legacy(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        legacy: &TableLegacyPrefixes,
+    ) -> Result<Vec<String>, String> {
+        let mut tables_set: HashSet<String> = HashSet::new();
+
+        // Get tables from in-memory cache
+        if let Some(ref cache) = self.write_cache {
+            for (schema, table) in cache.list_cached_tables_in_catalog(catalog_name) {
+                if schema == schema_name {
+                    tables_set.insert(table);
+                }
+            }
+        }
+
+        // Get tables from storage (all prefixes)
+        if let Some(ref storage) = self.storage {
+            // Build all prefixes to scan
+            let mut all_prefixes = Vec::new();
+            if let Some(ref cache) = self.write_cache {
+                all_prefixes.push(format!("{}/{}/{}/", cache.node_id(), catalog_name, schema_name));
+            } else {
+                all_prefixes.push(format!("{}/{}/", catalog_name, schema_name));
+            }
+            for lp in &legacy.prefixes {
+                all_prefixes.push(format!("{}/{}/{}/", lp, catalog_name, schema_name));
+            }
+
+            for prefix in &all_prefixes {
+                if let Ok(files) = storage.list(prefix).await {
+                    for file in files {
+                        let relative = file.strip_prefix(prefix).unwrap_or(&file);
+                        let parts: Vec<&str> = relative.split('/').collect();
+                        if !parts.is_empty() {
+                            let table_name = parts[0];
+                            if !table_name.is_empty()
+                                && !table_name.starts_with('.')
+                                && !table_name.starts_with("date=")
+                            {
+                                tables_set.insert(table_name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Local filesystem - no legacy prefix support
+            return self.list_tables_in_schema(catalog_name, schema_name).await;
         }
 
         let mut tables: Vec<String> = tables_set.into_iter().collect();

@@ -4,17 +4,22 @@
 //! memtable providers, and union providers.
 
 use crate::query::providers::{
-    MemtableProvider, ParquetTableConfig, ParquetTableProvider, UnionTableProvider,
+    MemtableProvider, MultiUnionTableProvider, ParquetTableConfig, ParquetTableProvider,
+    UnionTableProvider,
 };
+use datafusion::catalog::TableProvider;
 use datafusion::catalog_common::MemoryCatalogProvider;
 use datafusion::catalog_common::MemorySchemaProvider;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl};
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
 use datafusion::prelude::*;
 use std::collections::HashSet;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
+use super::discovery::TableLegacyPrefixes;
 use super::QueryEngine;
 
 impl QueryEngine {
@@ -509,5 +514,187 @@ impl QueryEngine {
             .insert(schema_name.to_string());
 
         Ok(())
+    }
+
+    // ========================================================================
+    // Multi-Prefix Registration (Scale-In Support)
+    // ========================================================================
+
+    /// Register a table with legacy prefix support (for scale-in)
+    ///
+    /// When a cluster scales in, data from retired nodes remains in S3 under
+    /// their original prefixes. This method creates a MultiUnionTableProvider
+    /// that combines data from all relevant prefixes.
+    pub async fn register_table_with_legacy(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+        legacy: &TableLegacyPrefixes,
+    ) -> Result<(), String> {
+        // If no legacy prefixes, use normal registration
+        if legacy.prefixes.is_empty() {
+            return self.register_table(catalog_name, schema_name, table_name).await;
+        }
+
+        let is_object_storage = self
+            .storage
+            .as_ref()
+            .map(|s| !s.is_local())
+            .unwrap_or(false);
+
+        // Multi-prefix registration only makes sense for object storage
+        if !is_object_storage {
+            debug!(
+                "Local storage: ignoring legacy prefixes for {}.{}.{}",
+                catalog_name, schema_name, table_name
+            );
+            return self.register_table(catalog_name, schema_name, table_name).await;
+        }
+
+        // Ensure catalog and schema exist
+        self.ensure_schema_in_catalog(catalog_name, schema_name).await?;
+
+        let storage = self
+            .storage
+            .as_ref()
+            .ok_or_else(|| "Storage not configured".to_string())?;
+
+        // Build all table URLs (current node + legacy prefixes)
+        let mut table_urls = Vec::new();
+        let mut valid_prefixes = Vec::new();
+
+        // Current node's URL
+        if let Some(ref cache) = self.write_cache {
+            let url = storage.table_url_with_node(
+                cache.node_id(),
+                catalog_name,
+                schema_name,
+                table_name,
+            );
+            table_urls.push((url, cache.node_id().to_string()));
+        } else {
+            let url = storage.table_url(catalog_name, schema_name, table_name);
+            table_urls.push((url, "default".to_string()));
+        }
+
+        // Legacy prefix URLs
+        for lp in &legacy.prefixes {
+            let url = storage.table_url_with_node(lp, catalog_name, schema_name, table_name);
+            table_urls.push((url, lp.clone()));
+        }
+
+        // Create providers for each valid URL
+        let mut providers: Vec<Arc<dyn TableProvider>> = Vec::new();
+
+        for (url, prefix) in table_urls {
+            match self
+                .create_listing_provider_for_url(&url, catalog_name, schema_name, table_name)
+                .await
+            {
+                Ok(provider) => {
+                    providers.push(provider);
+                    valid_prefixes.push(prefix);
+                }
+                Err(e) => {
+                    // Log but continue - some prefixes might have no data for this table
+                    debug!(
+                        "No data at prefix '{}' for {}.{}.{}: {}",
+                        prefix, catalog_name, schema_name, table_name, e
+                    );
+                }
+            }
+        }
+
+        if providers.is_empty() {
+            // Check if we have memtable data
+            if let Some(ref cache) = self.write_cache {
+                if cache.has_cached_data(catalog_name, schema_name, table_name) {
+                    return self
+                        .register_memtable_only(catalog_name, schema_name, table_name)
+                        .await;
+                }
+            }
+            return Err(format!(
+                "No data found for table {}.{}.{} in any prefix",
+                catalog_name, schema_name, table_name
+            ));
+        }
+
+        let full_name = format!("{}.{}.{}", catalog_name, schema_name, table_name);
+
+        // If only one provider, use normal registration path
+        if providers.len() == 1 {
+            let provider = providers.remove(0);
+            let final_provider =
+                self.maybe_wrap_with_memtable(catalog_name, schema_name, table_name, provider)?;
+            return self.register_provider(catalog_name, schema_name, table_name, final_provider);
+        }
+
+        // Create MultiUnionTableProvider for multiple prefixes
+        let multi_union = MultiUnionTableProvider::try_new(providers, full_name.clone(), valid_prefixes.clone())
+            .map_err(|e| format!("Failed to create multi-union provider: {}", e))?;
+
+        // Wrap with memtable if needed
+        let final_provider = self.maybe_wrap_with_memtable(
+            catalog_name,
+            schema_name,
+            table_name,
+            Arc::new(multi_union),
+        )?;
+
+        self.register_provider(catalog_name, schema_name, table_name, final_provider)?;
+
+        info!(
+            "Registered table {} with {} prefixes (including {} legacy): {:?}",
+            full_name,
+            valid_prefixes.len(),
+            legacy.prefixes.len(),
+            valid_prefixes
+        );
+
+        // Track registration
+        let mut catalogs = self.registered_catalogs.write().await;
+        catalogs
+            .entry(catalog_name.to_string())
+            .or_insert_with(HashSet::new)
+            .insert(schema_name.to_string());
+
+        Ok(())
+    }
+
+    /// Create a ListingTable provider for a specific URL
+    async fn create_listing_provider_for_url(
+        &self,
+        table_url: &str,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+    ) -> Result<Arc<dyn TableProvider>, String> {
+        let listing_url = ListingTableUrl::parse(table_url)
+            .map_err(|e| format!("Failed to parse table URL '{}': {}", table_url, e))?;
+
+        let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+            .with_file_extension(".parquet")
+            .with_table_partition_cols(vec![(
+                "date".to_string(),
+                datafusion::arrow::datatypes::DataType::Utf8,
+            )]);
+
+        let config = ListingTableConfig::new(listing_url)
+            .with_listing_options(listing_options)
+            .infer_schema(&self.ctx.state())
+            .await
+            .map_err(|e| {
+                format!(
+                    "Failed to infer schema for {}.{}.{} at {}: {}",
+                    catalog_name, schema_name, table_name, table_url, e
+                )
+            })?;
+
+        let listing_table = ListingTable::try_new(config)
+            .map_err(|e| format!("Failed to create listing table: {}", e))?;
+
+        Ok(Arc::new(listing_table))
     }
 }
