@@ -241,13 +241,72 @@ impl MetaStateMachine {
     pub(crate) fn deregister_node(&self, node_id: &str) -> MetaResponse {
         let key = format!("{}{}", keys::PREFIX_NODE, node_id);
 
-        // Get node info for event
+        // Get node info for event and cleanup
         let info = self
             .db
             .get(key.as_bytes())
             .ok()
             .flatten()
             .and_then(|data| bincode::deserialize::<NodeInfo>(&data).ok());
+
+        // Clean up standby pairings based on node mode
+        if let Some(ref node_info) = info {
+            if node_info.role == NodeRole::Data {
+                match node_info.mode {
+                    Some(DataNodeMode::Primary) => {
+                        // Primary deregistering: remove itself from its backing Standby's list
+                        if let Some(ref standby_id) = node_info.backing_standby {
+                            self.remove_primary_from_standby(standby_id, node_id);
+                            info!(
+                                "Deregister: removed Primary {} from Standby {} backed_primaries",
+                                node_id, standby_id
+                            );
+                        }
+                    }
+                    Some(DataNodeMode::Standby) => {
+                        // Standby deregistering: clear backing_standby for all Primaries it backs
+                        for primary_id in &node_info.backed_primaries {
+                            self.clear_primary_backing_standby(primary_id);
+                            info!(
+                                "Deregister: cleared Standby {} from Primary {} backing_standby",
+                                node_id, primary_id
+                            );
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+
+        // Clean up table ownership: remove this node from multi-owner tables
+        // Note: Sole-owner tables are left for background rebalancer to handle
+        // (requires finding a suitable new owner which is async)
+        let tables = self.list_tables_for_node(node_id);
+        for table in tables {
+            if table.owner_node_ids.len() > 1 {
+                // Safe to remove - other owners exist
+                let mut updated = table.clone();
+                updated.remove_owner(node_id);
+                let table_key = format!(
+                    "{}{}",
+                    keys::PREFIX_TABLE,
+                    format!("{}/{}/{}", table.catalog, table.schema, table.table)
+                );
+                let _ = self
+                    .db
+                    .insert(table_key.as_bytes(), bincode::serialize(&updated).unwrap());
+                info!(
+                    "Deregister: removed {} from table {}.{}.{} owners (remaining: {:?})",
+                    node_id, table.catalog, table.schema, table.table, updated.owner_node_ids
+                );
+            } else {
+                // Sole owner - leave for background rebalancer
+                warn!(
+                    "Deregister: node {} is sole owner of table {}.{}.{}, will be reassigned by rebalancer",
+                    node_id, table.catalog, table.schema, table.table
+                );
+            }
+        }
 
         // Remove node
         let _ = self.db.remove(key.as_bytes());
@@ -264,14 +323,17 @@ impl MetaStateMachine {
             }
         }
 
+        // Flush to ensure all changes are durable
+        let _ = self.db.flush();
+
         // No-Promotion Architecture: Primary crash handled by RecoveryManager
         // - Standby flushes cache to S3 via FlushForRecovery event
         // - K8s replaces the failed Primary pod
         // - No automatic promotion, eliminating split-brain risk
 
         // Publish event
-        if let Some(info) = info {
-            let event_payload = serde_json::to_vec(&info).unwrap_or_default();
+        if let Some(node_info) = info {
+            let event_payload = serde_json::to_vec(&node_info).unwrap_or_default();
             self.publish_event("nodes", EventType::NodeLeft, event_payload, node_id);
         }
 
