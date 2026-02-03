@@ -11,17 +11,6 @@ use tracing::{debug, info, warn};
 use super::QueryEngine;
 use crate::query::cache::metadata_cache::TableParquetStats;
 
-/// Legacy prefixes for a table (used during scale-in recovery)
-///
-/// When a cluster scales in, parquet files from retired nodes remain in S3
-/// under their original prefixes. This struct provides those prefixes to
-/// the query engine so it can find all data.
-#[derive(Debug, Clone, Default)]
-pub struct TableLegacyPrefixes {
-    /// Legacy prefixes from retired nodes (e.g., ["data-50", "data-75"])
-    pub prefixes: Vec<String>,
-}
-
 impl QueryEngine {
     // ========================================================================
     // Partition & File Discovery
@@ -366,11 +355,12 @@ impl QueryEngine {
     }
 
     // ========================================================================
-    // Auto-discovery
+    // Auto-discovery (with legacy prefix support)
     // ========================================================================
 
     /// Auto-discover and register all tables in catalog.schema
     /// Works with both local filesystem and object storage (S3/MinIO)
+    /// Scans both current node prefix and any legacy prefixes from scale-in
     pub async fn discover_and_register(
         &self,
         catalog_name: &str,
@@ -380,31 +370,26 @@ impl QueryEngine {
 
         // Try object storage first if configured
         if let Some(ref storage) = self.storage {
-            // Build prefix based on whether we have node_id
-            let prefix = if let Some(ref cache) = self.write_cache {
-                format!("{}/{}/{}/", cache.node_id(), catalog_name, schema_name)
-            } else {
-                format!("{}/{}/", catalog_name, schema_name)
-            };
+            // Build all prefixes to scan (current node + legacy)
+            let prefixes = self.build_storage_prefixes(catalog_name, schema_name).await;
 
-            // List files from object storage
-            if let Ok(files) = storage.list(&prefix).await {
-                for file in files {
-                    // Extract table name from path like: {table}/date=YYYY-MM-DD/file.parquet
-                    // or {node_id}/{catalog}/{schema}/{table}/date=YYYY-MM-DD/file.parquet
-                    let relative = file.strip_prefix(&prefix).unwrap_or(&file);
-                    if let Some(table_name) = relative.split('/').next() {
-                        if !table_name.is_empty()
-                            && !table_name.starts_with('.')
-                            && !table_name.starts_with("date=")
-                        {
-                            tables_found.insert(table_name.to_string());
+            for prefix in &prefixes {
+                if let Ok(files) = storage.list(prefix).await {
+                    for file in files {
+                        let relative = file.strip_prefix(prefix).unwrap_or(&file);
+                        if let Some(table_name) = relative.split('/').next() {
+                            if !table_name.is_empty()
+                                && !table_name.starts_with('.')
+                                && !table_name.starts_with("date=")
+                            {
+                                tables_found.insert(table_name.to_string());
+                            }
                         }
                     }
                 }
             }
         } else {
-            // Fallback to local filesystem
+            // Fallback to local filesystem (no legacy prefix support for local)
             let schema_path = format!("{}/{}/{}", self.data_dir, catalog_name, schema_name);
 
             if std::path::Path::new(&schema_path).exists() {
@@ -445,6 +430,7 @@ impl QueryEngine {
     /// Auto-discover all schemas and tables in a catalog
     /// Works with both local filesystem and object storage (S3/MinIO)
     /// Also includes tables from in-memory cache (write_cache)
+    /// Scans both current node prefix and any legacy prefixes from scale-in
     pub async fn discover_catalog(&self, catalog_name: &str) -> Result<usize, String> {
         let mut schemas_found: HashSet<String> = HashSet::new();
         let mut cached_tables: HashSet<(String, String)> = HashSet::new();
@@ -457,26 +443,22 @@ impl QueryEngine {
             }
         }
 
-        // Discover schemas from storage
+        // Discover schemas from storage (all prefixes)
         if let Some(ref storage) = self.storage {
-            // Build prefix based on whether we have node_id
-            let prefix = if let Some(ref cache) = self.write_cache {
-                format!("{}/{}/", cache.node_id(), catalog_name)
-            } else {
-                format!("{}/", catalog_name)
-            };
+            // Build all prefixes to scan (current node + legacy)
+            let all_prefixes = self.build_catalog_prefixes(catalog_name).await;
 
-            // List files from object storage
-            if let Ok(files) = storage.list(&prefix).await {
-                for file in files {
-                    // Extract schema name from path
-                    let relative = file.strip_prefix(&prefix).unwrap_or(&file);
-                    if let Some(schema_name) = relative.split('/').next() {
-                        if !schema_name.is_empty()
-                            && !schema_name.starts_with('.')
-                            && !schema_name.starts_with("date=")
-                        {
-                            schemas_found.insert(schema_name.to_string());
+            for prefix in &all_prefixes {
+                if let Ok(files) = storage.list(prefix).await {
+                    for file in files {
+                        let relative = file.strip_prefix(prefix).unwrap_or(&file);
+                        if let Some(schema_name) = relative.split('/').next() {
+                            if !schema_name.is_empty()
+                                && !schema_name.starts_with('.')
+                                && !schema_name.starts_with("date=")
+                            {
+                                schemas_found.insert(schema_name.to_string());
+                            }
                         }
                     }
                 }
@@ -557,19 +539,12 @@ impl QueryEngine {
     }
 
     // ========================================================================
-    // Multi-Prefix Discovery (Scale-In Support)
+    // Storage Prefix Helpers (Scale-In Support)
     // ========================================================================
 
-    /// Build all storage prefixes for discovery (current node + legacy)
-    ///
-    /// Used by multi-prefix discovery and registration methods to scan
-    /// all locations where data for a table might exist.
-    pub fn build_storage_prefixes(
-        &self,
-        catalog_name: &str,
-        schema_name: &str,
-        legacy: &TableLegacyPrefixes,
-    ) -> Vec<String> {
+    /// Build all storage prefixes for schema discovery (current node + legacy)
+    /// Uses internal legacy_prefixes field
+    pub(crate) async fn build_storage_prefixes(&self, catalog_name: &str, schema_name: &str) -> Vec<String> {
         let mut prefixes = Vec::new();
 
         // Current node's prefix
@@ -579,170 +554,78 @@ impl QueryEngine {
             prefixes.push(format!("{}/{}/", catalog_name, schema_name));
         }
 
-        // Add legacy prefixes from retired nodes
-        for lp in &legacy.prefixes {
-            prefixes.push(format!("{}/{}/{}/", lp, catalog_name, schema_name));
+        // Add legacy prefixes from internal state
+        // For schema-level discovery, we collect all unique legacy prefixes for this catalog
+        let legacy_map = self.legacy_prefixes.read().await;
+        let mut seen_prefixes: HashSet<String> = HashSet::new();
+        for ((cat, _schema, _table), lps) in legacy_map.iter() {
+            if cat == catalog_name {
+                for lp in lps {
+                    if seen_prefixes.insert(lp.clone()) {
+                        prefixes.push(format!("{}/{}/{}/", lp, catalog_name, schema_name));
+                    }
+                }
+            }
         }
 
         prefixes
     }
 
-    /// Auto-discover tables in catalog.schema by scanning multiple prefixes
-    ///
-    /// This is the scale-in aware version that scans both the current node's
-    /// prefix and any legacy prefixes from retired nodes.
-    pub async fn discover_and_register_with_legacy(
+    /// Build all catalog-level prefixes (current node + legacy)
+    pub(crate) async fn build_catalog_prefixes(&self, catalog_name: &str) -> Vec<String> {
+        let mut prefixes = Vec::new();
+
+        // Current node's prefix
+        if let Some(ref cache) = self.write_cache {
+            prefixes.push(format!("{}/{}/", cache.node_id(), catalog_name));
+        } else {
+            prefixes.push(format!("{}/", catalog_name));
+        }
+
+        // Add legacy prefixes from internal state
+        let legacy_map = self.legacy_prefixes.read().await;
+        let mut seen_prefixes: HashSet<String> = HashSet::new();
+        for ((cat, _schema, _table), lps) in legacy_map.iter() {
+            if cat == catalog_name {
+                for lp in lps {
+                    if seen_prefixes.insert(lp.clone()) {
+                        prefixes.push(format!("{}/{}/", lp, catalog_name));
+                    }
+                }
+            }
+        }
+
+        prefixes
+    }
+
+    /// Build all table-level prefixes (current node + legacy for specific table)
+    pub(crate) async fn build_table_prefixes(
         &self,
         catalog_name: &str,
         schema_name: &str,
-        legacy: &TableLegacyPrefixes,
-    ) -> Result<usize, String> {
-        let mut tables_found: HashSet<String> = HashSet::new();
+        table_name: &str,
+    ) -> Vec<String> {
+        let mut prefixes = Vec::new();
 
-        // Try object storage first if configured
-        if let Some(ref storage) = self.storage {
-            // Build all prefixes to scan
-            let prefixes = self.build_storage_prefixes(catalog_name, schema_name, legacy);
-
-            for prefix in &prefixes {
-                // List files from object storage
-                if let Ok(files) = storage.list(prefix).await {
-                    for file in files {
-                        // Extract table name from path
-                        let relative = file.strip_prefix(prefix).unwrap_or(&file);
-                        if let Some(table_name) = relative.split('/').next() {
-                            if !table_name.is_empty()
-                                && !table_name.starts_with('.')
-                                && !table_name.starts_with("date=")
-                            {
-                                tables_found.insert(table_name.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            // Fallback to local filesystem (standalone mode - no legacy prefix support)
-            return self.discover_and_register(catalog_name, schema_name).await;
-        }
-
-        // Register all discovered tables with their legacy prefixes
-        let mut count = 0;
-        for table_name in tables_found {
-            // Build table-specific legacy prefixes
-            let table_legacy = TableLegacyPrefixes {
-                prefixes: legacy.prefixes.clone(),
-            };
-
-            if let Err(e) = self
-                .register_table_with_legacy(catalog_name, schema_name, &table_name, &table_legacy)
-                .await
-            {
-                warn!(
-                    "Failed to register {}.{}.{} with legacy prefixes: {}",
-                    catalog_name, schema_name, table_name, e
-                );
-            } else {
-                count += 1;
-            }
-        }
-
-        if !legacy.prefixes.is_empty() {
-            debug!(
-                "Discovered {} tables in {}.{} (scanned {} prefixes including {} legacy)",
-                count,
+        // Current node's prefix
+        if let Some(ref cache) = self.write_cache {
+            prefixes.push(format!(
+                "{}/{}/{}/{}/",
+                cache.node_id(),
                 catalog_name,
                 schema_name,
-                legacy.prefixes.len() + 1,
-                legacy.prefixes.len()
-            );
-        }
-
-        Ok(count)
-    }
-
-    /// Auto-discover all schemas and tables in a catalog with legacy prefix support
-    pub async fn discover_catalog_with_legacy(
-        &self,
-        catalog_name: &str,
-        legacy: &TableLegacyPrefixes,
-    ) -> Result<usize, String> {
-        let mut schemas_found: HashSet<String> = HashSet::new();
-        let mut cached_tables: HashSet<(String, String)> = HashSet::new();
-
-        // Get tables from in-memory cache first
-        if let Some(ref cache) = self.write_cache {
-            cached_tables = cache.list_cached_tables_in_catalog(catalog_name);
-            for (schema, _table) in &cached_tables {
-                schemas_found.insert(schema.clone());
-            }
-        }
-
-        // Discover schemas from storage (all prefixes)
-        if let Some(ref storage) = self.storage {
-            // Build all prefixes to scan
-            let mut all_prefixes = Vec::new();
-            if let Some(ref cache) = self.write_cache {
-                all_prefixes.push(format!("{}/{}/", cache.node_id(), catalog_name));
-            } else {
-                all_prefixes.push(format!("{}/", catalog_name));
-            }
-            for lp in &legacy.prefixes {
-                all_prefixes.push(format!("{}/{}/", lp, catalog_name));
-            }
-
-            for prefix in &all_prefixes {
-                if let Ok(files) = storage.list(prefix).await {
-                    for file in files {
-                        let relative = file.strip_prefix(prefix).unwrap_or(&file);
-                        if let Some(schema_name) = relative.split('/').next() {
-                            if !schema_name.is_empty()
-                                && !schema_name.starts_with('.')
-                                && !schema_name.starts_with("date=")
-                            {
-                                schemas_found.insert(schema_name.to_string());
-                            }
-                        }
-                    }
-                }
-            }
+                table_name
+            ));
         } else {
-            // Fallback to local filesystem (no legacy prefix support)
-            return self.discover_catalog(catalog_name).await;
+            prefixes.push(format!("{}/{}/{}/", catalog_name, schema_name, table_name));
         }
 
-        // Discover and register tables from each schema
-        let mut total_tables = 0;
-        for schema_name in &schemas_found {
-            match self
-                .discover_and_register_with_legacy(catalog_name, schema_name, legacy)
-                .await
-            {
-                Ok(count) => total_tables += count,
-                Err(e) => warn!(
-                    "Failed to discover schema {}.{} with legacy: {}",
-                    catalog_name, schema_name, e
-                ),
-            }
+        // Add legacy prefixes for this specific table
+        let legacy = self.get_legacy_prefixes(catalog_name, schema_name, table_name).await;
+        for lp in legacy {
+            prefixes.push(format!("{}/{}/{}/{}/", lp, catalog_name, schema_name, table_name));
         }
 
-        // Register tables from in-memory cache
-        for (schema_name, table_name) in cached_tables {
-            if let Err(e) = self
-                .register_table(catalog_name, &schema_name, &table_name)
-                .await
-            {
-                if !e.contains("already") {
-                    warn!(
-                        "Failed to register cached table {}.{}.{}: {}",
-                        catalog_name, schema_name, table_name, e
-                    );
-                }
-            } else {
-                total_tables += 1;
-            }
-        }
-
-        Ok(total_tables)
+        prefixes
     }
 }
