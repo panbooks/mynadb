@@ -394,7 +394,7 @@ impl WriteRouter {
             }
         }
 
-        // Register as table owner
+        // Register as table owner (optimized: skips if already registered or in-progress)
         Self::register_table_owner(
             meta_client,
             shard_cache,
@@ -402,7 +402,6 @@ impl WriteRouter {
             catalog,
             partition_key,
             success_node,
-            attempt > 0,
         )
         .await;
     }
@@ -421,6 +420,12 @@ impl WriteRouter {
     }
 
     /// Register a node as table owner in Meta (helper function)
+    ///
+    /// Optimized with two guards:
+    /// 1. Cache check: Skip if already registered as owner in local cache
+    /// 2. Pending guard: Skip if another write is already registering (prevents burst)
+    ///
+    /// This reduces Meta calls from O(writes) to O(tables) even during failover.
     async fn register_table_owner(
         meta_client: Option<&Arc<MetaClient>>,
         shard_cache: &ShardCache,
@@ -428,31 +433,42 @@ impl WriteRouter {
         catalog: &str,
         partition_key: &PartitionKey,
         node_id: &str,
-        is_reroute: bool,
     ) {
         let Some(client) = meta_client else { return };
 
-        match client
+        // Guard 1: Already registered as owner in cache
+        if shard_cache.is_table_owner(table_key, node_id) {
+            return;
+        }
+
+        // Guard 2: Another write is already registering this table+node
+        // This prevents N concurrent failover writes from making N Meta calls
+        if !shard_cache.try_start_registration(table_key, node_id) {
+            debug!(
+                "Skipping duplicate registration for {} -> {}",
+                table_key.to_path(),
+                node_id
+            );
+            return;
+        }
+
+        // Slow path: Register with Meta (only one concurrent call per table+node)
+        let result = client
             .add_table_owner(catalog, &partition_key.schema, &partition_key.table, node_id)
-            .await
-        {
+            .await;
+
+        // Always clean up the pending marker
+        shard_cache.finish_registration(table_key, node_id);
+
+        match result {
             Ok((already_owner, all_owners, version)) => {
                 if !already_owner {
-                    if is_reroute {
-                        info!(
-                            "Added rerouted node {} as owner for table {} (v{})",
-                            node_id,
-                            table_key.to_path(),
-                            version
-                        );
-                    } else {
-                        debug!(
-                            "Registered node {} as owner for table {} (v{})",
-                            node_id,
-                            table_key.to_path(),
-                            version
-                        );
-                    }
+                    info!(
+                        "Registered node {} as owner for table {} (v{})",
+                        node_id,
+                        table_key.to_path(),
+                        version
+                    );
                 }
                 shard_cache.set_table_owners(table_key, all_owners, version);
             }

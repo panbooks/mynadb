@@ -17,7 +17,7 @@
 
 use crate::meta::types::{DataNodeMode, DistributionConfig, DistributionScope};
 use crate::utils::hash::{hash_select_clone, hash_select_index};
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -226,6 +226,11 @@ pub struct ShardCache {
     /// Key: "catalog" or "catalog/schema" or "catalog/schema/table"
     /// Hierarchical lookup: table > schema > catalog
     distribution_configs: DashMap<String, CachedDistributionConfig>,
+
+    /// Pending owner registrations (prevents duplicate concurrent Meta calls)
+    /// Key: "catalog/schema/table:node_id"
+    /// When a registration is in progress, other writes skip the Meta call
+    pending_registrations: DashSet<String>,
 }
 
 impl ShardCache {
@@ -235,6 +240,7 @@ impl ShardCache {
             data_nodes: RwLock::new(HashMap::new()),
             last_event_seq: AtomicU64::new(0),
             distribution_configs: DashMap::new(),
+            pending_registrations: DashSet::new(),
         }
     }
 
@@ -371,6 +377,39 @@ impl ShardCache {
             );
         }
     }
+
+    // ========================================================================
+    // Pending Registration Guard (prevents duplicate Meta calls)
+    // ========================================================================
+
+    /// Try to start a registration for table+node pair
+    ///
+    /// Returns true if this is the first caller (should proceed with Meta call)
+    /// Returns false if another write is already registering (should skip Meta call)
+    ///
+    /// This prevents N concurrent writes from making N Meta calls when a node fails.
+    pub fn try_start_registration(&self, table_key: &TableKey, node_id: &str) -> bool {
+        let key = format!("{}:{}", table_key.to_path(), node_id);
+        self.pending_registrations.insert(key)
+    }
+
+    /// Finish a pending registration (always call after Meta call completes)
+    pub fn finish_registration(&self, table_key: &TableKey, node_id: &str) {
+        let key = format!("{}:{}", table_key.to_path(), node_id);
+        self.pending_registrations.remove(&key);
+    }
+
+    /// Check if node is already registered as owner for table
+    pub fn is_table_owner(&self, table_key: &TableKey, node_id: &str) -> bool {
+        if let Some(entry) = self.table_owners.get(&table_key.to_path()) {
+            return entry.is_owner(node_id);
+        }
+        false
+    }
+
+    // ========================================================================
+    // Node Management
+    // ========================================================================
 
     /// Remove a node from all table ownership entries
     /// Called when a node permanently leaves the cluster
