@@ -88,3 +88,13 @@ harness = false
 [build-dependencies]
 chrono = "0.4"
 tonic-build = "0.12"
+# Optimize dev builds for faster iteration
+[profile.dev]
+split-debuginfo = "unpacked"  # Faster incremental builds
+debug = 1                      # Less debug info = faster link
+
+[profile.dev.package."*"]
+opt-level = 2                  # Optimize dependencies
+
+[profile.test]
+inherits = "dev"
