@@ -7,7 +7,7 @@ use crate::meta::types::{
 };
 use tracing::{debug, info};
 
-use super::super::MetaStateMachine;
+use super::MetaStateMachine;
 
 impl MetaStateMachine {
     // ========================================================================

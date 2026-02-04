@@ -4,7 +4,7 @@
 
 use crate::meta::types::{current_timestamp_ms, keys, LockInfo, MetaResponse};
 
-use super::super::MetaStateMachine;
+use super::MetaStateMachine;
 
 impl MetaStateMachine {
     // ========================================================================
