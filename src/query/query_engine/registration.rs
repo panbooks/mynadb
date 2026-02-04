@@ -94,21 +94,10 @@ impl QueryEngine {
         }
 
         // Build table URL based on storage backend
+        // Note: With Hive partition structure (date=.../node_id=.../), we use the base table URL
+        // without node_id prefix - node_id is discovered as a partition column
         let table_url = if let Some(ref storage) = self.storage {
-            if let Some(ref cache) = self.write_cache {
-                storage.table_url_with_node(cache.node_id(), catalog_name, schema_name, table_name)
-            } else {
-                storage.table_url(catalog_name, schema_name, table_name)
-            }
-        } else if let Some(ref cache) = self.write_cache {
-            format!(
-                "file://{}/{}/{}/{}/{}",
-                self.data_dir,
-                cache.node_id(),
-                catalog_name,
-                schema_name,
-                table_name
-            )
+            storage.table_url(catalog_name, schema_name, table_name)
         } else {
             format!(
                 "file://{}/{}/{}/{}",
@@ -117,21 +106,11 @@ impl QueryEngine {
         };
 
         // Build local path for existence check
-        let table_path = if let Some(ref cache) = self.write_cache {
-            format!(
-                "{}/{}/{}/{}/{}",
-                self.data_dir,
-                cache.node_id(),
-                catalog_name,
-                schema_name,
-                table_name
-            )
-        } else {
-            format!(
-                "{}/{}/{}/{}",
-                self.data_dir, catalog_name, schema_name, table_name
-            )
-        };
+        // Note: With Hive partition structure, path is {data_dir}/{catalog}/{schema}/{table}/
+        let table_path = format!(
+            "{}/{}/{}/{}",
+            self.data_dir, catalog_name, schema_name, table_name
+        );
 
         // For object storage with memtable data, use memtable-only registration
         if is_object_storage && has_memtable_data {
@@ -336,10 +315,10 @@ impl QueryEngine {
 
         let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
             .with_file_extension(".parquet")
-            .with_table_partition_cols(vec![(
-                "date".to_string(),
-                datafusion::arrow::datatypes::DataType::Utf8,
-            )]);
+            .with_table_partition_cols(vec![
+                ("date".to_string(), datafusion::arrow::datatypes::DataType::Utf8),
+                ("node_id".to_string(), datafusion::arrow::datatypes::DataType::Utf8),
+            ]);
 
         let config = ListingTableConfig::new(table_url)
             .with_listing_options(listing_options)
