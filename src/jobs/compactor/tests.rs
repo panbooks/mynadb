@@ -5,7 +5,6 @@ use crate::storage::storage::Storage;
 use arrow::array::{Float64Array, StringArray, TimestampNanosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -87,61 +86,70 @@ fn test_compaction_config_from_config() {
 fn test_parquet_file_info_from_path_l0() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("L0_1234567890123.parquet");
-    fs::write(&file_path, vec![0u8; 1024 * 1024]).unwrap();
+    let size = 1024 * 1024;
+    fs::write(&file_path, vec![0u8; size]).unwrap();
 
-    let info = ParquetFileInfo::from_path(file_path).unwrap();
+    let info =
+        ParquetFileInfo::from_path_and_size(file_path.to_str().unwrap().to_string(), size as u64)
+            .unwrap();
     assert_eq!(info.level, 0);
     assert_eq!(info.timestamp, 1234567890123);
-    assert_eq!(info.size, 1024 * 1024);
+    assert_eq!(info.size, size as u64);
 }
 
 #[test]
 fn test_parquet_file_info_from_path_l3() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("L3_9876543210987.parquet");
-    fs::write(&file_path, vec![0u8; 5 * 1024 * 1024]).unwrap();
+    let size = 5 * 1024 * 1024;
+    fs::write(&file_path, vec![0u8; size]).unwrap();
 
-    let info = ParquetFileInfo::from_path(file_path).unwrap();
+    let info =
+        ParquetFileInfo::from_path_and_size(file_path.to_str().unwrap().to_string(), size as u64)
+            .unwrap();
     assert_eq!(info.level, 3);
     assert_eq!(info.timestamp, 9876543210987);
-    assert_eq!(info.size, 5 * 1024 * 1024);
+    assert_eq!(info.size, size as u64);
 }
 
 #[test]
 fn test_parquet_file_info_from_path_legacy_format() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("1234567890123.parquet");
-    fs::write(&file_path, vec![0u8; 2048]).unwrap();
+    let size = 2048;
+    fs::write(&file_path, vec![0u8; size]).unwrap();
 
-    let info = ParquetFileInfo::from_path(file_path).unwrap();
+    let info =
+        ParquetFileInfo::from_path_and_size(file_path.to_str().unwrap().to_string(), size as u64)
+            .unwrap();
     assert_eq!(info.level, 0); // Legacy files default to L0
     assert_eq!(info.timestamp, 1234567890123);
-    assert_eq!(info.size, 2048);
+    assert_eq!(info.size, size as u64);
 }
 
 #[test]
 fn test_parquet_file_info_sorting() {
     let mut files = vec![
         ParquetFileInfo {
-            path: PathBuf::from("L1_3000.parquet"),
+            path: "L1_3000.parquet".to_string(),
             level: 1,
             timestamp: 3000,
             size: 1024,
         },
         ParquetFileInfo {
-            path: PathBuf::from("L0_2000.parquet"),
+            path: "L0_2000.parquet".to_string(),
             level: 0,
             timestamp: 2000,
             size: 1024,
         },
         ParquetFileInfo {
-            path: PathBuf::from("L0_1000.parquet"),
+            path: "L0_1000.parquet".to_string(),
             level: 0,
             timestamp: 1000,
             size: 1024,
         },
         ParquetFileInfo {
-            path: PathBuf::from("L1_4000.parquet"),
+            path: "L1_4000.parquet".to_string(),
             level: 1,
             timestamp: 4000,
             size: 1024,
@@ -293,7 +301,7 @@ async fn test_list_parquet_file_infos_empty_directory() {
     let config = create_test_config();
     let compactor = create_test_compactor(&temp_dir, &config);
 
-    let result = compactor.list_parquet_file_infos(temp_dir.path().to_str().unwrap());
+    let result = compactor.list_parquet_file_infos_async("").await;
     assert!(result.is_ok());
     assert_eq!(result.unwrap().len(), 0);
 }
@@ -309,7 +317,7 @@ async fn test_list_parquet_file_infos_with_files() {
     fs::write(temp_dir.path().join("L1_2000000.parquet"), b"test data 2").unwrap();
     fs::write(temp_dir.path().join("not_a_parquet.txt"), b"ignored").unwrap();
 
-    let result = compactor.list_parquet_file_infos(temp_dir.path().to_str().unwrap());
+    let result = compactor.list_parquet_file_infos_async("").await;
     assert!(result.is_ok());
 
     let files = result.unwrap();
@@ -329,7 +337,7 @@ async fn test_list_parquet_file_infos_filters_invalid() {
     fs::write(temp_dir.path().join("invalid_format.parquet"), b"test data").unwrap();
     fs::write(temp_dir.path().join("LX_1000000.parquet"), b"test data").unwrap();
 
-    let result = compactor.list_parquet_file_infos(temp_dir.path().to_str().unwrap());
+    let result = compactor.list_parquet_file_infos_async("").await;
     assert!(result.is_ok());
 
     let files = result.unwrap();
@@ -346,19 +354,19 @@ fn test_file_filtering_by_size() {
 
     let files = vec![
         ParquetFileInfo {
-            path: PathBuf::from("L1_1000.parquet"),
+            path: "L1_1000.parquet".to_string(),
             level: 1,
             timestamp: 1000,
             size: 50 * 1024 * 1024, // 50MB - should be included
         },
         ParquetFileInfo {
-            path: PathBuf::from("L1_2000.parquet"),
+            path: "L1_2000.parquet".to_string(),
             level: 1,
             timestamp: 2000,
             size: 150 * 1024 * 1024, // 150MB - should be filtered out
         },
         ParquetFileInfo {
-            path: PathBuf::from("L1_3000.parquet"),
+            path: "L1_3000.parquet".to_string(),
             level: 1,
             timestamp: 3000,
             size: 80 * 1024 * 1024, // 80MB - should be included
@@ -466,8 +474,9 @@ async fn test_compact_non_existing_path() {
         .compact_table_partition("catalog", "schema", "table", "2024-01-01", &config)
         .await;
 
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("does not exist"));
+    // With Object Store, "path doesn't exist" = "no files to compact" = Ok(None)
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_none());
 }
 
 // =====================================================================
