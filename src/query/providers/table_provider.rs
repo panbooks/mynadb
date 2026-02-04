@@ -41,7 +41,11 @@ use tracing::debug;
 
 /// Configuration for the Parquet table provider
 ///
-/// All tables are partitioned by date (Hive-style: date=YYYY-MM-DD)
+/// All tables use Hive-style nested partitions:
+///   - First level: date=YYYY-MM-DD (time-based partitioning)
+///   - Second level: node_id={node_id} (writer identification for distributed queries)
+///
+/// Path structure: catalog/schema/table/date=YYYY-MM-DD/node_id=XXX/file.parquet
 #[derive(Debug, Clone)]
 pub struct ParquetTableConfig {
     /// Enable filter pushdown to Parquet reader
@@ -52,8 +56,11 @@ pub struct ParquetTableConfig {
     pub table_name: String,
     /// Batch size for reading
     pub batch_size: usize,
-    /// Partition column name (default: "date")
+    /// First partition column name (default: "date")
     pub partition_column: String,
+    /// Second partition column name (default: "node_id")
+    /// Used for distributed query routing - each Data Node filters by its node_id
+    pub node_id_column: String,
 }
 
 impl Default for ParquetTableConfig {
@@ -64,6 +71,7 @@ impl Default for ParquetTableConfig {
             table_name: "parquet_table".to_string(),
             batch_size: 8192,
             partition_column: "date".to_string(),
+            node_id_column: "node_id".to_string(),
         }
     }
 }
@@ -87,7 +95,7 @@ impl ParquetTableConfig {
 pub struct ParquetFileInfo {
     /// Full path to the Parquet file
     pub path: PathBuf,
-    /// Partition values (e.g., {"date": "2024-01-15"})
+    /// Partition values (e.g., {"date": "2024-01-15", "node_id": "data-1"})
     pub partition_values: HashMap<String, String>,
     /// File size in bytes (for statistics)
     pub file_size: u64,
@@ -97,8 +105,8 @@ pub struct ParquetFileInfo {
 ///
 /// This provider handles:
 /// - Schema inference from Parquet files
-/// - Partition discovery (Hive-style date=YYYY-MM-DD)
-/// - Filter and projection pushdown
+/// - Nested partition discovery (Hive-style date=YYYY-MM-DD/node_id=XXX)
+/// - Filter and projection pushdown on both partition columns
 /// - Efficient parallel file reading
 pub struct ParquetTableProvider {
     /// Table schema (includes partition columns)
@@ -229,11 +237,14 @@ impl ParquetTableProvider {
                         let schema =
                             Self::infer_schema_from_path(object_store, &meta.location).await?;
 
-                        // Add partition column to schema
+                        // Add partition columns to schema (date, node_id)
                         let mut fields: Vec<Field> =
                             schema.fields().iter().map(|f| f.as_ref().clone()).collect();
                         if !fields.iter().any(|f| f.name() == &config.partition_column) {
                             fields.push(Field::new(&config.partition_column, DataType::Utf8, true));
+                        }
+                        if !fields.iter().any(|f| f.name() == &config.node_id_column) {
+                            fields.push(Field::new(&config.node_id_column, DataType::Utf8, true));
                         }
                         return Ok(Schema::new(fields));
                     }
@@ -244,12 +255,11 @@ impl ParquetTableProvider {
             }
         }
 
-        // No parquet files found - return minimal schema with partition column
-        Ok(Schema::new(vec![Field::new(
-            &config.partition_column,
-            DataType::Utf8,
-            true,
-        )]))
+        // No parquet files found - return minimal schema with partition columns
+        Ok(Schema::new(vec![
+            Field::new(&config.partition_column, DataType::Utf8, true),
+            Field::new(&config.node_id_column, DataType::Utf8, true),
+        ]))
     }
 
     /// Infer schema from a specific parquet file path
@@ -282,6 +292,8 @@ impl ParquetTableProvider {
     /// This is called at scan time, not construction time. It uses partition
     /// filters to prune directories before listing files, dramatically reducing
     /// the number of list operations for large tables.
+    ///
+    /// Path structure: catalog/schema/table/date=YYYY-MM-DD/node_id=XXX/file.parquet
     async fn discover_files_for_scan(
         object_store: &Arc<dyn ObjectStore>,
         base_path: &str,
@@ -293,69 +305,108 @@ impl ParquetTableProvider {
 
         let base_prefix = ObjectPath::from(base_path.trim_start_matches('/'));
 
-        // Extract partition filters for pruning
-        let partition_filters = Self::extract_partition_filters(&config.partition_column, filters);
+        // Extract partition filters for both date and node_id
+        let date_filters = Self::extract_partition_filters(&config.partition_column, filters);
+        let node_id_filters = Self::extract_partition_filters(&config.node_id_column, filters);
 
-        // List partition directories using list_with_delimiter
+        // List date partition directories using list_with_delimiter
         let list_result = object_store
             .list_with_delimiter(Some(&base_prefix))
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let mut files = Vec::new();
-        let partition_prefix = format!("{}=", config.partition_column);
+        let date_prefix = format!("{}=", config.partition_column);
+        let node_id_prefix = format!("{}=", config.node_id_column);
 
-        // Process each partition directory
-        for prefix in list_result.common_prefixes {
-            let dir_name = prefix
+        // Process each date partition directory
+        for date_dir in list_result.common_prefixes {
+            let date_dir_name = date_dir
                 .as_ref()
                 .trim_end_matches('/')
                 .rsplit('/')
                 .next()
                 .unwrap_or("");
 
-            // Check if this is a partition directory
-            if !dir_name.starts_with(&partition_prefix) {
+            // Check if this is a date partition directory
+            if !date_dir_name.starts_with(&date_prefix) {
                 continue;
             }
 
-            let partition_value = dir_name
-                .strip_prefix(&partition_prefix)
+            let date_value = date_dir_name
+                .strip_prefix(&date_prefix)
                 .unwrap_or("")
                 .to_string();
 
-            // Apply partition filter pruning
-            if !partition_filters.is_empty()
-                && !Self::matches_partition_filter(&partition_value, &partition_filters)
+            // Apply date partition filter pruning
+            if !date_filters.is_empty()
+                && !Self::matches_partition_filter(&date_value, &date_filters)
             {
                 debug!(
-                    "Pruning partition {} (doesn't match filters)",
-                    partition_value
+                    "Pruning date partition {} (doesn't match filters)",
+                    date_value
                 );
                 continue;
             }
 
-            // List files in this partition
-            let partition_files = object_store.list(Some(&prefix));
-            let objects: Vec<_> = partition_files
-                .try_collect()
+            // List node_id subdirectories within this date partition
+            let node_id_list = object_store
+                .list_with_delimiter(Some(&date_dir))
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-            for meta in objects {
-                let path_str = meta.location.to_string();
-                if !path_str.ends_with(".parquet") {
+            for node_id_dir in node_id_list.common_prefixes {
+                let node_id_dir_name = node_id_dir
+                    .as_ref()
+                    .trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("");
+
+                // Check if this is a node_id partition directory
+                if !node_id_dir_name.starts_with(&node_id_prefix) {
                     continue;
                 }
 
-                let mut partition_values = HashMap::new();
-                partition_values.insert(config.partition_column.clone(), partition_value.clone());
+                let node_id_value = node_id_dir_name
+                    .strip_prefix(&node_id_prefix)
+                    .unwrap_or("")
+                    .to_string();
 
-                files.push(ParquetFileInfo {
-                    path: PathBuf::from(&path_str),
-                    partition_values,
-                    file_size: meta.size as u64,
-                });
+                // Apply node_id partition filter pruning
+                if !node_id_filters.is_empty()
+                    && !Self::matches_partition_filter(&node_id_value, &node_id_filters)
+                {
+                    debug!(
+                        "Pruning node_id partition {} (doesn't match filters)",
+                        node_id_value
+                    );
+                    continue;
+                }
+
+                // List parquet files in this node_id directory
+                let partition_files = object_store.list(Some(&node_id_dir));
+                let objects: Vec<_> = partition_files
+                    .try_collect()
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                for meta in objects {
+                    let path_str = meta.location.to_string();
+                    if !path_str.ends_with(".parquet") {
+                        continue;
+                    }
+
+                    let mut partition_values = HashMap::new();
+                    partition_values.insert(config.partition_column.clone(), date_value.clone());
+                    partition_values.insert(config.node_id_column.clone(), node_id_value.clone());
+
+                    files.push(ParquetFileInfo {
+                        path: PathBuf::from(&path_str),
+                        partition_values,
+                        file_size: meta.size as u64,
+                    });
+                }
             }
         }
 
@@ -364,7 +415,8 @@ impl ParquetTableProvider {
     }
 
     /// Discover Parquet files in the table directory (sync, local filesystem only)
-    /// All tables are partitioned by date (Hive-style: date=YYYY-MM-DD)
+    ///
+    /// Path structure: catalog/schema/table/date=YYYY-MM-DD/node_id=XXX/file.parquet
     fn discover_files(
         base_path: &Path,
         config: &ParquetTableConfig,
@@ -375,14 +427,14 @@ impl ParquetTableProvider {
             return Ok(files);
         }
 
-        // Scan for Hive-style partitions (date=YYYY-MM-DD)
+        // Scan for Hive-style nested partitions (date=YYYY-MM-DD/node_id=XXX)
         Self::scan_partitioned_dir(base_path, config, &mut files)?;
 
         files.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(files)
     }
 
-    /// Scan a partitioned directory structure
+    /// Scan a partitioned directory structure with nested date/node_id partitions
     fn scan_partitioned_dir(
         base_path: &Path,
         config: &ParquetTableConfig,
@@ -391,23 +443,24 @@ impl ParquetTableProvider {
         let entries =
             std::fs::read_dir(base_path).map_err(|e| DataFusionError::External(Box::new(e)))?;
 
+        let date_prefix = format!("{}=", config.partition_column);
+
         for entry in entries {
             let entry = entry.map_err(|e| DataFusionError::External(Box::new(e)))?;
             let path = entry.path();
 
             if path.is_dir() {
                 if let Some(dir_name) = path.file_name().and_then(|s| s.to_str()) {
-                    // Check for partition format: column=value
-                    let prefix = format!("{}=", config.partition_column);
-                    if dir_name.starts_with(&prefix) {
-                        let partition_value =
-                            dir_name.strip_prefix(&prefix).unwrap_or("").to_string();
+                    // Check for date partition format: date=YYYY-MM-DD
+                    if dir_name.starts_with(&date_prefix) {
+                        let date_value =
+                            dir_name.strip_prefix(&date_prefix).unwrap_or("").to_string();
 
-                        // Scan Parquet files in this partition
-                        Self::scan_partition_files(
+                        // Scan node_id subdirectories within this date partition
+                        Self::scan_node_id_dirs(
                             &path,
-                            &config.partition_column,
-                            &partition_value,
+                            config,
+                            &date_value,
                             files,
                         )?;
                     }
@@ -418,14 +471,54 @@ impl ParquetTableProvider {
         Ok(())
     }
 
-    /// Scan Parquet files within a partition directory
-    fn scan_partition_files(
-        partition_path: &Path,
-        partition_column: &str,
-        partition_value: &str,
+    /// Scan node_id subdirectories within a date partition
+    fn scan_node_id_dirs(
+        date_partition_path: &Path,
+        config: &ParquetTableConfig,
+        date_value: &str,
         files: &mut Vec<ParquetFileInfo>,
     ) -> Result<()> {
-        let entries = std::fs::read_dir(partition_path)
+        let entries = std::fs::read_dir(date_partition_path)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let node_id_prefix = format!("{}=", config.node_id_column);
+
+        for entry in entries {
+            let entry = entry.map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                if let Some(dir_name) = path.file_name().and_then(|s| s.to_str()) {
+                    // Check for node_id partition format: node_id=XXX
+                    if dir_name.starts_with(&node_id_prefix) {
+                        let node_id_value =
+                            dir_name.strip_prefix(&node_id_prefix).unwrap_or("").to_string();
+
+                        // Scan Parquet files in this node_id directory
+                        Self::scan_partition_files(
+                            &path,
+                            config,
+                            date_value,
+                            &node_id_value,
+                            files,
+                        )?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Scan Parquet files within a node_id partition directory
+    fn scan_partition_files(
+        node_id_path: &Path,
+        config: &ParquetTableConfig,
+        date_value: &str,
+        node_id_value: &str,
+        files: &mut Vec<ParquetFileInfo>,
+    ) -> Result<()> {
+        let entries = std::fs::read_dir(node_id_path)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         for entry in entries {
@@ -440,7 +533,9 @@ impl ParquetTableProvider {
 
                         let mut partition_values = HashMap::new();
                         partition_values
-                            .insert(partition_column.to_string(), partition_value.to_string());
+                            .insert(config.partition_column.clone(), date_value.to_string());
+                        partition_values
+                            .insert(config.node_id_column.clone(), node_id_value.to_string());
 
                         files.push(ParquetFileInfo {
                             path,
@@ -463,12 +558,11 @@ impl ParquetTableProvider {
         let files = Self::discover_files(base_path, config)?;
 
         if files.is_empty() {
-            // Return minimal schema with partition column
-            let schema = Schema::new(vec![Field::new(
-                &config.partition_column,
-                DataType::Utf8,
-                true,
-            )]);
+            // Return minimal schema with partition columns (date, node_id)
+            let schema = Schema::new(vec![
+                Field::new(&config.partition_column, DataType::Utf8, true),
+                Field::new(&config.node_id_column, DataType::Utf8, true),
+            ]);
             return Ok((files, schema));
         }
 
@@ -482,20 +576,23 @@ impl ParquetTableProvider {
 
         let base_schema = reader.schema().as_ref().clone();
 
-        // Add partition column to schema
-        let partition_field = Field::new(&config.partition_column, DataType::Utf8, true);
+        // Add partition columns to schema (date, node_id)
         let mut fields: Vec<Field> = base_schema
             .fields()
             .iter()
             .map(|f| f.as_ref().clone())
             .collect();
 
-        // Only add if not already present
+        // Add date partition column if not present
         if !fields.iter().any(|f| f.name() == &config.partition_column) {
-            fields.push(partition_field);
+            fields.push(Field::new(&config.partition_column, DataType::Utf8, true));
         }
-        let schema = Schema::new(fields);
+        // Add node_id partition column if not present
+        if !fields.iter().any(|f| f.name() == &config.node_id_column) {
+            fields.push(Field::new(&config.node_id_column, DataType::Utf8, true));
+        }
 
+        let schema = Schema::new(fields);
         Ok((files, schema))
     }
 
@@ -526,16 +623,17 @@ impl ParquetTableProvider {
         &self.config
     }
 
-    /// Filter files based on partition predicates
+    /// Filter files based on partition predicates (both date and node_id)
     fn filter_files_by_partition(
         files: &[ParquetFileInfo],
-        partition_column: &str,
+        config: &ParquetTableConfig,
         filters: &[Expr],
     ) -> Vec<ParquetFileInfo> {
-        // Extract partition filter values from expressions
-        let partition_filter_values = Self::extract_partition_filters(partition_column, filters);
+        // Extract partition filter values for both date and node_id
+        let date_filters = Self::extract_partition_filters(&config.partition_column, filters);
+        let node_id_filters = Self::extract_partition_filters(&config.node_id_column, filters);
 
-        if partition_filter_values.is_empty() {
+        if date_filters.is_empty() && node_id_filters.is_empty() {
             // No partition filters, return all files
             return files.to_vec();
         }
@@ -544,11 +642,25 @@ impl ParquetTableProvider {
         files
             .iter()
             .filter(|f| {
-                if let Some(value) = f.partition_values.get(partition_column) {
-                    Self::matches_partition_filter(value, &partition_filter_values)
+                // Check date partition filter
+                let date_matches = if date_filters.is_empty() {
+                    true
+                } else if let Some(value) = f.partition_values.get(&config.partition_column) {
+                    Self::matches_partition_filter(value, &date_filters)
                 } else {
                     true // Include files without partition values
-                }
+                };
+
+                // Check node_id partition filter
+                let node_id_matches = if node_id_filters.is_empty() {
+                    true
+                } else if let Some(value) = f.partition_values.get(&config.node_id_column) {
+                    Self::matches_partition_filter(value, &node_id_filters)
+                } else {
+                    true // Include files without partition values
+                };
+
+                date_matches && node_id_matches
             })
             .cloned()
             .collect()
@@ -851,7 +963,7 @@ impl TableProvider for ParquetTableProvider {
         } else {
             // Use pre-discovered files (local filesystem) with partition filter pruning
             let all_files = self.files.read().clone();
-            Self::filter_files_by_partition(&all_files, &self.config.partition_column, filters)
+            Self::filter_files_by_partition(&all_files, &self.config, filters)
         };
 
         debug!(
@@ -1013,6 +1125,7 @@ impl ExecutionPlan for ParquetExecPlan {
         let batch_size = self.config.batch_size;
         let limit = self.limit;
         let partition_column = self.config.partition_column.clone();
+        let node_id_column = self.config.node_id_column.clone();
         let filters = self.filters.clone();
         let parquet_cache = self.parquet_cache.clone();
 
@@ -1022,6 +1135,7 @@ impl ExecutionPlan for ParquetExecPlan {
                 let schema = schema.clone();
                 let projection = projection.clone();
                 let partition_column = partition_column.clone();
+                let node_id_column = node_id_column.clone();
                 let filters = filters.clone();
                 let parquet_cache = parquet_cache.clone();
 
@@ -1033,6 +1147,7 @@ impl ExecutionPlan for ParquetExecPlan {
                         batch_size,
                         limit,
                         &partition_column,
+                        &node_id_column,
                         &filters,
                         parquet_cache.as_ref(),
                     )
@@ -1059,7 +1174,8 @@ impl ExecutionPlan for ParquetExecPlan {
 /// - `_projection`: Original projection indices (unused - we use target_schema instead)
 /// - `batch_size`: Batch size for reading
 /// - `limit`: Optional row limit
-/// - `partition_column`: Name of the partition column (default: "date")
+/// - `partition_column`: Name of the date partition column (default: "date")
+/// - `node_id_column`: Name of the node_id partition column (default: "node_id")
 /// - `filters`: Pushed-down filter expressions for bloom filter and predicate pushdown
 /// - `parquet_cache`: Optional local cache for remote files (cluster mode)
 async fn read_parquet_file(
@@ -1069,6 +1185,7 @@ async fn read_parquet_file(
     batch_size: usize,
     limit: Option<usize>,
     partition_column: &str,
+    node_id_column: &str,
     filters: &[Expr],
     parquet_cache: Option<&Arc<crate::data::cache::ParquetLocalCache>>,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>> {
@@ -1103,8 +1220,8 @@ async fn read_parquet_file(
         .fields()
         .iter()
         .filter(|field| {
-            // Exclude partition column - it will be added from partition path
-            field.name() != partition_column
+            // Exclude partition columns - they will be added from partition path
+            field.name() != partition_column && field.name() != node_id_column
         })
         .filter_map(|field| {
             file_schema
@@ -1153,19 +1270,22 @@ async fn read_parquet_file(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     // Clone partition values for the stream
-    let partition_value = file_info.partition_values.get(partition_column).cloned();
+    let partition_values = file_info.partition_values.clone();
+    let partition_col = partition_column.to_string();
+    let node_id_col = node_id_column.to_string();
 
-    // Convert to stream and add partition column if needed
+    // Convert to stream and add partition columns if needed
     let batches: Vec<RecordBatch> = reader.filter_map(|r| r.ok()).collect();
 
     let result_batches: Vec<Result<RecordBatch>> = batches
         .into_iter()
         .map(|batch| {
-            add_partition_column(
+            add_partition_columns(
                 &batch,
                 &target_schema,
-                partition_column,
-                partition_value.as_deref(),
+                &partition_col,
+                &node_id_col,
+                &partition_values,
             )
         })
         .collect();
@@ -1173,23 +1293,28 @@ async fn read_parquet_file(
     Ok(Box::pin(stream::iter(result_batches)))
 }
 
-/// Add partition column to a record batch
-fn add_partition_column(
+/// Add partition columns (date, node_id) to a record batch
+fn add_partition_columns(
     batch: &RecordBatch,
     target_schema: &SchemaRef,
     partition_column: &str,
-    partition_value: Option<&str>,
+    node_id_column: &str,
+    partition_values: &HashMap<String, String>,
 ) -> Result<RecordBatch> {
     use datafusion::arrow::array::StringArray;
 
-    // Check if partition column is in target schema
-    let has_partition_col = target_schema
+    // Check if any partition columns are in target schema
+    let has_date_col = target_schema
         .fields()
         .iter()
         .any(|f| f.name() == partition_column);
+    let has_node_id_col = target_schema
+        .fields()
+        .iter()
+        .any(|f| f.name() == node_id_column);
 
-    if !has_partition_col {
-        // Partition column not requested in projection
+    if !has_date_col && !has_node_id_col {
+        // No partition columns requested in projection
         // Just return the batch with the target schema if they match
         if batch.schema().fields().len() == target_schema.fields().len() {
             return Ok(batch.clone());
@@ -1214,14 +1339,20 @@ fn add_partition_column(
         return Ok(batch.clone());
     }
 
-    // Build new columns array with partition column in correct position
+    // Build new columns array with partition columns in correct positions
     let mut columns: Vec<Arc<dyn datafusion::arrow::array::Array>> = Vec::new();
     let num_rows = batch.num_rows();
 
     for field in target_schema.fields() {
         if field.name() == partition_column {
-            // Add partition column with the partition value
-            let value = partition_value.unwrap_or("");
+            // Add date partition column with the partition value
+            let value = partition_values.get(partition_column).map(|s| s.as_str()).unwrap_or("");
+            let array: Arc<dyn datafusion::arrow::array::Array> =
+                Arc::new(StringArray::from(vec![value; num_rows]));
+            columns.push(array);
+        } else if field.name() == node_id_column {
+            // Add node_id partition column with the partition value
+            let value = partition_values.get(node_id_column).map(|s| s.as_str()).unwrap_or("");
             let array: Arc<dyn datafusion::arrow::array::Array> =
                 Arc::new(StringArray::from(vec![value; num_rows]));
             columns.push(array);
@@ -1282,10 +1413,10 @@ mod tests {
     }
 
     #[test]
-    fn test_discover_single_partition() {
-        // All tables are partitioned by date, test with a single partition
+    fn test_discover_nested_partitions() {
+        // Test nested partitions: date=YYYY-MM-DD/node_id=XXX
         let temp_dir = TempDir::new().unwrap();
-        let part = temp_dir.path().join("date=2024-01-01");
+        let part = temp_dir.path().join("date=2024-01-01").join("node_id=data-1");
         std::fs::create_dir_all(&part).unwrap();
         create_test_parquet(&part, "file1.parquet", 1);
         create_test_parquet(&part, "file2.parquet", 10);
@@ -1294,39 +1425,44 @@ mod tests {
         let provider = ParquetTableProvider::try_new(temp_dir.path(), config).unwrap();
 
         assert_eq!(provider.file_count(), 2);
-        // Schema should include date partition column + 2 data columns (id, name)
-        assert_eq!(provider.schema().fields().len(), 3);
+        // Schema should include date and node_id partition columns + 2 data columns (id, name)
+        assert_eq!(provider.schema().fields().len(), 4);
         assert!(provider.schema().field_with_name("date").is_ok());
+        assert!(provider.schema().field_with_name("node_id").is_ok());
     }
 
     #[test]
-    fn test_discover_partitioned_directory() {
+    fn test_discover_multi_node_partitions() {
         let temp_dir = TempDir::new().unwrap();
 
-        // Create partitioned structure (all tables are partitioned by date)
-        let part1 = temp_dir.path().join("date=2024-01-01");
-        let part2 = temp_dir.path().join("date=2024-01-02");
-        std::fs::create_dir_all(&part1).unwrap();
-        std::fs::create_dir_all(&part2).unwrap();
+        // Create nested partition structure with multiple nodes
+        let part1_node1 = temp_dir.path().join("date=2024-01-01").join("node_id=data-1");
+        let part1_node2 = temp_dir.path().join("date=2024-01-01").join("node_id=data-2");
+        let part2_node1 = temp_dir.path().join("date=2024-01-02").join("node_id=data-1");
+        std::fs::create_dir_all(&part1_node1).unwrap();
+        std::fs::create_dir_all(&part1_node2).unwrap();
+        std::fs::create_dir_all(&part2_node1).unwrap();
 
-        create_test_parquet(&part1, "data.parquet", 1);
-        create_test_parquet(&part2, "data.parquet", 10);
+        create_test_parquet(&part1_node1, "data.parquet", 1);
+        create_test_parquet(&part1_node2, "data.parquet", 10);
+        create_test_parquet(&part2_node1, "data.parquet", 20);
 
         let config = ParquetTableConfig::new("test");
         let provider = ParquetTableProvider::try_new(temp_dir.path(), config).unwrap();
 
-        assert_eq!(provider.file_count(), 2);
-        // Schema should include date partition column
+        assert_eq!(provider.file_count(), 3);
+        // Schema should include both partition columns
         assert!(provider.schema().field_with_name("date").is_ok());
+        assert!(provider.schema().field_with_name("node_id").is_ok());
     }
 
     #[tokio::test]
-    async fn test_query_partitioned_table() {
+    async fn test_query_nested_partitions() {
         let temp_dir = TempDir::new().unwrap();
 
-        let part1 = temp_dir.path().join("date=2024-01-01");
-        std::fs::create_dir_all(&part1).unwrap();
-        create_test_parquet(&part1, "data.parquet", 1);
+        let part = temp_dir.path().join("date=2024-01-01").join("node_id=data-1");
+        std::fs::create_dir_all(&part).unwrap();
+        create_test_parquet(&part, "data.parquet", 1);
 
         let config = ParquetTableConfig::new("test_table");
         let provider = ParquetTableProvider::try_new(temp_dir.path(), config).unwrap();
@@ -1334,21 +1470,52 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(provider)).unwrap();
 
-        let df = ctx.sql("SELECT id, date FROM test").await.unwrap();
+        let df = ctx.sql("SELECT id, date, node_id FROM test").await.unwrap();
         let results = df.collect().await.unwrap();
 
         assert!(!results.is_empty());
-        // Should have both id and date columns
-        assert_eq!(results[0].num_columns(), 2);
+        // Should have id, date, and node_id columns
+        assert_eq!(results[0].num_columns(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_query_with_node_id_filter() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create data for two nodes
+        let part_node1 = temp_dir.path().join("date=2024-01-01").join("node_id=data-1");
+        let part_node2 = temp_dir.path().join("date=2024-01-01").join("node_id=data-2");
+        std::fs::create_dir_all(&part_node1).unwrap();
+        std::fs::create_dir_all(&part_node2).unwrap();
+        create_test_parquet(&part_node1, "data.parquet", 1);
+        create_test_parquet(&part_node2, "data.parquet", 100);
+
+        let config = ParquetTableConfig::new("test_table");
+        let provider = ParquetTableProvider::try_new(temp_dir.path(), config).unwrap();
+
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(provider)).unwrap();
+
+        // Query with node_id filter - should only get data-1's rows
+        let df = ctx.sql("SELECT id, node_id FROM test WHERE node_id = 'data-1'").await.unwrap();
+        let results = df.collect().await.unwrap();
+
+        assert!(!results.is_empty());
+        // All rows should have node_id = 'data-1'
+        let node_id_col = results[0].column(1);
+        let node_ids = node_id_col.as_any().downcast_ref::<StringArray>().unwrap();
+        for i in 0..node_ids.len() {
+            assert_eq!(node_ids.value(i), "data-1");
+        }
     }
 
     #[tokio::test]
     async fn test_query_with_projection() {
         let temp_dir = TempDir::new().unwrap();
 
-        let part1 = temp_dir.path().join("date=2024-01-01");
-        std::fs::create_dir_all(&part1).unwrap();
-        create_test_parquet(&part1, "data.parquet", 1);
+        let part = temp_dir.path().join("date=2024-01-01").join("node_id=data-1");
+        std::fs::create_dir_all(&part).unwrap();
+        create_test_parquet(&part, "data.parquet", 1);
 
         let config = ParquetTableConfig::new("test_table");
         let provider = ParquetTableProvider::try_new(temp_dir.path(), config).unwrap();

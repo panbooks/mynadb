@@ -10,6 +10,7 @@ use crate::data::replication::ReplicationManager;
 use crate::meta::client::MetaClient;
 use crate::meta::types::{NodeRole, NodeState};
 use crate::query::query_engine::QueryEngine;
+use crate::query::sql_utils::inject_node_id_predicate;
 use crate::storage::cache::DataCache;
 use crate::storage::line_protocol::parse_multiple_lines;
 use arrow::array::{Array, RecordBatch};
@@ -875,12 +876,22 @@ impl FlightService for DataNodeFlightService {
             }
         }
 
+        // Inject node_id predicate for automatic partition pruning
+        // This ensures the Data Node only reads its own data (from node_id={self.node_id} partitions)
+        // Example: "SELECT * FROM cpu WHERE time > 0" becomes
+        //          "SELECT * FROM cpu WHERE node_id = 'data-1' AND time > 0"
+        let sql_with_node_id = inject_node_id_predicate(&ticket.sql, &self.node_id);
+        debug!(
+            "Injected node_id predicate: {} -> {}",
+            ticket.sql, sql_with_node_id
+        );
+
         // Execute query
         // QueryEngine now uses legacy prefixes (if set) when registering tables,
         // creating MultiUnionTableProvider to scan all relevant S3 prefixes.
         let df_batches = self
             .query_engine
-            .execute_query_with_db(&ticket.sql, &ticket.catalog)
+            .execute_query_with_db(&sql_with_node_id, &ticket.catalog)
             .await
             .map_err(|e| Status::internal(format!("Query execution error: {}", e)))?;
 
