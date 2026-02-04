@@ -1166,26 +1166,21 @@ grpc_port = ${TEST_PORT}
         std::env::remove_var("TEST_PORT");
     }
 
+    // Combined into single test to avoid env var races
     #[test]
-    fn test_get_stable_node_id_from_env() {
+    fn test_get_stable_node_id() {
+        // Test 1: from env var
         std::env::set_var("MYNADB_NODE_ID", "my-custom-id");
         let id = get_stable_node_id("data");
         assert_eq!(id, "my-custom-id");
-        std::env::remove_var("MYNADB_NODE_ID");
-    }
 
-    #[test]
-    fn test_get_stable_node_id_from_hostname() {
+        // Test 2: from hostname (clear MYNADB_NODE_ID first)
         std::env::remove_var("MYNADB_NODE_ID");
         std::env::set_var("HOSTNAME", "mynadb-data-0");
         let id = get_stable_node_id("data");
         assert_eq!(id, "mynadb-data-0");
-        std::env::remove_var("HOSTNAME");
-    }
 
-    #[test]
-    fn test_get_stable_node_id_fallback() {
-        std::env::remove_var("MYNADB_NODE_ID");
+        // Test 3: fallback (clear both)
         std::env::remove_var("HOSTNAME");
         let id = get_stable_node_id("data");
         assert!(id.starts_with("data-"));
