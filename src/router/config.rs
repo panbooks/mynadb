@@ -75,6 +75,15 @@ pub struct RoutingConfig {
     /// Data node request timeout in milliseconds
     #[serde(default = "default_data_node_request_timeout_ms")]
     pub data_node_request_timeout_ms: u64,
+
+    /// Partition cache TTL in seconds (for partition → node_ids mapping)
+    /// Set to 0 to disable automatic eviction
+    #[serde(default = "default_partition_cache_ttl_secs")]
+    pub partition_cache_ttl_secs: u64,
+
+    /// Partition cache eviction interval in seconds
+    #[serde(default = "default_partition_cache_eviction_interval_secs")]
+    pub partition_cache_eviction_interval_secs: u64,
 }
 
 /// Query configuration
@@ -159,6 +168,14 @@ fn default_data_node_request_timeout_ms() -> u64 {
     60000
 }
 
+fn default_partition_cache_ttl_secs() -> u64 {
+    300 // 5 minutes
+}
+
+fn default_partition_cache_eviction_interval_secs() -> u64 {
+    60 // Run eviction every minute
+}
+
 fn default_cache_enabled() -> bool {
     true
 }
@@ -219,6 +236,8 @@ impl Default for RoutingConfig {
             data_node_pool_size: default_data_node_pool_size(),
             data_node_connect_timeout_ms: default_data_node_connect_timeout_ms(),
             data_node_request_timeout_ms: default_data_node_request_timeout_ms(),
+            partition_cache_ttl_secs: default_partition_cache_ttl_secs(),
+            partition_cache_eviction_interval_secs: default_partition_cache_eviction_interval_secs(),
         }
     }
 }

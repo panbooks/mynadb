@@ -238,7 +238,7 @@ impl RetentionManager {
         Ok(())
     }
 
-    /// Delete a partition using Object Store
+    /// Delete a partition using Object Store batch deletion
     ///
     /// Path structure: catalog/schema/table/date=YYYY-MM-DD/node_id=X/*.parquet
     async fn delete_partition_async(
@@ -257,24 +257,17 @@ impl RetentionManager {
 
         let partition_prefix = format!("{}/{}/{}/{}", catalog, schema, table, partition_dir);
 
-        // List all files in the partition (includes node_id= subdirectories)
-        let files = self.storage.list(&partition_prefix).await?;
+        // Delete all files under the partition prefix (includes node_id= subdirectories)
+        let result = self.storage.delete_prefix(&partition_prefix).await?;
 
-        let mut total_size = 0u64;
-        for file in &files {
-            if file.ends_with(".parquet") {
-                // Get file size before deletion
-                if let Ok(size) = self.storage.size(file).await {
-                    total_size += size;
-                }
-                // Delete the file
-                if let Err(e) = self.storage.delete(file).await {
-                    warn!("Failed to delete file {}: {}", file, e);
-                }
-            }
-        }
+        debug!(
+            "Deleted {} files ({:.2} MB) from {}",
+            result.files_deleted,
+            result.bytes_freed as f64 / 1024.0 / 1024.0,
+            partition_prefix
+        );
 
-        Ok(total_size)
+        Ok(result.bytes_freed)
     }
 
     /// Discover all catalogs (top-level directories) using Object Store
