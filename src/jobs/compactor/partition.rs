@@ -1,9 +1,8 @@
 //! Partition Compaction Operations for Compactor
 //!
 //! Handles partition-level and level-based compaction.
+//! Uses Object Store abstraction for both local and S3/MinIO storage.
 
-use std::fs;
-use std::path::Path;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
@@ -21,13 +20,13 @@ impl Compactor {
         table: &str,
         config: &CompactionConfig,
     ) -> Result<Option<CompactionResult>, String> {
-        let table_path = format!("{}/{}/{}/{}", self.data_dir, catalog, schema, table);
-        self.compact_path_internal(
+        let table_prefix = format!("{}/{}/{}", catalog, schema, table);
+        self.compact_prefix_internal(
             catalog,
             schema,
             table,
             "",
-            &table_path,
+            &table_prefix,
             "[non-partitioned]",
             config,
         )
@@ -35,6 +34,9 @@ impl Compactor {
     }
 
     /// Compact a specific partition within a table
+    ///
+    /// Uses Object Store for all file operations.
+    /// Path structure: catalog/schema/table/date=YYYY-MM-DD/node_id=X/*.parquet
     pub async fn compact_table_partition(
         &self,
         catalog: &str,
@@ -43,16 +45,13 @@ impl Compactor {
         date_partition: &str,
         config: &CompactionConfig,
     ) -> Result<Option<CompactionResult>, String> {
-        let partition_path = format!(
-            "{}/{}/{}/{}/{}",
-            self.data_dir, catalog, schema, table, date_partition
-        );
-        self.compact_path_internal(
+        let partition_prefix = format!("{}/{}/{}/{}", catalog, schema, table, date_partition);
+        self.compact_prefix_internal(
             catalog,
             schema,
             table,
             date_partition,
-            &partition_path,
+            &partition_prefix,
             date_partition,
             config,
         )
@@ -60,13 +59,15 @@ impl Compactor {
     }
 
     /// Internal compaction logic shared by partitioned and non-partitioned tables
-    pub(crate) async fn compact_path_internal(
+    ///
+    /// Uses Object Store for all file operations.
+    pub(crate) async fn compact_prefix_internal(
         &self,
         catalog: &str,
         schema: &str,
         table: &str,
         partition_id: &str,
-        path: &str,
+        prefix: &str,
         display_partition: &str,
         config: &CompactionConfig,
     ) -> Result<Option<CompactionResult>, String> {
@@ -83,8 +84,6 @@ impl Compactor {
         };
 
         // Try to acquire distributed lock for cluster mode
-        // This prevents multiple nodes from compacting the same partition simultaneously
-        // Lock key format: /compaction/{catalog}/{schema}/{table}/{partition}
         let lock_key = format!(
             "/compaction/{}/{}/{}/{}",
             catalog, schema, table, partition_id
@@ -104,8 +103,6 @@ impl Compactor {
                         })
                     }
                     Ok(None) => {
-                        // Lock held by another node - skip this partition
-                        // Another node is already compacting it
                         debug!(
                             "Skipping compaction for {}/{}/{}/{}: partition locked by another node",
                             catalog, schema, table, partition_id
@@ -113,9 +110,6 @@ impl Compactor {
                         return Ok(None);
                     }
                     Err(e) => {
-                        // Meta service unavailable - log warning and proceed with local-only compaction
-                        // This is a fail-open approach: better to risk duplicate work than to block
-                        // compaction entirely when meta is temporarily unavailable
                         warn!(
                             "Failed to acquire distributed lock for compaction {}/{}/{}/{}: {}. \
                          Proceeding with local-only lock (potential duplicate work in cluster).",
@@ -125,7 +119,6 @@ impl Compactor {
                     }
                 }
             } else {
-                // Standalone mode - no distributed locking needed
                 None
             };
 
@@ -133,15 +126,8 @@ impl Compactor {
         let lock = self.get_lock(catalog, schema, table, partition_id).await;
         let _guard = lock.lock().await;
 
-        if !Path::new(path).exists() {
-            return Err(format!(
-                "Path '{}.{}.{}/{}' does not exist",
-                catalog, schema, table, display_partition
-            ));
-        }
-
-        // List and parse all parquet files
-        let mut file_infos = self.list_parquet_file_infos(path)?;
+        // List and parse all parquet files using Object Store
+        let mut file_infos = self.list_parquet_file_infos_async(prefix).await?;
 
         if file_infos.is_empty() {
             return Ok(None);
@@ -184,8 +170,8 @@ impl Compactor {
             info!("Minor compaction: {} L0 files → L1", l0_files.len());
 
             let rows = self
-                .compact_level_files(
-                    path,
+                .compact_level_files_async(
+                    prefix,
                     &l0_files,
                     0,
                     config,
@@ -200,7 +186,7 @@ impl Compactor {
         }
 
         // Step 2: Major compactions (L1 → L2, L2 → L3, etc.)
-        let file_infos_updated = self.list_parquet_file_infos(path)?;
+        let file_infos_updated = self.list_parquet_file_infos_async(prefix).await?;
 
         for current_level in 1..=config.max_level {
             let all_level_files: Vec<_> = file_infos_updated
@@ -246,8 +232,8 @@ impl Compactor {
                 }
 
                 let rows = self
-                    .compact_level_files(
-                        path,
+                    .compact_level_files_async(
+                        prefix,
                         &level_files,
                         current_level,
                         config,
@@ -276,7 +262,7 @@ impl Compactor {
         }
 
         // Recalculate files after compaction
-        let file_infos_after = self.list_parquet_file_infos(path)?;
+        let file_infos_after = self.list_parquet_file_infos_async(prefix).await?;
         let total_files_after = file_infos_after.len();
         let l0_files_after = file_infos_after.iter().filter(|f| f.level == 0).count();
         let total_bytes_after: u64 = file_infos_after.iter().map(|f| f.size).sum();
@@ -309,12 +295,13 @@ impl Compactor {
         }))
     }
 
-    /// Compact files at a specific level to the next level
-    /// If at max_level, compacts within the same level to reduce file count
-    /// Returns the total number of rows compacted
-    pub(crate) async fn compact_level_files(
+    /// Compact files at a specific level to the next level using Object Store
+    ///
+    /// If at max_level, compacts within the same level to reduce file count.
+    /// Returns the total number of rows compacted.
+    pub(crate) async fn compact_level_files_async(
         &self,
-        partition_path: &str,
+        partition_prefix: &str,
         level_files: &[ParquetFileInfo],
         current_level: u32,
         config: &CompactionConfig,
@@ -329,9 +316,9 @@ impl Compactor {
 
         // At max_level, compact within same level; otherwise, compact to next level
         let target_level = if current_level >= config.max_level {
-            current_level // Stay at max level
+            current_level
         } else {
-            current_level + 1 // Promote to next level
+            current_level + 1
         };
 
         let mut total_rows = 0;
@@ -352,30 +339,26 @@ impl Compactor {
                 group.len()
             );
 
-            let paths: Vec<std::path::PathBuf> = group.iter().map(|f| f.path.clone()).collect();
-            let batches = self.read_parquet_files(&paths).await?;
+            let paths: Vec<String> = group.iter().map(|f| f.path.clone()).collect();
+            let batches = self.read_parquet_files_from_storage(&paths).await?;
             let rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
             total_rows += rows;
 
             // Create compacted file at target level
             let timestamp = chrono::Utc::now().timestamp_millis();
-            let compacted_filename = format!(
+            let compacted_path = format!(
                 "{}/{}{}{}{}{}",
-                partition_path, LEVEL_PREFIX, target_level, LEVEL_SEPARATOR, timestamp, PARQUET_EXT
+                partition_prefix, LEVEL_PREFIX, target_level, LEVEL_SEPARATOR, timestamp, PARQUET_EXT
             );
 
-            self.write_compacted_file(&compacted_filename, batches)
+            let file_size = self
+                .write_compacted_file_to_storage(&compacted_path, batches)
                 .await?;
-
-            // Get the size of the newly written file for metadata
-            let file_size = fs::metadata(&compacted_filename)
-                .map(|m| m.len())
-                .unwrap_or(0);
 
             // Register new file with metadata manager
             if let Some(ref manager) = self.metadata_manager {
                 let file_info = Self::create_file_info(
-                    &compacted_filename,
+                    &compacted_path,
                     catalog,
                     schema,
                     table,
@@ -387,47 +370,34 @@ impl Compactor {
                 if let Err(e) = manager.register_file(file_info).await {
                     warn!(
                         "Failed to register compacted file {}: {}",
-                        compacted_filename, e
+                        compacted_path, e
                     );
                 }
             }
 
+            // Extract filename for logging
+            let filename = compacted_path.rsplit('/').next().unwrap_or(&compacted_path);
+
             if target_level == current_level {
                 info!(
                     "Created L{} file: {} ({} rows from {} L{} files) [max-level compaction]",
-                    target_level,
-                    Path::new(&compacted_filename)
-                        .file_name()
-                        .unwrap()
-                        .to_str()
-                        .unwrap(),
-                    rows,
-                    group.len(),
-                    current_level
+                    target_level, filename, rows, group.len(), current_level
                 );
             } else {
                 info!(
                     "Created L{} file: {} ({} rows from {} L{} files)",
-                    target_level,
-                    Path::new(&compacted_filename)
-                        .file_name()
-                        .unwrap()
-                        .to_str()
-                        .unwrap(),
-                    rows,
-                    group.len(),
-                    current_level
+                    target_level, filename, rows, group.len(), current_level
                 );
             }
 
-            // Delete old files after successful write
+            // Delete old files after successful write using Object Store
             let mut deleted_paths: Vec<String> = Vec::new();
-            for file in &paths {
-                if let Err(e) = fs::remove_file(file) {
-                    warn!("Failed to delete {}: {}", file.display(), e);
+            for file_path in &paths {
+                if let Err(e) = self.storage.delete(file_path).await {
+                    warn!("Failed to delete {}: {}", file_path, e);
                 } else {
-                    debug!("Deleted: {}", file.display());
-                    deleted_paths.push(file.to_string_lossy().to_string());
+                    debug!("Deleted: {}", file_path);
+                    deleted_paths.push(file_path.clone());
                 }
             }
 
