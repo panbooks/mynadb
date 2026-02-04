@@ -13,13 +13,20 @@ This proposal addresses performance defects in MynaDB's table-level routing mech
 
 **Key Finding:** Query routing cannot prune by date partition, resulting in N× query cost where N = number of historical table owners.
 
-**Proposed Solution:** Restructure the object store path from `{node_id}/{catalog}/...` to `{catalog}/.../date={date}/{node_id}/`, enabling partition discovery via simple S3 LIST operations.
+**Proposed Solution:** Restructure the object store path to use `node_id` as a Hive-style partition key:
+```
+{catalog}/{schema}/{table}/date={YYYY-MM-DD}/node_id={node_id}/file.parquet
+```
+
+This leverages DataFusion's built-in partition pruning - each Data Node simply adds `WHERE node_id = 'my_id'` to queries, and DataFusion automatically skips irrelevant files.
 
 **Impact:**
 - Query fan-out reduced by 60-90% for typical queries
 - **Zero Meta storage overhead** (vs 16.8MB+ for alternatives)
+- **~50 lines of code changes** (vs ~500 for file-level routing)
 - True compute-storage separation
 - Simplified scale-in/out operations
+- `node_id` becomes a queryable column for debugging/analysis
 
 ---
 
@@ -130,38 +137,74 @@ s3://bucket/
     └── {schema}/
         └── {table}/
             └── date={YYYY-MM-DD}/
-                ├── {node-A}/
+                ├── node_id={node-A}/
                 │   └── *.parquet
-                └── {node-B}/
+                └── node_id={node-B}/
                     └── *.parquet
 ```
 
-**Key Change:** Move `{node_id}` from path prefix to partition subdirectory.
+**Key Change:** Make `node_id` a Hive-style partition key, just like `date`.
 
 ### 3.2 How It Solves the Problem
 
 ```
 Query: SELECT * FROM cpu WHERE date = '2024-01-15'
 
-1. LIST s3://bucket/mydb/default/cpu/date=2024-01-15/
-   → CommonPrefixes: [node-A/, node-B/]
+Routing Flow:
+1. Router caches partition → nodes mapping (stable, cacheable)
+   LIST s3://bucket/mydb/default/cpu/date=2024-01-15/
+   → CommonPrefixes: [node_id=A/, node_id=B/]
 
-2. Route:
-   - node-A/ files → Node A (cache hit)
-   - node-B/ files → Node B (cache hit)
+2. Router sends to nodes A and B:
+   - Query: SELECT * FROM cpu WHERE date = '2024-01-15'
+   - Each node knows its own node_id
 
-3. No Meta lookup needed for routing!
+3. Data Node query execution:
+   - Node A injects: WHERE node_id = 'A'
+   - DataFusion automatically prunes node_id=B/ directory
+   - Only reads files from node_id=A/
+
+Result: Automatic partition pruning via DataFusion!
 ```
 
-### 3.3 Benefits Summary
+### 3.3 Why Hive-Style `node_id` Partition Key?
 
-| Benefit | Current (Node-ID First) | Proposed (Node-ID Last) |
-|---------|------------------------|-------------------------|
+Making `node_id` a partition key (like `date`) brings several advantages:
+
+1. **DataFusion handles pruning automatically** - No custom file discovery logic needed
+2. **`node_id` becomes a queryable column** - Useful for debugging (`SELECT DISTINCT node_id FROM cpu`)
+3. **Existing partition code reused** - Same logic that handles `date=` partitions works for `node_id=`
+4. **Minimal code changes** - Data Node just injects one predicate
+
+### 3.4 Benefits Summary
+
+| Benefit | Current (Node-ID First) | Proposed (Hive Partition) |
+|---------|------------------------|---------------------------|
 | Meta storage for routing | 16.8MB+ | **0** |
+| Implementation complexity | N/A | **~50 lines** |
 | Retention complexity | O(nodes × dates) | **O(dates)** |
 | Scale-in complexity | High (legacy_prefixes) | **None** |
 | Cross-node compaction | Impossible | **Possible** |
-| Cache affinity | Strong | **Strong** (with smart routing) |
+| Cache affinity | Strong | **Strong** (writer = reader) |
+| `node_id` queryable | No | **Yes** |
+
+### 3.5 Why Hive Partition is Elegant
+
+The key insight is that **DataFusion already knows how to do partition pruning**. By making `node_id` a partition key:
+
+1. **No new file discovery code** - DataFusion's `ListingTable` handles it
+2. **No file lists in QueryTicket** - Each node discovers its own files
+3. **No LocalFileCache** - DataFusion caches discovered files
+4. **Natural predicate injection** - Just one `WHERE` clause addition
+
+**Comparison of approaches:**
+
+| Approach | Router Responsibility | Data Node Responsibility | Code Changes |
+|----------|----------------------|--------------------------|--------------|
+| File-level routing | LIST all files, assign to nodes | Execute with file list | ~500 lines |
+| Partition-level (Hive) | Cache partition→nodes | Inject `node_id` predicate | **~50 lines** |
+
+The Router doesn't need to know about files at all - it only tracks the stable mapping of partitions to nodes. Files change frequently (compaction), but partition ownership is stable.
 
 ---
 
@@ -270,25 +313,36 @@ With node_coverage:
   → But requires 16.8MB+ Meta storage
 ```
 
-**Node-ID Last (Proposed):**
+**Node-ID Last with Hive Partition (Proposed):**
 ```
 Range query: WHERE date BETWEEN '01-01' AND '01-31'
 
-1. LIST each date partition (parallel):
-   date=01-01/ → [node-A/]
-   date=01-15/ → [node-A/, node-B/]
-   date=01-31/ → [node-A/, node-B/, node-C/]
+1. Router checks partition cache (stable, cacheable 5min+):
+   date=01-01 → nodes: [A]
+   date=01-15 → nodes: [A, B]
+   date=01-31 → nodes: [A, B, C]
 
-2. Build precise file list per node:
-   Node A: files from 01-01 to 01-31
-   Node B: files from 01-15 to 01-31
-   Node C: files from 01-31 only
+2. Router determines: need to query {A, B, C}
 
-3. Send each node exactly its files
-   → Optimal parallelism, zero redundant work
+3. Send SAME query to each node (no file lists!):
+   SELECT * FROM cpu WHERE date BETWEEN '01-01' AND '01-31'
+
+4. Each Data Node injects its node_id:
+   Node A: WHERE ... AND node_id = 'A'
+   Node B: WHERE ... AND node_id = 'B'
+   Node C: WHERE ... AND node_id = 'C'
+
+5. DataFusion prunes automatically:
+   - A reads only node_id=A/ directories
+   - B reads only node_id=B/ directories
+   - C reads only node_id=C/ directories
+
+→ Optimal parallelism, zero redundant work
+→ No file lists passed to nodes
+→ Each node discovers its own files locally
 ```
 
-**Winner: Node-ID Last**
+**Winner: Node-ID Last (Hive Partition)**
 
 ---
 
@@ -306,31 +360,26 @@ Cache hit rate: HIGH
 Latency: ~0.1ms (local SSD) vs ~50-100ms (S3)
 ```
 
-**Node-ID Last (Naive):**
+**Node-ID Last with Hive Partition (Proposed):**
 ```
-Write: Node A writes → /.../node-A/file.parquet
-       Node A caches file locally
-
-Query: Could be routed to ANY node
-       If routed to Node B → cache miss!
-
-Cache hit rate: LOW (PROBLEM!)
-```
-
-**Node-ID Last (Smart Routing):**
-```
-Write: Node A writes → /.../node-A/file.parquet
+Write: Node A writes → /.../node_id=A/file.parquet
        Node A caches file locally
 
 Query:
-  1. LIST partition → [node-A/, node-B/]
-  2. Route node-A/ files to Node A (writer)
-  3. Route node-B/ files to Node B (writer)
+  1. Router: partition=01-15 has nodes [A, B]
+  2. Router sends SAME query to both A and B
+  3. Node A executes with: WHERE node_id = 'A'
+     → DataFusion only reads /.../node_id=A/ files
+     → Cache HIT (Node A wrote these files!)
+  4. Node B executes with: WHERE node_id = 'B'
+     → DataFusion only reads /.../node_id=B/ files
+     → Cache HIT (Node B wrote these files!)
 
-Cache hit rate: HIGH (writer = reader preserved!)
+Cache hit rate: HIGH (writer = reader naturally preserved!)
+No explicit file routing needed - just send query to all relevant nodes!
 ```
 
-**Winner: Tie** (with smart routing implementation)
+**Winner: Tie** (both achieve high cache affinity)
 
 ---
 
@@ -349,11 +398,11 @@ Compaction:
   - Cannot merge cross-node
 ```
 
-**Node-ID Last (Proposed):**
+**Node-ID Last with Hive Partition (Proposed):**
 ```
 Partition structure:
-  /mydb/cpu/date=01-15/node-A/L0_001.parquet
-  /mydb/cpu/date=01-15/node-B/L0_002.parquet
+  /mydb/cpu/date=01-15/node_id=A/L0_001.parquet
+  /mydb/cpu/date=01-15/node_id=B/L0_002.parquet
 
 Compaction options:
 
@@ -361,12 +410,13 @@ Compaction options:
 
   Option 2 (cross-node merge):
     Compact ALL files in partition →
-    /mydb/cpu/date=01-15/merged/L1_001.parquet
+    /mydb/cpu/date=01-15/node_id=merged/L1_001.parquet
 
     Result: Unified partition, optimal compression
+    After: Queries with WHERE node_id='merged' see all data
 ```
 
-**Winner: Node-ID Last**
+**Winner: Node-ID Last (Hive Partition)**
 
 ---
 
@@ -387,21 +437,23 @@ Node B retires:
 4. Complex, error-prone
 ```
 
-**Node-ID Last (Proposed):**
+**Node-ID Last with Hive Partition (Proposed):**
 ```
 Node B retires:
 
-1. Data remains at /.../node-B/ subdirectories
+1. Data remains at /.../node_id=B/ subdirectories
 2. No Meta update needed!
 3. Query routing:
-   - LIST partition → still discovers node-B/
-   - Node B offline → route B's files to any active node
+   - Router cache still shows: partition → [..., B, ...]
+   - B offline → send B's work to fallback node C
+   - C queries with: WHERE node_id = 'B'
+   - DataFusion reads /.../node_id=B/ from S3
 4. Over time:
-   - Cross-node compaction merges B's data
-   - B's subdirectories naturally disappear
+   - Cross-node compaction merges B's data into node_id=merged/
+   - node_id=B/ directories naturally disappear
 ```
 
-**Winner: Node-ID Last**
+**Winner: Node-ID Last (Hive Partition)**
 
 ---
 
@@ -417,17 +469,20 @@ Node C joins:
 4. owner_node_ids grows unbounded over time
 ```
 
-**Node-ID Last (Proposed):**
+**Node-ID Last with Hive Partition (Proposed):**
 ```
 Node C joins:
 
 1. C starts receiving writes for some tables
-2. C writes to /.../node-C/
+2. C writes to /.../node_id=C/
 3. No Meta update needed
-4. Next query LIST discovers node-C/ automatically
+4. Router cache refresh (or LIST) discovers node_id=C/ automatically
+5. Queries naturally include C:
+   - Router sends query to C
+   - C queries with: WHERE node_id = 'C'
 ```
 
-**Winner: Node-ID Last**
+**Winner: Node-ID Last (Hive Partition)**
 
 ---
 
@@ -446,18 +501,21 @@ Node A fails during query:
 5. Complex failover logic
 ```
 
-**Node-ID Last (Proposed):**
+**Node-ID Last with Hive Partition (Proposed):**
 ```
 Node A fails during query:
 
-1. Router knows exact files: /date=01-15/node-A/file.parquet
+1. Router knows: partition has nodes [A, B]
 2. A times out
-3. Simple retry: send A's files to any active node (B or C)
-4. B fetches from S3 (cache miss, but works)
+3. Simple retry: send A's query to any active node (C):
+   - Query includes: WHERE node_id = 'A'
+   - C reads /.../node_id=A/ from S3
+4. C fetches from S3 (cache miss, but works)
 5. True compute-storage separation
+6. No file lists needed - just pass node_id!
 ```
 
-**Winner: Node-ID Last**
+**Winner: Node-ID Last (Hive Partition)**
 
 ---
 
@@ -515,23 +573,24 @@ Cost: O(1) LIST operation
 
 ### 4.2 Summary Comparison Table
 
-| Dimension | Node-ID First | Node-ID Last | Winner |
-|-----------|---------------|--------------|--------|
+| Dimension | Node-ID First | Node-ID Last (Hive) | Winner |
+|-----------|---------------|---------------------|--------|
 | Retention logic | O(nodes × dates) | O(dates) | **Last** |
-| Route simplicity | Complex (Meta) | Simple (LIST) | **Last** |
-| Query performance | No LIST latency | LIST (cacheable) | Tie |
-| Parallel query | Needs node_coverage | Natural from LIST | **Last** |
-| **Cache affinity** | Strong | Strong (smart routing) | **Tie** |
+| Route simplicity | Complex (Meta) | Simple (cache + predicate) | **Last** |
+| Query performance | No LIST latency | Cache hit (stable mapping) | Tie |
+| Parallel query | Needs node_coverage | Natural (node_id predicate) | **Last** |
+| **Cache affinity** | Strong | Strong (writer = reader) | **Tie** |
 | Compaction | Per-node only | Cross-node possible | **Last** |
-| Scale-in | Complex (legacy) | Natural (LIST) | **Last** |
+| Scale-in | Complex (legacy) | Natural (just query) | **Last** |
 | Scale-out | Meta grows | Natural discovery | **Last** |
-| Failure handling | Complex failover | Any node reads | **Last** |
+| Failure handling | Complex failover | Simple retry with node_id | **Last** |
 | Write path | Simple | Simple | Tie |
 | Multi-tenant | Node isolation | Tenant isolation | **Last** |
 | Listing efficiency | O(nodes) | O(1) | **Last** |
 | **Meta storage** | **16.8MB+** | **0** | **Last** |
+| **Implementation** | N/A | **~50 lines** | **Last** |
 
-**Final Score: Node-ID Last wins 9/13, Tie 3/13, Node-ID First wins 1/13**
+**Final Score: Node-ID Last (Hive Partition) wins 10/14, Tie 3/14, Node-ID First wins 1/14**
 
 ---
 
@@ -543,85 +602,170 @@ Cost: O(1) LIST operation
 Old path format:
   s3://{bucket}/{node_id}/{catalog}/{schema}/{table}/date={YYYY-MM-DD}/{file}.parquet
 
-New path format:
-  s3://{bucket}/{catalog}/{schema}/{table}/date={YYYY-MM-DD}/{node_id}/{file}.parquet
+New path format (Hive-style partition):
+  s3://{bucket}/{catalog}/{schema}/{table}/date={YYYY-MM-DD}/node_id={node_id}/{file}.parquet
 ```
 
-### 5.2 Query Routing Algorithm
+The `node_id=` prefix makes it a Hive-style partition key that DataFusion recognizes automatically.
+
+### 5.2 Router: Partition → Nodes Caching
+
+The Router maintains a cache of which nodes have data for each partition. This mapping is stable (changes only on scale events), making it highly cacheable.
 
 ```rust
-/// Discover nodes with data for given partition
-async fn discover_partition_nodes(
-    &self,
-    catalog: &str,
-    schema: &str,
-    table: &str,
-    date: &str,
-) -> Vec<String> {
-    let prefix = format!("{}/{}/{}/date={}/", catalog, schema, table, date);
-
-    // Check cache first
-    if let Some(nodes) = self.partition_cache.get(&prefix) {
-        return nodes;
-    }
-
-    // LIST from object store
-    let result = self.object_store
-        .list_with_delimiter(&prefix)
-        .await?;
-
-    // Extract node_ids from CommonPrefixes
-    let nodes: Vec<String> = result
-        .common_prefixes
-        .iter()
-        .filter_map(|p| extract_node_id(p))
-        .collect();
-
-    // Cache result
-    self.partition_cache.insert(prefix, nodes.clone(), TTL_SECONDS);
-
-    nodes
+/// Cache for partition → nodes mapping
+/// Key: "catalog/schema/table/date=YYYY-MM-DD"
+/// Value: Vec<node_id>
+struct PartitionNodeCache {
+    cache: DashMap<String, (Vec<String>, Instant)>,
+    ttl: Duration,  // e.g., 5 minutes
 }
 
-/// Route query with smart affinity
-async fn route_query(
-    &self,
-    catalog: &str,
-    table: &TableRef,
-    date_range: &DateRange,
-) -> Vec<QueryTask> {
-    let mut tasks = Vec::new();
+impl PartitionNodeCache {
+    /// Discover nodes with data for given partition
+    async fn get_or_discover(
+        &self,
+        object_store: &ObjectStore,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date: &str,
+    ) -> Vec<String> {
+        let key = format!("{}/{}/{}/date={}", catalog, schema, table, date);
+
+        // Check cache
+        if let Some((nodes, timestamp)) = self.cache.get(&key).map(|r| r.clone()) {
+            if timestamp.elapsed() < self.ttl {
+                return nodes;
+            }
+        }
+
+        // LIST from object store (only get CommonPrefixes)
+        let prefix = format!("{}/", key);
+        let result = object_store
+            .list_with_delimiter(&prefix)
+            .await
+            .unwrap_or_default();
+
+        // Extract node_ids from CommonPrefixes like "node_id=A/"
+        let nodes: Vec<String> = result
+            .common_prefixes
+            .iter()
+            .filter_map(|p| p.strip_prefix("node_id=")?.strip_suffix("/"))
+            .map(String::from)
+            .collect();
+
+        // Cache result
+        self.cache.insert(key, (nodes.clone(), Instant::now()));
+
+        nodes
+    }
+}
+
+/// Route query to appropriate nodes
+async fn route_query(&self, table: &TableRef, date_range: &DateRange) -> Vec<NodeId> {
+    let mut target_nodes = HashSet::new();
 
     for date in date_range.iter_dates() {
-        let nodes = self.discover_partition_nodes(catalog, &table.schema, &table.name, &date).await;
+        let nodes = self.partition_cache.get_or_discover(
+            &self.object_store,
+            &table.catalog,
+            &table.schema,
+            &table.name,
+            &date
+        ).await;
 
         for node_id in nodes {
-            // Route to writer node for cache affinity
             if self.is_node_available(&node_id) {
-                tasks.push(QueryTask {
-                    target_node: node_id.clone(),
-                    files: self.list_node_files(catalog, table, &date, &node_id).await,
-                });
-            } else {
-                // Failover: any available node can read
-                let fallback = self.select_fallback_node();
-                tasks.push(QueryTask {
-                    target_node: fallback,
-                    files: self.list_node_files(catalog, table, &date, &node_id).await,
-                });
+                target_nodes.insert(node_id);
             }
         }
     }
 
-    // Merge tasks by target node
-    merge_tasks_by_node(tasks)
+    target_nodes.into_iter().collect()
 }
 ```
 
-### 5.3 Write Path Changes
+**Key Point:** Router only caches partition → nodes mapping, NOT file lists. File discovery is delegated to Data Nodes.
+
+### 5.3 Data Node: Automatic Partition Pruning
+
+The Data Node leverages DataFusion's built-in Hive partition pruning. When executing a query, it injects `WHERE node_id = 'my_id'` to filter to only its own files.
 
 ```rust
-/// Generate write path (new format)
+/// Data Node query execution with node_id injection
+impl FlightService {
+    async fn do_get(&self, ticket: QueryTicket) -> Result<FlightDataStream> {
+        // Inject node_id predicate to leverage DataFusion partition pruning
+        let sql_with_node_filter = inject_node_id_predicate(
+            &ticket.sql,
+            &self.node_id,
+        );
+
+        // Execute query - DataFusion automatically prunes node_id partitions
+        let batches = self.query_engine
+            .execute_query_with_db(&sql_with_node_filter, &ticket.catalog)
+            .await?;
+
+        Ok(batches.into())
+    }
+}
+
+/// Inject WHERE node_id = 'X' into the query
+fn inject_node_id_predicate(sql: &str, node_id: &str) -> String {
+    // Parse SQL and add predicate
+    // For queries with WHERE: add "AND node_id = 'X'"
+    // For queries without WHERE: add "WHERE node_id = 'X'"
+
+    // Simple implementation using sqlparser
+    let mut statements = sqlparser::parser::Parser::parse_sql(
+        &sqlparser::dialect::GenericDialect {},
+        sql
+    ).unwrap();
+
+    for stmt in &mut statements {
+        if let Statement::Query(query) = stmt {
+            add_node_id_filter(query, node_id);
+        }
+    }
+
+    statements.iter().map(|s| s.to_string()).collect::<Vec<_>>().join("; ")
+}
+
+/// Add node_id filter to query
+fn add_node_id_filter(query: &mut Query, node_id: &str) {
+    if let SetExpr::Select(select) = &mut *query.body {
+        let node_filter = Expr::BinaryOp {
+            left: Box::new(Expr::Identifier(Ident::new("node_id"))),
+            op: BinaryOperator::Eq,
+            right: Box::new(Expr::Value(Value::SingleQuotedString(node_id.to_string()))),
+        };
+
+        select.selection = match select.selection.take() {
+            Some(existing) => Some(Expr::BinaryOp {
+                left: Box::new(existing),
+                op: BinaryOperator::And,
+                right: Box::new(node_filter),
+            }),
+            None => Some(node_filter),
+        };
+    }
+}
+```
+
+**How DataFusion Partition Pruning Works:**
+
+1. TableProvider registers the table with partition columns `[date, node_id]`
+2. Query has predicate `WHERE node_id = 'A'`
+3. DataFusion's `ListingTable` automatically skips directories not matching the predicate
+4. Only files under `node_id=A/` are read
+
+This requires **no changes to DataFusion** - it's built-in functionality.
+
+### 5.4 Write Path Changes
+
+```rust
+/// Generate write path with Hive-style node_id partition
 fn get_write_path(
     node_id: &str,
     catalog: &str,
@@ -631,15 +775,44 @@ fn get_write_path(
     file_name: &str,
 ) -> String {
     // Old: {node_id}/{catalog}/{schema}/{table}/date={date}/{file}
-    // New: {catalog}/{schema}/{table}/date={date}/{node_id}/{file}
+    // New: {catalog}/{schema}/{table}/date={date}/node_id={node_id}/{file}
     format!(
-        "{}/{}/{}/date={}/{}/{}",
+        "{}/{}/{}/date={}/node_id={}/{}",
         catalog, schema, table, date, node_id, file_name
     )
 }
 ```
 
-### 5.4 Retention Manager Changes
+### 5.5 Schema Changes
+
+The table schema now includes `node_id` as a partition column:
+
+```rust
+/// Register table with partition columns
+fn register_table(&self, catalog: &str, schema: &str, table: &str) -> Result<()> {
+    let table_path = format!("{}/{}/{}/", catalog, schema, table);
+
+    let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+        .with_table_partition_cols(vec![
+            ("date".to_string(), DataType::Utf8),
+            ("node_id".to_string(), DataType::Utf8),  // NEW!
+        ]);
+
+    // ... register with DataFusion
+}
+```
+
+**Implication:** `node_id` becomes a queryable column:
+
+```sql
+-- See which nodes have data for a table
+SELECT DISTINCT node_id FROM cpu WHERE date = '2024-01-15';
+
+-- Debug: query specific node's data
+SELECT * FROM cpu WHERE date = '2024-01-15' AND node_id = 'data-1';
+```
+
+### 5.6 Retention Manager Changes
 
 ```rust
 /// Delete partitions older than retention days (simplified)
@@ -665,7 +838,7 @@ async fn enforce_retention(
         let date = extract_date_from_prefix(&partition_prefix)?;
 
         if date < cutoff_date {
-            // Delete entire partition (all node subdirs)
+            // Delete entire partition (all node_id= subdirs included)
             let stats = self.object_store
                 .delete_prefix(&partition_prefix)
                 .await?;
@@ -679,7 +852,7 @@ async fn enforce_retention(
 }
 ```
 
-### 5.5 Compaction Changes
+### 5.7 Compaction Changes
 
 ```rust
 /// Cross-node compaction (new capability)
@@ -692,7 +865,7 @@ async fn compact_partition_cross_node(
 ) -> Result<CompactionStats> {
     let partition_prefix = format!("{}/{}/{}/date={}/", catalog, schema, table, date);
 
-    // List all node subdirectories
+    // List all node_id= subdirectories
     let node_dirs = self.object_store
         .list_with_delimiter(&partition_prefix)
         .await?;
@@ -700,6 +873,7 @@ async fn compact_partition_cross_node(
     // Collect all files from all nodes
     let mut all_files = Vec::new();
     for node_dir in node_dirs.common_prefixes {
+        // node_dir is like "node_id=A/"
         let files = self.object_store.list(&node_dir).await?;
         all_files.extend(files);
     }
@@ -708,13 +882,15 @@ async fn compact_partition_cross_node(
         return Ok(CompactionStats::skipped());
     }
 
-    // Compact all files into merged output
-    let output_path = format!("{}merged/", partition_prefix);
+    // Compact all files into merged output under "node_id=merged/"
+    let output_path = format!("{}node_id=merged/", partition_prefix);
     let stats = self.compact_files(all_files, &output_path).await?;
 
-    // Delete original node subdirectories
+    // Delete original node_id= subdirectories
     for node_dir in node_dirs.common_prefixes {
-        self.object_store.delete_prefix(&node_dir).await?;
+        if !node_dir.contains("node_id=merged") {
+            self.object_store.delete_prefix(&node_dir).await?;
+        }
     }
 
     Ok(stats)
@@ -737,22 +913,24 @@ For a query scanning 100 files:
 - Cache hit: 100 × 0.1ms = 10ms
 - Cache miss: 100 × 50ms = 5000ms (5 seconds!)
 
-### 6.2 Smart Routing Preserves Affinity
+### 6.2 Hive Partition Automatically Preserves Affinity
 
 ```
 Write flow:
   1. Node A receives write for partition P
-  2. A writes to s3://bucket/.../date=P/node-A/file.parquet
+  2. A writes to s3://bucket/.../date=P/node_id=A/file.parquet
   3. A caches file locally
 
-Query flow:
-  1. Router LISTs partition → discovers [node-A/, node-B/]
-  2. Router routes:
-     - node-A/ files → Node A (writer = reader, cache HIT)
-     - node-B/ files → Node B (writer = reader, cache HIT)
-  3. Both nodes read from local cache
+Query flow (Hive Partition approach):
+  1. Router knows partition P → nodes [A, B]
+  2. Router sends SAME query to A and B
+  3. Node A injects: WHERE node_id = 'A'
+     → DataFusion reads only /.../node_id=A/ (cache HIT!)
+  4. Node B injects: WHERE node_id = 'B'
+     → DataFusion reads only /.../node_id=B/ (cache HIT!)
 
-Result: Cache affinity preserved!
+Result: Cache affinity preserved automatically!
+No explicit file→node routing needed!
 ```
 
 ### 6.3 Failover with Graceful Degradation
@@ -760,13 +938,15 @@ Result: Cache affinity preserved!
 ```
 Node A fails:
 
-  1. Router discovers [node-A/, node-B/] from LIST
+  1. Router knows partition P → nodes [A, B]
   2. Router detects A is unavailable
-  3. Router assigns A's files to Node C (fallback)
-  4. Node C fetches from S3 (cache miss, ~50ms per file)
+  3. Router sends A's work to fallback Node C:
+     Query with WHERE node_id = 'A'
+  4. Node C executes: DataFusion reads /.../node_id=A/
+     → Fetches from S3 (cache miss, ~50ms per file)
   5. Query completes (slower, but works)
   6. Node C caches fetched files
-  7. Next query to same partition → C has cache hit
+  7. Next failover query → C has cache hit
 
 Graceful degradation: Works correctly, just slower on first failover query
 ```
@@ -774,22 +954,22 @@ Graceful degradation: Works correctly, just slower on first failover query
 ### 6.4 Cache Warm-Up Strategy
 
 ```rust
-/// Pre-warm cache for frequently accessed partitions
-async fn warm_cache(&self, table: &str, recent_days: u32) {
+/// Pre-warm cache for frequently accessed partitions (Data Node startup)
+async fn warm_cache(&self, recent_days: u32) {
     let today = Utc::now().date();
+    let my_node_id = &self.node_id;
 
-    for day_offset in 0..recent_days {
-        let date = today - Duration::days(day_offset as i64);
-        let nodes = self.discover_partition_nodes(table, &date).await;
+    for table in self.discover_my_tables().await {
+        for day_offset in 0..recent_days {
+            let date = today - Duration::days(day_offset as i64);
 
-        for node_id in nodes {
-            if self.is_local_node(&node_id) {
-                // Pre-fetch our own files into cache
-                let files = self.list_node_files(table, &date, &node_id).await;
-                for file in files {
-                    self.file_cache.prefetch(&file).await;
-                }
-            }
+            // Just run a lightweight query to warm the cache
+            // DataFusion's partition pruning will only read our node_id files
+            let sql = format!(
+                "SELECT COUNT(*) FROM {}.{}.{} WHERE date = '{}' AND node_id = '{}'",
+                table.catalog, table.schema, table.name, date, my_node_id
+            );
+            let _ = self.query_engine.execute_query(&sql).await;
         }
     }
 }
@@ -1004,31 +1184,31 @@ Add coverage tracking without changing paths.
 
 ## 9. Implementation Plan
 
-### 9.1 Milestones
+### 9.1 Milestones (Simplified with Hive Partition Approach)
 
-| Phase | Description | Duration | Risk |
-|-------|-------------|----------|------|
-| 1 | Dual-path read support | 1 week | Low |
-| 2 | New path write support | 1 week | Low |
-| 3 | Query routing with LIST | 1 week | Medium |
-| 4 | Retention manager update | 3 days | Low |
-| 5 | Compaction changes | 1 week | Medium |
-| 6 | Migration tooling | 1 week | Low |
-| 7 | Testing & validation | 1 week | Low |
+| Phase | Description | LOC Estimate | Risk |
+|-------|-------------|--------------|------|
+| 1 | Write path: add `node_id=` to path | ~20 lines | Low |
+| 2 | TableProvider: add `node_id` partition column | ~10 lines | Low |
+| 3 | Data Node: inject `node_id` predicate | ~30 lines | Low |
+| 4 | Router: partition→nodes cache | ~50 lines | Low |
+| 5 | Dual-path read support (migration) | ~30 lines | Low |
+| 6 | Testing & validation | Tests | Low |
 
-**Total: ~6 weeks**
+**Total: ~140 lines of production code**
+
+Compare to previous approach requiring ~500+ lines for LocalFileCache and custom file routing.
 
 ### 9.2 Files to Modify
 
 | File | Changes |
 |------|---------|
-| `src/storage/parquet_writer.rs` | New path format |
-| `src/query/query_engine/discovery.rs` | Dual-path discovery |
-| `src/router/routing/query_coordinator.rs` | LIST-based routing |
-| `src/router/routing/shard_cache.rs` | Partition node cache |
-| `src/jobs/retention_manager.rs` | Simplified retention |
-| `src/jobs/compactor/` | Cross-node compaction |
-| `src/config.rs` | Feature flags |
+| `src/storage/parquet_writer.rs` | Add `node_id=` to write path (~5 lines) |
+| `src/query/providers/table_provider.rs` | Add `node_id` partition column (~10 lines) |
+| `src/data/server/flight.rs` | Inject `node_id` predicate (~30 lines) |
+| `src/router/routing/query_coordinator.rs` | Partition cache (~50 lines) |
+| `src/jobs/retention_manager.rs` | Simplified retention (already works!) |
+| `src/jobs/compactor/` | Cross-node compaction (optional, later) |
 
 ### 9.3 Feature Flags
 
@@ -1044,23 +1224,46 @@ support_legacy_paths = true
 cross_node_compaction = false
 
 [query]
-# Use LIST-based partition discovery
-list_based_routing = true
-
-# Cache TTL for partition node discovery
-partition_cache_ttl_secs = 60
+# Cache TTL for partition node discovery (stable, can be long)
+partition_cache_ttl_secs = 300  # 5 minutes
 ```
 
 ### 9.4 Testing Plan
 
 | Test Category | Description |
 |---------------|-------------|
-| Unit tests | Path generation, LIST parsing |
-| Integration tests | Dual-path read, migration |
-| Performance tests | LIST latency, cache hit rate |
-| Scale tests | 100K tables, 30 partitions each |
-| Chaos tests | Node failure during query/write |
-| Migration tests | Old → new path conversion |
+| Unit tests | Path generation with `node_id=`, predicate injection |
+| Integration tests | Query with `node_id` partition pruning |
+| Performance tests | Verify DataFusion prunes `node_id=` directories |
+| Scale tests | 100K tables, 30 partitions, 5 nodes each |
+| Migration tests | Old → new path during compaction |
+
+### 9.5 Implementation Code Summary
+
+**Total changes for core functionality (~50 lines):**
+
+```rust
+// 1. Write path (parquet_writer.rs) - ~5 lines
+fn get_write_path(...) -> String {
+    format!("{}/{}/{}/date={}/node_id={}/{}",
+        catalog, schema, table, date, node_id, file_name)
+}
+
+// 2. TableProvider (table_provider.rs) - ~10 lines
+let listing_options = ListingOptions::new(...)
+    .with_table_partition_cols(vec![
+        ("date".to_string(), DataType::Utf8),
+        ("node_id".to_string(), DataType::Utf8),  // ADD THIS
+    ]);
+
+// 3. Data Node predicate injection (flight.rs) - ~30 lines
+async fn do_get(&self, ticket: QueryTicket) -> Result<...> {
+    let sql = inject_node_id_predicate(&ticket.sql, &self.node_id);
+    self.query_engine.execute_query_with_db(&sql, &ticket.catalog).await
+}
+```
+
+That's it. DataFusion handles the rest automatically.
 
 ---
 
@@ -1078,7 +1281,7 @@ partition_cache_ttl_secs = 60
 
 ## Appendix
 
-### A.1 Example Query Flow (New Design)
+### A.1 Example Query Flow (New Design with Hive Partition)
 
 ```
 Query: SELECT avg(value) FROM cpu
@@ -1086,56 +1289,79 @@ Query: SELECT avg(value) FROM cpu
        GROUP BY host
 
 Router:
-  1. Parse SQL → table=cpu, dates=[01-10, 01-11, 01-12, 01-13, 01-14, 01-15]
+  1. Parse SQL → table=cpu, dates=[01-10 to 01-15]
 
-  2. Parallel LIST for each date:
-     LIST /mydb/default/cpu/date=2024-01-10/ → [node-A/]
-     LIST /mydb/default/cpu/date=2024-01-11/ → [node-A/]
-     LIST /mydb/default/cpu/date=2024-01-12/ → [node-A/, node-B/]
-     LIST /mydb/default/cpu/date=2024-01-13/ → [node-B/]
-     LIST /mydb/default/cpu/date=2024-01-14/ → [node-B/]
-     LIST /mydb/default/cpu/date=2024-01-15/ → [node-B/, node-C/]
+  2. Check partition cache (or LIST if cache miss):
+     date=2024-01-10 → nodes: [A]
+     date=2024-01-11 → nodes: [A]
+     date=2024-01-12 → nodes: [A, B]
+     date=2024-01-13 → nodes: [B]
+     date=2024-01-14 → nodes: [B]
+     date=2024-01-15 → nodes: [B, C]
 
-  3. Build query tasks:
-     Node A: scan dates 01-10, 01-11, 01-12 (A's files only)
-     Node B: scan dates 01-12, 01-13, 01-14, 01-15 (B's files only)
-     Node C: scan date 01-15 (C's files only)
+  3. Determine target nodes: {A, B, C}
 
-  4. Execute in parallel:
-     A: reads from local cache (wrote these files)
-     B: reads from local cache (wrote these files)
-     C: reads from local cache (wrote these files)
+  4. Send query to each node (same SQL):
+     SELECT avg(value) FROM cpu
+     WHERE date BETWEEN '2024-01-10' AND '2024-01-15'
+     GROUP BY host
 
-  5. Aggregate partial results at Router
+Data Node (e.g., Node A):
+  1. Receive query
+  2. Inject node_id predicate:
+     SELECT avg(value) FROM cpu
+     WHERE date BETWEEN '2024-01-10' AND '2024-01-15'
+       AND node_id = 'A'  ← INJECTED
+     GROUP BY host
 
-  6. Return final result
+  3. DataFusion partition pruning:
+     - Scans date=2024-01-10/node_id=A/  ✓
+     - Scans date=2024-01-11/node_id=A/  ✓
+     - Scans date=2024-01-12/node_id=A/  ✓
+     - SKIPS date=2024-01-12/node_id=B/  (pruned by predicate)
+     - SKIPS date=2024-01-13/ through 01-15 for node_id=A (no files exist)
+
+  4. Read from local cache (wrote these files)
+  5. Return partial aggregates
+
+Router:
+  5. Collect partial results from A, B, C
+  6. Merge aggregates
+  7. Return final result
 
 Nodes queried: 3 (vs ALL owners with current design)
 Cache hit rate: 100% (writer = reader)
+No file lists passed between Router and Data Nodes!
 ```
 
-### A.2 Scale-In Example (New Design)
+### A.2 Scale-In Example (New Design with Hive Partition)
 
 ```
 Before: Cluster has nodes [A, B, C]
         Table cpu has data on all three nodes
+
+Storage layout:
+  /mydb/default/cpu/date=2024-01-15/node_id=A/file1.parquet
+  /mydb/default/cpu/date=2024-01-15/node_id=B/file2.parquet
+  /mydb/default/cpu/date=2024-01-15/node_id=C/file3.parquet
 
 Scale-in: Remove Node B
 
 During transition:
   1. B marked as retiring
   2. New writes go to A and C only
-  3. B's existing data remains at /.../node-B/ subdirectories
+  3. B's existing data remains at /node_id=B/ subdirectories
   4. Queries:
-     - LIST discovers [node-A/, node-B/, node-C/]
-     - B is offline → B's files assigned to A or C
-     - A/C fetch B's files from S3 (cache miss, one time)
+     - Router cache: date=01-15 → [A, B, C]
+     - B is offline → Router sends B's work to fallback node (A or C)
+     - Fallback node queries with: WHERE node_id = 'B'
+     - DataFusion reads from /node_id=B/ (S3 fetch, cache miss once)
 
 After compaction:
   1. Cross-node compaction runs on old partitions
-  2. Merges A + B + C files → single merged/ directory
-  3. B's subdirectories deleted
-  4. Future queries only see merged/ (no B references)
+  2. Merges all files → /node_id=merged/L1_001.parquet
+  3. Original node_id=A/, node_id=B/, node_id=C/ deleted
+  4. Future queries see only node_id=merged/
 
 No Meta updates required!
 No legacy_prefixes needed!
@@ -1155,16 +1381,17 @@ Current (Node-ID First):
      - OR broadcast to all nodes (wasteful)
   4. Complex failover logic
 
-New (Node-ID Last):
-  1. Router LIST'd partition → knows exact files:
-     /date=01-15/node-A/file1.parquet
-     /date=01-15/node-A/file2.parquet
-  2. A times out
-  3. Router simply reassigns A's files to available node B
-  4. B fetches from S3 (cache miss, but works)
-  5. Query completes
+New (Hive Partition):
+  1. Router knows: date=01-15 has nodes [A, B]
+  2. Router sends query to both A and B
+  3. A times out
+  4. Router retries A's portion on fallback node C:
+     - Query: SELECT * FROM cpu WHERE date='01-15' AND node_id='A'
+     - C fetches from S3 /date=01-15/node_id=A/ (cache miss, but works)
+  5. Query completes with results from B and C
 
 Simple, predictable failover!
+No file lists needed - just pass node_id to retry!
 ```
 
 ---
