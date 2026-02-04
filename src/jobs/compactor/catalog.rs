@@ -1,80 +1,50 @@
 //! Catalog Operations for Compactor
 //!
 //! Handles catalog-level and table-level compaction.
+//! Uses Object Store abstraction for both local and S3/MinIO storage.
 
 use futures::stream::{FuturesUnordered, StreamExt};
-use std::fs;
-use std::path::Path;
 use tracing::{debug, warn};
 
 use super::{CompactionConfig, CompactionResult, Compactor};
 
 impl Compactor {
     /// Compact all tables in a catalog
-    /// Now runs tables in parallel (up to max_concurrent_compactions)
+    ///
+    /// Runs tables in parallel (up to max_concurrent_compactions).
+    /// Uses Object Store to discover schemas and tables.
     pub async fn compact_catalog(
         &self,
         catalog: &str,
         config: &CompactionConfig,
     ) -> Result<Vec<CompactionResult>, String> {
-        let catalog_path = format!("{}/{}", self.data_dir, catalog);
-
-        if !Path::new(&catalog_path).exists() {
-            return Err(format!("Catalog '{}' does not exist", catalog));
-        }
-
-        // Phase 1: Collect all tables that need compaction
+        // Phase 1: Collect all tables that need compaction using Object Store
         let mut tables_to_compact: Vec<(String, String)> = Vec::new();
 
-        // List all schemas (subdirectories under catalog)
-        let schema_entries = fs::read_dir(&catalog_path)
-            .map_err(|e| format!("Failed to read catalog directory: {}", e))?;
+        // List all schemas using Object Store
+        let schemas = self.storage.list_prefixes(catalog).await?;
 
-        for schema_entry in schema_entries {
-            let schema_entry =
-                schema_entry.map_err(|e| format!("Failed to read schema entry: {}", e))?;
-            let schema_path = schema_entry.path();
-
-            // Skip non-directories and config files
-            if !schema_path.is_dir() {
+        for schema_name in schemas {
+            // Skip hidden directories and config files
+            if schema_name.starts_with('.') || schema_name.ends_with(".json") {
                 continue;
             }
 
-            let schema_name = match schema_path.file_name().and_then(|n| n.to_str()) {
-                Some(name) => name.to_string(),
-                None => continue,
-            };
-
-            // List all tables (subdirectories under schema)
-            let table_entries = match fs::read_dir(&schema_path) {
-                Ok(entries) => entries,
+            // List all tables in this schema using Object Store
+            let schema_prefix = format!("{}/{}", catalog, schema_name);
+            let tables = match self.storage.list_prefixes(&schema_prefix).await {
+                Ok(t) => t,
                 Err(e) => {
                     warn!(
-                        "Failed to read schema directory {}/{}: {}",
+                        "Failed to list tables in schema {}/{}: {}",
                         catalog, schema_name, e
                     );
                     continue;
                 }
             };
 
-            for table_entry in table_entries {
-                let table_entry = match table_entry {
-                    Ok(entry) => entry,
-                    Err(e) => {
-                        warn!("Failed to read table entry: {}", e);
-                        continue;
-                    }
-                };
-                let table_path = table_entry.path();
-
-                // Skip non-directories
-                if !table_path.is_dir() {
-                    continue;
-                }
-
-                if let Some(table_name) = table_path.file_name().and_then(|n| n.to_str()) {
-                    tables_to_compact.push((schema_name.clone(), table_name.to_string()));
-                }
+            for table_name in tables {
+                tables_to_compact.push((schema_name.clone(), table_name));
             }
         }
 
@@ -126,7 +96,11 @@ impl Compactor {
     }
 
     /// Compact all partitions in a table (or the table itself if not partitioned)
-    /// Runs sequentially within a table since most tables only have 1-2 active partitions
+    ///
+    /// Runs sequentially within a table since most tables only have 1-2 active partitions.
+    /// Uses Object Store to discover partitions.
+    ///
+    /// Path structure: catalog/schema/table/date=YYYY-MM-DD/node_id=X/*.parquet
     pub async fn compact_table_all_partitions(
         &self,
         catalog: &str,
@@ -134,46 +108,34 @@ impl Compactor {
         table: &str,
         config: &CompactionConfig,
     ) -> Result<Vec<CompactionResult>, String> {
-        let table_path = format!("{}/{}/{}/{}", self.data_dir, catalog, schema, table);
-
-        if !Path::new(&table_path).exists() {
-            return Ok(Vec::new());
-        }
+        let table_prefix = format!("{}/{}/{}", catalog, schema, table);
 
         let mut results = Vec::new();
 
-        // Check if table has partitions or is a flat table
-        let has_partitions = self.has_partitions(&table_path)?;
+        // Check if table has partitions using Object Store
+        let has_partitions = self.has_partitions_async(&table_prefix).await?;
 
         if has_partitions {
             // Partitioned table: compact each partition separately (sequentially)
-            // Most tables only have 1-2 active partitions (today + maybe yesterday)
-            let entries = fs::read_dir(&table_path)
-                .map_err(|e| format!("Failed to read table directory: {}", e))?;
+            // List date= partitions using Object Store
+            let partitions = self.storage.list_prefixes(&table_prefix).await?;
 
-            for entry in entries {
-                let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-                let path = entry.path();
-
-                if path.is_dir() {
-                    if let Some(dir_name) = path.file_name().and_then(|s| s.to_str()) {
-                        // Check for Hive-style partition format: date=YYYY-MM-DD
-                        if dir_name.starts_with("date=") {
-                            match self
-                                .compact_table_partition(catalog, schema, table, dir_name, config)
-                                .await
-                            {
-                                Ok(Some(result)) => results.push(result),
-                                Ok(None) => {
-                                    // No compaction needed for this partition
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        "Failed to compact partition {}/{}/{}/{}: {}",
-                                        catalog, schema, table, dir_name, e
-                                    );
-                                }
-                            }
+            for partition_name in partitions {
+                // Check for Hive-style partition format: date=YYYY-MM-DD
+                if partition_name.starts_with("date=") {
+                    match self
+                        .compact_table_partition(catalog, schema, table, &partition_name, config)
+                        .await
+                    {
+                        Ok(Some(result)) => results.push(result),
+                        Ok(None) => {
+                            // No compaction needed for this partition
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to compact partition {}/{}/{}/{}: {}",
+                                catalog, schema, table, partition_name, e
+                            );
                         }
                     }
                 }
@@ -205,20 +167,14 @@ impl Compactor {
     }
 
     /// Check if a table has partitions (contains subdirectories with date= prefix)
-    pub(crate) fn has_partitions(&self, table_path: &str) -> Result<bool, String> {
-        let entries = fs::read_dir(table_path)
-            .map_err(|e| format!("Failed to read table directory: {}", e))?;
+    ///
+    /// Uses Object Store to list prefixes.
+    pub(crate) async fn has_partitions_async(&self, table_prefix: &str) -> Result<bool, String> {
+        let prefixes = self.storage.list_prefixes(table_prefix).await?;
 
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                if let Some(dir_name) = path.file_name().and_then(|s| s.to_str()) {
-                    if dir_name.starts_with("date=") {
-                        return Ok(true);
-                    }
-                }
+        for prefix in prefixes {
+            if prefix.starts_with("date=") {
+                return Ok(true);
             }
         }
 

@@ -1,6 +1,7 @@
 //! Tests for the Compactor module
 
 use super::*;
+use crate::storage::storage::Storage;
 use arrow::array::{Float64Array, StringArray, TimestampNanosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use std::fs;
@@ -27,6 +28,17 @@ fn create_test_config() -> CompactionConfig {
         read_rate_limit_bytes_per_sec: 0,
         write_rate_limit_bytes_per_sec: 0,
     }
+}
+
+/// Create a local storage backend for testing
+fn create_test_storage(temp_dir: &TempDir) -> Arc<Storage> {
+    Arc::new(Storage::new_local(temp_dir.path().to_str().unwrap()).unwrap())
+}
+
+/// Create a compactor for testing with local storage
+fn create_test_compactor(temp_dir: &TempDir, config: &CompactionConfig) -> Compactor {
+    let storage = create_test_storage(temp_dir);
+    Compactor::new(storage, config)
 }
 
 #[test]
@@ -179,9 +191,10 @@ fn test_compaction_result_calculation() {
 fn test_compactor_creation() {
     let temp_dir = TempDir::new().unwrap();
     let config = create_test_config();
-    let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+    let compactor = create_test_compactor(&temp_dir, &config);
 
-    assert_eq!(compactor.data_dir, temp_dir.path().to_str().unwrap());
+    // Verify storage is set
+    assert!(compactor.storage.is_local());
 }
 
 #[test]
@@ -192,7 +205,7 @@ fn test_compactor_with_semaphore() {
         full_compaction_max_concurrent: 2,
         ..create_test_config()
     };
-    let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+    let compactor = create_test_compactor(&temp_dir, &config);
 
     assert!(compactor.compaction_semaphore.is_some());
     assert!(compactor.full_compaction_semaphore.is_some());
@@ -206,7 +219,7 @@ fn test_compactor_without_semaphore() {
         full_compaction_max_concurrent: 0,
         ..create_test_config()
     };
-    let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+    let compactor = create_test_compactor(&temp_dir, &config);
 
     assert!(compactor.compaction_semaphore.is_none());
     assert!(compactor.full_compaction_semaphore.is_none());
@@ -220,7 +233,7 @@ fn test_compactor_with_rate_limiters() {
         write_rate_limit_bytes_per_sec: 50 * 1024 * 1024,
         ..create_test_config()
     };
-    let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+    let compactor = create_test_compactor(&temp_dir, &config);
 
     assert!(compactor.read_rate_limiter.is_some());
     assert!(compactor.write_rate_limiter.is_some());
@@ -234,7 +247,7 @@ fn test_compactor_without_rate_limiters() {
         write_rate_limit_bytes_per_sec: 0,
         ..create_test_config()
     };
-    let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+    let compactor = create_test_compactor(&temp_dir, &config);
 
     assert!(compactor.read_rate_limiter.is_none());
     assert!(compactor.write_rate_limiter.is_none());
@@ -244,7 +257,7 @@ fn test_compactor_without_rate_limiters() {
 async fn test_get_lock_same_partition() {
     let temp_dir = TempDir::new().unwrap();
     let config = create_test_config();
-    let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+    let compactor = create_test_compactor(&temp_dir, &config);
 
     let lock1 = compactor
         .get_lock("catalog", "schema", "table", "2024-01-01")
@@ -261,7 +274,7 @@ async fn test_get_lock_same_partition() {
 async fn test_get_lock_different_partitions() {
     let temp_dir = TempDir::new().unwrap();
     let config = create_test_config();
-    let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+    let compactor = create_test_compactor(&temp_dir, &config);
 
     let lock1 = compactor
         .get_lock("catalog", "schema", "table", "2024-01-01")
@@ -278,7 +291,7 @@ async fn test_get_lock_different_partitions() {
 async fn test_list_parquet_file_infos_empty_directory() {
     let temp_dir = TempDir::new().unwrap();
     let config = create_test_config();
-    let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+    let compactor = create_test_compactor(&temp_dir, &config);
 
     let result = compactor.list_parquet_file_infos(temp_dir.path().to_str().unwrap());
     assert!(result.is_ok());
@@ -289,7 +302,7 @@ async fn test_list_parquet_file_infos_empty_directory() {
 async fn test_list_parquet_file_infos_with_files() {
     let temp_dir = TempDir::new().unwrap();
     let config = create_test_config();
-    let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+    let compactor = create_test_compactor(&temp_dir, &config);
 
     // Create test parquet files
     fs::write(temp_dir.path().join("L0_1000000.parquet"), b"test data 1").unwrap();
@@ -309,7 +322,7 @@ async fn test_list_parquet_file_infos_with_files() {
 async fn test_list_parquet_file_infos_filters_invalid() {
     let temp_dir = TempDir::new().unwrap();
     let config = create_test_config();
-    let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+    let compactor = create_test_compactor(&temp_dir, &config);
 
     // Create valid and invalid parquet files
     fs::write(temp_dir.path().join("L0_1000000.parquet"), b"test data").unwrap();
@@ -447,7 +460,7 @@ fn test_hour_check_for_full_compaction() {
 async fn test_compact_non_existing_path() {
     let temp_dir = TempDir::new().unwrap();
     let config = create_test_config();
-    let compactor = Compactor::with_config(temp_dir.path().to_str().unwrap(), &config);
+    let compactor = create_test_compactor(&temp_dir, &config);
 
     let result = compactor
         .compact_table_partition("catalog", "schema", "table", "2024-01-01", &config)
