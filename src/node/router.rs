@@ -10,7 +10,7 @@ use crate::meta::client::SubscriberConfig;
 use crate::router::api as router_api;
 use crate::router::config::RouterConfig;
 use crate::router::flight::RouterFlightService;
-use crate::router::routing::CacheInvalidationHandler;
+use crate::router::CacheInvalidationHandler;
 use crate::router::state::RouterAppState;
 use std::sync::Arc;
 use tonic::transport::Server;
@@ -106,6 +106,28 @@ pub async fn start(config_path: &str) {
                 {
                     warn!("Failed to resync from Meta: {}", e);
                 }
+            }
+        });
+    }
+
+    // Start partition cache eviction task
+    if router_config.routing.partition_cache_ttl_secs > 0
+        && router_config.routing.partition_cache_eviction_interval_secs > 0
+    {
+        let shard_cache = Arc::clone(&state.shard_cache);
+        let ttl_ms = router_config.routing.partition_cache_ttl_secs * 1000;
+        let interval_secs = router_config.routing.partition_cache_eviction_interval_secs;
+
+        info!(
+            "Starting partition cache eviction task (TTL: {}s, interval: {}s)",
+            router_config.routing.partition_cache_ttl_secs, interval_secs
+        );
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                shard_cache.evict_stale_partitions(ttl_ms as i64);
             }
         });
     }

@@ -1,12 +1,13 @@
 //! Parquet I/O Operations for Compactor
 //!
 //! Handles reading and writing parquet files.
+//! Uses Object Store abstraction for both local and S3/MinIO storage.
 
 use arrow::array::RecordBatch;
+use bytes::Bytes;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
-use std::fs::{self, File};
-use std::path::PathBuf;
+use std::io::Cursor;
 use tracing::{debug, warn};
 
 use crate::query::catalog::FileInfo;
@@ -46,24 +47,24 @@ impl Compactor {
         }
     }
 
-    /// List all parquet files with level information
-    pub(crate) fn list_parquet_file_infos(
+    /// List all parquet files with level information using Object Store
+    ///
+    /// Recursively lists files in node_id= subdirectories.
+    /// Path structure: catalog/schema/table/date=YYYY-MM-DD/node_id=X/*.parquet
+    pub(crate) async fn list_parquet_file_infos_async(
         &self,
-        dir: &str,
+        prefix: &str,
     ) -> Result<Vec<ParquetFileInfo>, String> {
-        let entries = fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))?;
+        // List all files recursively (includes node_id= subdirectories)
+        let files = self.storage.list(prefix).await?;
 
         let mut file_infos = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-            let path = entry.path();
-
-            if path.is_file() {
-                if let Some(ext) = path.extension() {
-                    if ext == "parquet" {
-                        if let Ok(info) = ParquetFileInfo::from_path(path) {
-                            file_infos.push(info);
-                        }
+        for path in files {
+            if path.ends_with(".parquet") {
+                // Get file size
+                if let Ok(size) = self.storage.size(&path).await {
+                    if let Ok(info) = ParquetFileInfo::from_path_and_size(path, size) {
+                        file_infos.push(info);
                     }
                 }
             }
@@ -102,29 +103,36 @@ impl Compactor {
         Ok(groups)
     }
 
-    /// Read all batches from multiple parquet files
-    pub(crate) async fn read_parquet_files(
+    /// Read all batches from multiple parquet files using Object Store
+    ///
+    /// Works with both local and S3/MinIO storage via the Storage abstraction.
+    pub(crate) async fn read_parquet_files_from_storage(
         &self,
-        files: &[PathBuf],
+        file_paths: &[String],
     ) -> Result<Vec<RecordBatch>, String> {
         let mut all_batches = Vec::new();
         let mut total_bytes_read = 0u64;
 
-        for file_path in files {
-            let file = File::open(file_path)
-                .map_err(|e| format!("Failed to open file {}: {}", file_path.display(), e))?;
+        for file_path in file_paths {
+            // Read file bytes from Object Store
+            let bytes = self
+                .storage
+                .get(file_path)
+                .await
+                .map_err(|e| format!("Failed to read file {}: {}", file_path, e))?;
 
-            let builder = ParquetRecordBatchReaderBuilder::try_new(file)
-                .map_err(|e| format!("Failed to create parquet reader: {}", e))?;
+            // Create a reader from bytes
+            let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)
+                .map_err(|e| format!("Failed to create parquet reader for {}: {}", file_path, e))?;
 
             let reader = builder
                 .build()
-                .map_err(|e| format!("Failed to build reader: {}", e))?;
+                .map_err(|e| format!("Failed to build reader for {}: {}", file_path, e))?;
 
             for batch_result in reader {
-                let batch = batch_result.map_err(|e| format!("Failed to read batch: {}", e))?;
+                let batch = batch_result
+                    .map_err(|e| format!("Failed to read batch from {}: {}", file_path, e))?;
 
-                // Calculate batch size (approximate)
                 let batch_bytes = batch.get_array_memory_size() as u64;
                 total_bytes_read += batch_bytes;
 
@@ -138,7 +146,7 @@ impl Compactor {
         }
 
         debug!(
-            "Read {} batches ({} MB)",
+            "Read {} batches ({} MB) from Object Store",
             all_batches.len(),
             total_bytes_read / (1024 * 1024)
         );
@@ -151,13 +159,15 @@ impl Compactor {
         Ok(all_batches)
     }
 
-    /// Write compacted batches to a new file (merge-sorted by time, optimized)
-    /// Uses k-way merge since each input file is already sorted
-    pub(crate) async fn write_compacted_file(
+    /// Write compacted batches to Object Store (merge-sorted by time, optimized)
+    ///
+    /// Uses k-way merge since each input file is already sorted.
+    /// Returns the size of the written file in bytes.
+    pub(crate) async fn write_compacted_file_to_storage(
         &self,
-        filename: &str,
+        path: &str,
         batches: Vec<RecordBatch>,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         if batches.is_empty() {
             return Err("No batches to write".to_string());
         }
@@ -170,15 +180,17 @@ impl Compactor {
         let total_rows = sorted_batch.num_rows();
         debug!(
             "Writing {} rows to {} (merge-sorted by time)",
-            total_rows, filename
+            total_rows, path
         );
 
-        let file = File::create(filename).map_err(|e| format!("Failed to create file: {}", e))?;
+        // Write to in-memory buffer first
+        let mut buffer = Vec::new();
+        let cursor = Cursor::new(&mut buffer);
 
         // Use optimized writer properties
         let props = Self::create_optimized_writer_props(&schema);
 
-        let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
+        let mut writer = ArrowWriter::try_new(cursor, schema.clone(), Some(props))
             .map_err(|e| format!("Failed to create writer: {}", e))?;
 
         let batch_bytes = sorted_batch.get_array_memory_size() as u64;
@@ -196,12 +208,20 @@ impl Compactor {
             .close()
             .map_err(|e| format!("Failed to close writer: {}", e))?;
 
+        let file_size = buffer.len() as u64;
+
+        // Write to Object Store
+        self.storage
+            .put(path, Bytes::from(buffer))
+            .await
+            .map_err(|e| format!("Failed to write to Object Store: {}", e))?;
+
         debug!(
-            "Wrote {} rows, {} MB (merge-sorted, compressed)",
+            "Wrote {} rows, {} MB to Object Store (merge-sorted, compressed)",
             total_rows,
-            batch_bytes / (1024 * 1024)
+            file_size / (1024 * 1024)
         );
 
-        Ok(())
+        Ok(file_size)
     }
 }

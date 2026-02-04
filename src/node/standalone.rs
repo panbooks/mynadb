@@ -87,11 +87,10 @@ pub async fn run(config_path: &str) {
     // Initialize compactor
     info!("Initializing compactor");
     let compaction_config = compactor::CompactionConfig::from(&config.compaction);
-    let compactor = Arc::new(compactor::Compactor::with_storage_and_metadata(
-        &config.storage.data_dir,
+    let compactor = Arc::new(compactor::Compactor::with_metadata(
         storage.clone(),
         &compaction_config,
-        metadata_manager.clone(),
+        Some(metadata_manager.clone()),
     ));
 
     // Start background compaction if enabled
@@ -125,9 +124,8 @@ pub async fn run(config_path: &str) {
 
     // Initialize retention manager
     info!("Initializing retention manager");
-    let retention_manager = Arc::new(retention_manager::RetentionManager::with_storage(
+    let retention_manager = Arc::new(retention_manager::RetentionManager::new(
         Arc::clone(&db_manager),
-        &config.storage.data_dir,
         storage.clone(),
     ));
 
