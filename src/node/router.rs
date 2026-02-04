@@ -10,7 +10,7 @@ use crate::meta::client::SubscriberConfig;
 use crate::router::api as router_api;
 use crate::router::config::RouterConfig;
 use crate::router::flight::RouterFlightService;
-use crate::router::routing::CacheInvalidationHandler;
+use crate::router::CacheInvalidationHandler;
 use crate::router::state::RouterAppState;
 use std::sync::Arc;
 use tonic::transport::Server;
