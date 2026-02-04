@@ -1,7 +1,7 @@
 //! TableProvider implementations for the query engine
 //!
 //! This module contains various TableProvider implementations:
-//! - `ParquetTableProvider` - Reads from Parquet files on disk
+//! - `ParquetTableProvider` - Reads from Parquet files via ObjectStore
 //! - `MemtableProvider` - Reads from in-memory cached data
 //! - `UnionTableProvider` - Combines two providers (memtable + parquet)
 //! - `MultiUnionTableProvider` - Combines N providers (multiple storage prefixes)
@@ -13,5 +13,5 @@ pub mod union_provider;
 
 pub use memtable_provider::MemtableProvider;
 pub use multi_union_provider::MultiUnionTableProvider;
-pub use table_provider::{ParquetTableConfig, ParquetTableProvider};
+pub use table_provider::{ParquetExecPlan, ParquetFileInfo, ParquetTableConfig, ParquetTableProvider};
 pub use union_provider::UnionTableProvider;
