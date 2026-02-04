@@ -1388,6 +1388,11 @@ pub enum MetaResponse {
         lease_id: u64,
     },
 
+    /// Leases expired and nodes deregistered
+    LeasesExpired {
+        expired_nodes: Vec<String>,
+    },
+
     // ========================================================================
     // Table-Level Responses
     // ========================================================================

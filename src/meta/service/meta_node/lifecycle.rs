@@ -1,16 +1,20 @@
 //! Background tasks, rebalancing, and shutdown
 
 use super::MetaNode;
-use crate::meta::types::{keys, MetaCommand, NodeRole, NodeState};
+use crate::meta::recovery::RecoveryManager;
+use crate::meta::types::{keys, MetaCommand, MetaResponse, NodeRole, NodeState};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 impl MetaNode {
     /// Start background tasks
     pub fn start_background_tasks(self: &Arc<Self>) {
-        // Lease expiration task
+        // Lease expiration + recovery task
         {
             let node = Arc::clone(self);
+            let failover_config = self.config.failover.clone();
+            let standby_config = self.config.standby.clone();
+
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
                 loop {
@@ -21,10 +25,27 @@ impl MetaNode {
                         continue;
                     }
 
-                    // Expire leases
+                    // Expire leases and get crashed nodes
                     let cmd = MetaCommand::ExpireLeases;
-                    if let Err(e) = node.apply_command(cmd).await {
-                        warn!("Failed to expire leases: {}", e);
+                    match node.apply_command_direct(cmd).await {
+                        Ok(MetaResponse::LeasesExpired { expired_nodes }) => {
+                            // Trigger recovery for each crashed node
+                            for node_id in expired_nodes {
+                                info!("Node {} lease expired, triggering recovery", node_id);
+                                let recovery_manager = RecoveryManager::new(
+                                    Arc::clone(&node),
+                                    failover_config.clone(),
+                                    standby_config.clone(),
+                                );
+                                if let Err(e) = recovery_manager.handle_node_crash(&node_id).await {
+                                    error!("Recovery failed for node {}: {:?}", node_id, e);
+                                }
+                            }
+                        }
+                        Ok(_) => {} // No leases expired
+                        Err(e) => {
+                            warn!("Failed to expire leases: {}", e);
+                        }
                     }
                 }
             });
