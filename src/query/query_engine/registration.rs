@@ -300,22 +300,28 @@ impl QueryEngine {
 
         let config = ParquetTableConfig::new(full_name.clone()).with_batch_size(8192);
 
-        // Use ObjectStore-based async constructor when Storage is available
+        // Use ObjectStore-based async constructor
         let mut provider = if let Some(ref storage) = self.storage {
             // Extract the path from the URL (remove scheme like file://, s3://)
             let base_path = Self::extract_path_from_url(table_path);
 
-            ParquetTableProvider::try_new_async(storage.object_store(), base_path, config)
+            ParquetTableProvider::try_new(storage.object_store(), base_path, config)
                 .await
                 .map_err(|e| {
                     format!("Failed to create table provider for '{}': {}", full_name, e)
                 })?
         } else {
-            // Fallback to sync local filesystem constructor
+            // Fallback: create local ObjectStore for local filesystem
             let local_path = table_path.strip_prefix("file://").unwrap_or(table_path);
-            ParquetTableProvider::try_new(local_path, config).map_err(|e| {
-                format!("Failed to create table provider for '{}': {}", full_name, e)
-            })?
+            let local_store: std::sync::Arc<dyn object_store::ObjectStore> =
+                std::sync::Arc::new(object_store::local::LocalFileSystem::new_with_prefix(local_path)
+                    .map_err(|e| format!("Failed to create local store for '{}': {}", local_path, e))?);
+
+            ParquetTableProvider::try_new(local_store, "", config)
+                .await
+                .map_err(|e| {
+                    format!("Failed to create table provider for '{}': {}", full_name, e)
+                })?
         };
 
         // Add parquet cache for cluster mode
