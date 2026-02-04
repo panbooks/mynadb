@@ -458,7 +458,7 @@ mod tests {
     use super::*;
     use crate::meta::types::DataNodeMode;
     use crate::router::client::data_node_pool::PoolConfig;
-    use crate::router::routing::shard_cache::NodeState;
+    use crate::router::shard_cache::NodeState;
     use crate::utils::hash::hash_select_index;
     use std::collections::HashSet;
 

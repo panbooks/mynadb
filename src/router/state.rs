@@ -4,7 +4,7 @@
 
 use super::client::DataNodePool;
 use super::config::RouterConfig;
-use super::routing::{QueryCoordinator, ShardCache, WriteRouter};
+use super::{QueryCoordinator, ShardCache, WriteRouter};
 use crate::config::Config;
 use crate::meta::client::MetaClient;
 use crate::storage::storage::Storage;

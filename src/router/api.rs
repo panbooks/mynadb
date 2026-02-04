@@ -317,7 +317,7 @@ pub async fn router_status_handler(State(state): State<RouterAppState>) -> impl 
 
 /// List active Primary Data nodes (only Primary nodes serve traffic)
 pub async fn list_data_nodes_handler(State(state): State<RouterAppState>) -> impl IntoResponse {
-    use super::routing::shard_cache::NodeState;
+    use super::shard_cache::NodeState;
     use crate::meta::types::DataNodeMode;
 
     // Only show Primary nodes - Standby nodes are cold backups and don't serve traffic

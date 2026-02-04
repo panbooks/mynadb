@@ -677,7 +677,7 @@ impl WriteRouter {
 mod tests {
     use super::*;
     use crate::meta::types::DataNodeMode;
-    use crate::router::routing::shard_cache::NodeState;
+    use crate::router::shard_cache::NodeState;
     use arrow::array::{Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use std::collections::HashMap;
