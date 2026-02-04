@@ -36,6 +36,26 @@ pub struct DistributedQueryPlan {
     /// Table-level routing: table → owner node_id (RECOMMENDED)
     /// When set, routes each table's query to its owner node
     pub table_owners: Option<HashMap<String, String>>,
+    /// Partition-level routing: target_node_id → [node_id partitions to query]
+    ///
+    /// When partition routing is used, each target node is assigned specific
+    /// `node_id` partitions to query. This enables:
+    /// - **Cache affinity**: Each node queries partitions it wrote (cached locally)
+    /// - **No duplicates**: Each partition is queried by exactly one node
+    /// - **Fallback support**: If a node is down, its partitions are reassigned
+    ///
+    /// Example:
+    /// ```text
+    /// {
+    ///   "data-1": ["data-1"],        // data-1 queries its own partition
+    ///   "data-2": ["data-2"],        // data-2 queries its own partition
+    ///   "data-3": ["data-4"],        // data-3 is fallback for data-4 (down)
+    /// }
+    /// ```
+    ///
+    /// When this is Some, fan_out_query() will rewrite SQL to add:
+    /// `AND node_id IN ('data-1')` for each target node's assigned partitions.
+    pub partition_assignments: Option<HashMap<String, Vec<String>>>,
 }
 
 /// Table reference in a query
@@ -53,4 +73,19 @@ pub struct TimeRange {
     /// Explicit date filter (e.g., date = '2024-01-15')
     pub start_date: Option<String>,
     pub end_date: Option<String>,
+}
+
+/// Result of partition-level routing
+///
+/// Contains both target nodes and their partition assignments for
+/// cache-affinity-aware distributed query execution.
+#[derive(Debug)]
+pub struct PartitionRoutingResult {
+    /// Target nodes to query
+    pub target_nodes: Vec<DataNodeInfo>,
+    /// Map of target_node_id → [node_id partitions to query]
+    /// Each target node is assigned specific partitions to ensure:
+    /// - No duplicate data (each partition queried by exactly one node)
+    /// - Cache affinity (nodes query their own partitions when possible)
+    pub partition_assignments: HashMap<String, Vec<String>>,
 }

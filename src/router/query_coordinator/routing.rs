@@ -21,7 +21,7 @@
 //! table-level routing (query all table owners).
 
 use super::super::shard_cache::{DataNodeInfo, NodeState, ShardCache, TableKey};
-use super::types::{TableRef, TimeRange};
+use super::types::{PartitionRoutingResult, TableRef, TimeRange};
 use super::QueryCoordinator;
 use crate::meta::client::MetaClient;
 use crate::storage::storage::Storage;
@@ -37,8 +37,8 @@ impl QueryCoordinator {
 
     /// Try partition-level routing based on date filters in the query
     ///
-    /// Returns Some(nodes) if partition cache has entries for all requested dates,
-    /// or if S3 LIST-based discovery finds the node_ids.
+    /// Returns Some(PartitionRoutingResult) if partition cache has entries for all
+    /// requested dates, or if S3 LIST-based discovery finds the node_ids.
     /// Returns None if discovery fails (fallback to table-level routing).
     ///
     /// Discovery flow:
@@ -46,15 +46,30 @@ impl QueryCoordinator {
     /// 2. On cache miss, try S3 LIST to discover `node_id=*` subdirectories
     /// 3. Cache discovered results for future queries
     ///
-    /// This is the key optimization: instead of querying ALL table owners,
-    /// we only query nodes that actually have data for the requested partitions.
+    /// ## Cache Affinity & Partition Assignments
+    ///
+    /// This function builds a mapping of target_node → [assigned partitions]:
+    /// - Each node is assigned its own `node_id` partition (for cache affinity)
+    /// - If a node is down, its partition is reassigned to a fallback node
+    /// - Each partition is assigned to exactly ONE node (no duplicates)
+    ///
+    /// Example with 4 partition nodes, 1 down:
+    /// ```text
+    /// Partition nodes: [data-1, data-2, data-3, data-4]
+    /// data-3 is DOWN → fallback to data-1
+    ///
+    /// Result:
+    ///   data-1 → ["data-1", "data-3"]  // queries own + fallback
+    ///   data-2 → ["data-2"]            // queries own
+    ///   data-4 → ["data-4"]            // queries own
+    /// ```
     pub(super) async fn try_partition_routing(
         &self,
         catalog: &str,
         tables: &[TableRef],
         time_range: &Option<TimeRange>,
         all_primary_nodes: &[DataNodeInfo],
-    ) -> Option<Vec<DataNodeInfo>> {
+    ) -> Option<PartitionRoutingResult> {
         // Extract date filters from time range
         let dates = self.extract_date_filters(time_range)?;
 
@@ -69,7 +84,8 @@ impl QueryCoordinator {
             dates
         );
 
-        let mut target_node_ids: HashSet<String> = HashSet::new();
+        // Collect all partition node_ids that have data for the query
+        let mut partition_node_ids: HashSet<String> = HashSet::new();
 
         for table in tables {
             // Try to get nodes from partition cache for all requested dates
@@ -90,7 +106,7 @@ impl QueryCoordinator {
                         node_ids.len(),
                         dates.len()
                     );
-                    target_node_ids.extend(node_ids);
+                    partition_node_ids.extend(node_ids);
                 }
                 Some(_) => {
                     // Empty nodes list - this shouldn't happen but fallback
@@ -138,7 +154,7 @@ impl QueryCoordinator {
                                         node_id,
                                     );
                                 }
-                                target_node_ids.extend(discovered);
+                                partition_node_ids.extend(discovered);
                             }
                         }
                     } else {
@@ -154,47 +170,122 @@ impl QueryCoordinator {
             }
         }
 
-        if target_node_ids.is_empty() {
+        if partition_node_ids.is_empty() {
             return None;
         }
 
-        // Convert node_ids to DataNodeInfo, filtering to queryable nodes
-        let target_nodes: Vec<DataNodeInfo> = target_node_ids
-            .iter()
-            .filter_map(|node_id| {
-                self.shard_cache.get_data_node(node_id).and_then(|node| {
-                    if Self::is_queryable(&node) {
-                        Some(node)
-                    } else {
-                        // Node not queryable, find a fallback
-                        debug!(
-                            "Node {} not queryable, assigning work to fallback",
-                            node_id
-                        );
-                        // Use consistent hash to pick a fallback node
-                        if !all_primary_nodes.is_empty() {
-                            let idx = hash_select_index(node_id, all_primary_nodes.len());
-                            Some(all_primary_nodes[idx].clone())
-                        } else {
-                            None
-                        }
-                    }
-                })
-            })
-            .collect();
+        // ====================================================================
+        // Build partition assignments with cache affinity and fallback support
+        // ====================================================================
+        // For each partition node_id:
+        //   - If the node is queryable → assign partition to itself (cache affinity)
+        //   - If the node is down → assign partition to a fallback node
+        // This ensures each partition is queried by exactly ONE node.
 
-        if target_nodes.is_empty() {
+        let mut partition_assignments: HashMap<String, Vec<String>> = HashMap::new();
+        let mut target_node_map: HashMap<String, DataNodeInfo> = HashMap::new();
+
+        for partition_node_id in &partition_node_ids {
+            // Check if this partition's owner node is queryable
+            let (target_node_id, target_node_info) =
+                if let Some(node) = self.shard_cache.get_data_node(partition_node_id) {
+                    if Self::is_queryable(&node) {
+                        // Node is queryable - assign partition to itself (cache affinity!)
+                        (partition_node_id.clone(), node)
+                    } else {
+                        // Node not queryable - find fallback
+                        debug!(
+                            "Partition owner {} not queryable (state={:?}), finding fallback",
+                            partition_node_id, node.state
+                        );
+                        self.find_fallback_node(partition_node_id, all_primary_nodes)?
+                    }
+                } else {
+                    // Node not in cluster - find fallback
+                    debug!(
+                        "Partition owner {} not in cluster, finding fallback",
+                        partition_node_id
+                    );
+                    self.find_fallback_node(partition_node_id, all_primary_nodes)?
+                };
+
+            // Add partition to target node's assignment list
+            partition_assignments
+                .entry(target_node_id.clone())
+                .or_default()
+                .push(partition_node_id.clone());
+
+            // Track target node info (dedup via HashMap)
+            target_node_map.insert(target_node_id, target_node_info);
+        }
+
+        if partition_assignments.is_empty() {
             return None;
+        }
+
+        let target_nodes: Vec<DataNodeInfo> = target_node_map.into_values().collect();
+
+        // Log the assignments for debugging
+        for (target, partitions) in &partition_assignments {
+            if partitions.len() == 1 && partitions[0] == *target {
+                debug!("  {} → own partition (cache affinity)", target);
+            } else {
+                debug!(
+                    "  {} → {:?} ({} includes fallback)",
+                    target,
+                    partitions,
+                    if partitions.contains(target) {
+                        "own +"
+                    } else {
+                        "fallback only,"
+                    }
+                );
+            }
         }
 
         info!(
-            "Partition-level routing: {} dates → {} nodes (vs {} table owners)",
-            dates.len(),
+            "Partition-level routing: {} partition nodes → {} target nodes ({}% fan-out reduction)",
+            partition_node_ids.len(),
             target_nodes.len(),
-            all_primary_nodes.len()
+            if all_primary_nodes.is_empty() {
+                0
+            } else {
+                100 - (target_nodes.len() * 100 / all_primary_nodes.len().max(1))
+            }
         );
 
-        Some(target_nodes)
+        Some(PartitionRoutingResult {
+            target_nodes,
+            partition_assignments,
+        })
+    }
+
+    /// Find a fallback node for a partition whose owner is unavailable
+    ///
+    /// Uses consistent hash to ensure stable fallback assignment.
+    fn find_fallback_node(
+        &self,
+        partition_node_id: &str,
+        all_primary_nodes: &[DataNodeInfo],
+    ) -> Option<(String, DataNodeInfo)> {
+        if all_primary_nodes.is_empty() {
+            warn!(
+                "No primary nodes available for fallback of partition {}",
+                partition_node_id
+            );
+            return None;
+        }
+
+        // Use consistent hash for stable fallback selection
+        let idx = hash_select_index(&partition_node_id.to_string(), all_primary_nodes.len());
+        let fallback_node = &all_primary_nodes[idx];
+
+        info!(
+            "Partition {} assigned to fallback node {} (via consistent hash)",
+            partition_node_id, fallback_node.node_id
+        );
+
+        Some((fallback_node.node_id.clone(), fallback_node.clone()))
     }
 
     /// Extract date strings from time range for partition cache lookup
