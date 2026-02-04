@@ -472,7 +472,7 @@ impl RecoveryManager {
             crashed_primary_id: primary_id.to_string(),
         };
 
-        match self.meta_node.apply_command_direct(cmd).await {
+        match self.meta_node.apply_command(cmd).await {
             Ok(_) => {
                 info!("Recovery: Flush command sent to Standby {}", standby_id);
 
@@ -685,7 +685,7 @@ impl RecoveryManager {
                     primary_ids: vec![primary_id.clone()],
                 };
 
-                match self.meta_node.apply_command_direct(cmd).await {
+                match self.meta_node.apply_command(cmd).await {
                     Ok(_) => {
                         assigned.push(primary_id.clone());
                     }
@@ -752,7 +752,7 @@ impl RecoveryManager {
             primary_ids: primary_ids.to_vec(),
         };
 
-        match self.meta_node.apply_command_direct(cmd).await {
+        match self.meta_node.apply_command(cmd).await {
             Ok(_) => {
                 info!("Recovery: Spare {} assigned to Primaries", spare_id);
                 Ok(())

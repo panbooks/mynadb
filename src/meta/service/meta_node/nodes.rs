@@ -1,7 +1,7 @@
 //! Node registration and heartbeat operations
 
 use super::MetaNode;
-use crate::meta::types::{MetaCommand, NodeInfo};
+use crate::meta::types::{MetaCommand, MetaResponse, NodeInfo};
 
 impl MetaNode {
     /// Register a node
@@ -11,7 +11,11 @@ impl MetaNode {
             lease_id: 0,
             lease_ttl_ms,
         };
-        self.apply_command(cmd).await
+        match self.apply_command(cmd).await? {
+            MetaResponse::NodeRegistered { lease_id } => Ok(lease_id),
+            MetaResponse::Error { message } => Err(message),
+            other => Err(format!("Unexpected response: {:?}", other)),
+        }
     }
 
     /// Send heartbeat for a node
@@ -26,10 +30,8 @@ impl MetaNode {
             lease_id,
             timestamp,
         };
-        match self.apply_command(cmd).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e),
-        }
+        self.apply_command(cmd).await?;
+        Ok(())
     }
 
     /// Deregister a node
@@ -37,9 +39,7 @@ impl MetaNode {
         let cmd = MetaCommand::DeregisterNode {
             node_id: node_id.to_string(),
         };
-        match self.apply_command(cmd).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e),
-        }
+        self.apply_command(cmd).await?;
+        Ok(())
     }
 }
