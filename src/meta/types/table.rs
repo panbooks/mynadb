@@ -39,13 +39,6 @@ pub struct TableMeta {
     /// Additional elements are nodes with rerouted data or distributed partitions.
     pub owner_node_ids: Vec<String>,
 
-    /// Legacy storage prefixes from retired nodes during scale-in.
-    /// When a node is retired, its node_id is recorded here so queries
-    /// can still find data under the old prefix (e.g., "data-50/" to "data-99/").
-    /// This enables reading orphaned parquet files after cluster scale-in.
-    #[serde(default)]
-    pub legacy_prefixes: Vec<String>,
-
     // Cached statistics (updated periodically, not per-flush)
     /// Number of date partitions (e.g., 30 for a month of data)
     pub partition_count: u32,
@@ -78,7 +71,6 @@ impl TableMeta {
             schema,
             table,
             owner_node_ids: vec![owner_node_id],
-            legacy_prefixes: Vec::new(),
             partition_count: 0,
             total_bytes: 0,
             total_rows: 0,
@@ -185,65 +177,6 @@ impl TableMeta {
         keys::PREFIX_TABLE.to_string()
     }
 
-    // ========================================================================
-    // Legacy Prefix Management (Scale-In Support)
-    // ========================================================================
-
-    /// Add a legacy prefix from a retired node
-    ///
-    /// Called during scale-in when partitions are reassigned from a retiring node.
-    /// The old node's prefix is recorded so queries can still find data under
-    /// the old storage path.
-    ///
-    /// Returns true if the prefix was added, false if it already exists.
-    pub fn add_legacy_prefix(&mut self, prefix: String) -> bool {
-        if !self.legacy_prefixes.contains(&prefix) {
-            self.legacy_prefixes.push(prefix);
-            self.last_modified = current_timestamp_ms();
-            self.version += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Remove a legacy prefix (e.g., after data migration completes)
-    ///
-    /// Returns true if the prefix was removed.
-    pub fn remove_legacy_prefix(&mut self, prefix: &str) -> bool {
-        let initial_len = self.legacy_prefixes.len();
-        self.legacy_prefixes.retain(|p| p != prefix);
-        if self.legacy_prefixes.len() < initial_len {
-            self.last_modified = current_timestamp_ms();
-            self.version += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Get all storage prefixes for this table (current owners + legacy)
-    ///
-    /// Used during query discovery to scan all paths where data for this
-    /// table might exist. This includes:
-    /// - Current owner node IDs (active writers)
-    /// - Legacy prefixes (retired nodes that still have data in S3)
-    pub fn all_storage_prefixes(&self) -> Vec<&str> {
-        let mut prefixes: Vec<&str> = self.owner_node_ids.iter().map(|s| s.as_str()).collect();
-        prefixes.extend(self.legacy_prefixes.iter().map(|s| s.as_str()));
-        prefixes
-    }
-
-    /// Check if this table has legacy prefixes from retired nodes
-    pub fn has_legacy_prefixes(&self) -> bool {
-        !self.legacy_prefixes.is_empty()
-    }
-
-    /// Get the legacy prefixes (read-only)
-    pub fn legacy_prefixes(&self) -> &[String] {
-        &self.legacy_prefixes
-    }
-
     /// Update statistics with a delta (after flush)
     pub fn apply_stats_delta(&mut self, delta: &TableStatsDelta) {
         self.partition_count = (self.partition_count as i64 + delta.partition_count_delta) as u32;
@@ -331,7 +264,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_table_meta_new_has_empty_legacy_prefixes() {
+    fn test_table_meta_new() {
         let meta = TableMeta::new(
             "mydb".to_string(),
             "default".to_string(),
@@ -339,142 +272,42 @@ mod tests {
             "data-1".to_string(),
         );
 
-        assert!(meta.legacy_prefixes.is_empty());
-        assert!(!meta.has_legacy_prefixes());
+        assert_eq!(meta.catalog, "mydb");
+        assert_eq!(meta.schema, "default");
+        assert_eq!(meta.table, "cpu");
+        assert_eq!(meta.primary_owner(), Some("data-1"));
     }
 
     #[test]
-    fn test_add_legacy_prefix() {
+    fn test_multi_owner() {
         let mut meta = TableMeta::new(
             "mydb".to_string(),
             "default".to_string(),
             "cpu".to_string(),
             "data-1".to_string(),
         );
-
-        let initial_version = meta.version;
-
-        // Add first legacy prefix
-        let added = meta.add_legacy_prefix("data-50".to_string());
-        assert!(added);
-        assert_eq!(meta.legacy_prefixes().len(), 1);
-        assert!(meta.has_legacy_prefixes());
-        assert_eq!(meta.version, initial_version + 1);
-
-        // Add second legacy prefix
-        let added = meta.add_legacy_prefix("data-75".to_string());
-        assert!(added);
-        assert_eq!(meta.legacy_prefixes().len(), 2);
-        assert_eq!(meta.version, initial_version + 2);
-
-        // Try to add duplicate (should return false)
-        let added = meta.add_legacy_prefix("data-50".to_string());
-        assert!(!added);
-        assert_eq!(meta.legacy_prefixes().len(), 2);
-        assert_eq!(meta.version, initial_version + 2); // Version unchanged
-    }
-
-    #[test]
-    fn test_remove_legacy_prefix() {
-        let mut meta = TableMeta::new(
-            "mydb".to_string(),
-            "default".to_string(),
-            "cpu".to_string(),
-            "data-1".to_string(),
-        );
-
-        meta.add_legacy_prefix("data-50".to_string());
-        meta.add_legacy_prefix("data-75".to_string());
-        let initial_version = meta.version;
-
-        // Remove existing prefix
-        let removed = meta.remove_legacy_prefix("data-50");
-        assert!(removed);
-        assert_eq!(meta.legacy_prefixes().len(), 1);
-        assert_eq!(meta.version, initial_version + 1);
-
-        // Try to remove non-existent prefix
-        let removed = meta.remove_legacy_prefix("data-99");
-        assert!(!removed);
-        assert_eq!(meta.legacy_prefixes().len(), 1);
-        assert_eq!(meta.version, initial_version + 1); // Version unchanged
-    }
-
-    #[test]
-    fn test_all_storage_prefixes() {
-        let mut meta = TableMeta::new(
-            "mydb".to_string(),
-            "default".to_string(),
-            "cpu".to_string(),
-            "data-1".to_string(),
-        );
-
-        // Initially just the owner
-        let prefixes = meta.all_storage_prefixes();
-        assert_eq!(prefixes.len(), 1);
-        assert!(prefixes.contains(&"data-1"));
 
         // Add a second owner
         meta.add_owner("data-2".to_string());
-
-        // Add legacy prefixes
-        meta.add_legacy_prefix("data-50".to_string());
-        meta.add_legacy_prefix("data-75".to_string());
-
-        // Should include all owners + all legacy
-        let prefixes = meta.all_storage_prefixes();
-        assert_eq!(prefixes.len(), 4);
-        assert!(prefixes.contains(&"data-1"));
-        assert!(prefixes.contains(&"data-2"));
-        assert!(prefixes.contains(&"data-50"));
-        assert!(prefixes.contains(&"data-75"));
+        assert!(meta.is_multi_owner());
+        assert_eq!(meta.all_owners().len(), 2);
     }
 
     #[test]
-    fn test_legacy_prefixes_serialization() {
-        let mut meta = TableMeta::new(
+    fn test_serialization() {
+        let meta = TableMeta::new(
             "mydb".to_string(),
             "default".to_string(),
             "cpu".to_string(),
             "data-1".to_string(),
         );
-        meta.add_legacy_prefix("data-50".to_string());
-        meta.add_legacy_prefix("data-75".to_string());
 
         // Test bincode serialization
         let encoded = bincode::serialize(&meta).unwrap();
         let decoded: TableMeta = bincode::deserialize(&encoded).unwrap();
 
-        assert_eq!(decoded.legacy_prefixes().len(), 2);
-        assert!(decoded.legacy_prefixes().contains(&"data-50".to_string()));
-        assert!(decoded.legacy_prefixes().contains(&"data-75".to_string()));
-    }
-
-    #[test]
-    fn test_legacy_prefixes_backward_compatibility() {
-        // Test that old TableMeta without legacy_prefixes can be deserialized
-        // This uses #[serde(default)] to ensure backward compatibility
-
-        // Create a minimal JSON without legacy_prefixes field
-        let json = r#"{
-            "catalog": "mydb",
-            "schema": "default",
-            "table": "cpu",
-            "owner_node_ids": ["data-1"],
-            "partition_count": 0,
-            "total_bytes": 0,
-            "total_rows": 0,
-            "oldest_partition": null,
-            "newest_partition": null,
-            "min_time": 9223372036854775807,
-            "max_time": -9223372036854775808,
-            "created_at": 1000,
-            "last_modified": 1000,
-            "version": 1
-        }"#;
-
-        let meta: TableMeta = serde_json::from_str(json).unwrap();
-        assert!(meta.legacy_prefixes.is_empty());
-        assert!(!meta.has_legacy_prefixes());
+        assert_eq!(decoded.catalog, meta.catalog);
+        assert_eq!(decoded.schema, meta.schema);
+        assert_eq!(decoded.table, meta.table);
     }
 }

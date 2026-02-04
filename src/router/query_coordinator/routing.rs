@@ -424,7 +424,6 @@ impl QueryCoordinator {
     /// Handles scale-in by:
     /// 1. Detecting stale owners (removed from cluster)
     /// 2. Refreshing from Meta when stale owners detected
-    /// 3. Assigning legacy_prefixes to active nodes via consistent hash
     pub(super) async fn resolve_query_targets(
         &self,
         catalog: &str,
@@ -470,7 +469,7 @@ impl QueryCoordinator {
                     continue;
                 }
 
-                // All owners are active - add them and handle legacy prefixes
+                // All owners are active - add them
                 let count = self.add_queryable_owners(
                     cached_meta.all_owners(),
                     &table_key,
@@ -478,22 +477,11 @@ impl QueryCoordinator {
                     &mut nodes_to_query,
                 );
 
-                // Also handle legacy prefixes (data from previously retired nodes)
-                if cached_meta.has_legacy_prefixes() {
-                    self.add_legacy_prefix_nodes(
-                        &table_key,
-                        cached_meta.legacy_prefixes(),
-                        all_primary_nodes,
-                        &mut nodes_to_query,
-                    );
-                }
-
                 if count > 0 {
                     debug!(
-                        "Table {} resolved: {} owners, {} legacy prefixes (dist={}%)",
+                        "Table {} resolved: {} owners (dist={}%)",
                         table_key.to_path(),
                         count,
-                        cached_meta.legacy_prefixes().len(),
                         distribution_percent
                     );
                     continue;
@@ -579,46 +567,12 @@ impl QueryCoordinator {
         count
     }
 
-    /// Add nodes responsible for legacy prefixes (from retired nodes)
-    ///
-    /// Uses consistent hash to assign each legacy prefix to an active node.
-    /// This ensures stable assignment: same prefix always maps to same node.
-    pub(super) fn add_legacy_prefix_nodes(
-        &self,
-        table_key: &TableKey,
-        legacy_prefixes: &[String],
-        all_primary_nodes: &[DataNodeInfo],
-        nodes_to_query: &mut HashMap<String, DataNodeInfo>,
-    ) {
-        if all_primary_nodes.is_empty() {
-            return;
-        }
-
-        for prefix in legacy_prefixes {
-            // Use consistent hash: hash(table_key + legacy_prefix) → node
-            // This ensures the same prefix always maps to the same node
-            let hash_key = format!("{}:{}", table_key.to_path(), prefix);
-            let idx = hash_select_index(&hash_key, all_primary_nodes.len());
-            let assigned_node = &all_primary_nodes[idx];
-
-            if !nodes_to_query.contains_key(&assigned_node.node_id) {
-                debug!(
-                    "Legacy prefix '{}' for table {} assigned to node {}",
-                    prefix,
-                    table_key.to_path(),
-                    assigned_node.node_id
-                );
-                nodes_to_query.insert(assigned_node.node_id.clone(), assigned_node.clone());
-            }
-        }
-    }
-
     /// Check if a node is queryable (Active or Retiring)
     pub(super) fn is_queryable(node: &DataNodeInfo) -> bool {
         node.state == NodeState::Active || node.state == NodeState::Retiring
     }
 
-    /// Resolve distributed table from Meta, with legacy prefix handling
+    /// Resolve distributed table from Meta
     pub(super) async fn resolve_distributed_from_meta(
         &self,
         meta_client: &MetaClient,
@@ -635,10 +589,9 @@ impl QueryCoordinator {
         {
             Ok(Some(table_meta)) => {
                 // Cache the updated metadata
-                self.shard_cache.set_table_owners_with_legacy(
+                self.shard_cache.set_table_owners(
                     table_key,
                     table_meta.all_owners().to_vec(),
-                    table_meta.legacy_prefixes.clone(),
                     table_meta.version,
                 );
 
@@ -650,23 +603,8 @@ impl QueryCoordinator {
                     nodes_to_query,
                 );
 
-                // Add nodes for legacy prefixes
-                if !table_meta.legacy_prefixes.is_empty() {
-                    info!(
-                        "Table {} has {} legacy prefixes from scale-in",
-                        table_key.to_path(),
-                        table_meta.legacy_prefixes.len()
-                    );
-                    self.add_legacy_prefix_nodes(
-                        table_key,
-                        &table_meta.legacy_prefixes,
-                        all_primary_nodes,
-                        nodes_to_query,
-                    );
-                }
-
-                if count == 0 && table_meta.legacy_prefixes.is_empty() {
-                    // No owners and no legacy - use fallback
+                if count == 0 {
+                    // No owners - use fallback
                     let distribution_percent = self.shard_cache.get_distribution_percent(
                         catalog,
                         &table.schema,
@@ -771,20 +709,11 @@ impl QueryCoordinator {
         {
             Ok(Some(table_meta)) => {
                 // Cache the result
-                self.shard_cache.set_table_owners_with_legacy(
+                self.shard_cache.set_table_owners(
                     table_key,
                     table_meta.all_owners().to_vec(),
-                    table_meta.legacy_prefixes.clone(),
                     table_meta.version,
                 );
-
-                if !table_meta.legacy_prefixes.is_empty() {
-                    info!(
-                        "Table {} has {} legacy prefixes",
-                        table_key.to_path(),
-                        table_meta.legacy_prefixes.len()
-                    );
-                }
 
                 // Add queryable owners
                 let count = self.add_queryable_owners(

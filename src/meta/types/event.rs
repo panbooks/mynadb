@@ -48,13 +48,6 @@ pub enum EventType {
     /// Published when write distribution config is set or deleted.
     /// Payload: {"catalog": "...", "schema": "...", "table": "...", "percent": N, "deleted": bool}
     DistributionConfigChanged = 17,
-
-    /// Legacy prefix added to table during scale-in
-    ///
-    /// Published when a node is retired and its prefix is recorded in TableMeta.
-    /// This allows queries to continue finding data under the old prefix.
-    /// Payload: {"catalog": "...", "schema": "...", "table": "...", "legacy_prefix": "..."}
-    TableLegacyPrefixAdded = 18,
 }
 
 impl From<i32> for EventType {
@@ -73,7 +66,6 @@ impl From<i32> for EventType {
             15 => EventType::TableOwnerRemoved,
             16 => EventType::TableReassigned,
             17 => EventType::DistributionConfigChanged,
-            18 => EventType::TableLegacyPrefixAdded,
             _ => EventType::Unknown,
         }
     }

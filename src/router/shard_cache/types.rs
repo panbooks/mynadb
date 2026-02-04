@@ -126,9 +126,6 @@ impl TableKey {
 pub struct CachedTableMeta {
     /// All owner node IDs (first is primary)
     pub owner_node_ids: Vec<String>,
-    /// Legacy storage prefixes from retired nodes during scale-in.
-    /// Used by query engine to scan orphaned data after cluster shrinks.
-    pub legacy_prefixes: Vec<String>,
     pub version: u64,
     pub cached_at: i64,
 }
@@ -147,25 +144,6 @@ impl CachedTableMeta {
     /// Check if a node is an owner
     pub fn is_owner(&self, node_id: &str) -> bool {
         self.owner_node_ids.iter().any(|id| id == node_id)
-    }
-
-    /// Get all storage prefixes (current owners + legacy)
-    ///
-    /// Used by query engine to scan all paths where data might exist.
-    pub fn all_storage_prefixes(&self) -> Vec<&str> {
-        let mut prefixes: Vec<&str> = self.owner_node_ids.iter().map(|s| s.as_str()).collect();
-        prefixes.extend(self.legacy_prefixes.iter().map(|s| s.as_str()));
-        prefixes
-    }
-
-    /// Check if this table has legacy prefixes from retired nodes
-    pub fn has_legacy_prefixes(&self) -> bool {
-        !self.legacy_prefixes.is_empty()
-    }
-
-    /// Get the legacy prefixes (read-only)
-    pub fn legacy_prefixes(&self) -> &[String] {
-        &self.legacy_prefixes
     }
 }
 
