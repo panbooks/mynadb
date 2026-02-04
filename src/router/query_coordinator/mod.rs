@@ -28,7 +28,7 @@ mod aggregation;
 mod routing;
 mod types;
 
-pub use types::{DistributedQueryPlan, QueryResult, TableRef, TimeRange};
+pub use types::{DistributedQueryPlan, PartitionRoutingResult, QueryResult, TableRef, TimeRange};
 
 use super::shard_cache::{DataNodeInfo, ShardCache, TableKey};
 use crate::meta::client::MetaClient;
@@ -42,6 +42,86 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
+
+// ============================================================================
+// SQL Rewriting for Partition-Level Routing
+// ============================================================================
+
+/// Rewrite SQL to add node_id partition filter
+///
+/// This is crucial for partition-level routing with cache affinity:
+/// - Each target node receives SQL filtered to only its assigned partitions
+/// - Prevents duplicate data (each partition queried by exactly one node)
+/// - Enables cache affinity (nodes query partitions they wrote)
+///
+/// ## Examples
+///
+/// Original: `SELECT * FROM cpu WHERE date='2024-01-15'`
+/// Rewritten: `SELECT * FROM cpu WHERE date='2024-01-15' AND node_id IN ('data-1', 'data-3')`
+///
+/// Original: `SELECT * FROM cpu`
+/// Rewritten: `SELECT * FROM cpu WHERE node_id IN ('data-1')`
+fn rewrite_sql_with_node_filter(sql: &str, assigned_partitions: &[String]) -> String {
+    if assigned_partitions.is_empty() {
+        return sql.to_string();
+    }
+
+    // Build the node_id IN clause
+    let node_ids: Vec<String> = assigned_partitions
+        .iter()
+        .map(|id| format!("'{}'", id.replace('\'', "''"))) // Escape single quotes
+        .collect();
+    let node_filter = format!("node_id IN ({})", node_ids.join(", "));
+
+    // Find the best place to inject the filter
+    let sql_upper = sql.to_uppercase();
+
+    // Strategy: Find WHERE clause and append, or add WHERE before GROUP BY/ORDER BY/LIMIT
+    if let Some(where_pos) = find_where_clause_end(&sql_upper) {
+        // Has WHERE clause - append with AND
+        let (before, after) = sql.split_at(where_pos);
+        format!("{} AND {}{}", before, node_filter, after)
+    } else if let Some(clause_pos) = find_clause_position(&sql_upper) {
+        // No WHERE but has GROUP BY/ORDER BY/LIMIT - insert WHERE before it
+        let (before, after) = sql.split_at(clause_pos);
+        format!("{} WHERE {}{}", before.trim_end(), node_filter, after)
+    } else {
+        // No WHERE and no trailing clauses - append WHERE at end
+        format!("{} WHERE {}", sql.trim_end(), node_filter)
+    }
+}
+
+/// Find the end position of the WHERE clause (before GROUP BY/ORDER BY/LIMIT/;)
+fn find_where_clause_end(sql_upper: &str) -> Option<usize> {
+    let where_pos = sql_upper.find(" WHERE ")?;
+    let where_end = where_pos + 7; // Past " WHERE "
+
+    // Find where the WHERE clause ends
+    let terminators = [" GROUP BY", " ORDER BY", " LIMIT ", " HAVING ", ";"];
+    let mut end_pos = sql_upper.len();
+
+    for terminator in &terminators {
+        if let Some(pos) = sql_upper[where_end..].find(terminator) {
+            end_pos = end_pos.min(where_end + pos);
+        }
+    }
+
+    Some(end_pos)
+}
+
+/// Find position of GROUP BY/ORDER BY/LIMIT clause (for inserting WHERE before)
+fn find_clause_position(sql_upper: &str) -> Option<usize> {
+    let clauses = [" GROUP BY", " ORDER BY", " LIMIT ", " HAVING "];
+    let mut earliest = None;
+
+    for clause in &clauses {
+        if let Some(pos) = sql_upper.find(clause) {
+            earliest = Some(earliest.map_or(pos, |e: usize| e.min(pos)));
+        }
+    }
+
+    earliest
+}
 
 /// Query Coordinator for distributed query execution
 pub struct QueryCoordinator {
@@ -257,26 +337,35 @@ impl QueryCoordinator {
         // Try partition-level routing first (when date filters are present).
         // This reduces query fan-out by 60-90% by only querying nodes that
         // actually have data for the requested partitions.
+        //
+        // With partition assignments, each node receives SQL rewritten to only
+        // query its assigned partitions (cache affinity, no duplicates).
 
-        if let Some(partition_nodes) = self
+        if let Some(routing_result) = self
             .try_partition_routing(catalog, &tables, &time_range, &all_primary_nodes)
             .await
         {
-            // Partition routing succeeded - use these nodes
-            let target_nodes: Vec<_> = partition_nodes
+            // Partition routing succeeded - use these nodes with assignments
+            let target_nodes: Vec<_> = routing_result
+                .target_nodes
                 .into_iter()
                 .take(self.max_parallel_fanout)
                 .collect();
 
+            // Filter partition assignments to only include nodes we're targeting
+            let target_node_ids: std::collections::HashSet<_> =
+                target_nodes.iter().map(|n| n.node_id.as_str()).collect();
+            let partition_assignments: HashMap<String, Vec<String>> = routing_result
+                .partition_assignments
+                .into_iter()
+                .filter(|(node_id, _)| target_node_ids.contains(node_id.as_str()))
+                .collect();
+
             info!(
-                "Partition-level routing: {} nodes for {} tables (saved {}% fan-out)",
+                "Partition-level routing: {} nodes for {} tables with {} partition assignments",
                 target_nodes.len(),
                 tables.len(),
-                if all_primary_nodes.is_empty() {
-                    0
-                } else {
-                    100 - (target_nodes.len() * 100 / all_primary_nodes.len().max(1))
-                }
+                partition_assignments.values().map(|v| v.len()).sum::<usize>()
             );
 
             return Ok(DistributedQueryPlan {
@@ -287,6 +376,7 @@ impl QueryCoordinator {
                 target_nodes,
                 needs_aggregation,
                 table_owners: None, // Partition routing doesn't use table_owners
+                partition_assignments: Some(partition_assignments),
             });
         }
 
@@ -323,16 +413,25 @@ impl QueryCoordinator {
             target_nodes,
             needs_aggregation,
             table_owners,
+            partition_assignments: None, // Table-level routing doesn't use partition assignments
         })
     }
 
     /// Fan-out query to target nodes via Arrow Flight and collect results
     ///
-    /// Uses table-level routing when `table_owners` is available:
+    /// ## Routing Modes
+    ///
+    /// **Partition-Level Routing** (when `partition_assignments` is set):
+    /// - Each node receives SQL rewritten with `node_id IN (...)` filter
+    /// - Ensures cache affinity (nodes query partitions they wrote)
+    /// - Prevents duplicate data (each partition queried by exactly one node)
+    ///
+    /// **Table-Level Routing** (when `table_owners` is set):
     /// - Each table's query goes to its owner node
     /// - Owner has all data cached locally (excellent performance)
     ///
-    /// Falls back to broadcast query when table owners are unknown.
+    /// **Broadcast** (fallback when neither is set):
+    /// - Query sent to all target nodes with same SQL
     async fn fan_out_query(&self, plan: &DistributedQueryPlan) -> (Vec<RecordBatch>, Vec<String>) {
         // Type alias for boxed futures (needed because different async blocks have different types)
         type QueryFuture = Pin<Box<dyn Future<Output = Result<Vec<RecordBatch>, String>> + Send>>;
@@ -349,14 +448,81 @@ impl QueryCoordinator {
         }
 
         // ====================================================================
-        // TABLE-LEVEL ROUTING (RECOMMENDED)
+        // PARTITION-LEVEL ROUTING (Cache Affinity, No Duplicates)
+        // ====================================================================
+        // When partition_assignments is set, rewrite SQL for each node to only
+        // query its assigned partitions. This ensures:
+        // - Cache affinity: nodes query partitions they wrote (hot cache)
+        // - No duplicates: each partition queried by exactly one node
+        // - Fallback support: down nodes' partitions reassigned to healthy nodes
+
+        if let Some(ref partition_assignments) = plan.partition_assignments {
+            info!(
+                "Using partition-level routing with {} node assignments",
+                partition_assignments.len()
+            );
+
+            for node in &plan.target_nodes {
+                let pool = Arc::clone(&self.data_node_pool);
+                let node_id = node.node_id.clone();
+                let catalog = plan.catalog.clone();
+
+                // Get this node's assigned partitions
+                let assigned_partitions = partition_assignments
+                    .get(&node_id)
+                    .cloned()
+                    .unwrap_or_default();
+
+                if assigned_partitions.is_empty() {
+                    debug!("Node {} has no assigned partitions, skipping", node_id);
+                    continue;
+                }
+
+                // Rewrite SQL with node_id filter for this node's assigned partitions
+                let sql = rewrite_sql_with_node_filter(&plan.sql, &assigned_partitions);
+
+                debug!(
+                    "Node {} assigned partitions {:?}, SQL: {}",
+                    node_id, assigned_partitions, sql
+                );
+
+                let future: QueryFuture = Box::pin(async move {
+                    // Execute query via Arrow Flight DoGet
+                    match pool.query(&node_id, &catalog, &sql, None).await {
+                        Ok(batches) => {
+                            let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+                            debug!(
+                                "Received {} batches ({} rows) from {} (partition-level)",
+                                batches.len(),
+                                total_rows,
+                                node_id
+                            );
+                            Ok(batches)
+                        }
+                        Err(e) => {
+                            // For partition-level routing, we don't do runtime fallback
+                            // because the partition assignments are pre-computed with fallbacks.
+                            // If this node fails, it means both primary AND fallback failed.
+                            error!(
+                                "Query failed on {} (partition-level, no runtime fallback): {}",
+                                node_id, e
+                            );
+                            Err(format!("Failed to query {} (partition): {}", node_id, e))
+                        }
+                    }
+                });
+
+                futures.push(future);
+            }
+        }
+        // ====================================================================
+        // TABLE-LEVEL ROUTING (RECOMMENDED for non-partitioned queries)
         // ====================================================================
         // Route to table owner nodes directly. This provides:
         // - Optimal cache locality (owner has all table data)
         // - Single node for single-table queries (95% of time-series queries)
         // - Fan-out only for multi-table joins
-
-        if plan.table_owners.is_some() || !plan.target_nodes.is_empty() {
+        else if plan.table_owners.is_some() || !plan.target_nodes.is_empty() {
             // Query each target node
             for node in &plan.target_nodes {
                 let pool = Arc::clone(&self.data_node_pool);
@@ -890,12 +1056,30 @@ mod tests {
             .await;
 
         assert!(result.is_some());
-        let nodes = result.unwrap();
+        let routing_result = result.unwrap();
         // Should only route to data-1 and data-2, not data-3 and data-4
-        assert_eq!(nodes.len(), 2);
-        let node_ids: HashSet<_> = nodes.iter().map(|n| n.node_id.as_str()).collect();
+        assert_eq!(routing_result.target_nodes.len(), 2);
+        let node_ids: HashSet<_> = routing_result
+            .target_nodes
+            .iter()
+            .map(|n| n.node_id.as_str())
+            .collect();
         assert!(node_ids.contains("data-1"));
         assert!(node_ids.contains("data-2"));
+
+        // Verify partition assignments
+        assert_eq!(routing_result.partition_assignments.len(), 2);
+        // Each node should be assigned its own partition (cache affinity)
+        assert!(routing_result
+            .partition_assignments
+            .get("data-1")
+            .map(|v| v.contains(&"data-1".to_string()))
+            .unwrap_or(false));
+        assert!(routing_result
+            .partition_assignments
+            .get("data-2")
+            .map(|v| v.contains(&"data-2".to_string()))
+            .unwrap_or(false));
     }
 
     #[tokio::test]
@@ -927,5 +1111,214 @@ mod tests {
 
         // Should return None (fallback to table-level routing)
         assert!(result.is_none());
+    }
+
+    // =========================================================================
+    // Tests for SQL rewriting with node_id filter
+    // =========================================================================
+
+    #[test]
+    fn test_sql_rewrite_simple_select() {
+        // Simple SELECT without WHERE
+        let sql = "SELECT * FROM cpu";
+        let partitions = vec!["data-1".to_string()];
+        let rewritten = rewrite_sql_with_node_filter(sql, &partitions);
+        assert_eq!(rewritten, "SELECT * FROM cpu WHERE node_id IN ('data-1')");
+    }
+
+    #[test]
+    fn test_sql_rewrite_with_existing_where() {
+        // SELECT with existing WHERE clause
+        let sql = "SELECT * FROM cpu WHERE date='2024-01-15'";
+        let partitions = vec!["data-1".to_string()];
+        let rewritten = rewrite_sql_with_node_filter(sql, &partitions);
+        assert_eq!(
+            rewritten,
+            "SELECT * FROM cpu WHERE date='2024-01-15' AND node_id IN ('data-1')"
+        );
+    }
+
+    #[test]
+    fn test_sql_rewrite_with_multiple_partitions() {
+        // Multiple partition assignments
+        let sql = "SELECT * FROM cpu WHERE time > 0";
+        let partitions = vec!["data-1".to_string(), "data-3".to_string()];
+        let rewritten = rewrite_sql_with_node_filter(sql, &partitions);
+        assert_eq!(
+            rewritten,
+            "SELECT * FROM cpu WHERE time > 0 AND node_id IN ('data-1', 'data-3')"
+        );
+    }
+
+    #[test]
+    fn test_sql_rewrite_with_order_by() {
+        // SELECT with ORDER BY (no WHERE)
+        let sql = "SELECT * FROM cpu ORDER BY time DESC";
+        let partitions = vec!["data-2".to_string()];
+        let rewritten = rewrite_sql_with_node_filter(sql, &partitions);
+        assert_eq!(
+            rewritten,
+            "SELECT * FROM cpu WHERE node_id IN ('data-2') ORDER BY time DESC"
+        );
+    }
+
+    #[test]
+    fn test_sql_rewrite_with_where_and_order_by() {
+        // SELECT with WHERE and ORDER BY
+        let sql = "SELECT * FROM cpu WHERE value > 50 ORDER BY time DESC";
+        let partitions = vec!["data-1".to_string()];
+        let rewritten = rewrite_sql_with_node_filter(sql, &partitions);
+        assert_eq!(
+            rewritten,
+            "SELECT * FROM cpu WHERE value > 50 AND node_id IN ('data-1') ORDER BY time DESC"
+        );
+    }
+
+    #[test]
+    fn test_sql_rewrite_with_group_by() {
+        // SELECT with GROUP BY
+        let sql = "SELECT host, COUNT(*) FROM cpu GROUP BY host";
+        let partitions = vec!["data-1".to_string()];
+        let rewritten = rewrite_sql_with_node_filter(sql, &partitions);
+        assert_eq!(
+            rewritten,
+            "SELECT host, COUNT(*) FROM cpu WHERE node_id IN ('data-1') GROUP BY host"
+        );
+    }
+
+    #[test]
+    fn test_sql_rewrite_with_limit() {
+        // SELECT with LIMIT
+        let sql = "SELECT * FROM cpu LIMIT 100";
+        let partitions = vec!["data-1".to_string()];
+        let rewritten = rewrite_sql_with_node_filter(sql, &partitions);
+        assert_eq!(
+            rewritten,
+            "SELECT * FROM cpu WHERE node_id IN ('data-1') LIMIT 100"
+        );
+    }
+
+    #[test]
+    fn test_sql_rewrite_complex_query() {
+        // Complex query with WHERE, GROUP BY, ORDER BY, LIMIT
+        let sql = "SELECT host, AVG(value) FROM cpu WHERE date='2024-01-15' GROUP BY host ORDER BY host LIMIT 10";
+        let partitions = vec!["data-1".to_string(), "data-2".to_string()];
+        let rewritten = rewrite_sql_with_node_filter(sql, &partitions);
+        assert_eq!(
+            rewritten,
+            "SELECT host, AVG(value) FROM cpu WHERE date='2024-01-15' AND node_id IN ('data-1', 'data-2') GROUP BY host ORDER BY host LIMIT 10"
+        );
+    }
+
+    #[test]
+    fn test_sql_rewrite_empty_partitions() {
+        // Empty partitions list should return original SQL
+        let sql = "SELECT * FROM cpu";
+        let partitions: Vec<String> = vec![];
+        let rewritten = rewrite_sql_with_node_filter(sql, &partitions);
+        assert_eq!(rewritten, sql);
+    }
+
+    #[test]
+    fn test_sql_rewrite_escapes_quotes() {
+        // Node ID with single quote should be escaped
+        let sql = "SELECT * FROM cpu";
+        let partitions = vec!["data's-node".to_string()];
+        let rewritten = rewrite_sql_with_node_filter(sql, &partitions);
+        assert_eq!(
+            rewritten,
+            "SELECT * FROM cpu WHERE node_id IN ('data''s-node')"
+        );
+    }
+
+    // =========================================================================
+    // Tests for partition routing with fallback (node down)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_partition_routing_with_fallback() {
+        let shard_cache = Arc::new(ShardCache::new());
+
+        // Populate partition cache - data from 3 nodes
+        shard_cache.record_partition_node("mydb", "default", "cpu", "2024-01-15", "data-1");
+        shard_cache.record_partition_node("mydb", "default", "cpu", "2024-01-15", "data-2");
+        shard_cache.record_partition_node("mydb", "default", "cpu", "2024-01-15", "data-3");
+
+        // Add node info - data-2 is UNHEALTHY (down)
+        shard_cache.update_data_nodes(vec![
+            DataNodeInfo {
+                node_id: "data-1".to_string(),
+                grpc_addr: "127.0.0.1:7001".to_string(),
+                state: NodeState::Active,
+                mode: DataNodeMode::Primary,
+            },
+            DataNodeInfo {
+                node_id: "data-2".to_string(),
+                grpc_addr: "127.0.0.1:7002".to_string(),
+                state: NodeState::Unhealthy, // DOWN!
+                mode: DataNodeMode::Primary,
+            },
+            DataNodeInfo {
+                node_id: "data-3".to_string(),
+                grpc_addr: "127.0.0.1:7003".to_string(),
+                state: NodeState::Active,
+                mode: DataNodeMode::Primary,
+            },
+        ]);
+
+        let data_node_pool = Arc::new(DataNodePool::new(PoolConfig::default()));
+        let coordinator = QueryCoordinator::new(shard_cache, data_node_pool, 10);
+
+        let tables = vec![TableRef {
+            schema: "default".to_string(),
+            table: "cpu".to_string(),
+        }];
+
+        let time_range = Some(TimeRange {
+            min_time: None,
+            max_time: None,
+            start_date: Some("2024-01-15".to_string()),
+            end_date: Some("2024-01-15".to_string()),
+        });
+
+        // All primary nodes (only active ones for fallback)
+        let all_nodes = create_active_nodes(&["data-1", "data-3", "data-4"]);
+
+        let result = coordinator
+            .try_partition_routing("mydb", &tables, &time_range, &all_nodes)
+            .await;
+
+        assert!(result.is_some());
+        let routing_result = result.unwrap();
+
+        // Should have target nodes (data-1, data-3, and a fallback for data-2)
+        // data-2's partition should be assigned to a fallback node
+        let total_partitions: usize = routing_result
+            .partition_assignments
+            .values()
+            .map(|v| v.len())
+            .sum();
+        assert_eq!(total_partitions, 3, "All 3 partitions should be assigned");
+
+        // Verify data-2's partition is assigned somewhere (fallback)
+        let has_data2_partition = routing_result
+            .partition_assignments
+            .values()
+            .any(|partitions| partitions.contains(&"data-2".to_string()));
+        assert!(
+            has_data2_partition,
+            "data-2's partition should be assigned to a fallback node"
+        );
+
+        // data-2 should NOT be a target node (it's unhealthy)
+        let target_node_ids: HashSet<_> = routing_result
+            .target_nodes
+            .iter()
+            .map(|n| n.node_id.as_str())
+            .collect();
+        assert!(
+            !target_node_ids.contains("data-2"),
+            "Unhealthy data-2 should not be a target node"
+        );
     }
 }
