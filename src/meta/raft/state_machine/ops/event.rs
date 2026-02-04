@@ -71,10 +71,11 @@ impl MetaStateMachine {
         }
 
         // Deregister expired nodes
-        for node_id in expired_nodes {
-            self.deregister_node(&node_id);
+        for node_id in &expired_nodes {
+            self.deregister_node(node_id);
         }
 
-        MetaResponse::Success
+        // Return expired nodes so recovery can be triggered
+        MetaResponse::LeasesExpired { expired_nodes }
     }
 }
