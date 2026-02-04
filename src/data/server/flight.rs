@@ -13,6 +13,7 @@ use crate::query::query_engine::QueryEngine;
 use crate::query::sql_utils::inject_node_id_predicate;
 use crate::storage::cache::DataCache;
 use crate::storage::line_protocol::parse_multiple_lines;
+use crate::storage::wal::Wal;
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::IpcWriteOptions;
@@ -159,6 +160,9 @@ pub struct DataNodeFlightService {
     /// Health status
     status: Arc<RwLock<String>>,
 
+    /// Write-ahead log for durability
+    wal: Option<Arc<Wal>>,
+
     /// Local parquet file cache for cluster mode
     /// Caches files owned by this node for fast repeated access
     parquet_cache: Option<Arc<ParquetLocalCache>>,
@@ -201,6 +205,7 @@ impl DataNodeFlightService {
             node_id,
             start_time: Instant::now(),
             status: Arc::new(RwLock::new("ready".to_string())),
+            wal: None,
             parquet_cache: None,
             replication_manager: None,
             db_manager: None,
@@ -208,6 +213,12 @@ impl DataNodeFlightService {
             in_flight_queries: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             backing_standby_cache: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Set the WAL for durability
+    pub fn with_wal(mut self, wal: Arc<Wal>) -> Self {
+        self.wal = Some(wal);
+        self
     }
 
     /// Set the retiring flag (shared with HTTP API)
@@ -393,6 +404,49 @@ impl DataNodeFlightService {
             let row_count = batch.num_rows() as u64;
             if row_count == 0 {
                 continue;
+            }
+
+            // WAL write (if enabled) - log BEFORE adding to cache for durability
+            if let Some(ref wal) = self.wal {
+                let sync_on_write = wal.is_sync_on_write();
+                if sync_on_write {
+                    // Synchronous WAL write - wait for completion
+                    if let Err(e) = wal
+                        .log_batch_write(
+                            &ticket.catalog,
+                            &ticket.schema,
+                            &ticket.table,
+                            ticket.date,
+                            &batch,
+                        )
+                        .await
+                    {
+                        error!(
+                            "WAL batch write failed for {}/{}/{}: {}",
+                            ticket.catalog, ticket.schema, ticket.table, e
+                        );
+                        return Err(Status::internal(format!("WAL error: {}", e)));
+                    }
+                } else {
+                    // Asynchronous WAL write - fire and forget
+                    let wal = wal.clone();
+                    let catalog = ticket.catalog.clone();
+                    let schema = ticket.schema.clone();
+                    let table = ticket.table.clone();
+                    let date = ticket.date;
+                    let batch_clone = batch.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = wal
+                            .log_batch_write(&catalog, &schema, &table, date, &batch_clone)
+                            .await
+                        {
+                            error!(
+                                "WAL batch write failed (async) for {}/{}/{}: {}",
+                                catalog, schema, table, e
+                            );
+                        }
+                    });
+                }
             }
 
             match self

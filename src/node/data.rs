@@ -91,6 +91,7 @@ pub async fn start(config_path: &str) {
         parquet_cache.clone(),
         replication_manager,
         backing_standby_info,
+        wal.clone(),
     );
 
     // Spawn background tasks
@@ -368,6 +369,7 @@ fn build_flight_service(
     parquet_cache: Option<Arc<ParquetLocalCache>>,
     replication_manager: Option<Arc<ReplicationManager>>,
     backing_standby_info: Option<(String, String)>,
+    wal: Option<Arc<wal::Wal>>,
 ) -> DataNodeFlightService {
     let db_manager = Arc::new(
         crate::jobs::database_manager::DatabaseManager::with_storage_and_node_id(
@@ -390,6 +392,10 @@ fn build_flight_service(
     .with_db_manager(db_manager)
     .with_is_retiring(is_retiring)
     .with_in_flight_queries(in_flight_queries);
+
+    if let Some(wal) = wal {
+        service = service.with_wal(wal);
+    }
 
     if let Some(cache) = parquet_cache {
         service = service.with_parquet_cache(cache);
