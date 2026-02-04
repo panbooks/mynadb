@@ -3,13 +3,9 @@
 //! Uses table-level operations for routing and node-level pairing for standby management.
 
 use super::MetaNode;
-use crate::meta::proto;
-use crate::meta::raft::NodeId;
 use crate::meta::types::{
     MetaCommand, MetaResponse, NodeState, RetireStatus, ScaleInRecommendation,
 };
-use openraft::error::{ClientWriteError, RaftError};
-use tracing::debug;
 
 impl MetaNode {
     /// Start retiring a node (scale-in)
@@ -25,82 +21,25 @@ impl MetaNode {
             node_id: node_id.to_string(),
         };
 
-        let result = self.raft.client_write(cmd.clone()).await;
-        match result {
-            Ok(response) => match response.data {
-                MetaResponse::RetireStarted {
-                    tables_to_reassign, ..
-                } => Ok(tables_to_reassign),
-                MetaResponse::DataNodeNotFound { node_id } => {
-                    Err(format!("Node {} not found", node_id))
-                }
-                MetaResponse::NodeNotRetirable {
-                    node_id,
-                    current_state,
-                } => Err(format!(
-                    "Node {} cannot be retired (state: {:?})",
-                    node_id, current_state
-                )),
-                MetaResponse::CannotRetireNoAlternative { node_id, reason } => {
-                    Err(format!("Cannot retire {}: {}", node_id, reason))
-                }
-                MetaResponse::Error { message } => Err(message),
-                _ => Err("Unexpected response from start_retire".to_string()),
-            },
-            Err(e) => {
-                // Handle ForwardToLeader
-                if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
-                    if let Some(leader_id) = forward.leader_id {
-                        debug!("Forwarding start_retire to leader node {}", leader_id);
-                        return self.forward_start_retire_to_leader(leader_id, cmd).await;
-                    }
-                }
-                Err(format!("Raft error: {}", e))
+        match self.apply_command(cmd).await? {
+            MetaResponse::RetireStarted {
+                tables_to_reassign, ..
+            } => Ok(tables_to_reassign),
+            MetaResponse::DataNodeNotFound { node_id } => {
+                Err(format!("Node {} not found", node_id))
             }
-        }
-    }
-
-    /// Forward start_retire to leader
-    async fn forward_start_retire_to_leader(
-        &self,
-        leader_id: NodeId,
-        cmd: MetaCommand,
-    ) -> Result<usize, String> {
-        let channel = self
-            .network
-            .get_channel_to(leader_id)
-            .await
-            .map_err(|e| format!("Failed to connect to leader {}: {}", leader_id, e))?;
-
-        let mut client = proto::raft_internal_client::RaftInternalClient::new(channel);
-
-        let command_data =
-            bincode::serialize(&cmd).map_err(|e| format!("Failed to serialize command: {}", e))?;
-
-        let request = tonic::Request::new(proto::ForwardCommandRequest { command_data });
-
-        let response = client
-            .forward_command(request)
-            .await
-            .map_err(|e| format!("Forward to leader failed: {}", e))?
-            .into_inner();
-
-        if response.success {
-            if !response.response_data.is_empty() {
-                let meta_resp: MetaResponse = bincode::deserialize(&response.response_data)
-                    .map_err(|e| format!("Failed to deserialize response: {}", e))?;
-                match meta_resp {
-                    MetaResponse::RetireStarted {
-                        tables_to_reassign, ..
-                    } => Ok(tables_to_reassign),
-                    MetaResponse::Error { message } => Err(message),
-                    _ => Err("Unexpected response".to_string()),
-                }
-            } else {
-                Ok(response.result as usize)
+            MetaResponse::NodeNotRetirable {
+                node_id,
+                current_state,
+            } => Err(format!(
+                "Node {} cannot be retired (state: {:?})",
+                node_id, current_state
+            )),
+            MetaResponse::CannotRetireNoAlternative { node_id, reason } => {
+                Err(format!("Cannot retire {}: {}", node_id, reason))
             }
-        } else {
-            Err(response.error)
+            MetaResponse::Error { message } => Err(message),
+            other => Err(format!("Unexpected response: {:?}", other)),
         }
     }
 
@@ -109,10 +48,8 @@ impl MetaNode {
         let cmd = MetaCommand::CompleteRetire {
             node_id: node_id.to_string(),
         };
-        match self.apply_command(cmd).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e),
-        }
+        self.apply_command(cmd).await?;
+        Ok(())
     }
 
     /// Cancel a node retirement (restore to Active)
@@ -120,10 +57,8 @@ impl MetaNode {
         let cmd = MetaCommand::CancelRetire {
             node_id: node_id.to_string(),
         };
-        match self.apply_command(cmd).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e),
-        }
+        self.apply_command(cmd).await?;
+        Ok(())
     }
 
     /// Get retirement status for a node

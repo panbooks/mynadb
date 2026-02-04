@@ -585,7 +585,7 @@ impl ScaleInExecutor {
             node_id: node_id.to_string(),
         };
 
-        match self.meta_node.apply_command_direct(cmd).await {
+        match self.meta_node.apply_command(cmd).await {
             Ok(_) => Ok(()),
             Err(e) => Err(ScaleInError::RetirementFailed {
                 node_id: node_id.to_string(),

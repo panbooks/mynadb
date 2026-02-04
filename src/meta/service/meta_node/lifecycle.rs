@@ -27,7 +27,7 @@ impl MetaNode {
 
                     // Expire leases and get crashed nodes
                     let cmd = MetaCommand::ExpireLeases;
-                    match node.apply_command_direct(cmd).await {
+                    match node.apply_command(cmd).await {
                         Ok(MetaResponse::LeasesExpired { expired_nodes }) => {
                             // Trigger recovery for each crashed node
                             for node_id in expired_nodes {

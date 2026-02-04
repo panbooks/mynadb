@@ -1465,15 +1465,13 @@ impl proto::raft_internal_server::RaftInternal for RaftInternalService {
         debug!("Received forwarded command from follower");
 
         match self.node.execute_forwarded_command(req.command_data).await {
-            Ok((result, meta_response)) => {
-                let response_data = meta_response
-                    .map(|r| bincode::serialize(&r).unwrap_or_default())
-                    .unwrap_or_default();
+            Ok(meta_response) => {
+                let response_data = bincode::serialize(&meta_response).unwrap_or_default();
 
                 Ok(Response::new(proto::ForwardCommandResponse {
                     success: true,
                     error: String::new(),
-                    result,
+                    result: 0, // Deprecated, response_data contains full MetaResponse
                     response_data,
                 }))
             }
