@@ -273,6 +273,9 @@ impl DatabaseManager {
     }
 
     /// Discover all date partitions for a table using object storage
+    ///
+    /// Path structure (node_id as Hive partition key):
+    ///   {catalog}/{schema}/{table}/date={YYYY-MM-DD}/node_id={node_id}/*.parquet
     pub async fn discover_table_partitions_async(
         &self,
         catalog_name: &str,
@@ -281,15 +284,8 @@ impl DatabaseManager {
     ) -> Result<Vec<PartitionInfo>, String> {
         // If storage is available, use it
         if let Some(storage) = &self.storage {
-            // Build prefix with node_id if in cluster mode
-            let table_prefix = if let Some(ref node_id) = self.node_id {
-                format!(
-                    "{}/{}/{}/{}",
-                    node_id, catalog_name, schema_name, table_name
-                )
-            } else {
-                format!("{}/{}/{}", catalog_name, schema_name, table_name)
-            };
+            // New path structure: catalog/schema/table (node_id is now a subdirectory under date)
+            let table_prefix = format!("{}/{}/{}", catalog_name, schema_name, table_name);
             let partition_dirs = storage.list_prefixes(&table_prefix).await?;
 
             let mut partitions = Vec::new();
@@ -298,18 +294,12 @@ impl DatabaseManager {
                 if dir_name.starts_with("date=") {
                     let date_str = dir_name.strip_prefix("date=").unwrap_or(&dir_name);
 
-                    // List files in partition to get count and size
-                    let partition_prefix = if let Some(ref node_id) = self.node_id {
-                        format!(
-                            "{}/{}/{}/{}/{}",
-                            node_id, catalog_name, schema_name, table_name, dir_name
-                        )
-                    } else {
-                        format!(
-                            "{}/{}/{}/{}",
-                            catalog_name, schema_name, table_name, dir_name
-                        )
-                    };
+                    // List files in partition (includes all node_id= subdirectories)
+                    // Path: catalog/schema/table/date=YYYY-MM-DD/node_id=*/*.parquet
+                    let partition_prefix = format!(
+                        "{}/{}/{}/{}",
+                        catalog_name, schema_name, table_name, dir_name
+                    );
                     let files = storage.list(&partition_prefix).await.unwrap_or_default();
 
                     let mut file_count = 0;
@@ -344,9 +334,47 @@ impl DatabaseManager {
     }
 
     /// Count files and calculate total size in a partition directory
+    ///
+    /// Handles nested node_id= subdirectories (Hive partition structure):
+    ///   date=YYYY-MM-DD/node_id=X/*.parquet
+    ///   date=YYYY-MM-DD/node_id=Y/*.parquet
     fn count_partition_files(&self, partition_path: &Path) -> Result<(usize, u64), String> {
         let entries = std::fs::read_dir(partition_path)
             .map_err(|e| format!("Failed to read partition directory: {}", e))?;
+
+        let mut file_count = 0;
+        let mut total_size = 0u64;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+
+            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("parquet") {
+                // Direct parquet file in partition (legacy format)
+                file_count += 1;
+                if let Ok(metadata) = std::fs::metadata(&path) {
+                    total_size += metadata.len();
+                }
+            } else if path.is_dir() {
+                // Check for node_id= subdirectory (new Hive partition format)
+                if let Some(dir_name) = path.file_name().and_then(|s| s.to_str()) {
+                    if dir_name.starts_with("node_id=") {
+                        // Recurse into node_id= directory to count parquet files
+                        let (sub_count, sub_size) = self.count_files_in_dir(&path)?;
+                        file_count += sub_count;
+                        total_size += sub_size;
+                    }
+                }
+            }
+        }
+
+        Ok((file_count, total_size))
+    }
+
+    /// Count parquet files in a directory (non-recursive, single level)
+    fn count_files_in_dir(&self, dir_path: &Path) -> Result<(usize, u64), String> {
+        let entries = std::fs::read_dir(dir_path)
+            .map_err(|e| format!("Failed to read directory: {}", e))?;
 
         let mut file_count = 0;
         let mut total_size = 0u64;
