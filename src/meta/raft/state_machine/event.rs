@@ -5,7 +5,7 @@
 use crate::meta::types::{current_timestamp_ms, keys, Event, EventType, LeaseInfo, MetaResponse};
 use tokio::sync::broadcast;
 
-use super::super::MetaStateMachine;
+use super::MetaStateMachine;
 
 impl MetaStateMachine {
     // ========================================================================

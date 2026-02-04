@@ -22,8 +22,17 @@ mod raft_keys {
     pub const SNAPSHOT_META: &[u8] = b"/raft/sm/snapshot_meta";
 }
 
-/// Operations module - contains impl blocks for MetaStateMachine operations
-mod ops;
+// Operation modules - contain impl blocks for MetaStateMachine
+mod distribution;
+mod election;
+mod event;
+mod lock;
+mod node;
+mod query;
+mod recovery;
+mod scale_in;
+mod standby;
+mod table;
 
 /// State machine backed by sled embedded database
 pub struct MetaStateMachine {

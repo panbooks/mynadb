@@ -5,7 +5,7 @@
 use crate::meta::types::{keys, DataNodeMode, NodeInfo, NodeRole, NodeState};
 use tracing::info;
 
-use super::super::MetaStateMachine;
+use super::MetaStateMachine;
 
 impl MetaStateMachine {
     // ========================================================================

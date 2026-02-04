@@ -4,7 +4,7 @@
 
 use crate::meta::types::{keys, EventType, LeaderInfo, MetaResponse};
 
-use super::super::MetaStateMachine;
+use super::MetaStateMachine;
 
 impl MetaStateMachine {
     // ========================================================================

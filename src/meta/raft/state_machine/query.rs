@@ -5,7 +5,7 @@
 use crate::meta::types::{keys, Event, LeaderInfo, LockInfo, NodeInfo, NodeRole, NodeState};
 use std::sync::atomic::Ordering;
 
-use super::super::MetaStateMachine;
+use super::MetaStateMachine;
 
 impl MetaStateMachine {
     // ========================================================================
