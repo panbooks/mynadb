@@ -16,6 +16,7 @@ use super::{CompactionConfig, Compactor, ParquetFileInfo};
 
 impl Compactor {
     /// Create a FileInfo struct for registering with the metadata manager
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn create_file_info(
         path: &str,
         catalog: &str,

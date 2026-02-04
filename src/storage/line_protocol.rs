@@ -111,8 +111,7 @@ pub fn parse_field_value(value: &str) -> Result<FieldValue, String> {
     }
 
     // Integer: ends with 'i' (e.g., 42i)
-    if value.ends_with('i') {
-        let num_str = &value[..value.len() - 1];
+    if let Some(num_str) = value.strip_suffix('i') {
         if let Ok(n) = num_str.parse::<i64>() {
             return Ok(FieldValue::Integer(n));
         }

@@ -162,48 +162,45 @@ fn extract_equality_from_expr(
     schema: &SchemaRef,
     predicates: &mut Vec<EqualityPredicate>,
 ) {
-    match expr {
-        Expr::BinaryExpr(binary) => {
-            // Handle equality: column = 'value'
-            if binary.op == datafusion::logical_expr::Operator::Eq {
-                if let (Expr::Column(col), Expr::Literal(scalar)) =
-                    (binary.left.as_ref(), binary.right.as_ref())
-                {
-                    // Only extract for UTF8 columns (bloom filter targets)
-                    if let Ok(field) = schema.field_with_name(&col.name) {
-                        if matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8) {
-                            if let Some(value) = scalar_to_string(scalar) {
-                                predicates.push(EqualityPredicate {
-                                    column: col.name.clone(),
-                                    value,
-                                });
-                            }
-                        }
-                    }
-                }
-                // Handle reversed: 'value' = column
-                if let (Expr::Literal(scalar), Expr::Column(col)) =
-                    (binary.left.as_ref(), binary.right.as_ref())
-                {
-                    if let Ok(field) = schema.field_with_name(&col.name) {
-                        if matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8) {
-                            if let Some(value) = scalar_to_string(scalar) {
-                                predicates.push(EqualityPredicate {
-                                    column: col.name.clone(),
-                                    value,
-                                });
-                            }
+    if let Expr::BinaryExpr(binary) = expr {
+        // Handle equality: column = 'value'
+        if binary.op == datafusion::logical_expr::Operator::Eq {
+            if let (Expr::Column(col), Expr::Literal(scalar)) =
+                (binary.left.as_ref(), binary.right.as_ref())
+            {
+                // Only extract for UTF8 columns (bloom filter targets)
+                if let Ok(field) = schema.field_with_name(&col.name) {
+                    if matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8) {
+                        if let Some(value) = scalar_to_string(scalar) {
+                            predicates.push(EqualityPredicate {
+                                column: col.name.clone(),
+                                value,
+                            });
                         }
                     }
                 }
             }
-            // Recurse into AND expressions
-            if binary.op == datafusion::logical_expr::Operator::And {
-                extract_equality_from_expr(&binary.left, schema, predicates);
-                extract_equality_from_expr(&binary.right, schema, predicates);
+            // Handle reversed: 'value' = column
+            if let (Expr::Literal(scalar), Expr::Column(col)) =
+                (binary.left.as_ref(), binary.right.as_ref())
+            {
+                if let Ok(field) = schema.field_with_name(&col.name) {
+                    if matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8) {
+                        if let Some(value) = scalar_to_string(scalar) {
+                            predicates.push(EqualityPredicate {
+                                column: col.name.clone(),
+                                value,
+                            });
+                        }
+                    }
+                }
             }
         }
-        _ => {}
+        // Recurse into AND expressions
+        if binary.op == datafusion::logical_expr::Operator::And {
+            extract_equality_from_expr(&binary.left, schema, predicates);
+            extract_equality_from_expr(&binary.right, schema, predicates);
+        }
     }
 }
 

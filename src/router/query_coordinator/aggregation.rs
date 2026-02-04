@@ -96,7 +96,7 @@ impl QueryCoordinator {
                     .find("LIMIT")
                     .unwrap_or(order_clause.len());
                 final_sql.push(' ');
-                final_sql.push_str(&order_clause[..end_pos].trim());
+                final_sql.push_str(order_clause[..end_pos].trim());
             }
 
             // Extract and append LIMIT clause
@@ -124,7 +124,7 @@ impl QueryCoordinator {
                     .find("LIMIT")
                     .unwrap_or(order_clause.len());
                 final_sql.push(' ');
-                final_sql.push_str(&order_clause[..end_pos].trim());
+                final_sql.push_str(order_clause[..end_pos].trim());
             }
 
             if let Some(limit_pos) = sql_upper.find("LIMIT") {

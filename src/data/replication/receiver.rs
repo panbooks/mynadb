@@ -162,6 +162,7 @@ impl StandbyReceiver {
     /// This is the core method called when a leader sends data to this standby.
     /// The data is applied directly to the memtable without writing to WAL or Parquet.
     /// If raw_data and expected_checksum are provided, verifies integrity before applying.
+    #[allow(clippy::too_many_arguments)]
     pub async fn receive_batch_with_checksum(
         &self,
         catalog: &str,
@@ -220,6 +221,7 @@ impl StandbyReceiver {
     ///
     /// This is the core method called when a leader sends data to this standby.
     /// The data is applied directly to the memtable without writing to WAL or Parquet.
+    #[allow(clippy::too_many_arguments)]
     pub async fn receive_batch(
         &self,
         catalog: &str,
@@ -245,6 +247,7 @@ impl StandbyReceiver {
     }
 
     /// Internal method to receive and apply a replicated batch
+    #[allow(clippy::too_many_arguments)]
     async fn receive_batch_internal(
         &self,
         catalog: &str,

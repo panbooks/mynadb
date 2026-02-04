@@ -125,7 +125,7 @@ impl MetaStateMachine {
             .ok()
             .flatten()
             .and_then(|v| bincode::deserialize(&v).ok())
-            .unwrap_or_else(StoredMembership::default);
+            .unwrap_or_default();
 
         debug!(
             "MetaStateMachine initialized: last_applied={:?}, membership={:?}, standby_enabled={}",
@@ -363,21 +363,19 @@ impl MetaStateMachine {
         let mut state_data = Vec::new();
 
         // Iterate over all keys and collect them
-        for item in self.db.iter() {
-            if let Ok((key, value)) = item {
-                // Skip Raft log entries (they have their own persistence)
-                if key.starts_with(b"/raft/log/") {
-                    continue;
-                }
-                // Skip Raft vote/committed state
-                if key.starts_with(b"/raft/vote")
-                    || key.starts_with(b"/raft/committed")
-                    || key.starts_with(b"/raft/last_purged")
-                {
-                    continue;
-                }
-                state_data.push((key.to_vec(), value.to_vec()));
+        for (key, value) in self.db.iter().flatten() {
+            // Skip Raft log entries (they have their own persistence)
+            if key.starts_with(b"/raft/log/") {
+                continue;
             }
+            // Skip Raft vote/committed state
+            if key.starts_with(b"/raft/vote")
+                || key.starts_with(b"/raft/committed")
+                || key.starts_with(b"/raft/last_purged")
+            {
+                continue;
+            }
+            state_data.push((key.to_vec(), value.to_vec()));
         }
 
         bincode::serialize(&state_data).map_err(|e| format!("Failed to serialize state: {}", e))
@@ -389,17 +387,15 @@ impl MetaStateMachine {
             .map_err(|e| format!("Failed to deserialize state: {}", e))?;
 
         // Clear existing state (except Raft log entries)
-        for item in self.db.iter() {
-            if let Ok((key, _)) = item {
-                if key.starts_with(b"/raft/log/")
-                    || key.starts_with(b"/raft/vote")
-                    || key.starts_with(b"/raft/committed")
-                    || key.starts_with(b"/raft/last_purged")
-                {
-                    continue;
-                }
-                let _ = self.db.remove(&key);
+        for (key, _) in self.db.iter().flatten() {
+            if key.starts_with(b"/raft/log/")
+                || key.starts_with(b"/raft/vote")
+                || key.starts_with(b"/raft/committed")
+                || key.starts_with(b"/raft/last_purged")
+            {
+                continue;
             }
+            let _ = self.db.remove(&key);
         }
 
         // Insert new state
@@ -454,7 +450,7 @@ impl Clone for MetaStateMachine {
             event_sequence: AtomicU64::new(self.event_sequence.load(Ordering::SeqCst)),
             fencing_counter: AtomicU64::new(self.fencing_counter.load(Ordering::SeqCst)),
             lease_counter: AtomicU64::new(0),
-            last_applied: RwLock::new(self.last_applied.read().clone()),
+            last_applied: RwLock::new(*self.last_applied.read()),
             last_membership: RwLock::new(self.last_membership.read().clone()),
             event_broadcast,
             standby_config: self.standby_config.clone(),
@@ -472,7 +468,7 @@ impl RaftStateMachine<TypeConfig> for MetaStateMachine {
     async fn applied_state(
         &mut self,
     ) -> Result<(Option<LogId>, StoredMembership), StorageError<NodeId>> {
-        let last_applied = self.last_applied.read().clone();
+        let last_applied = *self.last_applied.read();
         let membership = self.last_membership.read().clone();
         debug!(
             "applied_state: last_applied={:?}, membership={:?}",
@@ -528,7 +524,7 @@ impl RaftStateMachine<TypeConfig> for MetaStateMachine {
     async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
         MetaSnapshotBuilder {
             db: self.db.clone(),
-            last_applied: self.last_applied.read().clone(),
+            last_applied: *self.last_applied.read(),
             membership: self.last_membership.read().clone(),
             event_sequence: self.event_sequence.load(Ordering::SeqCst),
             fencing_counter: self.fencing_counter.load(Ordering::SeqCst),
@@ -614,7 +610,7 @@ impl RaftStateMachine<TypeConfig> for MetaStateMachine {
                 })?;
 
                 let snap = MetaSnapshot {
-                    last_applied: self.last_applied.read().clone(),
+                    last_applied: *self.last_applied.read(),
                     membership: self.last_membership.read().clone(),
                     data: state_data,
                     event_sequence: self.event_sequence.load(Ordering::SeqCst),
@@ -653,18 +649,16 @@ impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for MetaSnapshotBuilder 
 
         // Collect all state data
         let mut state_data = Vec::new();
-        for item in self.db.iter() {
-            if let Ok((key, value)) = item {
-                // Skip Raft log entries
-                if key.starts_with(b"/raft/log/")
-                    || key.starts_with(b"/raft/vote")
-                    || key.starts_with(b"/raft/committed")
-                    || key.starts_with(b"/raft/last_purged")
-                {
-                    continue;
-                }
-                state_data.push((key.to_vec(), value.to_vec()));
+        for (key, value) in self.db.iter().flatten() {
+            // Skip Raft log entries
+            if key.starts_with(b"/raft/log/")
+                || key.starts_with(b"/raft/vote")
+                || key.starts_with(b"/raft/committed")
+                || key.starts_with(b"/raft/last_purged")
+            {
+                continue;
             }
+            state_data.push((key.to_vec(), value.to_vec()));
         }
 
         let data = bincode::serialize(&state_data).map_err(|e| {
@@ -676,7 +670,7 @@ impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for MetaSnapshotBuilder 
         })?;
 
         let snap = MetaSnapshot {
-            last_applied: self.last_applied.clone(),
+            last_applied: self.last_applied,
             membership: self.membership.clone(),
             data,
             event_sequence: self.event_sequence,

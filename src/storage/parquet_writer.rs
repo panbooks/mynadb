@@ -261,6 +261,7 @@ impl ParquetWriter {
     /// Write batches with cardinality-based sort ordering
     /// tag_order_by_cardinality: tags sorted from low to high cardinality
     /// Sort order will be: [low_cardinality_tags...] -> time
+    #[allow(clippy::too_many_arguments)]
     pub async fn write_batches_partitioned_with_sort(
         &self,
         node_id: &str,
@@ -377,6 +378,7 @@ impl ParquetWriter {
     }
 
     /// Write batches synchronously with cardinality-based sort ordering
+    #[allow(clippy::too_many_arguments)]
     pub fn write_batches_partitioned_with_sort_sync(
         &self,
         node_id: &str,

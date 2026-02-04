@@ -323,7 +323,7 @@ impl DataNodePool {
         // Map Status errors to FlightError for FlightRecordBatchStream
         let mapped_stream = response
             .into_inner()
-            .map(|result| result.map_err(|status| arrow_flight::error::FlightError::Tonic(status)));
+            .map(|result| result.map_err(arrow_flight::error::FlightError::Tonic));
         let flight_stream = FlightRecordBatchStream::new_from_flight_data(mapped_stream);
 
         let batches: Vec<RecordBatch> = flight_stream
@@ -371,7 +371,7 @@ impl DataNodePool {
         // Decode the response stream into RecordBatches
         let mapped_stream = response
             .into_inner()
-            .map(|result| result.map_err(|status| arrow_flight::error::FlightError::Tonic(status)));
+            .map(|result| result.map_err(arrow_flight::error::FlightError::Tonic));
         let flight_stream = FlightRecordBatchStream::new_from_flight_data(mapped_stream);
 
         let batches: Vec<RecordBatch> = flight_stream

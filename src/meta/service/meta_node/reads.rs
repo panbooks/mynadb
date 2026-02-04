@@ -34,8 +34,8 @@ impl MetaNode {
                     let key_str = String::from_utf8_lossy(&k);
                     info!("list_nodes: scanned key={}, value_len={}", key_str, v.len());
                     if let Ok(info) = bincode::deserialize::<NodeInfo>(&v) {
-                        let role_match = role.map_or(true, |r| info.role == r);
-                        let state_match = state.map_or(true, |s| info.state == s);
+                        let role_match = role.is_none_or(|r| info.role == r);
+                        let state_match = state.is_none_or(|s| info.state == s);
                         if role_match && state_match {
                             nodes.push(info);
                         }

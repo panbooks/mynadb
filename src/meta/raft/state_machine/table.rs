@@ -613,12 +613,10 @@ impl MetaStateMachine {
         let prefix = keys::PREFIX_TABLE;
         let mut tables = Vec::new();
 
-        for item in self.db.scan_prefix(prefix) {
-            if let Ok((_, v)) = item {
-                if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
-                    if meta.is_owner(node_id) {
-                        tables.push(meta);
-                    }
+        for (_, v) in self.db.scan_prefix(prefix).flatten() {
+            if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
+                if meta.is_owner(node_id) {
+                    tables.push(meta);
                 }
             }
         }
@@ -633,12 +631,10 @@ impl MetaStateMachine {
         let prefix = keys::PREFIX_TABLE;
         let mut tables = Vec::new();
 
-        for item in self.db.scan_prefix(prefix) {
-            if let Ok((_, v)) = item {
-                if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
-                    if meta.primary_owner() == Some(node_id) {
-                        tables.push(meta);
-                    }
+        for (_, v) in self.db.scan_prefix(prefix).flatten() {
+            if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
+                if meta.primary_owner() == Some(node_id) {
+                    tables.push(meta);
                 }
             }
         }
@@ -651,11 +647,9 @@ impl MetaStateMachine {
         let prefix = TableMeta::schema_prefix(catalog, schema);
         let mut tables = Vec::new();
 
-        for item in self.db.scan_prefix(prefix.as_bytes()) {
-            if let Ok((_, v)) = item {
-                if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
-                    tables.push(meta);
-                }
+        for (_, v) in self.db.scan_prefix(prefix.as_bytes()).flatten() {
+            if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
+                tables.push(meta);
             }
         }
 
@@ -667,11 +661,9 @@ impl MetaStateMachine {
         let prefix = TableMeta::catalog_prefix(catalog);
         let mut tables = Vec::new();
 
-        for item in self.db.scan_prefix(prefix.as_bytes()) {
-            if let Ok((_, v)) = item {
-                if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
-                    tables.push(meta);
-                }
+        for (_, v) in self.db.scan_prefix(prefix.as_bytes()).flatten() {
+            if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
+                tables.push(meta);
             }
         }
 
@@ -683,11 +675,9 @@ impl MetaStateMachine {
         let prefix = TableMeta::all_prefix();
         let mut tables = Vec::new();
 
-        for item in self.db.scan_prefix(prefix.as_bytes()) {
-            if let Ok((_, v)) = item {
-                if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
-                    tables.push(meta);
-                }
+        for (_, v) in self.db.scan_prefix(prefix.as_bytes()).flatten() {
+            if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
+                tables.push(meta);
             }
         }
 
@@ -702,12 +692,10 @@ impl MetaStateMachine {
         let prefix = keys::PREFIX_TABLE;
         let mut counts = std::collections::HashMap::new();
 
-        for item in self.db.scan_prefix(prefix) {
-            if let Ok((_, v)) = item {
-                if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
-                    if let Some(primary) = meta.primary_owner() {
-                        *counts.entry(primary.to_string()).or_insert(0) += 1;
-                    }
+        for (_, v) in self.db.scan_prefix(prefix).flatten() {
+            if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
+                if let Some(primary) = meta.primary_owner() {
+                    *counts.entry(primary.to_string()).or_insert(0) += 1;
                 }
             }
         }
@@ -723,12 +711,10 @@ impl MetaStateMachine {
         let prefix = keys::PREFIX_TABLE;
         let mut counts = std::collections::HashMap::new();
 
-        for item in self.db.scan_prefix(prefix) {
-            if let Ok((_, v)) = item {
-                if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
-                    for owner in &meta.owner_node_ids {
-                        *counts.entry(owner.clone()).or_insert(0) += 1;
-                    }
+        for (_, v) in self.db.scan_prefix(prefix).flatten() {
+            if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
+                for owner in &meta.owner_node_ids {
+                    *counts.entry(owner.clone()).or_insert(0) += 1;
                 }
             }
         }
@@ -741,12 +727,10 @@ impl MetaStateMachine {
         let prefix = keys::PREFIX_TABLE;
         let mut tables = Vec::new();
 
-        for item in self.db.scan_prefix(prefix) {
-            if let Ok((_, v)) = item {
-                if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
-                    if meta.is_multi_owner() {
-                        tables.push(meta);
-                    }
+        for (_, v) in self.db.scan_prefix(prefix).flatten() {
+            if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
+                if meta.is_multi_owner() {
+                    tables.push(meta);
                 }
             }
         }
@@ -761,13 +745,11 @@ impl MetaStateMachine {
         let mut total_bytes = 0u64;
         let mut total_rows = 0u64;
 
-        for item in self.db.scan_prefix(prefix) {
-            if let Ok((_, v)) = item {
-                if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
-                    table_count += 1;
-                    total_bytes += meta.total_bytes;
-                    total_rows += meta.total_rows;
-                }
+        for (_, v) in self.db.scan_prefix(prefix).flatten() {
+            if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
+                table_count += 1;
+                total_bytes += meta.total_bytes;
+                total_rows += meta.total_rows;
             }
         }
 

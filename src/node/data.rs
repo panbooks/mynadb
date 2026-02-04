@@ -32,7 +32,7 @@ pub async fn start(config_path: &str) {
     common::init_logging(&config);
     print_welcome_banner();
 
-    let data_config = config.data.clone().unwrap_or_else(DataNodeConfig::default);
+    let data_config = config.data.clone().unwrap_or_default();
     info!(
         "Starting Data node {} on {}",
         data_config.node_id, data_config.advertise_addr

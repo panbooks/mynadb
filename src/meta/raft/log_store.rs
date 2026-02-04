@@ -192,7 +192,7 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
     type LogReader = Self;
 
     async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, StorageError<NodeId>> {
-        let last_purged_log_id = self.inner.last_purged.read().clone();
+        let last_purged_log_id = *self.inner.last_purged.read();
 
         let last_log_id = self.last_log_entry().map(|e| e.log_id);
 
@@ -232,7 +232,7 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
             .flush()
             .map_err(|e| Self::storage_error(e, "flush vote"))?;
 
-        *self.inner.vote.write() = Some(vote.clone());
+        *self.inner.vote.write() = Some(*vote);
         debug!("Saved vote: {:?}", vote);
         Ok(())
     }
@@ -257,7 +257,7 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
     }
 
     async fn read_vote(&mut self) -> Result<Option<Vote>, StorageError<NodeId>> {
-        Ok(self.inner.vote.read().clone())
+        Ok(*self.inner.vote.read())
     }
 
     async fn append<I>(
@@ -299,13 +299,11 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
         let start_key = Self::log_key(log_id.index);
         let mut keys_to_remove = Vec::new();
 
-        for item in self.inner.db.range(start_key.as_bytes()..) {
-            if let Ok((k, _)) = item {
-                if !k.starts_with(PREFIX_LOG.as_bytes()) {
-                    break;
-                }
-                keys_to_remove.push(k);
+        for (k, _) in self.inner.db.range(start_key.as_bytes()..).flatten() {
+            if !k.starts_with(PREFIX_LOG.as_bytes()) {
+                break;
             }
+            keys_to_remove.push(k);
         }
 
         let count = keys_to_remove.len();
@@ -335,13 +333,11 @@ impl RaftLogStorage<TypeConfig> for SledLogStore {
         let end_key = Self::log_key(log_id.index + 1);
         let mut keys_to_remove = Vec::new();
 
-        for item in self.inner.db.scan_prefix(PREFIX_LOG) {
-            if let Ok((k, _)) = item {
-                if k.as_ref() >= end_key.as_bytes() {
-                    break;
-                }
-                keys_to_remove.push(k);
+        for (k, _) in self.inner.db.scan_prefix(PREFIX_LOG).flatten() {
+            if k.as_ref() >= end_key.as_bytes() {
+                break;
             }
+            keys_to_remove.push(k);
         }
 
         let count = keys_to_remove.len();
@@ -396,35 +392,33 @@ impl RaftLogReader<TypeConfig> for SledLogStore {
         let mut entries = Vec::new();
 
         // Use scan_prefix to iterate through log entries
-        for item in self.inner.db.scan_prefix(PREFIX_LOG) {
-            if let Ok((k, v)) = item {
-                // Parse the index from the key
-                let key_str = std::str::from_utf8(&k).unwrap_or("?");
-                let idx: u64 = key_str
-                    .strip_prefix(PREFIX_LOG)
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(u64::MAX);
+        for (k, v) in self.inner.db.scan_prefix(PREFIX_LOG).flatten() {
+            // Parse the index from the key
+            let key_str = std::str::from_utf8(&k).unwrap_or("?");
+            let idx: u64 = key_str
+                .strip_prefix(PREFIX_LOG)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(u64::MAX);
 
-                // Skip entries before our start
-                if idx < start {
-                    continue;
+            // Skip entries before our start
+            if idx < start {
+                continue;
+            }
+
+            // Stop at end
+            if let Some(end_idx) = end {
+                if idx >= end_idx {
+                    break;
                 }
+            }
 
-                // Stop at end
-                if let Some(end_idx) = end {
-                    if idx >= end_idx {
-                        break;
-                    }
+            // Deserialize Entry using bincode
+            match bincode::deserialize::<Entry>(&v) {
+                Ok(entry) => {
+                    entries.push(entry);
                 }
-
-                // Deserialize Entry using bincode
-                match bincode::deserialize::<Entry>(&v) {
-                    Ok(entry) => {
-                        entries.push(entry);
-                    }
-                    Err(e) => {
-                        error!("Failed to deserialize entry at idx={}: {:?}", idx, e);
-                    }
+                Err(e) => {
+                    error!("Failed to deserialize entry at idx={}: {:?}", idx, e);
                 }
             }
         }

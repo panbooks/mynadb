@@ -285,7 +285,6 @@ impl ScaleInPlanner {
     fn build_ha_units(&self, cluster_state: &ClusterState) -> Vec<HAUnit> {
         let ratio = cluster_state.primary_standby_ratio as usize;
         let mut units = Vec::new();
-        let mut unit_counter = 0;
 
         // Group primaries into units of `ratio` size
         let primaries: Vec<_> = cluster_state
@@ -294,9 +293,8 @@ impl ScaleInPlanner {
             .map(|n| n.node_id.clone())
             .collect();
 
-        for chunk in primaries.chunks(ratio) {
+        for (unit_counter, chunk) in primaries.chunks(ratio).enumerate() {
             let unit_id = format!("ha-unit-{}", unit_counter);
-            unit_counter += 1;
 
             // Find standby that backs up these primaries
             let standby_id = self.find_standby_for_primaries(cluster_state, chunk);
@@ -670,7 +668,7 @@ impl ScaleInPlanner {
         }
 
         // Warn if no standbys remain
-        if final_state.standby_count == 0 && cluster_state.standbys.len() > 0 {
+        if final_state.standby_count == 0 && !cluster_state.standbys.is_empty() {
             warnings.push("No Standbys will remain - no failover protection".to_string());
         }
 

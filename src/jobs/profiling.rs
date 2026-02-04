@@ -12,8 +12,10 @@ pub enum ProfileFormat {
     Text,
 }
 
-impl ProfileFormat {
-    pub fn from_str(s: &str) -> Result<Self, String> {
+impl std::str::FromStr for ProfileFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "protobuf" | "pb" | "pprof" => Ok(ProfileFormat::Protobuf),
             "flamegraph" | "svg" | "flame" => Ok(ProfileFormat::Flamegraph),
@@ -24,7 +26,9 @@ impl ProfileFormat {
             )),
         }
     }
+}
 
+impl ProfileFormat {
     pub fn content_type(&self) -> &'static str {
         match self {
             ProfileFormat::Protobuf => "application/octet-stream",
@@ -187,7 +191,7 @@ fn generate_text_report(report: &pprof::Report) -> String {
         output.push_str("Unable to generate detailed report\n");
     }
 
-    output.push_str("\n");
+    output.push('\n');
     output.push_str("Note: Use pprof format for full analysis\n");
     output.push_str("Example: curl http://localhost:7000/debug/heap?format=protobuf -o heap.pb\n");
     output.push_str("         go tool pprof -http=:8080 heap.pb\n");
@@ -198,6 +202,7 @@ fn generate_text_report(report: &pprof::Report) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_format_from_str() {

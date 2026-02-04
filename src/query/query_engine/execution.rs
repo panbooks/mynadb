@@ -203,8 +203,8 @@ impl QueryEngine {
                 .ok_or("Failed to get plan column")?;
 
             for i in 0..batch.num_rows() {
-                let plan_type = plans.is_valid(i).then(|| plan_types.value(i)).unwrap_or("");
-                let plan = plans.is_valid(i).then(|| plans.value(i)).unwrap_or("");
+                let plan_type = if plans.is_valid(i) { plan_types.value(i) } else { "" };
+                let plan = if plans.is_valid(i) { plans.value(i) } else { "" };
                 plan_lines.push(format!("{}:\n{}", plan_type, plan));
             }
         }

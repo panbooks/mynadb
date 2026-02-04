@@ -332,7 +332,7 @@ pub fn start_background_flush_with_table_routing(
                     let partitions = seen_partitions.entry(key.clone()).or_default();
                     let is_new_partition = partitions.insert(file.partition_key.clone());
 
-                    let delta = table_stats.entry(key).or_insert_with(TableStatsDelta::new);
+                    let delta = table_stats.entry(key).or_default();
                     delta.bytes_delta += file.size_bytes as i64;
                     delta.rows_delta += file.row_count as i64;
                     delta.files_delta += 1;

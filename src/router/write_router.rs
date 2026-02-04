@@ -380,6 +380,7 @@ impl WriteRouter {
     }
 
     /// Handle successful write: record success, mark failed nodes, register owner
+    #[allow(clippy::too_many_arguments)]
     async fn on_write_success(
         shard_cache: &ShardCache,
         meta_client: Option<&Arc<MetaClient>>,

@@ -24,6 +24,7 @@ impl ScanConfigOptimizer {
         Self { log_scans }
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn analyze_plan(&self, plan: &dyn ExecutionPlan, depth: usize) {
         let indent = "  ".repeat(depth);
         let name = plan.name();

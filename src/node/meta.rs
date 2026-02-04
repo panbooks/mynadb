@@ -36,7 +36,7 @@ pub async fn start(config_path: &str) {
     welcome!("===============================================");
 
     // Load Meta-specific config from [meta] section or use defaults
-    let meta_config = config.meta.clone().unwrap_or_else(MetaConfig::default);
+    let meta_config = config.meta.clone().unwrap_or_default();
 
     info!(
         "Starting Meta node {} on {}",
@@ -171,6 +171,6 @@ pub async fn start(config_path: &str) {
 /// Stop a running Meta node
 pub fn stop(config_path: &str) {
     let config = Config::load_or_default(config_path);
-    let meta_config = config.meta.unwrap_or_else(MetaConfig::default);
+    let meta_config = config.meta.unwrap_or_default();
     common::stop_node(&meta_config.data_dir, NODE_TYPE);
 }

@@ -9,6 +9,7 @@
 use super::types::{AggregateState, TimeBucketGranularity, WatermarkInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::str::FromStr;
 
 /// Aggregate function type
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,8 +145,7 @@ impl AggregateColumn {
             result.push(format!(
                 "sum({}) AS {}",
                 self.source_column,
-                self.helper_columns
-                    .get(0)
+                self.helper_columns.first()
                     .unwrap_or(&format!("{}_sum", self.alias))
             ));
             result.push(format!(

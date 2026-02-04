@@ -38,7 +38,7 @@ pub async fn start(config_path: &str) {
     welcome!("===============================================");
 
     // Load Router-specific config
-    let router_config = config.router.clone().unwrap_or_else(RouterConfig::default);
+    let router_config = config.router.clone().unwrap_or_default();
 
     info!("Starting Router node {}", router_config.node_id);
     info!("  HTTP port: {}", router_config.http_port);

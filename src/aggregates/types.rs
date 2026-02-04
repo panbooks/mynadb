@@ -225,7 +225,7 @@ pub enum TimeBucketGranularity {
 
 impl TimeBucketGranularity {
     /// Convert to nanoseconds
-    pub fn to_nanos(&self) -> i64 {
+    pub fn to_nanos(self) -> i64 {
         match self {
             Self::Second => 1_000_000_000,
             Self::Minute => 60 * 1_000_000_000,
@@ -233,12 +233,15 @@ impl TimeBucketGranularity {
             Self::FifteenMinutes => 15 * 60 * 1_000_000_000,
             Self::Hour => 3600 * 1_000_000_000,
             Self::Day => 86400 * 1_000_000_000_i64,
-            Self::Custom(nanos) => *nanos,
+            Self::Custom(nanos) => nanos,
         }
     }
+}
 
-    /// Parse from string (e.g., "1m", "5m", "1h", "1d")
-    pub fn from_str(s: &str) -> Result<Self, String> {
+impl std::str::FromStr for TimeBucketGranularity {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim().to_lowercase();
 
         if s == "1s" || s == "second" {
@@ -322,6 +325,7 @@ fn current_timestamp_ns() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_time_bucket_granularity() {

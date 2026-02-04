@@ -100,22 +100,20 @@ impl QueryEngine {
             } else {
                 storage.table_url(catalog_name, schema_name, table_name)
             }
+        } else if let Some(ref cache) = self.write_cache {
+            format!(
+                "file://{}/{}/{}/{}/{}",
+                self.data_dir,
+                cache.node_id(),
+                catalog_name,
+                schema_name,
+                table_name
+            )
         } else {
-            if let Some(ref cache) = self.write_cache {
-                format!(
-                    "file://{}/{}/{}/{}/{}",
-                    self.data_dir,
-                    cache.node_id(),
-                    catalog_name,
-                    schema_name,
-                    table_name
-                )
-            } else {
-                format!(
-                    "file://{}/{}/{}/{}",
-                    self.data_dir, catalog_name, schema_name, table_name
-                )
-            }
+            format!(
+                "file://{}/{}/{}/{}",
+                self.data_dir, catalog_name, schema_name, table_name
+            )
         };
 
         // Build local path for existence check
