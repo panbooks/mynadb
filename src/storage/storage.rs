@@ -170,6 +170,61 @@ impl Storage {
             .map_err(|e| format!("Failed to delete {}: {}", full_path, e))
     }
 
+    /// Delete all files under a prefix (batch deletion)
+    ///
+    /// Returns the number of files deleted and total bytes freed.
+    /// This is more efficient than listing + individual deletes for retention.
+    pub async fn delete_prefix(&self, prefix: &str) -> Result<DeletePrefixResult, String> {
+        let files = self.list(prefix).await?;
+
+        if files.is_empty() {
+            return Ok(DeletePrefixResult {
+                files_deleted: 0,
+                bytes_freed: 0,
+            });
+        }
+
+        let mut bytes_freed = 0u64;
+        let mut files_deleted = 0usize;
+        let mut errors = Vec::new();
+
+        // Get sizes first (for reporting)
+        for file in &files {
+            if let Ok(size) = self.size(file).await {
+                bytes_freed += size;
+            }
+        }
+
+        // Delete files
+        let store = self.object_store();
+        for file in &files {
+            let full_path = self.full_path(file);
+            match store.delete(&full_path).await {
+                Ok(()) => {
+                    files_deleted += 1;
+                    debug!("Deleted: {}", file);
+                }
+                Err(e) => {
+                    errors.push(format!("{}: {}", file, e));
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            tracing::warn!(
+                "delete_prefix had {} errors out of {} files: {:?}",
+                errors.len(),
+                files.len(),
+                &errors[..errors.len().min(5)]
+            );
+        }
+
+        Ok(DeletePrefixResult {
+            files_deleted,
+            bytes_freed,
+        })
+    }
+
     /// List files with prefix
     pub async fn list(&self, prefix: &str) -> Result<Vec<String>, String> {
         let full_prefix = self.full_path(prefix);
@@ -340,4 +395,13 @@ impl std::fmt::Debug for Storage {
             .field("url_prefix", &self.url_prefix)
             .finish()
     }
+}
+
+/// Result of delete_prefix operation
+#[derive(Debug, Clone, Default)]
+pub struct DeletePrefixResult {
+    /// Number of files successfully deleted
+    pub files_deleted: usize,
+    /// Total bytes freed
+    pub bytes_freed: u64,
 }

@@ -7,8 +7,18 @@
 //! - Caching partition→node mappings from Meta service
 
 pub mod api;
+pub mod cache_invalidation;
 pub mod client;
 pub mod config;
 pub mod flight;
-pub mod routing;
+pub mod health_checker;
+pub mod query_coordinator;
+pub mod shard_cache;
 pub mod state;
+pub mod write_router;
+
+// Re-exports for convenience
+pub use cache_invalidation::CacheInvalidationHandler;
+pub use query_coordinator::{DistributedQueryPlan, QueryCoordinator, QueryResult, TableRef, TimeRange};
+pub use shard_cache::ShardCache;
+pub use write_router::WriteRouter;

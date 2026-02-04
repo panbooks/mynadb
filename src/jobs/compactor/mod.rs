@@ -96,11 +96,14 @@ impl Drop for DistributedLockGuard {
 
 /// Compactor is responsible for merging small Parquet files into larger ones
 /// using a leveled compaction strategy (similar to LSM-tree)
+///
+/// Supports both standalone (local filesystem) and cluster (S3/MinIO) modes.
+/// All storage operations use the Object Store abstraction.
+///
+/// Path structure: catalog/schema/table/date=YYYY-MM-DD/node_id=X/*.parquet
 pub struct Compactor {
-    pub(crate) data_dir: String,
-    /// Storage backend (for future S3 support)
-    #[allow(dead_code)]
-    pub(crate) storage: Option<Arc<Storage>>,
+    /// Storage backend for Object Store operations
+    pub(crate) storage: Arc<Storage>,
     /// Lock to prevent concurrent compaction and read/write operations
     pub(crate) locks: CompactionLocks,
     /// Semaphore to limit concurrent LSM compaction operations
@@ -201,28 +204,44 @@ pub struct CompactionResult {
     pub rows_compacted: usize,
 }
 
+/// Information about a Parquet file for compaction
+///
+/// Uses String path for Object Store compatibility (works with both local and S3).
 #[derive(Debug, Clone)]
 pub(crate) struct ParquetFileInfo {
-    pub(crate) path: std::path::PathBuf,
+    /// Object Store path (relative to storage base)
+    pub(crate) path: String,
+    /// File size in bytes
     pub(crate) size: u64,
+    /// Compaction level (0 = L0, 1 = L1, etc.)
     pub(crate) level: u32,
+    /// Timestamp from filename
     pub(crate) timestamp: i64,
 }
 
 impl ParquetFileInfo {
-    pub(crate) fn from_path(path: std::path::PathBuf) -> Result<Self, String> {
-        let metadata =
-            std::fs::metadata(&path).map_err(|e| format!("Failed to get metadata: {}", e))?;
-
-        let size = metadata.len();
-
-        // Parse filename: L0_1703251234567.parquet or 1703251234567.parquet (legacy)
+    /// Parse file info from an Object Store path and size
+    ///
+    /// Extracts level and timestamp from filename patterns:
+    /// - L0_1703251234567.parquet (new format)
+    /// - 1703251234567.parquet (legacy, treated as L0)
+    /// - FULL_1703251234567.parquet (full compaction output)
+    pub(crate) fn from_path_and_size(path: String, size: u64) -> Result<Self, String> {
+        // Extract filename from path
         let filename = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or("Invalid filename")?;
+            .rsplit('/')
+            .next()
+            .ok_or("Invalid path: no filename")?;
 
-        let (level, timestamp) = if filename.starts_with(LEVEL_PREFIX) {
+        let (level, timestamp) = if filename.starts_with("FULL_") {
+            // Full compaction output: FULL_1703251234567.parquet (level 255)
+            let timestamp = filename
+                .trim_start_matches("FULL_")
+                .trim_end_matches(PARQUET_EXT)
+                .parse::<i64>()
+                .map_err(|_| "Invalid timestamp in FULL filename")?;
+            (255, timestamp)
+        } else if filename.starts_with(LEVEL_PREFIX) {
             // New format: L0_1703251234567.parquet
             let parts: Vec<&str> = filename.split(LEVEL_SEPARATOR).collect();
             if parts.len() >= 2 {
@@ -257,31 +276,14 @@ impl ParquetFileInfo {
 }
 
 impl Compactor {
-    pub fn with_config(data_dir: &str, config: &CompactionConfig) -> Self {
-        Self::with_storage_metadata_and_config(data_dir, None, config, None)
+    /// Create a new Compactor with storage backend and configuration
+    pub fn new(storage: Arc<Storage>, config: &CompactionConfig) -> Self {
+        Self::with_metadata(storage, config, None)
     }
 
-    pub fn with_storage(data_dir: &str, storage: Arc<Storage>, config: &CompactionConfig) -> Self {
-        Self::with_storage_metadata_and_config(data_dir, Some(storage), config, None)
-    }
-
-    pub fn with_storage_and_metadata(
-        data_dir: &str,
+    /// Create a new Compactor with storage, config, and metadata manager
+    pub fn with_metadata(
         storage: Arc<Storage>,
-        config: &CompactionConfig,
-        metadata_manager: SharedMetadataManager,
-    ) -> Self {
-        Self::with_storage_metadata_and_config(
-            data_dir,
-            Some(storage),
-            config,
-            Some(metadata_manager),
-        )
-    }
-
-    fn with_storage_metadata_and_config(
-        data_dir: &str,
-        storage: Option<Arc<Storage>>,
         config: &CompactionConfig,
         metadata_manager: Option<SharedMetadataManager>,
     ) -> Self {
@@ -319,7 +321,6 @@ impl Compactor {
         };
 
         Compactor {
-            data_dir: data_dir.to_string(),
             storage,
             locks: Arc::new(RwLock::new(HashMap::new())),
             compaction_semaphore,

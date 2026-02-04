@@ -4,9 +4,10 @@
 
 use super::client::DataNodePool;
 use super::config::RouterConfig;
-use super::routing::{QueryCoordinator, ShardCache, WriteRouter};
+use super::{QueryCoordinator, ShardCache, WriteRouter};
 use crate::config::Config;
 use crate::meta::client::MetaClient;
+use crate::storage::storage::Storage;
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -80,20 +81,60 @@ impl RouterAppState {
             config.schema.clone(),
         ));
 
-        // Initialize query coordinator (with MetaClient for file-based routing if available)
-        let query_coordinator = if let Some(ref client) = meta_client {
-            Arc::new(QueryCoordinator::with_meta_client(
-                Arc::clone(&shard_cache),
-                Arc::clone(&data_node_pool),
-                router_config.query.max_parallel_fanout,
-                Arc::clone(client),
-            ))
-        } else {
-            Arc::new(QueryCoordinator::new(
-                Arc::clone(&shard_cache),
-                Arc::clone(&data_node_pool),
-                router_config.query.max_parallel_fanout,
-            ))
+        // Initialize storage for S3 LIST-based partition discovery (optional)
+        let storage = match Storage::from_config(&config.storage) {
+            Ok(s) => {
+                info!("Initialized storage for partition discovery");
+                Some(s)
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to initialize storage for partition discovery: {}. \
+                     Partition cache will not auto-discover on miss.",
+                    e
+                );
+                None
+            }
+        };
+
+        // Initialize query coordinator with Storage and MetaClient (if available)
+        let query_coordinator = match (&meta_client, storage) {
+            (Some(client), Some(s)) => {
+                // Both Meta client and Storage available
+                Arc::new(QueryCoordinator::with_meta_and_storage(
+                    Arc::clone(&shard_cache),
+                    Arc::clone(&data_node_pool),
+                    router_config.query.max_parallel_fanout,
+                    Arc::clone(client),
+                    s,
+                ))
+            }
+            (Some(client), None) => {
+                // Only Meta client available
+                Arc::new(QueryCoordinator::with_meta_client(
+                    Arc::clone(&shard_cache),
+                    Arc::clone(&data_node_pool),
+                    router_config.query.max_parallel_fanout,
+                    Arc::clone(client),
+                ))
+            }
+            (None, Some(s)) => {
+                // Only Storage available
+                Arc::new(QueryCoordinator::with_storage(
+                    Arc::clone(&shard_cache),
+                    Arc::clone(&data_node_pool),
+                    router_config.query.max_parallel_fanout,
+                    s,
+                ))
+            }
+            (None, None) => {
+                // Neither available - basic routing only
+                Arc::new(QueryCoordinator::new(
+                    Arc::clone(&shard_cache),
+                    Arc::clone(&data_node_pool),
+                    router_config.query.max_parallel_fanout,
+                ))
+            }
         };
 
         Ok(Self {

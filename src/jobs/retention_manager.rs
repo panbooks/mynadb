@@ -7,33 +7,21 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 /// RetentionManager handles automatic deletion of old partitions
+///
+/// Supports both standalone (local filesystem) and cluster (S3/MinIO) modes.
+/// All storage operations use the Object Store abstraction.
 pub struct RetentionManager {
     db_manager: Arc<DatabaseManager>,
-    data_dir: String,
-    /// Storage backend (for future S3 support)
-    #[allow(dead_code)]
-    storage: Option<Arc<Storage>>,
+    /// Storage backend for Object Store operations
+    storage: Arc<Storage>,
 }
 
 impl RetentionManager {
-    pub fn new(db_manager: Arc<DatabaseManager>, data_dir: &str) -> Self {
-        RetentionManager {
-            db_manager,
-            data_dir: data_dir.to_string(),
-            storage: None,
-        }
-    }
-
-    pub fn with_storage(
-        db_manager: Arc<DatabaseManager>,
-        data_dir: &str,
-        storage: Arc<Storage>,
-    ) -> Self {
-        RetentionManager {
-            db_manager,
-            data_dir: data_dir.to_string(),
-            storage: Some(storage),
-        }
+    /// Create a new RetentionManager with storage backend
+    ///
+    /// All operations use the Object Store abstraction for both local and S3 storage.
+    pub fn new(db_manager: Arc<DatabaseManager>, storage: Arc<Storage>) -> Self {
+        RetentionManager { db_manager, storage }
     }
 
     /// Start background retention task
@@ -82,8 +70,8 @@ impl RetentionManager {
     ) -> Result<RetentionStats, String> {
         let mut stats = RetentionStats::default();
 
-        // Discover all catalogs (databases)
-        let catalogs = self.discover_catalogs()?;
+        // Discover all catalogs (databases) using Object Store
+        let catalogs = self.discover_catalogs().await?;
         stats.catalogs_scanned = catalogs.len();
 
         for catalog in catalogs {
@@ -117,8 +105,8 @@ impl RetentionManager {
         config: &RetentionConfig,
         stats: &mut RetentionStats,
     ) -> Result<(), String> {
-        // Discover all schemas in this catalog
-        let schemas = self.discover_schemas(catalog)?;
+        // Discover all schemas in this catalog using Object Store
+        let schemas = self.discover_schemas(catalog).await?;
 
         for schema in schemas {
             debug!("Checking retention for schema: {}.{}", catalog, schema);
@@ -152,8 +140,8 @@ impl RetentionManager {
         config: &RetentionConfig,
         stats: &mut RetentionStats,
     ) -> Result<(), String> {
-        // Discover all tables in this schema
-        let tables = self.discover_tables(catalog, schema)?;
+        // Discover all tables in this schema using Object Store
+        let tables = self.discover_tables(catalog, schema).await?;
 
         for table in tables {
             let full_table_name = format!("{}.{}.{}", catalog, schema, table);
@@ -185,6 +173,9 @@ impl RetentionManager {
     }
 
     /// Run retention check for a single table
+    ///
+    /// Uses Object Store to discover and delete old partitions.
+    /// Handles the new path structure: catalog/schema/table/date=YYYY-MM-DD/node_id=X/
     async fn run_table_retention(
         &self,
         catalog: &str,
@@ -193,108 +184,114 @@ impl RetentionManager {
         config: &RetentionConfig,
         stats: &mut RetentionStats,
     ) -> Result<(), String> {
-        // Delete partitions older than retention period
-        let deleted = self.db_manager.delete_partitions_older_than_days(
-            catalog,
-            schema,
-            table,
-            config.default_days,
-        )?;
+        use chrono::{Duration, Utc};
 
-        if !deleted.is_empty() {
+        let cutoff_date = Utc::now() - Duration::days(config.default_days as i64);
+        let cutoff_str = cutoff_date.format("%Y-%m-%d").to_string();
+
+        // Discover partitions using Object Store
+        let partitions = self
+            .db_manager
+            .discover_table_partitions_async(catalog, schema, table)
+            .await?;
+
+        let mut deleted_count = 0;
+        for partition in partitions {
+            // Check if partition is older than cutoff
+            if partition.date.as_str() < cutoff_str.as_str() {
+                // Delete the partition using Object Store
+                match self
+                    .delete_partition_async(catalog, schema, table, &partition.partition)
+                    .await
+                {
+                    Ok(bytes_freed) => {
+                        debug!(
+                            "Deleted partition {}.{}.{}/{} ({} files, {:.2} MB)",
+                            catalog,
+                            schema,
+                            table,
+                            partition.partition,
+                            partition.file_count,
+                            bytes_freed as f64 / 1024.0 / 1024.0
+                        );
+                        stats.bytes_freed += bytes_freed;
+                        stats.partitions_deleted += 1;
+                        deleted_count += 1;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to delete partition {}.{}.{}/{}: {}",
+                            catalog, schema, table, partition.partition, e
+                        );
+                    }
+                }
+            }
+        }
+
+        if deleted_count > 0 {
             info!(
                 "Deleted {} partition(s) from {}.{}.{}",
-                deleted.len(),
-                catalog,
-                schema,
-                table
+                deleted_count, catalog, schema, table
             );
-
-            for msg in deleted {
-                debug!("  {}", msg);
-                // Parse bytes from message (format: "... (N files, X.XX MB)")
-                if let Some(size_mb) = extract_size_mb(&msg) {
-                    stats.bytes_freed += (size_mb * 1024.0 * 1024.0) as u64;
-                }
-                stats.partitions_deleted += 1;
-            }
         }
 
         Ok(())
     }
 
-    /// Discover all catalogs (top-level directories in data_dir)
-    fn discover_catalogs(&self) -> Result<Vec<String>, String> {
-        let entries = std::fs::read_dir(&self.data_dir)
-            .map_err(|e| format!("Failed to read data directory: {}", e))?;
+    /// Delete a partition using Object Store batch deletion
+    ///
+    /// Path structure: catalog/schema/table/date=YYYY-MM-DD/node_id=X/*.parquet
+    async fn delete_partition_async(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        partition: &str,
+    ) -> Result<u64, String> {
+        // Ensure partition format: date=YYYY-MM-DD
+        let partition_dir = if partition.starts_with("date=") {
+            partition.to_string()
+        } else {
+            format!("date={}", partition)
+        };
 
-        let mut catalogs = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-            let path = entry.path();
+        let partition_prefix = format!("{}/{}/{}/{}", catalog, schema, table, partition_dir);
 
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                    catalogs.push(name.to_string());
-                }
-            }
-        }
+        // Delete all files under the partition prefix (includes node_id= subdirectories)
+        let result = self.storage.delete_prefix(&partition_prefix).await?;
 
-        Ok(catalogs)
+        debug!(
+            "Deleted {} files ({:.2} MB) from {}",
+            result.files_deleted,
+            result.bytes_freed as f64 / 1024.0 / 1024.0,
+            partition_prefix
+        );
+
+        Ok(result.bytes_freed)
     }
 
-    /// Discover all schemas in a catalog
-    fn discover_schemas(&self, catalog: &str) -> Result<Vec<String>, String> {
-        let catalog_path = std::path::Path::new(&self.data_dir).join(catalog);
-
-        let entries = std::fs::read_dir(&catalog_path)
-            .map_err(|e| format!("Failed to read catalog directory: {}", e))?;
-
-        let mut schemas = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                    // Skip config.json and other non-schema files
-                    if name.ends_with(".json") || name.starts_with('.') {
-                        continue;
-                    }
-                    schemas.push(name.to_string());
-                }
-            }
-        }
-
-        Ok(schemas)
+    /// Discover all catalogs (top-level directories) using Object Store
+    async fn discover_catalogs(&self) -> Result<Vec<String>, String> {
+        // Use Object Store list_prefixes to get top-level directories
+        self.storage.list_prefixes("").await
     }
 
-    /// Discover all tables in a schema
-    fn discover_tables(&self, catalog: &str, schema: &str) -> Result<Vec<String>, String> {
-        let schema_path = std::path::Path::new(&self.data_dir)
-            .join(catalog)
-            .join(schema);
+    /// Discover all schemas in a catalog using Object Store
+    async fn discover_schemas(&self, catalog: &str) -> Result<Vec<String>, String> {
+        // Use Object Store list_prefixes to get schema directories
+        let schemas = self.storage.list_prefixes(catalog).await?;
 
-        if !schema_path.exists() {
-            return Ok(Vec::new());
-        }
+        // Filter out config files and hidden directories
+        Ok(schemas
+            .into_iter()
+            .filter(|name| !name.ends_with(".json") && !name.starts_with('.'))
+            .collect())
+    }
 
-        let entries = std::fs::read_dir(&schema_path)
-            .map_err(|e| format!("Failed to read schema directory: {}", e))?;
-
-        let mut tables = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                    tables.push(name.to_string());
-                }
-            }
-        }
-
-        Ok(tables)
+    /// Discover all tables in a schema using Object Store
+    async fn discover_tables(&self, catalog: &str, schema: &str) -> Result<Vec<String>, String> {
+        let prefix = format!("{}/{}", catalog, schema);
+        self.storage.list_prefixes(&prefix).await
     }
 }
 

@@ -544,6 +544,80 @@ pub fn inject_date_predicates(sql: &str) -> String {
     }
 }
 
+/// Inject node_id predicate into SQL for Data Node local queries
+///
+/// When a Data Node receives a query, it should only read its own data.
+/// This function adds `node_id = 'my_node_id'` to the WHERE clause.
+///
+/// Example:
+///   Input:  SELECT * FROM cpu WHERE time >= 1704067200000000000
+///   Output: SELECT * FROM cpu WHERE node_id = 'data-1' AND time >= 1704067200000000000
+///
+/// If there's no WHERE clause, one is added:
+///   Input:  SELECT * FROM cpu
+///   Output: SELECT * FROM cpu WHERE node_id = 'data-1'
+///
+/// This enables automatic partition pruning on the node_id Hive partition column.
+pub fn inject_node_id_predicate(sql: &str, node_id: &str) -> String {
+    let sql_upper = sql.to_uppercase();
+
+    // Check if node_id predicate already exists
+    if sql_upper.contains("NODE_ID =")
+        || sql_upper.contains("NODE_ID=")
+        || sql_upper.contains("NODE_ID IN")
+    {
+        debug!(
+            "node_id predicate already present in query, skipping injection"
+        );
+        return sql.to_string();
+    }
+
+    // Build node_id predicate
+    let node_id_predicate = format!("node_id = '{}'", node_id);
+
+    // Find WHERE clause position to inject the predicate
+    if let Some(where_pos) = sql_upper.find("WHERE") {
+        // Insert node_id predicate after WHERE keyword
+        let where_end = where_pos + 5; // "WHERE" is 5 characters
+        let before = &sql[..where_end];
+        let after = &sql[where_end..];
+
+        let result = format!("{} {} AND{}", before, node_id_predicate, after);
+        debug!("Injected node_id predicate: {} -> {}", sql, result);
+        result
+    } else {
+        // No WHERE clause - need to add one
+        // Find the position to insert WHERE clause (before ORDER BY, GROUP BY, LIMIT, etc.)
+        let insert_positions = [
+            sql_upper.find("ORDER BY"),
+            sql_upper.find("GROUP BY"),
+            sql_upper.find("HAVING"),
+            sql_upper.find("LIMIT"),
+            sql_upper.find("UNION"),
+            sql_upper.find("EXCEPT"),
+            sql_upper.find("INTERSECT"),
+        ];
+
+        // Find the earliest keyword position
+        let insert_pos = insert_positions
+            .iter()
+            .filter_map(|&pos| pos)
+            .min();
+
+        let result = if let Some(pos) = insert_pos {
+            let before = &sql[..pos];
+            let after = &sql[pos..];
+            format!("{} WHERE {} {}", before.trim_end(), node_id_predicate, after)
+        } else {
+            // No trailing clauses, just append WHERE
+            format!("{} WHERE {}", sql.trim_end(), node_id_predicate)
+        };
+
+        debug!("Injected node_id predicate (new WHERE): {} -> {}", sql, result);
+        result
+    }
+}
+
 /// Extract optimization information from the physical plan
 pub fn extract_optimization_info(plan: &str) -> QueryOptimizations {
     let plan_lower = plan.to_lowercase();
@@ -660,5 +734,77 @@ mod tests {
         assert_eq!(quote_identifier("MixedCase"), "\"MixedCase\"");
         assert_eq!(quote_identifier("has-dash"), "\"has-dash\"");
         assert_eq!(quote_identifier("has.dot"), "\"has.dot\"");
+    }
+
+    #[test]
+    fn test_inject_node_id_predicate_with_where() {
+        // SQL with existing WHERE clause
+        let sql = "SELECT * FROM cpu WHERE time >= 1704067200000000000";
+        let result = inject_node_id_predicate(sql, "data-1");
+        assert_eq!(
+            result,
+            "SELECT * FROM cpu WHERE node_id = 'data-1' AND time >= 1704067200000000000"
+        );
+    }
+
+    #[test]
+    fn test_inject_node_id_predicate_without_where() {
+        // SQL without WHERE clause
+        let sql = "SELECT * FROM cpu";
+        let result = inject_node_id_predicate(sql, "data-1");
+        assert_eq!(result, "SELECT * FROM cpu WHERE node_id = 'data-1'");
+    }
+
+    #[test]
+    fn test_inject_node_id_predicate_with_order_by() {
+        // SQL without WHERE but with ORDER BY
+        let sql = "SELECT * FROM cpu ORDER BY time DESC";
+        let result = inject_node_id_predicate(sql, "data-1");
+        assert_eq!(
+            result,
+            "SELECT * FROM cpu WHERE node_id = 'data-1' ORDER BY time DESC"
+        );
+    }
+
+    #[test]
+    fn test_inject_node_id_predicate_with_group_by() {
+        // SQL without WHERE but with GROUP BY
+        let sql = "SELECT host, AVG(usage) FROM cpu GROUP BY host";
+        let result = inject_node_id_predicate(sql, "data-1");
+        assert_eq!(
+            result,
+            "SELECT host, AVG(usage) FROM cpu WHERE node_id = 'data-1' GROUP BY host"
+        );
+    }
+
+    #[test]
+    fn test_inject_node_id_predicate_with_limit() {
+        // SQL without WHERE but with LIMIT
+        let sql = "SELECT * FROM cpu LIMIT 10";
+        let result = inject_node_id_predicate(sql, "data-1");
+        assert_eq!(
+            result,
+            "SELECT * FROM cpu WHERE node_id = 'data-1' LIMIT 10"
+        );
+    }
+
+    #[test]
+    fn test_inject_node_id_predicate_already_present() {
+        // SQL already has node_id predicate
+        let sql = "SELECT * FROM cpu WHERE node_id = 'data-2' AND time > 0";
+        let result = inject_node_id_predicate(sql, "data-1");
+        // Should not modify since node_id already exists
+        assert_eq!(result, sql);
+    }
+
+    #[test]
+    fn test_inject_node_id_predicate_complex_where() {
+        // SQL with complex WHERE clause
+        let sql = "SELECT * FROM cpu WHERE time >= 0 AND host = 'server1' ORDER BY time";
+        let result = inject_node_id_predicate(sql, "data-1");
+        assert_eq!(
+            result,
+            "SELECT * FROM cpu WHERE node_id = 'data-1' AND time >= 0 AND host = 'server1' ORDER BY time"
+        );
     }
 }

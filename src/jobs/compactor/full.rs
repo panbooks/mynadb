@@ -1,11 +1,10 @@
 //! Full Compaction Operations for Compactor
 //!
 //! Handles full compaction for yesterday's partitions (date-based).
+//! Uses Object Store abstraction for both local and S3/MinIO storage.
 
 use chrono::Timelike;
 use futures::stream::{FuturesUnordered, StreamExt};
-use std::fs;
-use std::path::Path;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
@@ -16,7 +15,11 @@ use super::{
 
 impl Compactor {
     /// Full compaction for yesterday's partitions (date-based, no metadata overhead)
-    /// Now runs partitions in parallel (up to max_concurrent_compactions)
+    ///
+    /// Runs partitions in parallel (up to max_concurrent_compactions).
+    /// Uses Object Store to discover catalogs, schemas, tables, and partitions.
+    ///
+    /// Path structure: catalog/schema/table/date=YYYY-MM-DD/node_id=X/*.parquet
     pub async fn full_compact_yesterday(
         &self,
         config: &CompactionConfig,
@@ -44,70 +47,61 @@ impl Compactor {
             yesterday_partition, current_hour
         );
 
-        // Phase 1: Collect all partitions that need compaction
-        let mut partitions_to_compact: Vec<(String, String, String, std::path::PathBuf)> =
-            Vec::new();
+        // Phase 1: Collect all partitions that need compaction using Object Store
+        let mut partitions_to_compact: Vec<(String, String, String, String)> = Vec::new();
 
-        // Scan all catalogs
-        let catalog_entries =
-            fs::read_dir(&self.data_dir).map_err(|e| format!("Failed to read data dir: {}", e))?;
+        // Discover catalogs using Object Store
+        let catalogs = match self.storage.list_prefixes("").await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Failed to list catalogs: {}", e);
+                return Ok(Vec::new());
+            }
+        };
 
-        for catalog_entry in catalog_entries.flatten() {
-            if !catalog_entry.path().is_dir() {
+        for catalog in catalogs {
+            if catalog.starts_with('.') {
                 continue;
             }
 
-            let catalog = match catalog_entry.file_name().to_str() {
-                Some(name) if !name.starts_with('.') => name.to_string(),
-                _ => continue,
-            };
-
-            // Scan schemas
-            let schema_entries = match fs::read_dir(&catalog_entry.path()) {
-                Ok(e) => e,
+            // Discover schemas
+            let schemas = match self.storage.list_prefixes(&catalog).await {
+                Ok(s) => s,
                 Err(_) => continue,
             };
 
-            for schema_entry in schema_entries.flatten() {
-                if !schema_entry.path().is_dir() {
+            for schema in schemas {
+                if schema.starts_with('.') || schema.ends_with(".json") {
                     continue;
                 }
 
-                let schema = match schema_entry.file_name().to_str() {
-                    Some(name) if !name.starts_with('.') => name.to_string(),
-                    _ => continue,
-                };
-
-                // Scan tables
-                let table_entries = match fs::read_dir(&schema_entry.path()) {
-                    Ok(e) => e,
+                // Discover tables
+                let schema_prefix = format!("{}/{}", catalog, schema);
+                let tables = match self.storage.list_prefixes(&schema_prefix).await {
+                    Ok(t) => t,
                     Err(_) => continue,
                 };
 
-                for table_entry in table_entries.flatten() {
-                    if !table_entry.path().is_dir() {
-                        continue;
-                    }
+                for table in tables {
+                    // Check if yesterday's partition exists
+                    let partition_prefix =
+                        format!("{}/{}/{}/{}", catalog, schema, table, yesterday_partition);
 
-                    let table = match table_entry.file_name().to_str() {
-                        Some(name) => name.to_string(),
-                        None => continue,
+                    // Check for any files in this partition (including node_id= subdirs)
+                    let files = match self.storage.list(&partition_prefix).await {
+                        Ok(f) => f,
+                        Err(_) => continue,
                     };
 
-                    // Check if yesterday's partition exists
-                    let partition_path = table_entry.path().join(&yesterday_partition);
-
-                    if !partition_path.exists() {
-                        continue;
+                    // If there are parquet files, add to compaction queue
+                    if files.iter().any(|f| f.ends_with(".parquet")) {
+                        partitions_to_compact.push((
+                            catalog.clone(),
+                            schema.clone(),
+                            table.clone(),
+                            partition_prefix,
+                        ));
                     }
-
-                    // Add to compaction queue
-                    partitions_to_compact.push((
-                        catalog.clone(),
-                        schema.clone(),
-                        table.clone(),
-                        partition_path,
-                    ));
                 }
             }
         }
@@ -129,22 +123,21 @@ impl Compactor {
         // Phase 2: Process partitions concurrently using FuturesUnordered
         let mut tasks = FuturesUnordered::new();
 
-        for (catalog, schema, table, partition_path) in partitions_to_compact {
-            // Clone strings to move into the future
+        for (catalog, schema, table, partition_prefix) in partitions_to_compact {
             let catalog_owned = catalog.clone();
             let schema_owned = schema.clone();
             let table_owned = table.clone();
             let partition_name_owned = yesterday_partition.clone();
-            let partition_path_owned = partition_path.clone();
+            let partition_prefix_owned = partition_prefix.clone();
             let config_clone = config.clone();
 
             let future = async move {
-                self.full_compact_partition(
+                self.full_compact_partition_async(
                     &catalog_owned,
                     &schema_owned,
                     &table_owned,
                     &partition_name_owned,
-                    &partition_path_owned,
+                    &partition_prefix_owned,
                     &config_clone,
                 )
                 .await
@@ -197,15 +190,19 @@ impl Compactor {
         Ok(results)
     }
 
-    /// Full compact a single partition
-    /// Filters out files >= full_compaction_target_size to reduce I/O
-    pub(crate) async fn full_compact_partition(
+    /// Full compact a single partition using Object Store
+    ///
+    /// Filters out files >= full_compaction_target_size to reduce I/O.
+    /// Handles node_id= subdirectories in the partition.
+    ///
+    /// Path structure: catalog/schema/table/date=YYYY-MM-DD/node_id=X/*.parquet
+    pub(crate) async fn full_compact_partition_async(
         &self,
         catalog: &str,
         schema: &str,
         table: &str,
         partition_name: &str,
-        partition_path: &Path,
+        partition_prefix: &str,
         config: &CompactionConfig,
     ) -> Result<Option<CompactionResult>, String> {
         // Acquire full compaction semaphore permit if concurrent limiting is enabled
@@ -221,7 +218,6 @@ impl Compactor {
         };
 
         // Try to acquire distributed lock for cluster mode
-        // Uses same lock key format as LSM compaction to ensure mutual exclusion
         let lock_key = format!(
             "/compaction/{}/{}/{}/{}",
             catalog, schema, table, partition_name
@@ -242,7 +238,6 @@ impl Compactor {
                     })
                 }
                 Ok(None) => {
-                    // Lock held by another node - skip this partition
                     debug!(
                         "Skipping full compaction for {}/{}/{}/{}: partition locked by another node",
                         catalog, schema, table, partition_name
@@ -264,19 +259,18 @@ impl Compactor {
 
         let start = Instant::now();
 
-        // List all parquet files with their sizes
-        let all_files: Vec<(std::path::PathBuf, u64)> = fs::read_dir(partition_path)
-            .map_err(|e| format!("Failed to read partition: {}", e))?
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path().is_file()
-                    && e.path().extension().and_then(|s| s.to_str()) == Some("parquet")
-            })
-            .filter_map(|e| {
-                let path = e.path();
-                fs::metadata(&path).ok().map(|m| (path, m.len()))
-            })
-            .collect();
+        // List all parquet files with their sizes using Object Store
+        // This recursively lists files in node_id= subdirectories
+        let all_file_paths = self.storage.list(partition_prefix).await?;
+        let mut all_files: Vec<(String, u64)> = Vec::new();
+
+        for path in all_file_paths {
+            if path.ends_with(".parquet") {
+                if let Ok(size) = self.storage.size(&path).await {
+                    all_files.push((path, size));
+                }
+            }
+        }
 
         if all_files.len() < 2 {
             debug!(
@@ -293,15 +287,14 @@ impl Compactor {
         let files_before = all_files.len();
         let bytes_before: u64 = all_files.iter().map(|(_, size)| size).sum();
 
-        // Filter out files >= full_compaction_target_size to reduce I/O
-        // Already-large files don't need to be merged
-        let compactable_files: Vec<(std::path::PathBuf, u64)> = all_files
+        // Filter out files >= full_compaction_target_size
+        let compactable_files: Vec<(String, u64)> = all_files
             .iter()
             .filter(|(_, size)| *size < config.full_compaction_target_size)
             .cloned()
             .collect();
 
-        let oversized_files: Vec<(std::path::PathBuf, u64)> = all_files
+        let oversized_files: Vec<(String, u64)> = all_files
             .iter()
             .filter(|(_, size)| *size >= config.full_compaction_target_size)
             .cloned()
@@ -321,7 +314,6 @@ impl Compactor {
             );
         }
 
-        // If no compactable files or only 1 compactable file, skip
         if compactable_files.len() < 2 {
             debug!(
                 "Partition {}/{}/{}/{}: {} compactable file(s) (< 2), skipping full compaction",
@@ -349,28 +341,22 @@ impl Compactor {
             filtered_count
         );
 
-        // Extract just the paths for reading
-        let files_to_compact: Vec<std::path::PathBuf> =
-            compactable_files.iter().map(|(p, _)| p.clone()).collect();
-
-        // Read compactable files
-        let batches = self.read_parquet_files(&files_to_compact).await?;
+        // Read compactable files using Object Store
+        let file_paths: Vec<String> = compactable_files.iter().map(|(p, _)| p.clone()).collect();
+        let batches = self.read_parquet_files_from_storage(&file_paths).await?;
         let total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
 
         // Write consolidated file
         let timestamp = chrono::Utc::now().timestamp_millis();
-        let output = partition_path.join(format!("FULL_{}.parquet", timestamp));
+        let output_path = format!("{}/FULL_{}.parquet", partition_prefix, timestamp);
 
-        self.write_compacted_file(output.to_str().unwrap(), batches)
+        let output_size = self
+            .write_compacted_file_to_storage(&output_path, batches)
             .await?;
-
-        let output_size = fs::metadata(&output)
-            .map(|m| m.len())
-            .unwrap_or(compactable_bytes);
 
         info!(
             "Created: {} ({} rows, {:.2} MB from {:.2} MB)",
-            output.display(),
+            output_path,
             total_rows,
             output_size as f64 / MB_TO_BYTES as f64,
             compactable_bytes as f64 / MB_TO_BYTES as f64
@@ -379,32 +365,28 @@ impl Compactor {
         // Register new FULL file with metadata manager
         if let Some(ref manager) = self.metadata_manager {
             let file_info = Self::create_file_info(
-                output.to_str().unwrap_or_default(),
+                &output_path,
                 catalog,
                 schema,
                 table,
                 partition_name,
-                255, // FULL files use level 255 to distinguish from LSM levels
+                255, // FULL files use level 255
                 total_rows as u64,
                 output_size,
             );
             if let Err(e) = manager.register_file(file_info).await {
-                warn!(
-                    "Failed to register compacted file {}: {}",
-                    output.display(),
-                    e
-                );
+                warn!("Failed to register compacted file {}: {}", output_path, e);
             }
         }
 
-        // Delete old compacted files (keep oversized files)
+        // Delete old compacted files using Object Store
         let mut deleted_paths: Vec<String> = Vec::new();
-        for (file, _) in &compactable_files {
-            if let Err(e) = fs::remove_file(file) {
-                warn!("Failed to delete {}: {}", file.display(), e);
+        for (file_path, _) in &compactable_files {
+            if let Err(e) = self.storage.delete(file_path).await {
+                warn!("Failed to delete {}: {}", file_path, e);
             } else {
-                debug!("Deleted: {}", file.display());
-                deleted_paths.push(file.to_string_lossy().to_string());
+                debug!("Deleted: {}", file_path);
+                deleted_paths.push(file_path.clone());
             }
         }
 
@@ -414,14 +396,13 @@ impl Compactor {
                 if let Err(e) = manager.remove_files(deleted_paths).await {
                     warn!("Failed to remove files from metadata: {}", e);
                 }
-                // Save metadata after full compaction
                 if let Err(e) = manager.save().await {
                     warn!("Failed to save metadata after full compaction: {}", e);
                 }
             }
         }
 
-        let files_after = 1 + filtered_count; // 1 new FULL file + oversized files remaining
+        let files_after = 1 + filtered_count;
 
         info!(
             "Full compaction complete: {}/{}/{}/{}: {} → {} files ({} compacted, {} oversized kept), {:.2} MB → {:.2} MB in {:?}",
