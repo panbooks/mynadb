@@ -18,8 +18,15 @@ pub fn Tables() -> impl IntoView {
     let (error, set_error) = create_signal::<Option<String>>(None);
     let (search, set_search) = create_signal(String::new());
 
+    // Trigger signal for manual refresh/search
+    let (refresh_trigger, set_refresh_trigger) = create_signal(0_u32);
+
     // Fetch tables
-    let fetch = move || {
+    let state_clone = state.clone();
+    create_effect(move |_| {
+        let _ = refresh_trigger.get();
+        let state = state_clone.clone();
+
         set_loading.set(true);
         let query = ListTablesQuery {
             search: {
@@ -44,18 +51,13 @@ pub fn Tables() -> impl IntoView {
             }
             set_loading.set(false);
         });
-    };
-
-    // Initial fetch
-    create_effect(move |_| {
-        fetch();
     });
 
     view! {
         <div class="space-y-6">
             <div class="flex items-center justify-between">
                 <h1 class="text-2xl font-bold text-gray-900">"Tables"</h1>
-                <button class="btn btn-secondary" on:click=move |_| fetch()>
+                <button class="btn btn-secondary" on:click=move |_| set_refresh_trigger.update(|n| *n += 1)>
                     "Refresh"
                 </button>
             </div>
@@ -71,11 +73,11 @@ pub fn Tables() -> impl IntoView {
                         on:input=move |ev| set_search.set(event_target_value(&ev))
                         on:keydown=move |ev| {
                             if ev.key() == "Enter" {
-                                fetch();
+                                set_refresh_trigger.update(|n| *n += 1);
                             }
                         }
                     />
-                    <button class="btn btn-primary" on:click=move |_| fetch()>
+                    <button class="btn btn-primary" on:click=move |_| set_refresh_trigger.update(|n| *n += 1)>
                         "Search"
                     </button>
                 </div>
@@ -144,25 +146,35 @@ pub fn Tables() -> impl IntoView {
 /// Table row component
 #[component]
 fn TableRow(table: TableSummary) -> impl IntoView {
-    let table_key = format!("{}/{}/{}", table.catalog, table.schema, table.table);
+    let _table_key = format!("{}/{}/{}", table.catalog, table.schema, table.table);
+    let table_name = table.table.clone();
+    let catalog = table.catalog.clone();
+    let schema = table.schema.clone();
+    let primary_owner = table.primary_owner.clone().unwrap_or_else(|| "-".to_string());
+    let owner_count = table.owner_count;
+    let partition_count = table.partition_count;
+    let total_bytes = table.total_bytes;
+    let total_rows = table.total_rows;
+    let has_multiple_owners = owner_count > 1;
+    let extra_owners = if owner_count > 1 { owner_count - 1 } else { 0 };
 
     view! {
         <tr>
             <td>
-                <div class="font-medium text-gray-900">{table.table.clone()}</div>
-                <div class="text-xs text-gray-500">{table.catalog.clone()}.{table.schema.clone()}</div>
+                <div class="font-medium text-gray-900">{table_name}</div>
+                <div class="text-xs text-gray-500">{catalog}.{schema}</div>
             </td>
             <td>
-                {table.primary_owner.clone().unwrap_or_else(|| "-".to_string())}
-                <Show when=move || table.owner_count > 1>
+                {primary_owner}
+                <Show when=move || has_multiple_owners>
                     <span class="text-xs text-gray-400 ml-1">
-                        "(+" {table.owner_count - 1} ")"
+                        "(+" {extra_owners} ")"
                     </span>
                 </Show>
             </td>
-            <td>{table.partition_count}</td>
-            <td>{format_bytes(table.total_bytes)}</td>
-            <td>{format_number(table.total_rows)}</td>
+            <td>{partition_count}</td>
+            <td>{format_bytes(total_bytes)}</td>
+            <td>{format_number(total_rows)}</td>
         </tr>
     }
 }

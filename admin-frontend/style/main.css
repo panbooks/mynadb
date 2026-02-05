@@ -4,65 +4,85 @@
 
 /* Custom styles for MynaDB Admin Console */
 
+@layer base {
+  body {
+    @apply text-gray-700 antialiased;
+    font-size: 14px;
+  }
+}
+
 @layer components {
+  /* Buttons - compact and refined */
   .btn {
-    @apply px-4 py-2 rounded-lg font-medium transition-colors duration-200;
+    @apply inline-flex items-center justify-center px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-150 shadow-sm;
+  }
+
+  .btn-sm {
+    @apply px-2 py-1 text-xs rounded;
   }
 
   .btn-primary {
-    @apply bg-myna-primary text-white hover:bg-myna-primary-dark;
+    @apply bg-myna-primary text-white hover:bg-myna-primary-dark active:scale-[0.98];
   }
 
   .btn-secondary {
-    @apply bg-gray-200 text-gray-700 hover:bg-gray-300;
+    @apply bg-white text-gray-600 border border-gray-300 hover:bg-gray-50 active:scale-[0.98];
   }
 
   .btn-danger {
-    @apply bg-myna-danger text-white hover:bg-red-700;
+    @apply bg-red-600 text-white hover:bg-red-700 active:scale-[0.98];
   }
 
   .btn-success {
-    @apply bg-myna-success text-white hover:bg-green-700;
+    @apply bg-emerald-600 text-white hover:bg-emerald-700 active:scale-[0.98];
   }
 
+  .btn-ghost {
+    @apply bg-transparent text-gray-600 hover:bg-gray-100 shadow-none;
+  }
+
+  /* Cards - cleaner look */
   .card {
-    @apply bg-white rounded-lg shadow-md p-6;
+    @apply bg-white rounded-xl shadow-sm border border-gray-100 p-5;
   }
 
   .card-header {
-    @apply text-lg font-semibold text-gray-900 mb-4;
+    @apply text-base font-semibold text-gray-800 mb-3;
   }
 
+  /* Inputs */
   .input {
-    @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-myna-primary focus:border-transparent;
+    @apply w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-myna-primary/20 focus:border-myna-primary;
   }
 
+  /* Badges - smaller and refined */
   .badge {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+    @apply inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium;
   }
 
   .badge-success {
-    @apply bg-green-100 text-green-800;
+    @apply bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20;
   }
 
   .badge-warning {
-    @apply bg-yellow-100 text-yellow-800;
+    @apply bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20;
   }
 
   .badge-danger {
-    @apply bg-red-100 text-red-800;
+    @apply bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/20;
   }
 
   .badge-info {
-    @apply bg-blue-100 text-blue-800;
+    @apply bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-600/20;
   }
 
   .badge-gray {
-    @apply bg-gray-100 text-gray-800;
+    @apply bg-gray-50 text-gray-600 ring-1 ring-inset ring-gray-500/20;
   }
 
+  /* Tables - refined */
   .table-container {
-    @apply overflow-x-auto;
+    @apply overflow-x-auto rounded-lg border border-gray-200;
   }
 
   .table {
@@ -70,43 +90,64 @@
   }
 
   .table th {
-    @apply px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50;
+    @apply px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider bg-gray-50/80;
   }
 
   .table td {
-    @apply px-6 py-4 whitespace-nowrap text-sm text-gray-900;
+    @apply px-4 py-3 whitespace-nowrap text-sm text-gray-700;
   }
 
   .table tbody tr {
-    @apply hover:bg-gray-50;
+    @apply hover:bg-gray-50/50 transition-colors;
   }
 
+  /* Sidebar - refined */
   .sidebar-link {
-    @apply flex items-center px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors;
+    @apply flex items-center px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors;
   }
 
   .sidebar-link.active {
-    @apply bg-myna-primary text-white hover:bg-myna-primary-dark;
+    @apply bg-myna-primary/10 text-myna-primary font-medium hover:bg-myna-primary/15;
   }
 
+  /* Stat cards - cleaner design */
   .stat-card {
-    @apply bg-white rounded-lg shadow p-4;
+    @apply bg-white rounded-xl shadow-sm border border-gray-100 p-4 transition-shadow hover:shadow-md;
   }
 
   .stat-value {
-    @apply text-2xl font-bold text-gray-900;
+    @apply text-xl font-semibold text-gray-900;
   }
 
   .stat-label {
-    @apply text-sm text-gray-500;
+    @apply text-xs font-medium text-gray-500 uppercase tracking-wide mt-1;
   }
 
+  /* Progress bar */
   .progress-bar {
-    @apply h-2 bg-gray-200 rounded-full overflow-hidden;
+    @apply h-1.5 bg-gray-100 rounded-full overflow-hidden;
   }
 
   .progress-bar-fill {
-    @apply h-full bg-myna-primary transition-all duration-300;
+    @apply h-full bg-myna-primary transition-all duration-300 rounded-full;
+  }
+
+  /* Page header */
+  .page-header {
+    @apply mb-6;
+  }
+
+  .page-title {
+    @apply text-xl font-semibold text-gray-900;
+  }
+
+  .page-subtitle {
+    @apply text-sm text-gray-500 mt-0.5;
+  }
+
+  /* Section headers */
+  .section-header {
+    @apply text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3;
   }
 }
 

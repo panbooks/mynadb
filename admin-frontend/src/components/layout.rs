@@ -10,10 +10,12 @@ use super::toast::ToastContainer;
 #[component]
 pub fn Layout(children: Children) -> impl IntoView {
     view! {
-        <div class="min-h-screen flex">
+        <div class="min-h-screen flex bg-gray-50/50">
             <Sidebar />
-            <main class="flex-1 p-6 bg-gray-100">
-                {children()}
+            <main class="flex-1 p-5 overflow-auto">
+                <div class="max-w-6xl">
+                    {children()}
+                </div>
             </main>
             <ToastContainer />
         </div>
@@ -27,15 +29,24 @@ fn Sidebar() -> impl IntoView {
     let ws_connected = state.ws_connected;
 
     view! {
-        <aside class="w-64 bg-white shadow-lg flex flex-col">
+        <aside class="w-56 bg-white border-r border-gray-200 flex flex-col">
             // Logo/Header
-            <div class="p-4 border-b">
-                <h1 class="text-xl font-bold text-gray-900">"MynaDB"</h1>
-                <p class="text-sm text-gray-500">"Admin Console"</p>
+            <div class="px-4 py-4 border-b border-gray-100">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 bg-gradient-to-br from-myna-primary to-blue-600 rounded-lg flex items-center justify-center">
+                        <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h1 class="text-sm font-semibold text-gray-900">"MynaDB"</h1>
+                        <p class="text-xs text-gray-400">"Admin Console"</p>
+                    </div>
+                </div>
             </div>
 
             // Navigation links
-            <nav class="flex-1 p-4 space-y-2">
+            <nav class="flex-1 px-3 py-4 space-y-1">
                 <NavLink href="/" label="Dashboard" icon="chart-bar" />
                 <NavLink href="/nodes" label="Nodes" icon="server" />
                 <NavLink href="/scale-in" label="Scale-In" icon="arrow-down-circle" />
@@ -44,14 +55,14 @@ fn Sidebar() -> impl IntoView {
             </nav>
 
             // Status footer
-            <div class="p-4 border-t">
-                <div class="flex items-center space-x-2">
+            <div class="px-4 py-3 border-t border-gray-100">
+                <div class="flex items-center gap-2">
                     <span
-                        class="w-2 h-2 rounded-full"
-                        class:bg-green-500=move || ws_connected.get()
+                        class="w-1.5 h-1.5 rounded-full"
+                        class:bg-emerald-500=move || ws_connected.get()
                         class:bg-red-500=move || !ws_connected.get()
                     />
-                    <span class="text-sm text-gray-600">
+                    <span class="text-xs text-gray-500">
                         {move || if ws_connected.get() { "Connected" } else { "Disconnected" }}
                     </span>
                 </div>
@@ -81,10 +92,9 @@ fn NavLink(
     view! {
         <A
             href=href
-            class="sidebar-link"
-            class:active=is_active
+            class=move || if is_active() { "sidebar-link active" } else { "sidebar-link" }
         >
-            <Icon name=icon class="w-5 h-5 mr-3" />
+            <Icon name=icon class="w-4 h-4 mr-2.5 flex-shrink-0" />
             <span>{label}</span>
         </A>
     }

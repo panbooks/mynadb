@@ -54,10 +54,23 @@ async fn get<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
         });
     }
 
-    response.json::<T>().await.map_err(|e| ApiError {
+    // Parse as ApiResponse<T> and unwrap the data
+    let api_response: ApiResponse<T> = response.json().await.map_err(|e| ApiError {
         message: format!("Failed to parse response: {}", e),
         status: None,
-    })
+    })?;
+
+    if api_response.success {
+        api_response.data.ok_or_else(|| ApiError {
+            message: "Response success but no data".to_string(),
+            status: None,
+        })
+    } else {
+        Err(ApiError {
+            message: api_response.error.unwrap_or_else(|| "Unknown error".to_string()),
+            status: None,
+        })
+    }
 }
 
 /// Make a POST request with JSON body
@@ -79,10 +92,23 @@ async fn post<T: DeserializeOwned, B: serde::Serialize>(path: &str, body: &B) ->
         });
     }
 
-    response.json::<T>().await.map_err(|e| ApiError {
+    // Parse as ApiResponse<T> and unwrap the data
+    let api_response: ApiResponse<T> = response.json().await.map_err(|e| ApiError {
         message: format!("Failed to parse response: {}", e),
         status: None,
-    })
+    })?;
+
+    if api_response.success {
+        api_response.data.ok_or_else(|| ApiError {
+            message: "Response success but no data".to_string(),
+            status: None,
+        })
+    } else {
+        Err(ApiError {
+            message: api_response.error.unwrap_or_else(|| "Unknown error".to_string()),
+            status: None,
+        })
+    }
 }
 
 // ============ Cluster API ============

@@ -18,8 +18,12 @@ pub fn routes() -> Router<AdminState> {
         .route("/index.html", get(serve_index))
         .route("/assets/*path", get(serve_asset))
         .route("/style/*path", get(serve_style))
-        // SPA fallback - serve index.html for all unmatched routes
-        .fallback(serve_index)
+        // SPA routes - serve index.html for known SPA paths
+        .route("/nodes", get(serve_index))
+        .route("/nodes/*path", get(serve_index))
+        .route("/scale-in", get(serve_index))
+        .route("/tables", get(serve_index))
+        .route("/events", get(serve_index))
 }
 
 /// Serve the index.html file

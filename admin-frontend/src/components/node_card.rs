@@ -10,6 +10,15 @@ use super::{ModeBadge, RoleBadge, StateBadge};
 #[component]
 pub fn NodeCard(node: NodeSummary) -> impl IntoView {
     let node_id = node.node_id.clone();
+    let advertise_addr = node.advertise_addr.clone();
+    let role = node.role;
+    let state = node.state;
+    let mode = node.mode.clone();
+    let mode_for_show = node.mode.clone();
+    let zone = node.zone.clone();
+    let zone_for_show = node.zone.clone();
+    let tables_owned = node.tables_owned;
+    let last_heartbeat_ago_secs = node.last_heartbeat_ago_secs;
 
     view! {
         <A
@@ -18,33 +27,33 @@ pub fn NodeCard(node: NodeSummary) -> impl IntoView {
         >
             <div class="flex items-start justify-between">
                 <div>
-                    <h3 class="font-semibold text-gray-900">{node.node_id}</h3>
-                    <p class="text-sm text-gray-500 mt-1">{node.advertise_addr}</p>
+                    <h3 class="font-semibold text-gray-900">{node_id}</h3>
+                    <p class="text-sm text-gray-500 mt-1">{advertise_addr}</p>
                 </div>
                 <div class="flex flex-col items-end space-y-1">
-                    <RoleBadge role=node.role />
-                    <StateBadge state=node.state />
+                    <RoleBadge role=role />
+                    <StateBadge state=state />
                 </div>
             </div>
 
             <div class="mt-4 flex items-center justify-between text-sm">
                 <div class="flex items-center space-x-4">
-                    <Show when=move || node.mode.is_some()>
-                        <ModeBadge mode=node.mode />
+                    <Show when=move || mode_for_show.is_some()>
+                        <ModeBadge mode=mode />
                     </Show>
-                    <Show when=move || node.zone.is_some()>
+                    <Show when=move || zone_for_show.is_some()>
                         <span class="text-gray-500">
-                            "Zone: " {node.zone.clone().unwrap_or_default()}
+                            "Zone: " {zone.clone().unwrap_or_default()}
                         </span>
                     </Show>
                 </div>
                 <div class="text-gray-600">
-                    {node.tables_owned} " tables"
+                    {tables_owned} " tables"
                 </div>
             </div>
 
             <div class="mt-2 text-xs text-gray-400">
-                "Last heartbeat: " {format_heartbeat_ago(node.last_heartbeat_ago_secs)}
+                "Last heartbeat: " {format_heartbeat_ago(last_heartbeat_ago_secs)}
             </div>
         </A>
     }

@@ -58,20 +58,26 @@ pub fn StatCard(
     #[prop(optional)]
     variant: Option<&'static str>,
 ) -> impl IntoView {
-    let border_class = match variant {
-        Some("success") => "border-l-4 border-green-500",
-        Some("warning") => "border-l-4 border-yellow-500",
-        Some("danger") => "border-l-4 border-red-500",
-        Some("info") => "border-l-4 border-blue-500",
-        _ => "",
+    let indicator_class = match variant {
+        Some("success") => "bg-emerald-500",
+        Some("warning") => "bg-amber-500",
+        Some("danger") => "bg-red-500",
+        Some("info") => "bg-blue-500",
+        _ => "bg-gray-300",
     };
 
+    let has_subtext = subtext.is_some();
+    let subtext_value = subtext.clone().unwrap_or_default();
+
     view! {
-        <div class=format!("stat-card {}", border_class)>
+        <div class="stat-card">
+            <div class="flex items-center gap-2 mb-1">
+                <div class=format!("w-1.5 h-1.5 rounded-full {}", indicator_class) />
+                <div class="stat-label">{label}</div>
+            </div>
             <div class="stat-value">{value}</div>
-            <div class="stat-label">{label}</div>
-            <Show when=move || subtext.is_some()>
-                <div class="text-xs text-gray-400 mt-1">{subtext.clone().unwrap_or_default()}</div>
+            <Show when=move || has_subtext>
+                <div class="text-xs text-gray-400 mt-1">{subtext_value.clone()}</div>
             </Show>
         </div>
     }
@@ -83,25 +89,16 @@ pub fn EmptyState(
     message: &'static str,
     #[prop(optional)]
     action_label: Option<&'static str>,
-    #[prop(optional)]
-    on_action: Option<Box<dyn Fn()>>,
 ) -> impl IntoView {
     view! {
         <div class="text-center py-12">
             <div class="text-gray-400 text-6xl mb-4">"()"</div>
             <p class="text-gray-600">{message}</p>
-            <Show when=move || action_label.is_some()>
-                <button
-                    class="btn btn-primary mt-4"
-                    on:click=move |_| {
-                        if let Some(ref action) = on_action {
-                            action();
-                        }
-                    }
-                >
-                    {action_label.unwrap_or_default()}
+            {action_label.map(|label| view! {
+                <button class="btn btn-primary mt-4">
+                    {label}
                 </button>
-            </Show>
+            })}
         </div>
     }
 }
@@ -110,25 +107,11 @@ pub fn EmptyState(
 #[component]
 pub fn ErrorState(
     message: String,
-    #[prop(optional)]
-    on_retry: Option<Box<dyn Fn()>>,
 ) -> impl IntoView {
     view! {
         <div class="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
             <div class="text-red-500 text-4xl mb-4">"!"</div>
             <p class="text-red-700">{message}</p>
-            <Show when=move || on_retry.is_some()>
-                <button
-                    class="btn btn-danger mt-4"
-                    on:click=move |_| {
-                        if let Some(ref retry) = on_retry {
-                            retry();
-                        }
-                    }
-                >
-                    "Retry"
-                </button>
-            </Show>
         </div>
     }
 }

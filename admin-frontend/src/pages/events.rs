@@ -1,6 +1,7 @@
 //! Events page - event viewer
 
 use admin_types::{Event, ListEventsQuery};
+use gloo_timers::callback::Interval;
 use leptos::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -17,11 +18,19 @@ pub fn Events() -> impl IntoView {
     let (error, set_error) = create_signal::<Option<String>>(None);
     let (event_type_filter, set_event_type_filter) = create_signal::<Option<String>>(None);
 
-    // Fetch events
-    let fetch = move || {
+    // Trigger signal for manual refresh
+    let (refresh_trigger, set_refresh_trigger) = create_signal(0_u32);
+
+    // Fetch events - runs on filter change or refresh trigger
+    let state_clone = state.clone();
+    create_effect(move |_| {
+        let event_type = event_type_filter.get();
+        let _ = refresh_trigger.get();
+        let state = state_clone.clone();
+
         set_loading.set(true);
         let query = ListEventsQuery {
-            event_type: event_type_filter.get(),
+            event_type,
             limit: 100,
             ..Default::default()
         };
@@ -39,31 +48,22 @@ pub fn Events() -> impl IntoView {
             }
             set_loading.set(false);
         });
-    };
-
-    // Initial fetch and when filter changes
-    create_effect(move |_| {
-        let _ = event_type_filter.get();
-        fetch();
     });
 
     // Auto-refresh every 10 seconds
-    let refresh_interval = set_interval_with_handle(
-        move || fetch(),
-        std::time::Duration::from_secs(10),
-    );
+    let interval = Interval::new(10000, move || {
+        set_refresh_trigger.update(|n| *n += 1);
+    });
 
     on_cleanup(move || {
-        if let Ok(handle) = refresh_interval {
-            handle.clear();
-        }
+        drop(interval);
     });
 
     view! {
         <div class="space-y-6">
             <div class="flex items-center justify-between">
                 <h1 class="text-2xl font-bold text-gray-900">"Events"</h1>
-                <button class="btn btn-secondary" on:click=move |_| fetch()>
+                <button class="btn btn-secondary" on:click=move |_| set_refresh_trigger.update(|n| *n += 1)>
                     "Refresh"
                 </button>
             </div>

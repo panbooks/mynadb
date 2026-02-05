@@ -17,11 +17,11 @@ pub fn build_admin_router(config: &AdminConfig, meta_endpoints: Vec<String>) -> 
     let state = AdminState::new(config.clone(), meta_endpoints);
 
     Router::new()
-        // Static files (serve index.html for SPA)
-        .merge(static_files::routes())
-        // API routes under /api/v1
+        // API routes under /api/v1 (must come before static fallback)
         .nest("/api/v1", api::routes())
         // WebSocket for events
         .route("/api/v1/events/ws", axum::routing::get(websocket::handler))
+        // Static files (serve index.html for SPA) - fallback catches remaining routes
+        .merge(static_files::routes())
         .with_state(state)
 }

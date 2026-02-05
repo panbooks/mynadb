@@ -25,12 +25,13 @@ pub fn ToastContainer() -> impl IntoView {
 #[component]
 fn ToastItem(toast: Toast) -> impl IntoView {
     let state = use_app_state();
+    let state_for_timeout = state.clone();
     let toast_id = toast.id;
 
     // Auto-dismiss after duration
     set_timeout(
         move || {
-            state.remove_toast(toast_id);
+            state_for_timeout.remove_toast(toast_id);
         },
         std::time::Duration::from_millis(toast.duration_ms),
     );

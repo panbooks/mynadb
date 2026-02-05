@@ -9,3 +9,7 @@ ignore = ["dist"]
 stage = "pre_build"
 command = "sh"
 command_arguments = ["-c", "npx tailwindcss -i ./style/main.css -o ./style/tailwind.css --minify 2>/dev/null || echo 'Tailwind not installed, skipping'"]
+
+# Proxy API requests to the admin backend during development
+[[proxy]]
+backend = "http://localhost:18080/admin/api/"

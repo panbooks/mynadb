@@ -46,8 +46,9 @@ pub async fn start(config_path: &str) {
         std::process::exit(1);
     }
 
-    // Build admin router
-    let app = admin::build_admin_router(&admin_config, admin_config.meta_endpoints.clone());
+    // Build admin router and nest under /admin/
+    let admin_router = admin::build_admin_router(&admin_config, admin_config.meta_endpoints.clone());
+    let app = axum::Router::new().nest("/admin", admin_router);
 
     // Add CORS layer for development
     let app = app.layer(

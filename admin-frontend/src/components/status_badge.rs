@@ -66,14 +66,20 @@ pub fn HealthDot(healthy: bool) -> impl IntoView {
 
 /// Cluster health badge
 #[component]
-pub fn ClusterHealthBadge(healthy: bool) -> impl IntoView {
-    let (class, text) = if healthy {
-        ("badge-success", "Healthy")
-    } else {
-        ("badge-danger", "Degraded")
-    };
-
+pub fn ClusterHealthBadge<F>(healthy: F) -> impl IntoView
+where
+    F: Fn() -> bool + Clone + 'static,
+{
+    let healthy_for_class = healthy.clone();
     view! {
-        <span class=format!("badge {}", class)>{text}</span>
+        <span class=move || {
+            if healthy_for_class() {
+                "badge badge-success"
+            } else {
+                "badge badge-danger"
+            }
+        }>
+            {move || if healthy() { "Healthy" } else { "Degraded" }}
+        </span>
     }
 }

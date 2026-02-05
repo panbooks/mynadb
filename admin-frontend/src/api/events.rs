@@ -5,6 +5,7 @@ use leptos::*;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{CloseEvent, ErrorEvent, MessageEvent, WebSocket};
+use js_sys::JsString;
 
 /// WebSocket connection state
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,7 +19,7 @@ pub enum WsState {
 /// Create a WebSocket connection to the event stream
 pub fn create_event_stream(
     on_event: impl Fn(AdminEvent) + 'static,
-    on_state_change: impl Fn(WsState) + 'static,
+    on_state_change: impl Fn(WsState) + Clone + 'static,
 ) -> Result<WebSocket, String> {
     // Get WebSocket URL based on current location
     let window = web_sys::window().ok_or("No window")?;
@@ -58,7 +59,7 @@ pub fn create_event_stream(
     onerror_callback.forget();
 
     let onmessage_callback = Closure::wrap(Box::new(move |e: MessageEvent| {
-        if let Ok(text) = e.data().dyn_into::<js_sys::JsString>() {
+        if let Ok(text) = e.data().dyn_into::<JsString>() {
             let text: String = text.into();
             if let Ok(event) = serde_json::from_str::<AdminEvent>(&text) {
                 on_event(event);

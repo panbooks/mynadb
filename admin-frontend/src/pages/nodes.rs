@@ -21,13 +21,24 @@ pub fn Nodes() -> impl IntoView {
     let (state_filter, set_state_filter) = create_signal::<Option<String>>(None);
     let (mode_filter, set_mode_filter) = create_signal::<Option<String>>(None);
 
-    // Fetch nodes
-    let fetch = move || {
+    // Trigger signal for manual refresh
+    let (refresh_trigger, set_refresh_trigger) = create_signal(0_u32);
+
+    // Fetch nodes - this effect runs on filter changes or refresh trigger
+    let state_clone = state.clone();
+    create_effect(move |_| {
+        // Subscribe to filter signals and refresh trigger
+        let role = role_filter.get();
+        let state_val = state_filter.get();
+        let mode = mode_filter.get();
+        let _ = refresh_trigger.get();
+
+        let state = state_clone.clone();
         set_loading.set(true);
         let query = ListNodesQuery {
-            role: role_filter.get(),
-            state: state_filter.get(),
-            mode: mode_filter.get(),
+            role,
+            state: state_val,
+            mode,
         };
 
         spawn_local(async move {
@@ -43,22 +54,13 @@ pub fn Nodes() -> impl IntoView {
             }
             set_loading.set(false);
         });
-    };
-
-    // Initial fetch and when filters change
-    create_effect(move |_| {
-        // Subscribe to filter signals
-        let _ = role_filter.get();
-        let _ = state_filter.get();
-        let _ = mode_filter.get();
-        fetch();
     });
 
     view! {
         <div class="space-y-6">
             <div class="flex items-center justify-between">
                 <h1 class="text-2xl font-bold text-gray-900">"Nodes"</h1>
-                <button class="btn btn-secondary" on:click=move |_| fetch()>
+                <button class="btn btn-secondary" on:click=move |_| set_refresh_trigger.update(|n| *n += 1)>
                     "Refresh"
                 </button>
             </div>
