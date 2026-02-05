@@ -8,6 +8,9 @@
 
 use crate::meta::types::DataNodeMode;
 
+// Re-export QueryScope from flight_protocol for backwards compatibility
+pub use crate::flight_protocol::QueryScope;
+
 /// Data node information
 #[derive(Debug, Clone)]
 pub struct DataNodeInfo {
@@ -29,22 +32,6 @@ pub struct DataNodeInfo {
     /// memtable data (via replication) and can serve queries for hot data.
     /// The Standby only serves memtable data, not Parquet (S3 is shared).
     pub backing_standby: Option<String>,
-}
-
-/// Query scope for routing - determines what data to return
-///
-/// Used when a Primary fails and we need to split the query:
-/// - Memtable data: Query the backing Standby (has replicated memtable)
-/// - Parquet data: Query any fallback Primary (S3 is shared storage)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum QueryScope {
-    /// Query both memtable and Parquet (normal operation)
-    #[default]
-    Full,
-    /// Query only memtable (for Standby nodes on Primary failover)
-    MemtableOnly,
-    /// Query only Parquet/S3 (for fallback Primary on failover)
-    ParquetOnly,
 }
 
 /// Node state

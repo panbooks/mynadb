@@ -7,9 +7,12 @@
 use crate::config::SchemaConfig;
 use crate::data::cache::ParquetLocalCache;
 use crate::data::replication::ReplicationManager;
+use crate::flight_protocol::{
+    BatchWriteTicket, QueryScope, QueryTicket, ReplicationTicket, WriteTicket,
+};
 use crate::meta::client::MetaClient;
 use crate::meta::types::{NodeRole, NodeState};
-use crate::query::query_engine::{QueryEngine, QueryScope as EngineQueryScope};
+use crate::query::query_engine::QueryEngine;
 use crate::query::sql_utils::inject_node_id_predicate;
 use crate::storage::cache::DataCache;
 use crate::storage::line_protocol::parse_multiple_lines;
@@ -24,9 +27,8 @@ use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaAsIpc, SchemaResult, Ticket,
 };
-use dashmap::DashMap;
 use futures::{stream, Stream, StreamExt, TryStreamExt};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -34,76 +36,6 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, warn};
-
-/// Write request metadata sent via Flight Ticket (legacy line protocol format)
-#[derive(Debug, Serialize, Deserialize)]
-pub struct WriteTicket {
-    pub catalog: String,
-}
-
-/// Batch write request metadata sent via Flight Descriptor
-/// Used when Router sends pre-converted RecordBatch to Data node
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BatchWriteTicket {
-    pub catalog: String,
-    pub schema: String,
-    pub table: String,
-    pub date: i32, // Days since Unix epoch (Date32 format)
-}
-
-/// Query scope for routing - determines what data to return
-///
-/// Used when a Primary fails and we need to split the query:
-/// - Memtable data: Query the backing Standby (has replicated memtable)
-/// - Parquet data: Query any fallback Primary (S3 is shared storage)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum QueryScope {
-    /// Query both memtable and Parquet (normal operation)
-    #[default]
-    Full,
-    /// Query only memtable (for Standby nodes on Primary failover)
-    MemtableOnly,
-    /// Query only Parquet/S3 (for fallback Primary on failover)
-    ParquetOnly,
-}
-
-/// Query request metadata sent via Flight Ticket
-#[derive(Debug, Serialize, Deserialize)]
-pub struct QueryTicket {
-    pub catalog: String,
-    pub sql: String,
-    pub partitions: Option<Vec<String>>,
-    /// Explicit file paths to read (for distributed parallel queries)
-    /// When set, the Data node reads ONLY these specific files.
-    /// Format: ["node-1/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet", ...]
-    #[serde(default)]
-    pub file_paths: Option<Vec<String>>,
-    /// Query scope - determines what data to return (memtable, parquet, or both)
-    /// Used for standby failover: Standby returns memtable-only, fallback Primary returns parquet-only
-    #[serde(default)]
-    pub query_scope: QueryScope,
-}
-
-/// Replication write ticket - used by leader to send data to standby
-/// This uses add_batch_standby which doesn't trigger flush
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ReplicationTicket {
-    pub catalog: String,
-    pub schema: String,
-    pub table: String,
-    pub date: i32,
-    pub seq: u64,
-    #[serde(default)]
-    pub source_node_id: String,
-    /// Marker to identify this as replication data
-    pub is_replication: bool,
-    /// CRC32 checksum of the batch data for integrity verification
-    #[serde(default)]
-    pub checksum: Option<u32>,
-    /// Total bytes in the batch (for verification)
-    #[serde(default)]
-    pub total_bytes: Option<u64>,
-}
 
 /// Convert DataFusion DataType to Arrow DataType
 fn convert_data_type(dt: &arrow::datatypes::DataType) -> arrow::datatypes::DataType {
@@ -873,19 +805,12 @@ impl FlightService for DataNodeFlightService {
             ticket.sql, sql_with_node_id
         );
 
-        // Convert ticket QueryScope to engine QueryScope
-        let engine_scope = match ticket.query_scope {
-            QueryScope::Full => EngineQueryScope::Full,
-            QueryScope::MemtableOnly => EngineQueryScope::MemtableOnly,
-            QueryScope::ParquetOnly => EngineQueryScope::ParquetOnly,
-        };
-
         // Execute query with scope
         // QueryEngine now uses legacy prefixes (if set) when registering tables,
         // creating MultiUnionTableProvider to scan all relevant S3 prefixes.
         let df_batches = self
             .query_engine
-            .execute_query_with_db_and_scope(&sql_with_node_id, &ticket.catalog, engine_scope)
+            .execute_query_with_db_and_scope(&sql_with_node_id, &ticket.catalog, ticket.query_scope)
             .await
             .map_err(|e| Status::internal(format!("Query execution error: {}", e)))?;
 

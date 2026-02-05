@@ -2,6 +2,7 @@
 //!
 //! Handles SQL query execution, EXPLAIN, and ANALYZE operations.
 
+use crate::flight_protocol::QueryScope;
 use crate::query::cache::query_cache::QueryCacheKey;
 use crate::query::sql_utils::{
     extract_optimization_info, extract_table_references, extract_time_range,
@@ -15,22 +16,6 @@ use std::time::Instant;
 use tracing::debug;
 
 use super::QueryEngine;
-
-/// Query scope - determines what data to return
-///
-/// Used for standby failover:
-/// - Memtable data: Query the backing Standby (has replicated memtable)
-/// - Parquet data: Query any fallback Primary (S3 is shared storage)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum QueryScope {
-    /// Query both memtable and Parquet (normal operation)
-    #[default]
-    Full,
-    /// Query only memtable (for Standby nodes on Primary failover)
-    MemtableOnly,
-    /// Query only Parquet/S3 (for fallback Primary on failover)
-    ParquetOnly,
-}
 
 impl QueryEngine {
     // ========================================================================

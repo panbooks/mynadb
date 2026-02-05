@@ -16,6 +16,7 @@ mod admin;
 mod aggregates;
 mod config;
 mod data;
+mod flight_protocol;
 mod jobs;
 mod meta;
 mod node;

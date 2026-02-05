@@ -5,4 +5,5 @@
 pub mod circuit_breaker;
 pub mod data_node_pool;
 
-pub use data_node_pool::{DataNodePool, QueryScope};
+pub use crate::flight_protocol::QueryScope;
+pub use data_node_pool::DataNodePool;

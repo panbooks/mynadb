@@ -8,6 +8,7 @@ pub mod admin;
 pub mod aggregates;
 pub mod config;
 pub mod data;
+pub mod flight_protocol;
 pub mod jobs;
 pub mod meta;
 pub mod node;
