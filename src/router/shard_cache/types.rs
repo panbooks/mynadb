@@ -3,7 +3,7 @@
 //! Contains all the structs and enums used by the shard cache:
 //! - DataNodeInfo, NodeState - Node information
 //! - PartitionKey, TableKey - Routing keys
-//! - CachedTableMeta, CachedDistributionConfig, CachedPartitionInfo - Cache entries
+//! - CachedTableMeta, CachedDistributionConfig - Cache entries
 //! - ShardCacheStats - Cache statistics
 
 use crate::meta::types::DataNodeMode;
@@ -181,15 +181,6 @@ pub struct CachedDistributionConfig {
     pub cached_at: i64,
 }
 
-/// Cached partition info for smart query routing
-#[derive(Debug, Clone)]
-pub struct CachedPartitionInfo {
-    /// Node IDs that have data for this partition
-    pub node_ids: Vec<String>,
-    /// When the partition was last seen (for TTL-based eviction)
-    pub cached_at: i64,
-}
-
 /// Stats about the shard cache
 #[derive(Debug, Clone)]
 pub struct ShardCacheStats {
@@ -198,11 +189,6 @@ pub struct ShardCacheStats {
     pub active_node_count: usize,
     pub last_event_seq: u64,
     pub distribution_config_count: usize,
-
-    /// LEGACY: Number of partition cache entries (deprecated)
-    pub partition_cache_entries: usize,
-    /// LEGACY: Total node references in partition cache (deprecated)
-    pub partition_cache_node_refs: usize,
 
     /// Cold cache: Number of partition entries
     pub cold_cache_partitions: usize,

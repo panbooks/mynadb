@@ -76,15 +76,6 @@ pub struct RoutingConfig {
     #[serde(default = "default_data_node_request_timeout_ms")]
     pub data_node_request_timeout_ms: u64,
 
-    /// DEPRECATED: Legacy partition cache TTL (use hot_cache_ttl_secs instead)
-    /// Set to 0 to disable automatic eviction
-    #[serde(default = "default_partition_cache_ttl_secs")]
-    pub partition_cache_ttl_secs: u64,
-
-    /// DEPRECATED: Legacy eviction interval (use hot_cache_eviction_interval_secs instead)
-    #[serde(default = "default_partition_cache_eviction_interval_secs")]
-    pub partition_cache_eviction_interval_secs: u64,
-
     // ========================================================================
     // Partition Cache Configuration
     // ========================================================================
@@ -190,14 +181,6 @@ fn default_data_node_request_timeout_ms() -> u64 {
     60000
 }
 
-fn default_partition_cache_ttl_secs() -> u64 {
-    300 // 5 minutes (DEPRECATED)
-}
-
-fn default_partition_cache_eviction_interval_secs() -> u64 {
-    60 // Run eviction every minute (DEPRECATED)
-}
-
 fn default_hot_cache_ttl_secs() -> u64 {
     300 // 5 minutes - matches flush_interval
 }
@@ -270,9 +253,6 @@ impl Default for RoutingConfig {
             data_node_pool_size: default_data_node_pool_size(),
             data_node_connect_timeout_ms: default_data_node_connect_timeout_ms(),
             data_node_request_timeout_ms: default_data_node_request_timeout_ms(),
-            partition_cache_ttl_secs: default_partition_cache_ttl_secs(),
-            partition_cache_eviction_interval_secs: default_partition_cache_eviction_interval_secs(),
-            // Split cache config
             hot_cache_ttl_secs: default_hot_cache_ttl_secs(),
             hot_cache_eviction_interval_secs: default_hot_cache_eviction_interval_secs(),
             cold_cache_max_entries: default_cold_cache_max_entries(),

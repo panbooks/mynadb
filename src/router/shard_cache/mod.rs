@@ -36,14 +36,13 @@
 pub mod cold_partition_cache;
 mod distribution;
 mod node_mgmt;
-mod partition_cache;
 mod table_routing;
 pub mod types;
 
 pub use cold_partition_cache::ColdPartitionCache;
 pub use types::{
-    CachedDistributionConfig, CachedPartitionInfo, CachedTableMeta, DataNodeInfo, NodeState,
-    PartitionKey, ShardCacheStats, TableKey,
+    CachedDistributionConfig, CachedTableMeta, DataNodeInfo, NodeState, PartitionKey,
+    ShardCacheStats, TableKey,
 };
 
 use dashmap::{DashMap, DashSet};
@@ -103,10 +102,6 @@ pub struct ShardCache {
     /// When a registration is in progress, other writes skip the Meta call
     pub(crate) pending_registrations: DashSet<String>,
 
-    /// DEPRECATED: Legacy partition cache (kept for backward compatibility)
-    /// TODO: Remove after migration is complete
-    pub(crate) partition_nodes: DashMap<String, CachedPartitionInfo>,
-
     /// Cold partition cache for S3/Parquet data
     /// - Source of Truth: S3 LIST (immutable once written)
     /// - Eviction: LRU with max_entries
@@ -128,7 +123,6 @@ impl ShardCache {
             last_event_seq: AtomicU64::new(0),
             distribution_configs: DashMap::new(),
             pending_registrations: DashSet::new(),
-            partition_nodes: DashMap::new(),
             cold_partition_cache: Arc::new(ColdPartitionCache::new(cold_cache_max_entries)),
         }
     }
@@ -136,7 +130,6 @@ impl ShardCache {
     /// Get stats about the cache
     pub fn stats(&self) -> ShardCacheStats {
         let nodes = self.data_nodes.read();
-        let (partition_entries, partition_node_refs) = self.partition_cache_stats();
         let cold_stats = self.cold_partition_cache.stats();
 
         ShardCacheStats {
@@ -150,10 +143,6 @@ impl ShardCache {
                 .last_event_seq
                 .load(std::sync::atomic::Ordering::Relaxed),
             distribution_config_count: self.distribution_configs.len(),
-            // Legacy partition cache stats
-            partition_cache_entries: partition_entries,
-            partition_cache_node_refs: partition_node_refs,
-            // Cold cache stats
             cold_cache_partitions: cold_stats.partition_count,
             cold_cache_max_entries: cold_stats.max_entries,
             cold_cache_utilization_percent: cold_stats.utilization_percent,

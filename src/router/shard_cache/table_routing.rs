@@ -152,13 +152,10 @@ impl ShardCache {
             debug!("Removed table {} with no remaining owners", table_path);
         }
 
-        // Also clean up partition cache entries for this node
-        let partition_affected = self.remove_node_from_partitions(node_id);
-
-        if affected > 0 || partition_affected > 0 {
+        if affected > 0 {
             info!(
-                "Cleaned up {} table entries and {} partition entries for departed node {}",
-                affected, partition_affected, node_id
+                "Cleaned up {} table entries for departed node {}",
+                affected, node_id
             );
         }
         affected

@@ -113,29 +113,7 @@ pub async fn start(config_path: &str) {
     // NOTE: Hot cache eviction task removed
     // Hot data location is now derived from table owners (consistent across routers).
     // No per-router hot cache needed - table owner has memtable for recent partitions.
-
-    // DEPRECATED: Legacy partition cache eviction (kept for backward compatibility)
-    // This will be removed once migration to split cache is complete
-    if router_config.routing.partition_cache_ttl_secs > 0
-        && router_config.routing.partition_cache_eviction_interval_secs > 0
-    {
-        let shard_cache = Arc::clone(&state.shard_cache);
-        let ttl_ms = router_config.routing.partition_cache_ttl_secs * 1000;
-        let interval_secs = router_config.routing.partition_cache_eviction_interval_secs;
-
-        info!(
-            "Starting legacy partition cache eviction (TTL: {}s, interval: {}s) [DEPRECATED]",
-            router_config.routing.partition_cache_ttl_secs, interval_secs
-        );
-
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-            loop {
-                interval.tick().await;
-                shard_cache.evict_stale_partitions(ttl_ms as i64);
-            }
-        });
-    }
+    // Cold cache uses LRU eviction (automatic, no background task needed).
 
     // Build HTTP API
     let app = router_api::build_router(state.clone());
