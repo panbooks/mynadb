@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "admin-types"]
+# Note: admin-frontend is built separately with trunk
+
 [package]
 name = "mynadb"
 version = "0.1.0"
@@ -14,7 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.7", features = ["macros", "ws"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 arrow = "53"
@@ -58,6 +62,12 @@ dashmap = "6.0"
 prometheus = "0.13"
 uuid = { version = "1.7", features = ["v4"] }
 hostname = "0.4"
+
+# Admin Console
+admin-types = { path = "admin-types" }
+futures-util = "0.3"
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower-http = { version = "0.5", features = ["cors", "fs"] }
 
 [dev-dependencies]
 tempfile = "3"

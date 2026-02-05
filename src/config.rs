@@ -45,6 +45,43 @@ pub struct Config {
     /// Data node configuration (for --role data)
     #[serde(default)]
     pub data: Option<crate::data::config::DataNodeConfig>,
+    /// Admin console configuration (for --role admin)
+    #[serde(default)]
+    pub admin: Option<AdminConfig>,
+}
+
+/// Admin console configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminConfig {
+    /// HTTP server host
+    #[serde(default = "default_admin_host")]
+    pub http_host: String,
+
+    /// HTTP server port
+    #[serde(default = "default_admin_port")]
+    pub http_port: u16,
+
+    /// Meta service endpoints (gRPC)
+    #[serde(default)]
+    pub meta_endpoints: Vec<String>,
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            http_host: default_admin_host(),
+            http_port: default_admin_port(),
+            meta_endpoints: Vec::new(),
+        }
+    }
+}
+
+fn default_admin_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_admin_port() -> u16 {
+    8080
 }
 
 /// Server configuration

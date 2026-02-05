@@ -9,8 +9,10 @@
 //! - `mynadb meta start|stop` - Meta node (Raft-based metadata service)
 //! - `mynadb router start|stop` - Router node (client protocols + routing)
 //! - `mynadb data start|stop` - Data node (storage + query execution)
+//! - `mynadb admin start|stop` - Admin console for cluster management
 //! - `mynadb version` - Show version information
 
+mod admin;
 mod aggregates;
 mod config;
 mod data;
@@ -101,6 +103,12 @@ enum Commands {
         action: NodeAction,
     },
 
+    /// Admin console for cluster management
+    Admin {
+        #[command(subcommand)]
+        action: NodeAction,
+    },
+
     /// Show version information
     Version,
 }
@@ -159,6 +167,12 @@ async fn main() {
         Some(Commands::Data { action }) => match action {
             NodeAction::Start => node::data::start(&cli.config).await,
             NodeAction::Stop => node::data::stop(&cli.config),
+        },
+
+        // Admin console
+        Some(Commands::Admin { action }) => match action {
+            NodeAction::Start => node::admin::start(&cli.config).await,
+            NodeAction::Stop => node::admin::stop(&cli.config),
         },
 
         // Version
