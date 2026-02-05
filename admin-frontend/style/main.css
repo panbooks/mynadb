@@ -1,0 +1,146 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom styles for MynaDB Admin Console */
+
+@layer components {
+  .btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-colors duration-200;
+  }
+
+  .btn-primary {
+    @apply bg-myna-primary text-white hover:bg-myna-primary-dark;
+  }
+
+  .btn-secondary {
+    @apply bg-gray-200 text-gray-700 hover:bg-gray-300;
+  }
+
+  .btn-danger {
+    @apply bg-myna-danger text-white hover:bg-red-700;
+  }
+
+  .btn-success {
+    @apply bg-myna-success text-white hover:bg-green-700;
+  }
+
+  .card {
+    @apply bg-white rounded-lg shadow-md p-6;
+  }
+
+  .card-header {
+    @apply text-lg font-semibold text-gray-900 mb-4;
+  }
+
+  .input {
+    @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-myna-primary focus:border-transparent;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-success {
+    @apply bg-green-100 text-green-800;
+  }
+
+  .badge-warning {
+    @apply bg-yellow-100 text-yellow-800;
+  }
+
+  .badge-danger {
+    @apply bg-red-100 text-red-800;
+  }
+
+  .badge-info {
+    @apply bg-blue-100 text-blue-800;
+  }
+
+  .badge-gray {
+    @apply bg-gray-100 text-gray-800;
+  }
+
+  .table-container {
+    @apply overflow-x-auto;
+  }
+
+  .table {
+    @apply min-w-full divide-y divide-gray-200;
+  }
+
+  .table th {
+    @apply px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50;
+  }
+
+  .table td {
+    @apply px-6 py-4 whitespace-nowrap text-sm text-gray-900;
+  }
+
+  .table tbody tr {
+    @apply hover:bg-gray-50;
+  }
+
+  .sidebar-link {
+    @apply flex items-center px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors;
+  }
+
+  .sidebar-link.active {
+    @apply bg-myna-primary text-white hover:bg-myna-primary-dark;
+  }
+
+  .stat-card {
+    @apply bg-white rounded-lg shadow p-4;
+  }
+
+  .stat-value {
+    @apply text-2xl font-bold text-gray-900;
+  }
+
+  .stat-label {
+    @apply text-sm text-gray-500;
+  }
+
+  .progress-bar {
+    @apply h-2 bg-gray-200 rounded-full overflow-hidden;
+  }
+
+  .progress-bar-fill {
+    @apply h-full bg-myna-primary transition-all duration-300;
+  }
+}
+
+/* Loading spinner */
+.spinner {
+  border: 2px solid #f3f3f3;
+  border-top: 2px solid #1a56db;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Tooltip */
+.tooltip {
+  position: relative;
+}
+
+.tooltip:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  background: #374151;
+  color: white;
+  font-size: 12px;
+  border-radius: 4px;
+  white-space: nowrap;
+  z-index: 50;
+}
