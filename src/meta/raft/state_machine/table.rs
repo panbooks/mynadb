@@ -755,6 +755,83 @@ impl MetaStateMachine {
 
         (table_count, total_bytes, total_rows)
     }
+
+    // ========================================================================
+    // Table Cache Management (TTL-based eviction)
+    // ========================================================================
+
+    /// Evict stale table entries older than TTL
+    ///
+    /// Called periodically to bound the table_owners cache size.
+    /// Tables with no activity (last_modified) older than cutoff are removed.
+    /// Publishes TablesCacheRefresh event to notify Routers to rebuild their cache.
+    ///
+    /// Returns the number of tables evicted.
+    pub fn evict_stale_tables(&self, ttl_ms: i64) -> usize {
+        let now = crate::meta::types::current_timestamp_ms();
+        let cutoff = now - ttl_ms;
+
+        let prefix = keys::PREFIX_TABLE;
+        let mut keys_to_remove = Vec::new();
+
+        // Find stale entries
+        for (k, v) in self.db.scan_prefix(prefix).flatten() {
+            if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
+                if meta.last_modified < cutoff {
+                    keys_to_remove.push((k, meta));
+                }
+            }
+        }
+
+        if keys_to_remove.is_empty() {
+            return 0;
+        }
+
+        let evicted_count = keys_to_remove.len();
+
+        // Remove stale entries
+        for (key, meta) in &keys_to_remove {
+            if let Err(e) = self.db.remove(key) {
+                warn!(
+                    "Failed to evict stale table {}.{}.{}: {}",
+                    meta.catalog, meta.schema, meta.table, e
+                );
+            } else {
+                debug!(
+                    "Evicted stale table: {}.{}.{} (last_modified: {})",
+                    meta.catalog, meta.schema, meta.table, meta.last_modified
+                );
+            }
+        }
+
+        // Count remaining tables
+        let remaining_count = self.db.scan_prefix(prefix).count();
+
+        // Publish event to notify Routers
+        let payload = serde_json::json!({
+            "evicted_count": evicted_count,
+            "remaining_count": remaining_count,
+        });
+        let seq = self.next_sequence();
+        let event = Event::new(
+            seq,
+            EventType::TablesCacheRefresh,
+            "tables".to_string(),
+            serde_json::to_vec(&payload).unwrap_or_default(),
+            "system".to_string(),
+        );
+        let _ = self.db.insert(
+            event.storage_key().as_bytes(),
+            bincode::serialize(&event).unwrap(),
+        );
+
+        info!(
+            "Evicted {} stale table entries (remaining: {}), notified Routers",
+            evicted_count, remaining_count
+        );
+
+        evicted_count
+    }
 }
 
 #[cfg(test)]

@@ -61,6 +61,13 @@ pub struct MetaConfig {
     /// and reassigns them to healthy nodes.
     #[serde(default)]
     pub rebalancer: RebalancerConfig,
+
+    /// Table cache TTL configuration
+    ///
+    /// Controls TTL-based eviction of stale table entries.
+    /// Write routing only needs recent table ownership; old entries can be evicted.
+    #[serde(default)]
+    pub table_cache: TableCacheConfig,
 }
 
 /// Raft consensus configuration
@@ -352,6 +359,64 @@ impl Default for RebalancerConfig {
             auto_remove_dead_owners: default_rebalancer_auto_remove_dead(),
             auto_reassign_orphans: default_rebalancer_auto_reassign(),
         }
+    }
+}
+
+/// Table Cache TTL Configuration
+///
+/// Controls TTL-based eviction of stale table entries from Meta.
+/// Write routing only needs recent table ownership information;
+/// historical entries can be safely evicted and re-populated on demand.
+///
+/// When entries are evicted, a TablesCacheRefresh event is published
+/// to notify Routers to rebuild their local cache.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableCacheConfig {
+    /// Enable TTL-based eviction of stale table entries
+    #[serde(default = "default_table_cache_enabled")]
+    pub enabled: bool,
+
+    /// TTL for table entries in hours
+    ///
+    /// Tables with no activity (last_modified) older than this
+    /// will be evicted from Meta's table registry.
+    ///
+    /// Recommended: 24 hours for typical time series workloads.
+    /// Tables will be re-registered on first write after eviction.
+    #[serde(default = "default_table_cache_ttl_hours")]
+    pub ttl_hours: u64,
+
+    /// Interval between eviction checks in seconds
+    #[serde(default = "default_table_cache_check_interval_secs")]
+    pub check_interval_secs: u64,
+}
+
+fn default_table_cache_enabled() -> bool {
+    false // Disabled by default for backward compatibility
+}
+
+fn default_table_cache_ttl_hours() -> u64 {
+    24 // 24 hours
+}
+
+fn default_table_cache_check_interval_secs() -> u64 {
+    3600 // Check every hour
+}
+
+impl Default for TableCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_table_cache_enabled(),
+            ttl_hours: default_table_cache_ttl_hours(),
+            check_interval_secs: default_table_cache_check_interval_secs(),
+        }
+    }
+}
+
+impl TableCacheConfig {
+    /// Get TTL in milliseconds
+    pub fn ttl_ms(&self) -> i64 {
+        self.ttl_hours as i64 * 60 * 60 * 1000
     }
 }
 
@@ -690,6 +755,7 @@ impl Default for MetaConfig {
             standby: StandbyConfig::default(),
             failover: FailoverConfig::default(),
             rebalancer: RebalancerConfig::default(),
+            table_cache: TableCacheConfig::default(),
         }
     }
 }

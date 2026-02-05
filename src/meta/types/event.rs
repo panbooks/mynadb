@@ -48,6 +48,13 @@ pub enum EventType {
     /// Published when write distribution config is set or deleted.
     /// Payload: {"catalog": "...", "schema": "...", "table": "...", "percent": N, "deleted": bool}
     DistributionConfigChanged = 17,
+
+    /// Tables cache refresh notification
+    ///
+    /// Published after Meta evicts stale table entries (TTL-based cleanup).
+    /// Routers should rebuild their table_owners cache from Meta.
+    /// Payload: {"evicted_count": N, "remaining_count": M}
+    TablesCacheRefresh = 18,
 }
 
 impl From<i32> for EventType {
@@ -66,6 +73,7 @@ impl From<i32> for EventType {
             15 => EventType::TableOwnerRemoved,
             16 => EventType::TableReassigned,
             17 => EventType::DistributionConfigChanged,
+            18 => EventType::TablesCacheRefresh,
             _ => EventType::Unknown,
         }
     }

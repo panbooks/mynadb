@@ -312,6 +312,9 @@ impl CacheInvalidationHandler {
                 EventType::DistributionConfigChanged => {
                     Self::handle_distribution_config_changed(&shard_cache, &event);
                 }
+                EventType::TablesCacheRefresh => {
+                    Self::handle_tables_cache_refresh(&shard_cache, &event);
+                }
                 _ => {
                     // FlushForRecovery handled by Data nodes directly
                     // Other events not relevant to Router
@@ -483,6 +486,28 @@ impl CacheInvalidationHandler {
                     );
                 }
             }
+        }
+    }
+
+    /// Handle tables cache refresh event
+    ///
+    /// Triggered when Meta evicts stale table entries (TTL-based cleanup).
+    /// Clears local table_owners cache to ensure consistency.
+    /// Cache will be repopulated on-demand via Meta lookups.
+    fn handle_tables_cache_refresh(shard_cache: &ShardCache, event: &MetaEvent) {
+        if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
+            let evicted_count = payload["evicted_count"].as_u64().unwrap_or(0);
+            let remaining_count = payload["remaining_count"].as_u64().unwrap_or(0);
+
+            // Clear local cache - it will be repopulated on demand
+            // This ensures Router cache stays consistent with Meta
+            let local_count = shard_cache.table_owner_count();
+            shard_cache.clear_table_owners();
+
+            info!(
+                "Tables cache refresh: Meta evicted {} entries ({} remaining), cleared {} local entries",
+                evicted_count, remaining_count, local_count
+            );
         }
     }
 

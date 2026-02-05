@@ -4,10 +4,11 @@
 //! - Get/set table owners
 //! - Pending registration guards
 //! - Node selection for tables
+//! - Cache rebuild from Meta
 
 use super::types::{CachedTableMeta, DataNodeInfo, NodeState, TableKey};
 use super::ShardCache;
-use crate::meta::types::DataNodeMode;
+use crate::meta::types::{DataNodeMode, TableMeta};
 use crate::utils::hash::{hash_select_clone, hash_select_index};
 use tracing::{debug, info, warn};
 
@@ -290,5 +291,57 @@ impl ShardCache {
 
         // Consistent hashing based on table key
         hash_select_clone(key, &nodes)
+    }
+
+    // ========================================================================
+    // Cache Rebuild (from Meta sync)
+    // ========================================================================
+
+    /// Rebuild table_owners cache from Meta's table list
+    ///
+    /// This is an atomic rebuild - clears existing entries and populates
+    /// from the provided list. Used when:
+    /// - Router receives TablesCacheRefresh event from Meta
+    /// - Periodic sync to ensure consistency across Routers
+    ///
+    /// All Routers rebuild from the same Meta data, ensuring consistency.
+    pub fn rebuild_table_owners(&self, tables: Vec<TableMeta>) {
+        let now = chrono::Utc::now().timestamp_millis();
+
+        // Clear existing entries
+        self.table_owners.clear();
+
+        // Populate from Meta's table list
+        for table in &tables {
+            let path = format!("{}/{}/{}", table.catalog, table.schema, table.table);
+            self.table_owners.insert(
+                path,
+                CachedTableMeta {
+                    owner_node_ids: table.owner_node_ids.clone(),
+                    version: table.version,
+                    cached_at: now,
+                },
+            );
+        }
+
+        info!(
+            "Rebuilt table_owners cache with {} entries from Meta",
+            tables.len()
+        );
+    }
+
+    /// Get the number of cached table entries
+    pub fn table_owner_count(&self) -> usize {
+        self.table_owners.len()
+    }
+
+    /// Clear all table owner entries
+    ///
+    /// Used when Meta publishes TablesCacheRefresh event to ensure
+    /// Router cache stays consistent with Meta's evicted entries.
+    /// Cache will be repopulated on-demand via Meta lookups.
+    pub fn clear_table_owners(&self) {
+        self.table_owners.clear();
+        debug!("Cleared table_owners cache");
     }
 }

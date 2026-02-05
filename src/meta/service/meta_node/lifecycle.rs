@@ -51,6 +51,40 @@ impl MetaNode {
             });
         }
 
+        // Table cache TTL eviction task (only runs on leader)
+        if self.config.table_cache.enabled {
+            let node = Arc::clone(self);
+            let ttl_ms = self.config.table_cache.ttl_ms();
+            let interval_secs = self.config.table_cache.check_interval_secs;
+
+            info!(
+                "Starting table cache eviction task (TTL: {}h, interval: {}s)",
+                self.config.table_cache.ttl_hours, interval_secs
+            );
+
+            tokio::spawn(async move {
+                // Initial delay to let the cluster stabilize
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+                loop {
+                    interval.tick().await;
+
+                    // Only run on leader
+                    if !node.is_leader().await {
+                        continue;
+                    }
+
+                    // Evict stale tables
+                    let evicted = node.state_machine.evict_stale_tables(ttl_ms);
+                    if evicted > 0 {
+                        debug!("Table cache eviction completed: {} entries evicted", evicted);
+                    }
+                }
+            });
+        }
+
         // Table rebalancer task (only runs on leader)
         if self.config.rebalancer.enabled {
             let node = Arc::clone(self);
