@@ -45,8 +45,9 @@ impl CacheInvalidationHandler {
     /// 1. ShardCache - for routing decisions
     /// 2. DataNodePool - for connection addresses
     ///
-    /// Retries with exponential backoff if no nodes are found (race condition
-    /// when router and data nodes start simultaneously).
+    /// Retries with exponential backoff if:
+    /// - No nodes are found (race condition when router and data nodes start simultaneously)
+    /// - Nodes don't have mode assigned yet (Meta assigns modes after nodes register)
     ///
     /// Must be called BEFORE start() to avoid a window where the cache is empty.
     pub async fn init_from_meta(&self, meta_client: &MetaClient) -> Result<(), String> {
@@ -60,18 +61,59 @@ impl CacheInvalidationHandler {
                 .await?;
 
             if !nodes.is_empty() {
+                // Check if all nodes have mode assigned (not None/Unspecified)
+                // Meta assigns mode based on primary_standby_ratio after nodes register
+                let nodes_without_mode: Vec<_> = nodes
+                    .iter()
+                    .filter(|n| n.mode.is_none())
+                    .map(|n| n.node_id.as_str())
+                    .collect();
+
+                if !nodes_without_mode.is_empty() && attempt < MAX_RETRIES - 1 {
+                    // Some nodes don't have mode yet - wait for Meta to assign
+                    let delay = INITIAL_DELAY_MS * (1 << attempt.min(4));
+                    info!(
+                        "Waiting for mode assignment on {} nodes: {:?} (attempt {}/{})",
+                        nodes_without_mode.len(),
+                        nodes_without_mode,
+                        attempt + 1,
+                        MAX_RETRIES
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    continue;
+                }
+
                 // Convert to DataNodeInfo and populate shard cache
+                // Only include nodes with valid mode; exclude nodes without mode
+                // to prevent Standby nodes being treated as Primary
                 let data_nodes: Vec<DataNodeInfo> = nodes
                     .iter()
-                    .map(|n| DataNodeInfo {
-                        node_id: n.node_id.clone(),
-                        grpc_addr: n.advertise_addr.clone(),
-                        state: NodeState::Active,
-                        mode: n.mode.unwrap_or_default(),
+                    .filter_map(|n| {
+                        // Only include nodes with explicitly assigned mode
+                        n.mode.map(|mode| DataNodeInfo {
+                            node_id: n.node_id.clone(),
+                            grpc_addr: n.advertise_addr.clone(),
+                            state: NodeState::Active,
+                            mode,
+                        })
                     })
                     .collect();
 
-                let count = data_nodes.len();
+                let total_nodes = nodes.len();
+                let nodes_with_mode = data_nodes.len();
+
+                if nodes_with_mode == 0 && attempt < MAX_RETRIES - 1 {
+                    // All nodes have no mode - wait longer
+                    let delay = INITIAL_DELAY_MS * (1 << attempt.min(4));
+                    info!(
+                        "No nodes with mode assigned yet, retrying in {}ms (attempt {}/{})",
+                        delay,
+                        attempt + 1,
+                        MAX_RETRIES
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    continue;
+                }
 
                 // Update shard cache for routing
                 self.shard_cache.update_data_nodes(data_nodes);
@@ -91,9 +133,16 @@ impl CacheInvalidationHandler {
                 // 2. We do a re-sync in start() to catch any missed nodes
                 self.shard_cache.set_last_event_seq(u64::MAX / 2);
 
+                if nodes_with_mode < total_nodes {
+                    warn!(
+                        "Initialized with {}/{} nodes (some without mode), will update via events",
+                        nodes_with_mode, total_nodes
+                    );
+                }
+
                 info!(
                     "Initialized shard cache and connection pool with {} data nodes from Meta (attempt {})",
-                    count,
+                    nodes_with_mode,
                     attempt + 1
                 );
                 return Ok(());
@@ -142,8 +191,8 @@ impl CacheInvalidationHandler {
     /// Re-sync nodes from Meta to handle race conditions
     ///
     /// This should be called after start() with a short delay to catch any nodes
-    /// that registered between init_from_meta() and start(). It's safe to call
-    /// this multiple times - it will only ADD nodes, not remove them.
+    /// that registered between init_from_meta() and start(). It also updates
+    /// existing nodes that now have a mode assigned. Safe to call multiple times.
     pub async fn resync_from_meta(&self, meta_client: &MetaClient) -> Result<(), String> {
         let nodes = meta_client
             .list_nodes(Some(NodeRole::Data), Some(MetaNodeState::Active))
@@ -154,15 +203,44 @@ impl CacheInvalidationHandler {
         }
 
         let mut added = 0;
+        let mut updated = 0;
+
         for node in &nodes {
+            // Skip nodes without mode assigned - they'll be added when Meta assigns mode
+            let mode = match node.mode {
+                Some(m) => m,
+                None => {
+                    debug!(
+                        "Skipping node {} in resync - mode not yet assigned",
+                        node.node_id
+                    );
+                    continue;
+                }
+            };
+
             // Check if node is already in shard cache
-            if self.shard_cache.get_data_node(&node.node_id).is_none() {
-                // Add missing node
+            if let Some(existing) = self.shard_cache.get_data_node(&node.node_id) {
+                // Update mode if it changed (handles case where node was added before mode was assigned)
+                if existing.mode != mode {
+                    debug!(
+                        "Updating node {} mode: {:?} -> {:?}",
+                        node.node_id, existing.mode, mode
+                    );
+                    self.shard_cache.upsert_data_node(DataNodeInfo {
+                        node_id: node.node_id.clone(),
+                        grpc_addr: node.advertise_addr.clone(),
+                        state: NodeState::Active,
+                        mode,
+                    });
+                    updated += 1;
+                }
+            } else {
+                // Add missing node with its assigned mode
                 self.shard_cache.upsert_data_node(DataNodeInfo {
                     node_id: node.node_id.clone(),
                     grpc_addr: node.advertise_addr.clone(),
                     state: NodeState::Active,
-                    mode: node.mode.unwrap_or_default(),
+                    mode,
                 });
                 self.data_node_pool
                     .add_node(&node.node_id, &node.advertise_addr);
@@ -171,10 +249,11 @@ impl CacheInvalidationHandler {
             }
         }
 
-        if added > 0 {
+        if added > 0 || updated > 0 {
             info!(
-                "Resync added {} missing data nodes from Meta (total now: {})",
+                "Resync: added {} nodes, updated {} modes (total now: {})",
                 added,
+                updated,
                 self.shard_cache.get_active_data_nodes().len()
             );
         }
