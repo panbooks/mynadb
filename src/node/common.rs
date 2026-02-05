@@ -593,68 +593,100 @@ pub async fn perform_wal_recovery(
     query_engine: &Arc<query_engine::QueryEngine>,
     config: &Arc<Config>,
 ) {
+    use crate::storage::wal::RecoveredWrite;
+
     info!("Starting WAL recovery - replaying unflushed writes...");
 
     wal.set_recovery_mode(true);
 
-    let cache_for_recovery = cache.clone();
-    let query_engine_for_recovery = Arc::clone(query_engine);
-    let config_for_recovery = config.clone();
-
-    let recovered_data = wal
-        .replay_data_writes(|db, line_protocol| {
-            debug!(
-                "WAL recovery: replaying {} bytes to {}",
-                line_protocol.len(),
-                db
-            );
-
-            match tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(api::ingest_line_protocol_to_cache(
-                    db,
-                    line_protocol,
-                    &cache_for_recovery,
-                    Some(&query_engine_for_recovery),
-                    &config_for_recovery.schema,
-                ))
-            }) {
-                Ok(count) => {
-                    debug!("WAL recovery: replayed {} points to {}", count, db);
-                    Ok(())
-                }
-                Err(e) => {
-                    error!("WAL recovery failed for {}: {}", db, e);
-                    Err(e)
-                }
-            }
-        })
-        .await;
-
-    match recovered_data {
-        Ok(count) => {
-            if count > 0 {
-                info!("WAL recovery: replayed {} data write entries", count);
-
-                info!("Flushing recovered data to Parquet for durability...");
-                match cache.flush().await {
-                    Ok(files) => {
-                        info!("Recovery flush complete: {} file(s) written", files.len());
-                        wal.set_recovery_mode(false);
-                        // Note: cleanup_old_data_wal_files() is already called by cache.flush()
-                    }
-                    Err(e) => {
-                        error!("Recovery flush failed: {}", e);
-                        wal.set_recovery_mode(false);
-                    }
-                }
-            } else {
-                info!("WAL recovery: no data writes to replay");
-                wal.set_recovery_mode(false);
-            }
-        }
+    // Replay all writes (both line protocol and batch)
+    let entries = match wal.replay_writes().await {
+        Ok(entries) => entries,
         Err(e) => {
             error!("WAL recovery failed: {}", e);
             wal.set_recovery_mode(false);
+            return;
+        }
+    };
+
+    let mut line_protocol_count = 0;
+    let mut batch_count = 0;
+
+    for entry in entries {
+        match entry {
+            RecoveredWrite::LineProtocol { db, line_protocol } => {
+                debug!(
+                    "WAL recovery: replaying {} bytes to {}",
+                    line_protocol.len(),
+                    db
+                );
+
+                match api::ingest_line_protocol_to_cache(
+                    &db,
+                    &line_protocol,
+                    cache,
+                    Some(query_engine),
+                    &config.schema,
+                )
+                .await
+                {
+                    Ok(count) => {
+                        debug!("WAL recovery: replayed {} points to {}", count, db);
+                        line_protocol_count += 1;
+                    }
+                    Err(e) => {
+                        error!("WAL recovery failed for {}: {}", db, e);
+                    }
+                }
+            }
+            RecoveredWrite::Batch {
+                catalog,
+                schema,
+                table,
+                date,
+                batch,
+            } => {
+                debug!(
+                    "WAL recovery: replaying batch to {}/{}/{} date={} ({} rows)",
+                    catalog,
+                    schema,
+                    table,
+                    date,
+                    batch.num_rows()
+                );
+
+                if let Err(e) = cache.add_batch(&catalog, &schema, &table, date, batch).await {
+                    error!(
+                        "WAL batch recovery failed for {}/{}/{}: {}",
+                        catalog, schema, table, e
+                    );
+                } else {
+                    batch_count += 1;
+                }
+            }
         }
     }
+
+    let total_recovered = line_protocol_count + batch_count;
+
+    if total_recovered > 0 {
+        info!(
+            "WAL recovery: replayed {} line protocol + {} batch writes",
+            line_protocol_count, batch_count
+        );
+
+        info!("Flushing recovered data to Parquet for durability...");
+        match cache.flush().await {
+            Ok(files) => {
+                info!("Recovery flush complete: {} file(s) written", files.len());
+            }
+            Err(e) => {
+                error!("Recovery flush failed: {}", e);
+            }
+        }
+    } else {
+        info!("WAL recovery: no writes to replay");
+    }
+
+    wal.set_recovery_mode(false);
 }

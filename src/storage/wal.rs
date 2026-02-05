@@ -1,4 +1,7 @@
+use arrow::ipc::writer::StreamWriter;
+use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
+use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,6 +23,8 @@ const FLUSH_CHECKPOINT_FILE: &str = "flush_checkpoint";
 pub enum EntryType {
     DataWrite = 0,
     SeriesTrack = 1,
+    /// Batch write from cluster mode (RecordBatch with metadata)
+    BatchWrite = 2,
 }
 
 impl EntryType {
@@ -27,6 +32,7 @@ impl EntryType {
         match value {
             0 => Ok(EntryType::DataWrite),
             1 => Ok(EntryType::SeriesTrack),
+            2 => Ok(EntryType::BatchWrite),
             _ => Err(format!("Invalid entry type: {}", value)),
         }
     }
@@ -39,6 +45,24 @@ pub struct WalEntry {
     pub entry_type: EntryType,
     pub db_name: String,
     pub payload: Vec<u8>,
+}
+
+/// Recovered write entry - either line protocol or batch
+#[derive(Debug)]
+pub enum RecoveredWrite {
+    /// Line protocol write (standalone mode)
+    LineProtocol {
+        db: String,
+        line_protocol: String,
+    },
+    /// Batch write (cluster mode)
+    Batch {
+        catalog: String,
+        schema: String,
+        table: String,
+        date: i32,
+        batch: RecordBatch,
+    },
 }
 
 impl WalEntry {
@@ -429,6 +453,87 @@ impl Wal {
         Ok(())
     }
 
+    /// Log a batch write operation (for cluster mode RecordBatch writes)
+    ///
+    /// Payload format: [catalog_len:4][catalog][schema_len:4][schema][table_len:4][table][date:4][batch_data]
+    pub async fn log_batch_write(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date: i32,
+        batch: &RecordBatch,
+    ) -> Result<(), String> {
+        // Serialize the batch metadata and data
+        let mut payload = Vec::new();
+
+        // Catalog
+        let catalog_bytes = catalog.as_bytes();
+        payload.extend_from_slice(&(catalog_bytes.len() as u32).to_le_bytes());
+        payload.extend_from_slice(catalog_bytes);
+
+        // Schema
+        let schema_bytes = schema.as_bytes();
+        payload.extend_from_slice(&(schema_bytes.len() as u32).to_le_bytes());
+        payload.extend_from_slice(schema_bytes);
+
+        // Table
+        let table_bytes = table.as_bytes();
+        payload.extend_from_slice(&(table_bytes.len() as u32).to_le_bytes());
+        payload.extend_from_slice(table_bytes);
+
+        // Date (i32)
+        payload.extend_from_slice(&date.to_le_bytes());
+
+        // Serialize RecordBatch using Arrow IPC format
+        let mut batch_buffer = Vec::new();
+        {
+            let cursor = Cursor::new(&mut batch_buffer);
+            let mut writer = StreamWriter::try_new(cursor, &batch.schema())
+                .map_err(|e| format!("Failed to create IPC writer: {}", e))?;
+            writer
+                .write(batch)
+                .map_err(|e| format!("Failed to write batch: {}", e))?;
+            writer
+                .finish()
+                .map_err(|e| format!("Failed to finish IPC stream: {}", e))?;
+        }
+        payload.extend_from_slice(&batch_buffer);
+
+        let entry = WalEntry {
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64,
+            entry_type: EntryType::BatchWrite,
+            db_name: catalog.to_string(), // Use catalog as db_name for consistency
+            payload,
+        };
+
+        let (needs_rotation, needs_persist) = {
+            let mut segment = self.data_segment.lock().await;
+            segment.append(&entry);
+
+            // If sync_on_write, persist immediately
+            if self.sync_on_write {
+                self.persist_segment_locked(&mut segment).await?;
+            }
+
+            (segment.needs_rotation(), segment.needs_persist())
+        };
+
+        // Check if rotation is needed (size limit)
+        if needs_rotation {
+            self.rotate_data_wal().await?;
+        } else if needs_persist {
+            // Persist when buffer_entries is reached (without rotation)
+            let mut segment = self.data_segment.lock().await;
+            self.persist_segment_locked(&mut segment).await?;
+        }
+
+        Ok(())
+    }
+
     /// Persist a segment to storage (must hold lock)
     /// This writes the full buffer and marks it as persisted (for incremental writes)
     async fn persist_segment_locked(&self, segment: &mut WalSegment) -> Result<(), String> {
@@ -492,24 +597,22 @@ impl Wal {
         Ok(())
     }
 
-    /// Replay all data write entries
+    /// Replay all write entries (both line protocol and batch writes)
     ///
     /// This method reads the flush checkpoint to skip WAL files that have already
     /// been flushed to Parquet. This prevents duplicate writes if a crash occurred
     /// between Parquet write and WAL deletion.
     ///
-    /// Checkpoint contains timestamp of current active WAL after last successful flush.
-    /// Files with timestamp < checkpoint are skipped (already in Parquet).
-    pub async fn replay_data_writes<F>(&self, mut callback: F) -> Result<usize, String>
-    where
-        F: FnMut(&str, &str) -> Result<(), String>,
-    {
+    /// Returns: Vec of RecoveredWrite entries (either LineProtocol or Batch)
+    pub async fn replay_writes(&self) -> Result<Vec<RecoveredWrite>, String> {
+        use arrow::ipc::reader::StreamReader;
+
         // Read checkpoint timestamp - files older than this have been flushed to Parquet
         let checkpoint_timestamp = self.read_flush_checkpoint().await;
 
         let files = self.list_wal_files("data").await?;
-        let mut count = 0;
-        let mut skipped = 0;
+        let mut entries = Vec::new();
+        let mut skipped_files = 0;
 
         for file_path in files {
             // Check if this file should be skipped based on checkpoint
@@ -520,19 +623,48 @@ impl Wal {
                             "Skipping WAL file {} (timestamp {} < checkpoint {}, already flushed)",
                             file_path, file_ts, checkpoint_ts
                         );
-                        skipped += 1;
+                        skipped_files += 1;
                         continue;
                     }
                 }
             }
 
-            debug!("Replaying data WAL: {}", file_path);
-            count += self
+            debug!("Replaying WAL file: {}", file_path);
+            let _ = self
                 .replay_file(&file_path, |entry| {
-                    if entry.entry_type == EntryType::DataWrite {
-                        let line_protocol = String::from_utf8(entry.payload.clone())
-                            .map_err(|_| "Invalid UTF-8 in payload")?;
-                        callback(&entry.db_name, &line_protocol)?;
+                    match entry.entry_type {
+                        EntryType::DataWrite => {
+                            match String::from_utf8(entry.payload.clone()) {
+                                Ok(line_protocol) => {
+                                    entries.push(RecoveredWrite::LineProtocol {
+                                        db: entry.db_name.clone(),
+                                        line_protocol,
+                                    });
+                                }
+                                Err(e) => {
+                                    warn!("Invalid UTF-8 in DataWrite payload: {}", e);
+                                }
+                            }
+                        }
+                        EntryType::BatchWrite => {
+                            match Self::decode_batch_payload(&entry.payload) {
+                                Ok((catalog, schema, table, date, batch)) => {
+                                    entries.push(RecoveredWrite::Batch {
+                                        catalog,
+                                        schema,
+                                        table,
+                                        date,
+                                        batch,
+                                    });
+                                }
+                                Err(e) => {
+                                    warn!("Failed to decode BatchWrite entry: {}", e);
+                                }
+                            }
+                        }
+                        EntryType::SeriesTrack => {
+                            // Series tracking entries are not replayed for data recovery
+                        }
                     }
                     Ok(())
                 })
@@ -541,8 +673,9 @@ impl Wal {
 
         if checkpoint_timestamp.is_some() {
             info!(
-                "WAL replay complete: {} entries replayed, {} files skipped (already flushed)",
-                count, skipped
+                "WAL replay complete: {} entries, {} files skipped (already flushed)",
+                entries.len(),
+                skipped_files
             );
         }
 
@@ -551,7 +684,57 @@ impl Wal {
         // If we crash again before flush → data would be lost.
         // Old WAL files will be cleaned up after successful flush to Parquet.
 
-        Ok(count)
+        Ok(entries)
+    }
+
+    /// Decode batch write payload
+    /// Format: [catalog_len:4][catalog][schema_len:4][schema][table_len:4][table][date:4][batch_data]
+    fn decode_batch_payload(
+        payload: &[u8],
+    ) -> Result<(String, String, String, i32, RecordBatch), String> {
+        use arrow::ipc::reader::StreamReader;
+
+        let mut pos = 0;
+
+        // Helper to read a length-prefixed string
+        let read_string = |payload: &[u8], pos: &mut usize, name: &str| -> Result<String, String> {
+            if *pos + 4 > payload.len() {
+                return Err(format!("Payload too short for {} length", name));
+            }
+            let len = u32::from_le_bytes(payload[*pos..*pos + 4].try_into().unwrap()) as usize;
+            *pos += 4;
+            if *pos + len > payload.len() {
+                return Err(format!("Payload too short for {}", name));
+            }
+            let s = String::from_utf8(payload[*pos..*pos + len].to_vec())
+                .map_err(|_| format!("Invalid UTF-8 in {}", name))?;
+            *pos += len;
+            Ok(s)
+        };
+
+        let catalog = read_string(payload, &mut pos, "catalog")?;
+        let schema = read_string(payload, &mut pos, "schema")?;
+        let table = read_string(payload, &mut pos, "table")?;
+
+        // Read date
+        if pos + 4 > payload.len() {
+            return Err("Payload too short for date".to_string());
+        }
+        let date = i32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
+        pos += 4;
+
+        // Read batch using Arrow IPC
+        let batch_data = &payload[pos..];
+        let cursor = Cursor::new(batch_data);
+        let mut reader = StreamReader::try_new(cursor, None)
+            .map_err(|e| format!("Failed to create IPC reader: {}", e))?;
+
+        let batch = reader
+            .next()
+            .ok_or_else(|| "No batch in IPC stream".to_string())?
+            .map_err(|e| format!("Failed to read batch: {}", e))?;
+
+        Ok((catalog, schema, table, date, batch))
     }
 
     // ========================================================================
