@@ -112,19 +112,16 @@ pub struct ShardCache {
     /// - Eviction: LRU with max_entries
     /// - Purpose: Avoid repeated S3 LIST for historical queries
     pub cold_partition_cache: Arc<ColdPartitionCache>,
-
-    /// Flush interval in seconds (used to determine "recent" partitions)
-    flush_interval_secs: u64,
 }
 
 impl ShardCache {
     /// Create a new ShardCache with default settings
     pub fn new() -> Self {
-        Self::with_config(DEFAULT_COLD_CACHE_MAX_ENTRIES, DEFAULT_FLUSH_INTERVAL_SECS)
+        Self::with_config(DEFAULT_COLD_CACHE_MAX_ENTRIES)
     }
 
     /// Create a new ShardCache with custom configuration
-    pub fn with_config(cold_cache_max_entries: usize, flush_interval_secs: u64) -> Self {
+    pub fn with_config(cold_cache_max_entries: usize) -> Self {
         Self {
             table_owners: DashMap::new(),
             data_nodes: RwLock::new(HashMap::new()),
@@ -133,7 +130,6 @@ impl ShardCache {
             pending_registrations: DashSet::new(),
             partition_nodes: DashMap::new(),
             cold_partition_cache: Arc::new(ColdPartitionCache::new(cold_cache_max_entries)),
-            flush_interval_secs,
         }
     }
 
@@ -167,26 +163,6 @@ impl ShardCache {
     /// Get the cold partition cache (for external access)
     pub fn cold_cache(&self) -> &Arc<ColdPartitionCache> {
         &self.cold_partition_cache
-    }
-
-    /// Check if a date is "recent" (within flush_interval)
-    ///
-    /// Recent partitions have data in memtable (not yet flushed to S3).
-    /// For these, we query the table owner directly.
-    pub fn is_recent_partition(&self, date: &str) -> bool {
-        // Parse date string (YYYY-MM-DD format)
-        let parsed_date = match chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-            Ok(d) => d,
-            Err(_) => return true, // If can't parse, assume recent (safer)
-        };
-
-        let now = chrono::Utc::now().naive_utc();
-        let partition_datetime = parsed_date.and_hms_opt(23, 59, 59).unwrap();
-        let age_secs = (now - partition_datetime).num_seconds();
-
-        // Consider "recent" if within flush_interval (plus some buffer for clock skew)
-        // Buffer: partition could be for "today" even if slightly past midnight
-        age_secs < (self.flush_interval_secs as i64 + 86400) // flush_interval + 1 day buffer
     }
 
     /// Get table owners for hot data routing

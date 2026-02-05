@@ -46,10 +46,30 @@ use chrono::NaiveDate;
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, info, warn};
 
+/// Default flush interval in nanoseconds (5 minutes)
+const FLUSH_INTERVAL_NANOS: i64 = 300 * 1_000_000_000;
+
 impl QueryCoordinator {
     // ========================================================================
     // Partition-Level Routing (Hive Partition Architecture)
     // ========================================================================
+
+    /// Check if query might include recent data (still in memtable)
+    ///
+    /// Simple logic: if max_time is None or >= (now - flush_interval), return true
+    fn is_query_recent(time_range: &Option<TimeRange>) -> bool {
+        match time_range {
+            None => true, // No filter = includes all data including recent
+            Some(tr) => match tr.max_time {
+                None => true, // No upper bound = includes recent
+                Some(max_time) => {
+                    let now_nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(i64::MAX);
+                    let threshold = now_nanos - FLUSH_INTERVAL_NANOS;
+                    max_time > threshold
+                }
+            }
+        }
+    }
 
     /// Try partition-level routing based on date filters in the query
     ///
@@ -95,15 +115,16 @@ impl QueryCoordinator {
         // Collect all partition node_ids that have data for the query
         let mut partition_node_ids: HashSet<String> = HashSet::new();
 
+        // Check if query might include recent data (still in memtable)
+        // Simple: if max_time is None or recent, query table owners
+        let query_includes_recent = Self::is_query_recent(time_range);
+
         for table in tables {
             // ================================================================
-            // STEP 1: For RECENT dates, use table owners (have memtable data)
+            // STEP 1: For RECENT queries, use table owners (have memtable data)
             // Table owners are consistent across all routers (synced via Meta).
-            // This replaces the per-router hot_partition_cache.
             // ================================================================
-            let has_recent_dates = dates.iter().any(|d| self.shard_cache.is_recent_partition(d));
-
-            if has_recent_dates {
+            if query_includes_recent {
                 // Table owner has memtable data for recent partitions
                 let hot_nodes = self.shard_cache.get_table_owners_for_hot_data(
                     catalog,

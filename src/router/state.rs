@@ -47,12 +47,10 @@ impl RouterAppState {
         let router_config = config.router.clone().unwrap_or_default();
 
         // Initialize shard cache with cold cache configuration
-        // Note: Hot data routing is now derived from table owners (no separate hot cache)
-        // flush_interval_secs is used to determine "recent" partitions (have memtable data)
-        let flush_interval_secs = router_config.routing.hot_cache_ttl_secs; // Reuse config for flush interval
+        // Note: Hot data routing is derived from table owners + time-based check
+        // (no separate hot cache needed - recency is checked via max_time in queries)
         let shard_cache = Arc::new(ShardCache::with_config(
             router_config.routing.cold_cache_max_entries,
-            flush_interval_secs,
         ));
 
         // Initialize data node pool
