@@ -319,7 +319,7 @@ impl ScaleInPlanner {
     fn find_standby_for_primaries(
         &self,
         cluster_state: &ClusterState,
-        primary_ids: &[String],
+        _primary_ids: &[String],
     ) -> Option<String> {
         // Find standby nodes that are backing up any of these primaries
         // Note: With table-level routing, standbys back up entire Primary nodes

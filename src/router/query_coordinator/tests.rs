@@ -8,7 +8,7 @@ use crate::router::client::data_node_pool::PoolConfig;
 use crate::router::client::DataNodePool;
 use crate::router::shard_cache::{DataNodeInfo, NodeState, ShardCache, TableKey};
 use crate::utils::hash::hash_select_index;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 fn create_test_node(id: &str, state: NodeState) -> DataNodeInfo {
@@ -61,93 +61,6 @@ fn test_is_queryable_drained() {
 }
 
 // =========================================================================
-// Tests for legacy prefix consistent hash distribution
-// =========================================================================
-
-#[test]
-fn test_legacy_prefix_hash_deterministic() {
-    // Same inputs should always produce same output
-    let table_key = TableKey::new("mydb", "metrics", "events");
-    let prefix = "node3";
-    let nodes = create_active_nodes(&["node1", "node2", "node4"]);
-
-    let hash_key = format!("{}:{}", table_key.to_path(), prefix);
-    let idx1 = hash_select_index(&hash_key, nodes.len());
-    let idx2 = hash_select_index(&hash_key, nodes.len());
-    let idx3 = hash_select_index(&hash_key, nodes.len());
-
-    assert_eq!(idx1, idx2);
-    assert_eq!(idx2, idx3);
-}
-
-#[test]
-fn test_legacy_prefix_different_prefixes_distribute() {
-    // Different prefixes should distribute across nodes
-    let table_key = TableKey::new("mydb", "metrics", "events");
-    let prefixes = vec!["node3", "node5", "node6", "node7", "node8"];
-    let nodes = create_active_nodes(&["node1", "node2", "node4"]);
-
-    let mut assigned_indices: HashSet<usize> = HashSet::new();
-    for prefix in &prefixes {
-        let hash_key = format!("{}:{}", table_key.to_path(), prefix);
-        let idx = hash_select_index(&hash_key, nodes.len());
-        assigned_indices.insert(idx);
-    }
-
-    // With 5 prefixes and 3 nodes, we should hit at least 2 different nodes
-    assert!(
-        assigned_indices.len() >= 2,
-        "Legacy prefixes should distribute across nodes, got {} unique assignments",
-        assigned_indices.len()
-    );
-}
-
-#[test]
-fn test_legacy_prefix_stable_after_scale_in() {
-    // Simulates scale-in: prefix assigned to node should remain stable
-    // when cluster shrinks (as long as that node still exists)
-
-    let table_key = TableKey::new("mydb", "metrics", "events");
-    let prefix = "retired_node";
-
-    // Before scale-in: 4 nodes
-    let nodes_before = create_active_nodes(&["node1", "node2", "node3", "node4"]);
-    let hash_key = format!("{}:{}", table_key.to_path(), prefix);
-    let idx_before = hash_select_index(&hash_key, nodes_before.len());
-    let assigned_before = &nodes_before[idx_before].node_id;
-
-    // After scale-in: 3 nodes (node4 removed)
-    let nodes_after = create_active_nodes(&["node1", "node2", "node3"]);
-
-    // Note: The assigned node might change if cluster size changes
-    // This is expected - we test that it's still deterministic
-    let idx_after = hash_select_index(&hash_key, nodes_after.len());
-    let assigned_after = &nodes_after[idx_after].node_id;
-
-    // Both assignments should be valid nodes
-    assert!(nodes_before.iter().any(|n| &n.node_id == assigned_before));
-    assert!(nodes_after.iter().any(|n| &n.node_id == assigned_after));
-
-    // Re-running with same cluster should give same result
-    let idx_after2 = hash_select_index(&hash_key, nodes_after.len());
-    assert_eq!(idx_after, idx_after2);
-}
-
-#[test]
-fn test_legacy_prefix_single_node() {
-    // With single node, all prefixes go to that node
-    let table_key = TableKey::new("mydb", "metrics", "events");
-    let prefixes = vec!["node2", "node3", "node4"];
-    let nodes = create_active_nodes(&["node1"]);
-
-    for prefix in &prefixes {
-        let hash_key = format!("{}:{}", table_key.to_path(), prefix);
-        let idx = hash_select_index(&hash_key, nodes.len());
-        assert_eq!(idx, 0, "Single node should always be selected");
-    }
-}
-
-// =========================================================================
 // Tests for table key utilities
 // =========================================================================
 
@@ -163,65 +76,6 @@ fn test_table_key_components() {
     assert_eq!(key.catalog, "mydb");
     assert_eq!(key.schema, "metrics");
     assert_eq!(key.table, "cpu");
-}
-
-// =========================================================================
-// Tests for distributed query scenarios
-// =========================================================================
-
-#[test]
-fn test_scale_in_scenario_legacy_redistribution() {
-    // Scenario: Table had data on [Node2, Node3], Node3 removed
-    // Legacy prefix "node3" should be assigned to one of [Node1, Node2, Node4]
-
-    let table_key = TableKey::new("mydb", "metrics", "events");
-    let legacy_prefix = "node3";
-    let remaining_nodes = create_active_nodes(&["node1", "node2", "node4"]);
-
-    let hash_key = format!("{}:{}", table_key.to_path(), legacy_prefix);
-    let idx = hash_select_index(&hash_key, remaining_nodes.len());
-
-    assert!(idx < remaining_nodes.len());
-    let assigned = &remaining_nodes[idx];
-    assert!(
-        ["node1", "node2", "node4"].contains(&assigned.node_id.as_str()),
-        "Legacy prefix should be assigned to an active node"
-    );
-}
-
-#[test]
-fn test_multiple_legacy_prefixes_distribution() {
-    // Multiple retired nodes should distribute their data across remaining nodes
-    let table_key = TableKey::new("mydb", "metrics", "events");
-    let legacy_prefixes = vec!["retired1", "retired2", "retired3", "retired4"];
-    let active_nodes = create_active_nodes(&["node1", "node2", "node3"]);
-
-    let mut assignments: HashMap<String, Vec<String>> = HashMap::new();
-    for node in &active_nodes {
-        assignments.insert(node.node_id.clone(), Vec::new());
-    }
-
-    for prefix in &legacy_prefixes {
-        let hash_key = format!("{}:{}", table_key.to_path(), prefix);
-        let idx = hash_select_index(&hash_key, active_nodes.len());
-        let assigned_node = &active_nodes[idx].node_id;
-        assignments
-            .get_mut(assigned_node)
-            .unwrap()
-            .push(prefix.to_string());
-    }
-
-    // Verify distribution (not all on one node)
-    let non_empty_nodes: Vec<_> = assignments.values().filter(|v| !v.is_empty()).collect();
-
-    assert!(
-        non_empty_nodes.len() >= 2,
-        "Legacy prefixes should distribute across multiple nodes"
-    );
-
-    // Verify total coverage
-    let total_assigned: usize = assignments.values().map(|v| v.len()).sum();
-    assert_eq!(total_assigned, legacy_prefixes.len());
 }
 
 // =========================================================================

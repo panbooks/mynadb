@@ -35,31 +35,16 @@ impl ShardCache {
 
     /// Set all table owners (for multi-node tables)
     pub fn set_table_owners(&self, key: &TableKey, owner_node_ids: Vec<String>, version: u64) {
-        self.set_table_owners_with_legacy(key, owner_node_ids, Vec::new(), version);
-    }
-
-    /// Set all table owners and legacy prefixes
-    ///
-    /// Used when caching TableMeta that includes legacy prefixes from scale-in operations.
-    pub fn set_table_owners_with_legacy(
-        &self,
-        key: &TableKey,
-        owner_node_ids: Vec<String>,
-        legacy_prefixes: Vec<String>,
-        version: u64,
-    ) {
         debug!(
-            "Setting table owners: {} -> {:?} (legacy: {:?}, v{})",
+            "Setting table owners: {} -> {:?} (v{})",
             key.to_path(),
             owner_node_ids,
-            legacy_prefixes,
             version
         );
         self.table_owners.insert(
             key.to_path(),
             CachedTableMeta {
                 owner_node_ids,
-                legacy_prefixes,
                 version,
                 cached_at: chrono::Utc::now().timestamp_millis(),
             },
@@ -102,48 +87,6 @@ impl ShardCache {
         self.table_owners
             .get(&key.to_path())
             .and_then(|entry| entry.primary_owner().map(|s| s.to_string()))
-    }
-
-    /// Get all legacy prefixes for a table
-    pub fn get_table_legacy_prefixes(&self, key: &TableKey) -> Option<Vec<String>> {
-        self.table_owners
-            .get(&key.to_path())
-            .map(|entry| entry.legacy_prefixes.clone())
-    }
-
-    /// Get all storage prefixes for a table (owners + legacy)
-    pub fn get_table_all_prefixes(&self, key: &TableKey) -> Option<Vec<String>> {
-        self.table_owners.get(&key.to_path()).map(|entry| {
-            entry
-                .all_storage_prefixes()
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
-        })
-    }
-
-    /// Add a legacy prefix to an existing cached table
-    ///
-    /// Called when receiving TableLegacyPrefixAdded event.
-    /// Returns true if the prefix was added.
-    pub fn add_table_legacy_prefix(&self, key: &TableKey, legacy_prefix: String, version: u64) {
-        let path = key.to_path();
-        if let Some(mut entry) = self.table_owners.get_mut(&path) {
-            if !entry.legacy_prefixes.contains(&legacy_prefix) {
-                entry.legacy_prefixes.push(legacy_prefix.clone());
-                entry.version = version;
-                entry.cached_at = chrono::Utc::now().timestamp_millis();
-                debug!(
-                    "Added legacy prefix to table: {} -> {:?} (v{})",
-                    path, entry.legacy_prefixes, version
-                );
-            }
-        } else {
-            debug!(
-                "Table {} not cached, cannot add legacy prefix {}",
-                path, legacy_prefix
-            );
-        }
     }
 
     // ========================================================================

@@ -36,7 +36,6 @@ impl QueryEngine {
 
     /// List tables in a catalog that have actual data (from storage or cache)
     /// This is more expensive than list_tables() but only returns tables with data
-    /// Scans both current node prefix and legacy prefixes from scale-in
     pub async fn list_tables_with_data(&self, catalog_name: &str) -> Vec<String> {
         let mut tables: HashSet<String> = HashSet::new();
 
@@ -47,36 +46,33 @@ impl QueryEngine {
             }
         }
 
-        // Get tables from storage (all prefixes)
+        // Get tables from storage
         if let Some(ref storage) = self.storage {
-            // Build all prefixes to scan (current node + legacy)
-            let all_prefixes = self.build_catalog_prefixes(catalog_name).await;
+            let prefix = self.build_catalog_prefix(catalog_name);
 
-            for prefix in &all_prefixes {
-                if let Ok(files) = storage.list(prefix).await {
-                    for file in files {
-                        let relative = file.strip_prefix(prefix).unwrap_or(&file);
-                        let parts: Vec<&str> = relative.split('/').collect();
-                        if parts.len() >= 2 {
-                            let schema_name = parts[0];
-                            let table_name = parts[1];
-                            if !schema_name.is_empty()
-                                && !table_name.is_empty()
-                                && !schema_name.starts_with('.')
-                                && !table_name.starts_with('.')
-                                && !table_name.starts_with("date=")
-                            {
-                                tables.insert(format!(
-                                    "{}.{}.{}",
-                                    catalog_name, schema_name, table_name
-                                ));
-                            }
+            if let Ok(files) = storage.list(&prefix).await {
+                for file in files {
+                    let relative = file.strip_prefix(&prefix).unwrap_or(&file);
+                    let parts: Vec<&str> = relative.split('/').collect();
+                    if parts.len() >= 2 {
+                        let schema_name = parts[0];
+                        let table_name = parts[1];
+                        if !schema_name.is_empty()
+                            && !table_name.is_empty()
+                            && !schema_name.starts_with('.')
+                            && !table_name.starts_with('.')
+                            && !table_name.starts_with("date=")
+                        {
+                            tables.insert(format!(
+                                "{}.{}.{}",
+                                catalog_name, schema_name, table_name
+                            ));
                         }
                     }
                 }
             }
         } else {
-            // Local filesystem (no legacy prefix support)
+            // Local filesystem
             let catalog_path = std::path::Path::new(&self.data_dir).join(catalog_name);
             let schema_entries = match std::fs::read_dir(&catalog_path) {
                 Ok(entries) => entries,
@@ -132,7 +128,6 @@ impl QueryEngine {
     }
 
     /// List all schemas (services) in a catalog
-    /// Scans both current node prefix and legacy prefixes from scale-in
     pub async fn list_schemas(&self, catalog_name: &str) -> Result<Vec<String>, String> {
         let mut schemas_set: HashSet<String> = HashSet::new();
 
@@ -143,30 +138,28 @@ impl QueryEngine {
             }
         }
 
-        // Get schemas from storage (all prefixes)
+        // Get schemas from storage
         if let Some(ref storage) = self.storage {
-            let all_prefixes = self.build_catalog_prefixes(catalog_name).await;
+            let prefix = self.build_catalog_prefix(catalog_name);
 
-            for prefix in &all_prefixes {
-                if let Ok(files) = storage.list(prefix).await {
-                    for file in files {
-                        let relative = file.strip_prefix(prefix).unwrap_or(&file);
-                        let parts: Vec<&str> = relative.split('/').collect();
-                        if !parts.is_empty() {
-                            let schema_name = parts[0];
-                            if !schema_name.is_empty()
-                                && !schema_name.starts_with('.')
-                                && schema_name != "_system"
-                                && schema_name != "_wal"
-                            {
-                                schemas_set.insert(schema_name.to_string());
-                            }
+            if let Ok(files) = storage.list(&prefix).await {
+                for file in files {
+                    let relative = file.strip_prefix(&prefix).unwrap_or(&file);
+                    let parts: Vec<&str> = relative.split('/').collect();
+                    if !parts.is_empty() {
+                        let schema_name = parts[0];
+                        if !schema_name.is_empty()
+                            && !schema_name.starts_with('.')
+                            && schema_name != "_system"
+                            && schema_name != "_wal"
+                        {
+                            schemas_set.insert(schema_name.to_string());
                         }
                     }
                 }
             }
         } else {
-            // Fallback to local filesystem (no legacy prefix support)
+            // Fallback to local filesystem
             let catalog_path = format!("{}/{}", self.data_dir, catalog_name);
 
             if std::path::Path::new(&catalog_path).exists() {
@@ -191,7 +184,6 @@ impl QueryEngine {
     }
 
     /// List all tables in a catalog.schema
-    /// Scans both current node prefix and legacy prefixes from scale-in
     pub async fn list_tables_in_schema(
         &self,
         catalog_name: &str,
@@ -208,29 +200,27 @@ impl QueryEngine {
             }
         }
 
-        // Get tables from storage (all prefixes)
+        // Get tables from storage
         if let Some(ref storage) = self.storage {
-            let all_prefixes = self.build_storage_prefixes(catalog_name, schema_name).await;
+            let prefix = self.build_storage_prefix(catalog_name, schema_name);
 
-            for prefix in &all_prefixes {
-                if let Ok(files) = storage.list(prefix).await {
-                    for file in files {
-                        let relative = file.strip_prefix(prefix).unwrap_or(&file);
-                        let parts: Vec<&str> = relative.split('/').collect();
-                        if !parts.is_empty() {
-                            let table_name = parts[0];
-                            if !table_name.is_empty()
-                                && !table_name.starts_with('.')
-                                && !table_name.starts_with("date=")
-                            {
-                                tables_set.insert(table_name.to_string());
-                            }
+            if let Ok(files) = storage.list(&prefix).await {
+                for file in files {
+                    let relative = file.strip_prefix(&prefix).unwrap_or(&file);
+                    let parts: Vec<&str> = relative.split('/').collect();
+                    if !parts.is_empty() {
+                        let table_name = parts[0];
+                        if !table_name.is_empty()
+                            && !table_name.starts_with('.')
+                            && !table_name.starts_with("date=")
+                        {
+                            tables_set.insert(table_name.to_string());
                         }
                     }
                 }
             }
         } else {
-            // Fallback to local filesystem (no legacy prefix support)
+            // Fallback to local filesystem
             let schema_path = format!("{}/{}/{}", self.data_dir, catalog_name, schema_name);
 
             if std::path::Path::new(&schema_path).exists() {
