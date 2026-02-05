@@ -204,11 +204,6 @@ pub struct ShardCacheStats {
     /// LEGACY: Total node references in partition cache (deprecated)
     pub partition_cache_node_refs: usize,
 
-    /// Hot cache: Number of partition entries
-    pub hot_cache_partitions: usize,
-    /// Hot cache: Active (non-expired) node references
-    pub hot_cache_active_node_refs: usize,
-
     /// Cold cache: Number of partition entries
     pub cold_cache_partitions: usize,
     /// Cold cache: Maximum entries (LRU limit)

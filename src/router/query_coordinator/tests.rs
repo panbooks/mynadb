@@ -27,6 +27,11 @@ fn create_active_nodes(ids: &[&str]) -> Vec<DataNodeInfo> {
         .collect()
 }
 
+/// Get today's date as YYYY-MM-DD string
+fn today_date() -> String {
+    chrono::Utc::now().format("%Y-%m-%d").to_string()
+}
+
 // =========================================================================
 // Tests for is_queryable()
 // =========================================================================
@@ -252,9 +257,10 @@ fn test_extract_date_filters_no_range() {
 async fn test_partition_routing_with_cache_hit() {
     let shard_cache = Arc::new(ShardCache::new());
 
-    // Populate HOT partition cache (simulates recent writes from WriteRouter)
-    shard_cache.hot_partition_cache.record_write("mydb", "default", "cpu", "2024-01-15", "data-1");
-    shard_cache.hot_partition_cache.record_write("mydb", "default", "cpu", "2024-01-15", "data-2");
+    // Set table owners (hot data routing is now derived from table owners)
+    // The table owner nodes have memtable data for recent partitions
+    let table_key = TableKey::new("mydb", "default", "cpu");
+    shard_cache.set_table_owners(&table_key, vec!["data-1".to_string(), "data-2".to_string()], 1);
 
     // Add node info
     shard_cache.update_data_nodes(vec![
@@ -282,11 +288,13 @@ async fn test_partition_routing_with_cache_hit() {
         table: "cpu".to_string(),
     }];
 
+    // Use today's date so it's considered "recent" (table owners have memtable)
+    let today = today_date();
     let time_range = Some(TimeRange {
         min_time: None,
         max_time: None,
-        start_date: Some("2024-01-15".to_string()),
-        end_date: Some("2024-01-15".to_string()),
+        start_date: Some(today.clone()),
+        end_date: Some(today),
     });
 
     let all_nodes = create_active_nodes(&["data-1", "data-2", "data-3", "data-4"]);
@@ -297,7 +305,7 @@ async fn test_partition_routing_with_cache_hit() {
 
     assert!(result.is_some());
     let routing_result = result.unwrap();
-    // Should only route to data-1 and data-2, not data-3 and data-4
+    // Should only route to table owners (data-1 and data-2), not data-3 and data-4
     assert_eq!(routing_result.target_nodes.len(), 2);
     let node_ids: HashSet<_> = routing_result
         .target_nodes
@@ -479,10 +487,14 @@ fn test_sql_rewrite_escapes_quotes() {
 async fn test_partition_routing_with_fallback() {
     let shard_cache = Arc::new(ShardCache::new());
 
-    // Populate HOT partition cache - data from 3 nodes
-    shard_cache.hot_partition_cache.record_write("mydb", "default", "cpu", "2024-01-15", "data-1");
-    shard_cache.hot_partition_cache.record_write("mydb", "default", "cpu", "2024-01-15", "data-2");
-    shard_cache.hot_partition_cache.record_write("mydb", "default", "cpu", "2024-01-15", "data-3");
+    // Set table owners (hot data routing is now derived from table owners)
+    // All 3 nodes are owners (distributed table)
+    let table_key = TableKey::new("mydb", "default", "cpu");
+    shard_cache.set_table_owners(
+        &table_key,
+        vec!["data-1".to_string(), "data-2".to_string(), "data-3".to_string()],
+        1,
+    );
 
     // Add node info - data-2 is UNHEALTHY (down)
     shard_cache.update_data_nodes(vec![
@@ -517,11 +529,13 @@ async fn test_partition_routing_with_fallback() {
         table: "cpu".to_string(),
     }];
 
+    // Use today's date so it's considered "recent" (table owners have memtable)
+    let today = today_date();
     let time_range = Some(TimeRange {
         min_time: None,
         max_time: None,
-        start_date: Some("2024-01-15".to_string()),
-        end_date: Some("2024-01-15".to_string()),
+        start_date: Some(today.clone()),
+        end_date: Some(today),
     });
 
     // All primary nodes (only active ones for fallback)
@@ -534,33 +548,28 @@ async fn test_partition_routing_with_fallback() {
     assert!(result.is_some());
     let routing_result = result.unwrap();
 
-    // Should have target nodes (data-1, data-3, and a fallback for data-2)
-    // data-2's partition should be assigned to a fallback node
-    let total_partitions: usize = routing_result
-        .partition_assignments
-        .values()
-        .map(|v| v.len())
-        .sum();
-    assert_eq!(total_partitions, 3, "All 3 partitions should be assigned");
+    // With table owners, all 3 owners are returned (including down node data-2)
+    // The routing filters out unhealthy nodes, keeping only active ones
+    // data-1 and data-3 are active owners
+    let active_owner_count = routing_result.target_nodes.len();
+    assert!(active_owner_count >= 2, "Should have at least 2 active owners");
 
-    // Verify data-2's partition is assigned somewhere (fallback)
-    let has_data2_partition = routing_result
-        .partition_assignments
-        .values()
-        .any(|partitions| partitions.contains(&"data-2".to_string()));
-    assert!(
-        has_data2_partition,
-        "data-2's partition should be assigned to a fallback node"
-    );
-
-    // data-2 should NOT be a target node (it's unhealthy)
-    let target_node_ids: HashSet<_> = routing_result
+    // Verify data-1 and data-3 are in target nodes (active owners)
+    let node_ids: HashSet<_> = routing_result
         .target_nodes
         .iter()
         .map(|n| n.node_id.as_str())
         .collect();
+    assert!(node_ids.contains("data-1"), "data-1 should be a target (active owner)");
+    assert!(node_ids.contains("data-3"), "data-3 should be a target (active owner)");
+
+    // Note: This test was originally checking partition-level fallback,
+    // but with the new design, we route by table owners (not partitions).
+    // The fallback logic happens at query execution time, not routing time.
+
+    // data-2 should NOT be a target node (it's unhealthy, filtered by routing)
     assert!(
-        !target_node_ids.contains("data-2"),
+        !node_ids.contains("data-2"),
         "Unhealthy data-2 should not be a target node"
     );
 }

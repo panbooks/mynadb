@@ -401,18 +401,11 @@ impl WriteRouter {
         }
 
         // ================================================================
-        // Record write in HOT cache for query routing (cache affinity)
-        // This enables queries to route to this node for memtable data.
-        // The hot cache TTL matches flush_interval, so queries for data
-        // still in memtable will be routed to the correct node.
+        // NOTE: Hot cache recording removed
+        // Hot data location is now derived from table owners (consistent
+        // across all Router instances via Meta pub/sub). No per-router
+        // cache needed - table owner has memtable for recent partitions.
         // ================================================================
-        shard_cache.hot_partition_cache.record_write(
-            catalog,
-            &partition_key.schema,
-            &partition_key.table,
-            &partition_key.date,
-            success_node,
-        );
 
         // Register as table owner (optimized: skips if already registered or in-progress)
         Self::register_table_owner(

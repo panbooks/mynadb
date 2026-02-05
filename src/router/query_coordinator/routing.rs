@@ -97,23 +97,27 @@ impl QueryCoordinator {
 
         for table in tables {
             // ================================================================
-            // STEP 1: ALWAYS check hot cache first (for ALL dates)
-            // This handles the midnight edge case where data written at 23:58
-            // for yesterday's date may still be in memtable at 00:02.
+            // STEP 1: For RECENT dates, use table owners (have memtable data)
+            // Table owners are consistent across all routers (synced via Meta).
+            // This replaces the per-router hot_partition_cache.
             // ================================================================
-            let hot_nodes = self.shard_cache.hot_partition_cache.get_for_dates(
-                catalog,
-                &table.schema,
-                &table.table,
-                &dates,
-            );
+            let has_recent_dates = dates.iter().any(|d| self.shard_cache.is_recent_partition(d));
 
-            if !hot_nodes.is_empty() {
-                debug!(
-                    "Hot cache hit for {}/{}/{}: {} nodes",
-                    catalog, table.schema, table.table, hot_nodes.len()
+            if has_recent_dates {
+                // Table owner has memtable data for recent partitions
+                let hot_nodes = self.shard_cache.get_table_owners_for_hot_data(
+                    catalog,
+                    &table.schema,
+                    &table.table,
                 );
-                partition_node_ids.extend(hot_nodes);
+
+                if !hot_nodes.is_empty() {
+                    debug!(
+                        "Table owner routing for {}/{}/{}: {} owners (recent dates)",
+                        catalog, table.schema, table.table, hot_nodes.len()
+                    );
+                    partition_node_ids.extend(hot_nodes);
+                }
             }
 
             // ================================================================

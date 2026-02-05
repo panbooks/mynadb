@@ -86,16 +86,18 @@ pub struct RoutingConfig {
     pub partition_cache_eviction_interval_secs: u64,
 
     // ========================================================================
-    // Split Partition Cache Configuration
+    // Partition Cache Configuration
     // ========================================================================
 
-    /// Hot cache TTL in seconds (for memtable data)
-    /// Should match cache.flush_interval_secs (default: 300 = 5 min)
-    /// After this TTL, data is assumed to be flushed to S3.
+    /// Flush interval in seconds - determines "recent" partitions
+    /// Recent partitions (within this interval) are routed to table owners
+    /// (who have memtable data). Should match cache.flush_interval_secs.
+    /// NOTE: Config key kept as hot_cache_ttl_secs for backward compatibility
     #[serde(default = "default_hot_cache_ttl_secs")]
     pub hot_cache_ttl_secs: u64,
 
-    /// Hot cache eviction interval in seconds
+    /// DEPRECATED: Hot cache eviction interval - no longer used
+    /// Hot data routing is now derived from table owners (consistent across routers)
     #[serde(default = "default_hot_cache_eviction_interval_secs")]
     pub hot_cache_eviction_interval_secs: u64,
 
