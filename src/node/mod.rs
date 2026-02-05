@@ -5,7 +5,9 @@
 //! - `meta` - Raft-based metadata service node
 //! - `router` - Client protocol handler and request router
 //! - `data` - Storage and query execution node
+//! - `admin` - Admin console for cluster management
 
+pub mod admin;
 pub mod common;
 pub mod data;
 pub mod meta;
