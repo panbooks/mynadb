@@ -38,6 +38,9 @@ enabled = true
 sync_on_write = false
 rotate_size_mb = 128
 
+[query]
+use_custom_table_provider = true
+
 [query_cache]
 enabled = true
 max_size_mb = 128
