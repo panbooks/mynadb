@@ -573,6 +573,7 @@ impl QueryCoordinator {
     }
 
     /// Resolve distributed table from Meta
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn resolve_distributed_from_meta(
         &self,
         meta_client: &MetaClient,

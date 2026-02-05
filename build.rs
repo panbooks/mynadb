@@ -6,7 +6,7 @@ fn main() {
 
     // Get git describe (tag + commits + hash)
     let git_version = Command::new("git")
-        .args(&["describe", "--tags", "--always", "--dirty"])
+        .args(["describe", "--tags", "--always", "--dirty"])
         .output()
         .ok()
         .and_then(|output| String::from_utf8(output.stdout).ok())
@@ -16,7 +16,7 @@ fn main() {
 
     // Get commit hash (short)
     let git_hash = Command::new("git")
-        .args(&["rev-parse", "--short", "HEAD"])
+        .args(["rev-parse", "--short", "HEAD"])
         .output()
         .ok()
         .and_then(|output| String::from_utf8(output.stdout).ok())
@@ -26,7 +26,7 @@ fn main() {
 
     // Get commit date
     let git_commit_date = Command::new("git")
-        .args(&["log", "-1", "--format=%cd", "--date=short"])
+        .args(["log", "-1", "--format=%cd", "--date=short"])
         .output()
         .ok()
         .and_then(|output| String::from_utf8(output.stdout).ok())

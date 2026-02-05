@@ -290,7 +290,7 @@ fn array_to_nanos(arr: &ArrayRef) -> Result<Int64Array> {
                     )
                 })?;
             // TimestampNanosecondArray stores values as i64 nanoseconds
-            let values: Int64Array = arr.iter().map(|v| v).collect();
+            let values: Int64Array = arr.iter().collect();
             Ok(values)
         }
         DataType::Timestamp(TimeUnit::Microsecond, _) => {

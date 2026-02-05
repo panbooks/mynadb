@@ -148,7 +148,7 @@ impl DataCache {
             let mut tracker = self.cardinality_tracker.write();
             let table_tracker = tracker
                 .entry(table_key)
-                .or_insert_with(TableCardinalityTracker::new);
+                .or_default();
             for point in &points {
                 table_tracker.track_point(&point.tags);
             }
@@ -767,11 +767,10 @@ impl DataCache {
         for shard in self.shards.iter() {
             let data = shard.data.lock();
             for (key, batches) in data.iter() {
-                if key.0 == catalog && key.1 == schema && key.2 == table && !batches.is_empty() {
-                    if !dates.contains(&key.3) {
+                if key.0 == catalog && key.1 == schema && key.2 == table && !batches.is_empty()
+                    && !dates.contains(&key.3) {
                         dates.push(key.3);
                     }
-                }
             }
         }
 

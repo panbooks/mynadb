@@ -429,6 +429,7 @@ impl ReplicationManager {
     }
 
     /// Replicate a batch to all standbys for a partition
+    #[allow(clippy::too_many_arguments)]
     pub fn replicate_to_standbys(
         &self,
         partition_key: &str,

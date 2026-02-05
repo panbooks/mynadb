@@ -33,7 +33,7 @@ impl CacheShard {
         let batch_size = batch.get_array_memory_size();
         {
             let mut data = self.data.lock();
-            data.entry(key).or_insert_with(Vec::new).push((seq, batch));
+            data.entry(key).or_default().push((seq, batch));
         }
         self.size_bytes.fetch_add(batch_size, Ordering::Relaxed);
         batch_size

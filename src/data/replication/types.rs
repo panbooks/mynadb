@@ -230,8 +230,10 @@ impl PartitionReplicationState {
 
 /// Replication mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum ReplicationMode {
     /// Async: ACK immediately after local write, replicate in background
+    #[default]
     Async,
     /// Sync: Wait for at least one standby to ACK before ACKing client
     Sync,
@@ -239,11 +241,6 @@ pub enum ReplicationMode {
     SyncAll,
 }
 
-impl Default for ReplicationMode {
-    fn default() -> Self {
-        ReplicationMode::Async
-    }
-}
 
 /// Configuration for replication
 #[derive(Debug, Clone, Serialize, Deserialize)]

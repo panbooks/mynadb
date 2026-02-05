@@ -299,12 +299,10 @@ impl MetaStateMachine {
 
         // Remove any leases for this node
         let prefix = keys::PREFIX_LEASE;
-        for item in self.db.scan_prefix(prefix) {
-            if let Ok((k, v)) = item {
-                if let Ok(lease) = bincode::deserialize::<LeaseInfo>(&v) {
-                    if lease.node_id == node_id {
-                        let _ = self.db.remove(k);
-                    }
+        for (k, v) in self.db.scan_prefix(prefix).flatten() {
+            if let Ok(lease) = bincode::deserialize::<LeaseInfo>(&v) {
+                if lease.node_id == node_id {
+                    let _ = self.db.remove(k);
                 }
             }
         }

@@ -61,6 +61,7 @@ impl Compactor {
     /// Internal compaction logic shared by partitioned and non-partitioned tables
     ///
     /// Uses Object Store for all file operations.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn compact_prefix_internal(
         &self,
         catalog: &str,
@@ -299,6 +300,7 @@ impl Compactor {
     ///
     /// If at max_level, compacts within the same level to reduce file count.
     /// Returns the total number of rows compacted.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn compact_level_files_async(
         &self,
         partition_prefix: &str,

@@ -29,8 +29,8 @@ impl MetaStateMachine {
                 match bincode::deserialize::<NodeInfo>(&v) {
                     Ok(info) => {
                         deserialized += 1;
-                        let role_match = role.map_or(true, |r| info.role == r);
-                        let state_match = state.map_or(true, |s| info.state == s);
+                        let role_match = role.is_none_or(|r| info.role == r);
+                        let state_match = state.is_none_or(|s| info.state == s);
                         if role_match && state_match {
                             matched += 1;
                             nodes.push(info);
@@ -97,17 +97,15 @@ impl MetaStateMachine {
         let start_key = format!("{}{:020}", keys::PREFIX_EVENT, start_seq);
         let mut events = Vec::new();
 
-        for item in self.db.range(start_key.as_bytes()..) {
-            if let Ok((k, v)) = item {
-                // Check if still in events prefix
-                if !k.starts_with(keys::PREFIX_EVENT.as_bytes()) {
+        for (k, v) in self.db.range(start_key.as_bytes()..).flatten() {
+            // Check if still in events prefix
+            if !k.starts_with(keys::PREFIX_EVENT.as_bytes()) {
+                break;
+            }
+            if let Ok(event) = bincode::deserialize::<Event>(&v) {
+                events.push(event);
+                if events.len() >= limit {
                     break;
-                }
-                if let Ok(event) = bincode::deserialize::<Event>(&v) {
-                    events.push(event);
-                    if events.len() >= limit {
-                        break;
-                    }
                 }
             }
         }

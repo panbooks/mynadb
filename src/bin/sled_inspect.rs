@@ -77,20 +77,18 @@ fn main() {
                     }
                 }
                 // Show raw for other keys
-                else {
-                    if value.len() <= 50 {
-                        // Try as string
-                        if let Ok(s) = std::str::from_utf8(&value) {
-                            println!("  Value (string): {}", s);
-                        } else {
-                            println!("  Value (hex): {:02x?}", value.as_ref());
-                        }
+                else if value.len() <= 50 {
+                    // Try as string
+                    if let Ok(s) = std::str::from_utf8(&value) {
+                        println!("  Value (string): {}", s);
                     } else {
-                        // Try to decode as u64
-                        if value.len() == 8 {
-                            if let Ok(n) = bincode::deserialize::<u64>(&value) {
-                                println!("  Value (u64): {}", n);
-                            }
+                        println!("  Value (hex): {:02x?}", value.as_ref());
+                    }
+                } else {
+                    // Try to decode as u64
+                    if value.len() == 8 {
+                        if let Ok(n) = bincode::deserialize::<u64>(&value) {
+                            println!("  Value (u64): {}", n);
                         }
                     }
                 }

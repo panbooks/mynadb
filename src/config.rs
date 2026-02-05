@@ -5,6 +5,7 @@ use std::path::Path;
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
@@ -708,7 +709,7 @@ fn default_wal_rotate_size_mb() -> u64 {
 }
 
 fn default_wal_buffer_entries() -> usize {
-    1000_000 // Buffer up to 1000000 entries before forcing write (for object stores)
+    1_000_000 // Buffer up to 1000000 entries before forcing write (for object stores)
 }
 
 fn default_wal_cleanup_interval_secs() -> u64 {
@@ -840,29 +841,6 @@ impl Default for RetentionConfig {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            server: ServerConfig::default(),
-            storage: StorageConfig::default(),
-            schema: SchemaConfig::default(),
-            cache: CacheConfig::default(),
-            query_cache: QueryCacheConfig::default(),
-            hot_partition_cache: HotPartitionCacheConfig::default(),
-            partition_files_cache: PartitionFilesCacheConfig::default(),
-            query: QueryConfig::default(),
-            compaction: CompactionConfig::default(),
-            logging: LoggingConfig::default(),
-            retention: RetentionConfig::default(),
-            wal: WalConfig::default(),
-            auth: AuthConfig::default(),
-            continuous_aggregates: crate::aggregates::ContinuousAggregateConfig::default(),
-            meta: None,
-            router: None,
-            data: None,
-        }
-    }
-}
 
 /// Resolve environment variables in a string
 ///

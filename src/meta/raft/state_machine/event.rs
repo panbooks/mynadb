@@ -59,13 +59,11 @@ impl MetaStateMachine {
         let prefix = keys::PREFIX_LEASE;
         let mut expired_nodes = Vec::new();
 
-        for item in self.db.scan_prefix(prefix) {
-            if let Ok((k, v)) = item {
-                if let Ok(lease) = bincode::deserialize::<LeaseInfo>(&v) {
-                    if lease.expires_at < now {
-                        let _ = self.db.remove(&k);
-                        expired_nodes.push(lease.node_id);
-                    }
+        for (k, v) in self.db.scan_prefix(prefix).flatten() {
+            if let Ok(lease) = bincode::deserialize::<LeaseInfo>(&v) {
+                if lease.expires_at < now {
+                    let _ = self.db.remove(&k);
+                    expired_nodes.push(lease.node_id);
                 }
             }
         }

@@ -28,6 +28,7 @@ use tracing::debug;
 /// - `filters`: Pushed-down filter expressions for bloom filter and predicate pushdown
 /// - `object_store`: ObjectStore for file access
 /// - `parquet_cache`: Optional local cache for remote files (cluster mode)
+#[allow(clippy::too_many_arguments)]
 pub async fn read_parquet_file(
     file_info: &ParquetFileInfo,
     target_schema: SchemaRef,

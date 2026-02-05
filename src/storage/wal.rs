@@ -586,7 +586,7 @@ impl Wal {
     /// Example: data_1703005678000_5.wal -> Some(1703005678000)
     fn extract_wal_timestamp(filename: &str) -> Option<u128> {
         // Get just the filename without path
-        let name = filename.split('/').last().unwrap_or(filename);
+        let name = filename.split('/').next_back().unwrap_or(filename);
 
         // Split by underscore: ["data", "1703005678000", "5.wal"]
         let parts: Vec<&str> = name.split('_').collect();
@@ -701,7 +701,7 @@ impl Wal {
         let files_to_delete: Vec<String> = files
             .into_iter()
             .filter(|file_path| {
-                let filename = file_path.split('/').last().unwrap_or(file_path);
+                let filename = file_path.split('/').next_back().unwrap_or(file_path);
                 if filename == current_filename {
                     debug!("Keeping active WAL file: {}", file_path);
                     return false;
@@ -816,7 +816,7 @@ impl Wal {
         let mut wal_files: Vec<String> = files
             .into_iter()
             .filter(|path| {
-                let filename = path.split('/').last().unwrap_or(path);
+                let filename = path.split('/').next_back().unwrap_or(path);
                 filename.starts_with(prefix) && filename.ends_with(".wal")
             })
             .collect();
@@ -850,7 +850,7 @@ impl Wal {
         let files = self.storage.list(&self.wal_dir).await?;
 
         for file_path in files {
-            let filename = file_path.split('/').last().unwrap_or(&file_path);
+            let filename = file_path.split('/').next_back().unwrap_or(&file_path);
 
             // Skip if it's the current active file
             if filename == current_data_filename || filename == current_series_filename {

@@ -56,6 +56,7 @@ impl fmt::Debug for ParquetExecPlan {
 }
 
 impl ParquetExecPlan {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         schema: SchemaRef,
         files: Vec<ParquetFileInfo>,

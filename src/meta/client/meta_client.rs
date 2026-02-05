@@ -437,7 +437,7 @@ impl MetaClient {
 
         let response = self
             .with_retry("list_nodes", |mut client| {
-                let req = request.clone();
+                let req = request;
                 async move { client.list_nodes(req).await.map(|r| r.into_inner()) }
             })
             .await?;
@@ -1444,7 +1444,7 @@ impl MetaClient {
 
         let response = self
             .with_retry("recommend_scale_in", |mut client| {
-                let req = request.clone();
+                let req = request;
                 async move { client.recommend_scale_in(req).await.map(|r| r.into_inner()) }
             })
             .await?;

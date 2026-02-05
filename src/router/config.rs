@@ -112,6 +112,7 @@ pub struct QueryConfig {
 
 /// Authentication configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct AuthConfig {
     /// Whether authentication is enabled
     #[serde(default)]
@@ -254,12 +255,3 @@ impl Default for QueryConfig {
     }
 }
 
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            username: String::new(),
-            password: String::new(),
-        }
-    }
-}

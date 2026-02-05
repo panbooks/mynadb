@@ -513,8 +513,8 @@ impl MetadataManager for MemoryMetadataManager {
                             partition_entry.file_name().to_string_lossy().to_string();
 
                         // Parse partition key (date=YYYY-MM-DD)
-                        let partition_key = if partition_dir.starts_with("date=") {
-                            partition_dir[5..].to_string()
+                        let partition_key = if let Some(key) = partition_dir.strip_prefix("date=") {
+                            key.to_string()
                         } else {
                             continue;
                         };
@@ -687,8 +687,8 @@ impl MetadataManager for MemoryMetadataManager {
                             partition_entry.file_name().to_string_lossy().to_string();
 
                         // Parse partition key (date=YYYY-MM-DD)
-                        let partition_key = if partition_dir.starts_with("date=") {
-                            partition_dir[5..].to_string()
+                        let partition_key = if let Some(key) = partition_dir.strip_prefix("date=") {
+                            key.to_string()
                         } else {
                             continue;
                         };
