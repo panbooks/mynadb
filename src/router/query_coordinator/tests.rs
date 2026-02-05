@@ -17,6 +17,7 @@ fn create_test_node(id: &str, state: NodeState) -> DataNodeInfo {
         grpc_addr: format!("127.0.0.1:{}", 7000 + id.len()),
         state,
         mode: DataNodeMode::Primary,
+        backing_standby: None,
     }
 }
 
@@ -251,9 +252,9 @@ fn test_extract_date_filters_no_range() {
 async fn test_partition_routing_with_cache_hit() {
     let shard_cache = Arc::new(ShardCache::new());
 
-    // Populate partition cache
-    shard_cache.record_partition_node("mydb", "default", "cpu", "2024-01-15", "data-1");
-    shard_cache.record_partition_node("mydb", "default", "cpu", "2024-01-15", "data-2");
+    // Populate HOT partition cache (simulates recent writes from WriteRouter)
+    shard_cache.hot_partition_cache.record_write("mydb", "default", "cpu", "2024-01-15", "data-1");
+    shard_cache.hot_partition_cache.record_write("mydb", "default", "cpu", "2024-01-15", "data-2");
 
     // Add node info
     shard_cache.update_data_nodes(vec![
@@ -262,12 +263,14 @@ async fn test_partition_routing_with_cache_hit() {
             grpc_addr: "127.0.0.1:7001".to_string(),
             state: NodeState::Active,
             mode: DataNodeMode::Primary,
+            backing_standby: None,
         },
         DataNodeInfo {
             node_id: "data-2".to_string(),
             grpc_addr: "127.0.0.1:7002".to_string(),
             state: NodeState::Active,
             mode: DataNodeMode::Primary,
+            backing_standby: None,
         },
     ]);
 
@@ -476,10 +479,10 @@ fn test_sql_rewrite_escapes_quotes() {
 async fn test_partition_routing_with_fallback() {
     let shard_cache = Arc::new(ShardCache::new());
 
-    // Populate partition cache - data from 3 nodes
-    shard_cache.record_partition_node("mydb", "default", "cpu", "2024-01-15", "data-1");
-    shard_cache.record_partition_node("mydb", "default", "cpu", "2024-01-15", "data-2");
-    shard_cache.record_partition_node("mydb", "default", "cpu", "2024-01-15", "data-3");
+    // Populate HOT partition cache - data from 3 nodes
+    shard_cache.hot_partition_cache.record_write("mydb", "default", "cpu", "2024-01-15", "data-1");
+    shard_cache.hot_partition_cache.record_write("mydb", "default", "cpu", "2024-01-15", "data-2");
+    shard_cache.hot_partition_cache.record_write("mydb", "default", "cpu", "2024-01-15", "data-3");
 
     // Add node info - data-2 is UNHEALTHY (down)
     shard_cache.update_data_nodes(vec![
@@ -488,18 +491,21 @@ async fn test_partition_routing_with_fallback() {
             grpc_addr: "127.0.0.1:7001".to_string(),
             state: NodeState::Active,
             mode: DataNodeMode::Primary,
+            backing_standby: None,
         },
         DataNodeInfo {
             node_id: "data-2".to_string(),
             grpc_addr: "127.0.0.1:7002".to_string(),
             state: NodeState::Unhealthy, // DOWN!
             mode: DataNodeMode::Primary,
+            backing_standby: None,
         },
         DataNodeInfo {
             node_id: "data-3".to_string(),
             grpc_addr: "127.0.0.1:7003".to_string(),
             state: NodeState::Active,
             mode: DataNodeMode::Primary,
+            backing_standby: None,
         },
     ]);
 

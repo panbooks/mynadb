@@ -408,6 +408,140 @@ impl QueryEngine {
         Ok(Arc::new(union_provider))
     }
 
+    /// Register a table with only Parquet data (skip memtable wrapping)
+    ///
+    /// Used for standby failover when querying a fallback Primary node.
+    /// The fallback Primary doesn't have the memtable data (that's on the Standby),
+    /// so we only want to query Parquet/S3 data.
+    pub(crate) async fn register_parquet_only(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+    ) -> Result<(), String> {
+        // Build table URL based on storage backend
+        let table_url = if let Some(ref storage) = self.storage {
+            storage.table_url(catalog_name, schema_name, table_name)
+        } else {
+            format!(
+                "file://{}/{}/{}/{}",
+                self.data_dir, catalog_name, schema_name, table_name
+            )
+        };
+
+        // Build local path for existence check
+        let table_path = format!(
+            "{}/{}/{}/{}",
+            self.data_dir, catalog_name, schema_name, table_name
+        );
+
+        // For local storage, check if path exists
+        let is_object_storage = self
+            .storage
+            .as_ref()
+            .map(|s| !s.is_local())
+            .unwrap_or(false);
+
+        let path_exists = if !is_object_storage {
+            std::path::Path::new(&table_path).exists()
+        } else {
+            true // Object storage tables may not have local path
+        };
+
+        if !path_exists && !is_object_storage {
+            return Err(format!("Table path not found: {}", table_path));
+        }
+
+        self.ensure_schema_in_catalog(catalog_name, schema_name)
+            .await?;
+
+        // Register Parquet table WITHOUT memtable wrapping
+        self.register_parquet_table_no_memtable(catalog_name, schema_name, table_name, &table_url)
+            .await?;
+
+        debug!(
+            "Registered parquet-only table: {}.{}.{} (no memtable)",
+            catalog_name, schema_name, table_name
+        );
+
+        Ok(())
+    }
+
+    /// Register a Parquet table without memtable wrapping
+    ///
+    /// Used by `register_parquet_only` for standby failover queries.
+    async fn register_parquet_table_no_memtable(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+        table_path: &str,
+    ) -> Result<(), String> {
+        let full_name = format!("{}.{}.{}", catalog_name, schema_name, table_name);
+
+        // Use listing table or custom provider based on configuration
+        let provider: Arc<dyn TableProvider> = if self.use_custom_table_provider {
+            let config = ParquetTableConfig::new(full_name.clone()).with_batch_size(8192);
+
+            let mut provider = if let Some(ref storage) = self.storage {
+                let base_path = Self::extract_path_from_url(table_path);
+                ParquetTableProvider::try_new(storage.object_store(), base_path, config)
+                    .await
+                    .map_err(|e| format!("Failed to create table provider: {}", e))?
+            } else {
+                let local_path = table_path.strip_prefix("file://").unwrap_or(table_path);
+                let local_store: Arc<dyn object_store::ObjectStore> =
+                    Arc::new(object_store::local::LocalFileSystem::new_with_prefix(local_path)
+                        .map_err(|e| format!("Failed to create local store: {}", e))?);
+                ParquetTableProvider::try_new(local_store, "", config)
+                    .await
+                    .map_err(|e| format!("Failed to create table provider: {}", e))?
+            };
+
+            if let Some(ref cache) = self.parquet_cache {
+                provider = provider.with_parquet_cache(cache.clone());
+            }
+
+            Arc::new(provider)
+        } else {
+            // Use DataFusion's ListingTable
+            let table_url = ListingTableUrl::parse(table_path)
+                .map_err(|e| format!("Failed to parse table URL: {}", e))?;
+
+            let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+                .with_file_extension(".parquet")
+                .with_table_partition_cols(vec![
+                    ("date".to_string(), datafusion::arrow::datatypes::DataType::Utf8),
+                    ("node_id".to_string(), datafusion::arrow::datatypes::DataType::Utf8),
+                ]);
+
+            let config = ListingTableConfig::new(table_url)
+                .with_listing_options(listing_options)
+                .infer_schema(&self.ctx.state())
+                .await
+                .map_err(|e| format!("Failed to infer schema: {}", e))?;
+
+            Arc::new(ListingTable::try_new(config)
+                .map_err(|e| format!("Failed to create listing table: {}", e))?)
+        };
+
+        // Register directly WITHOUT memtable wrapping
+        let catalog = self
+            .ctx
+            .catalog(catalog_name)
+            .ok_or_else(|| format!("Catalog '{}' not found", catalog_name))?;
+
+        let schema = catalog
+            .schema(schema_name)
+            .ok_or_else(|| format!("Schema '{}.{}' not found", catalog_name, schema_name))?;
+
+        schema
+            .register_table(table_name.to_string(), provider)
+            .map_err(|e| format!("Failed to register table: {}", e))?;
+
+        Ok(())
+    }
+
     /// Register a table with only memtable data (no Parquet files on disk)
     pub(crate) async fn register_memtable_only(
         &self,

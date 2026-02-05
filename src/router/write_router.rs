@@ -704,6 +704,7 @@ mod tests {
                 grpc_addr: format!("127.0.0.1:{}", 7000 + i),
                 state: NodeState::Active,
                 mode: DataNodeMode::Primary,
+                backing_standby: None,
             })
             .collect()
     }

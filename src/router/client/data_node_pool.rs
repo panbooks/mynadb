@@ -26,6 +26,22 @@ pub struct BatchWriteTicket {
     pub date: i32, // Days since Unix epoch (Date32 format)
 }
 
+/// Query scope for routing - determines what data to return
+///
+/// Used when a Primary fails and we need to split the query:
+/// - Memtable data: Query the backing Standby (has replicated memtable)
+/// - Parquet data: Query any fallback Primary (S3 is shared storage)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum QueryScope {
+    /// Query both memtable and Parquet (normal operation)
+    #[default]
+    Full,
+    /// Query only memtable (for Standby nodes on Primary failover)
+    MemtableOnly,
+    /// Query only Parquet/S3 (for fallback Primary on failover)
+    ParquetOnly,
+}
+
 /// Query request metadata sent via Flight Ticket
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QueryTicket {
@@ -37,6 +53,10 @@ pub struct QueryTicket {
     /// Format: ["node-1/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet", ...]
     #[serde(default)]
     pub file_paths: Option<Vec<String>>,
+    /// Query scope - determines what data to return (memtable, parquet, or both)
+    /// Used for standby failover: Standby returns memtable-only, fallback Primary returns parquet-only
+    #[serde(default)]
+    pub query_scope: QueryScope,
 }
 
 /// Connection pool configuration
@@ -299,14 +319,33 @@ impl DataNodePool {
         sql: &str,
         partitions: Option<Vec<String>>,
     ) -> Result<Vec<RecordBatch>, String> {
+        self.query_with_scope(node_id, catalog, sql, partitions, QueryScope::Full)
+            .await
+    }
+
+    /// Execute a query on a Data node with explicit query scope
+    ///
+    /// Query scope controls what data the Data node returns:
+    /// - Full: Both memtable and Parquet (normal operation)
+    /// - MemtableOnly: Only memtable data (for Standby on Primary failover)
+    /// - ParquetOnly: Only Parquet/S3 data (for fallback Primary on failover)
+    pub async fn query_with_scope(
+        &self,
+        node_id: &str,
+        catalog: &str,
+        sql: &str,
+        partitions: Option<Vec<String>>,
+        query_scope: QueryScope,
+    ) -> Result<Vec<RecordBatch>, String> {
         let mut client = self.get_flight_client(node_id).await?;
 
-        // Create query ticket
+        // Create query ticket with scope
         let ticket = QueryTicket {
             catalog: catalog.to_string(),
             sql: sql.to_string(),
             partitions,
             file_paths: None,
+            query_scope,
         };
 
         let ticket_bytes = serde_json::to_vec(&ticket)
@@ -348,14 +387,30 @@ impl DataNodePool {
         sql: &str,
         file_paths: Vec<String>,
     ) -> Result<Vec<RecordBatch>, String> {
+        self.query_with_files_and_scope(node_id, catalog, sql, file_paths, QueryScope::Full)
+            .await
+    }
+
+    /// Execute a query on a Data node with explicit file paths and query scope
+    ///
+    /// Combines file-based routing with query scope for standby failover scenarios.
+    pub async fn query_with_files_and_scope(
+        &self,
+        node_id: &str,
+        catalog: &str,
+        sql: &str,
+        file_paths: Vec<String>,
+        query_scope: QueryScope,
+    ) -> Result<Vec<RecordBatch>, String> {
         let mut client = self.get_flight_client(node_id).await?;
 
-        // Create query ticket with explicit file paths
+        // Create query ticket with explicit file paths and scope
         let ticket = QueryTicket {
             catalog: catalog.to_string(),
             sql: sql.to_string(),
             partitions: None,
             file_paths: Some(file_paths),
+            query_scope,
         };
 
         let ticket_bytes = serde_json::to_vec(&ticket)

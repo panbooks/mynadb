@@ -21,8 +21,30 @@ pub struct DataNodeInfo {
     ///
     /// In Cold Standby architecture:
     /// - Primary nodes serve writes and queries
-    /// - Standby nodes only receive replication (never serve queries)
+    /// - Standby nodes receive replication and serve memtable queries on failover
     pub mode: DataNodeMode,
+    /// For Primary nodes: the Standby node that backs this Primary
+    ///
+    /// When this Primary fails, its backing Standby has a copy of the
+    /// memtable data (via replication) and can serve queries for hot data.
+    /// The Standby only serves memtable data, not Parquet (S3 is shared).
+    pub backing_standby: Option<String>,
+}
+
+/// Query scope for routing - determines what data to return
+///
+/// Used when a Primary fails and we need to split the query:
+/// - Memtable data: Query the backing Standby (has replicated memtable)
+/// - Parquet data: Query any fallback Primary (S3 is shared storage)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum QueryScope {
+    /// Query both memtable and Parquet (normal operation)
+    #[default]
+    Full,
+    /// Query only memtable (for Standby nodes on Primary failover)
+    MemtableOnly,
+    /// Query only Parquet/S3 (for fallback Primary on failover)
+    ParquetOnly,
 }
 
 /// Node state

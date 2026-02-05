@@ -9,7 +9,7 @@ use crate::data::cache::ParquetLocalCache;
 use crate::data::replication::ReplicationManager;
 use crate::meta::client::MetaClient;
 use crate::meta::types::{NodeRole, NodeState};
-use crate::query::query_engine::QueryEngine;
+use crate::query::query_engine::{QueryEngine, QueryScope as EngineQueryScope};
 use crate::query::sql_utils::inject_node_id_predicate;
 use crate::storage::cache::DataCache;
 use crate::storage::line_protocol::parse_multiple_lines;
@@ -51,6 +51,22 @@ pub struct BatchWriteTicket {
     pub date: i32, // Days since Unix epoch (Date32 format)
 }
 
+/// Query scope for routing - determines what data to return
+///
+/// Used when a Primary fails and we need to split the query:
+/// - Memtable data: Query the backing Standby (has replicated memtable)
+/// - Parquet data: Query any fallback Primary (S3 is shared storage)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum QueryScope {
+    /// Query both memtable and Parquet (normal operation)
+    #[default]
+    Full,
+    /// Query only memtable (for Standby nodes on Primary failover)
+    MemtableOnly,
+    /// Query only Parquet/S3 (for fallback Primary on failover)
+    ParquetOnly,
+}
+
 /// Query request metadata sent via Flight Ticket
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QueryTicket {
@@ -62,6 +78,10 @@ pub struct QueryTicket {
     /// Format: ["node-1/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet", ...]
     #[serde(default)]
     pub file_paths: Option<Vec<String>>,
+    /// Query scope - determines what data to return (memtable, parquet, or both)
+    /// Used for standby failover: Standby returns memtable-only, fallback Primary returns parquet-only
+    #[serde(default)]
+    pub query_scope: QueryScope,
 }
 
 /// Replication write ticket - used by leader to send data to standby
@@ -853,12 +873,19 @@ impl FlightService for DataNodeFlightService {
             ticket.sql, sql_with_node_id
         );
 
-        // Execute query
+        // Convert ticket QueryScope to engine QueryScope
+        let engine_scope = match ticket.query_scope {
+            QueryScope::Full => EngineQueryScope::Full,
+            QueryScope::MemtableOnly => EngineQueryScope::MemtableOnly,
+            QueryScope::ParquetOnly => EngineQueryScope::ParquetOnly,
+        };
+
+        // Execute query with scope
         // QueryEngine now uses legacy prefixes (if set) when registering tables,
         // creating MultiUnionTableProvider to scan all relevant S3 prefixes.
         let df_batches = self
             .query_engine
-            .execute_query_with_db(&sql_with_node_id, &ticket.catalog)
+            .execute_query_with_db_and_scope(&sql_with_node_id, &ticket.catalog, engine_scope)
             .await
             .map_err(|e| Status::internal(format!("Query execution error: {}", e)))?;
 

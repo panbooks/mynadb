@@ -95,6 +95,7 @@ impl CacheInvalidationHandler {
                             grpc_addr: n.advertise_addr.clone(),
                             state: NodeState::Active,
                             mode,
+                            backing_standby: n.backing_standby.clone(),
                         })
                     })
                     .collect();
@@ -220,17 +221,19 @@ impl CacheInvalidationHandler {
 
             // Check if node is already in shard cache
             if let Some(existing) = self.shard_cache.get_data_node(&node.node_id) {
-                // Update mode if it changed (handles case where node was added before mode was assigned)
-                if existing.mode != mode {
+                // Update mode or backing_standby if it changed
+                if existing.mode != mode || existing.backing_standby != node.backing_standby {
                     debug!(
-                        "Updating node {} mode: {:?} -> {:?}",
-                        node.node_id, existing.mode, mode
+                        "Updating node {} mode: {:?} -> {:?}, standby: {:?} -> {:?}",
+                        node.node_id, existing.mode, mode,
+                        existing.backing_standby, node.backing_standby
                     );
                     self.shard_cache.upsert_data_node(DataNodeInfo {
                         node_id: node.node_id.clone(),
                         grpc_addr: node.advertise_addr.clone(),
                         state: NodeState::Active,
                         mode,
+                        backing_standby: node.backing_standby.clone(),
                     });
                     updated += 1;
                 }
@@ -241,6 +244,7 @@ impl CacheInvalidationHandler {
                     grpc_addr: node.advertise_addr.clone(),
                     state: NodeState::Active,
                     mode,
+                    backing_standby: node.backing_standby.clone(),
                 });
                 self.data_node_pool
                     .add_node(&node.node_id, &node.advertise_addr);
@@ -343,9 +347,15 @@ impl CacheInvalidationHandler {
                     _ => DataNodeMode::Primary, // Default to Primary
                 };
 
+                // Extract backing_standby for Primary nodes
+                let backing_standby = payload["backing_standby"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string());
+
                 info!(
-                    "Node joined: {} at {} (mode: {:?})",
-                    node_id, grpc_addr, mode
+                    "Node joined: {} at {} (mode: {:?}, backing_standby: {:?})",
+                    node_id, grpc_addr, mode, backing_standby
                 );
 
                 // Update shard cache for routing
@@ -354,6 +364,7 @@ impl CacheInvalidationHandler {
                     grpc_addr: grpc_addr.to_string(),
                     state: NodeState::Active,
                     mode,
+                    backing_standby,
                 });
 
                 // Also add to connection pool
@@ -466,6 +477,13 @@ impl CacheInvalidationHandler {
                     }
                 });
 
+                // Preserve existing backing_standby or extract from payload
+                let backing_standby = payload["backing_standby"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .or_else(|| existing_node.as_ref().and_then(|n| n.backing_standby.clone()));
+
                 // Only update if we have a valid grpc_addr (either from event or existing)
                 if !grpc_addr.is_empty() {
                     shard_cache.upsert_data_node(DataNodeInfo {
@@ -473,6 +491,7 @@ impl CacheInvalidationHandler {
                         grpc_addr: grpc_addr.clone(),
                         state,
                         mode,
+                        backing_standby,
                     });
 
                     // Also update in connection pool (if address changed)

@@ -16,6 +16,22 @@ use tracing::debug;
 
 use super::QueryEngine;
 
+/// Query scope - determines what data to return
+///
+/// Used for standby failover:
+/// - Memtable data: Query the backing Standby (has replicated memtable)
+/// - Parquet data: Query any fallback Primary (S3 is shared storage)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum QueryScope {
+    /// Query both memtable and Parquet (normal operation)
+    #[default]
+    Full,
+    /// Query only memtable (for Standby nodes on Primary failover)
+    MemtableOnly,
+    /// Query only Parquet/S3 (for fallback Primary on failover)
+    ParquetOnly,
+}
+
 impl QueryEngine {
     // ========================================================================
     // Query Execution
@@ -28,16 +44,49 @@ impl QueryEngine {
         sql: &str,
         db_name: &str,
     ) -> Result<Vec<RecordBatch>, String> {
-        let cache_key = QueryCacheKey::new(db_name, sql);
-        if let Some(cached_result) = self.query_cache.get(&cache_key) {
-            debug!("Query cache HIT for db={}", db_name);
-            return Ok(cached_result);
+        self.execute_query_with_db_and_scope(sql, db_name, QueryScope::Full)
+            .await
+    }
+
+    /// Execute a SQL query with database context and query scope
+    ///
+    /// Query scope controls what data is returned:
+    /// - `Full`: Both memtable and Parquet (normal operation)
+    /// - `MemtableOnly`: Only memtable data (for Standby on Primary failover)
+    /// - `ParquetOnly`: Only Parquet/S3 data (for fallback Primary on failover)
+    pub async fn execute_query_with_db_and_scope(
+        &self,
+        sql: &str,
+        db_name: &str,
+        scope: QueryScope,
+    ) -> Result<Vec<RecordBatch>, String> {
+        // Skip cache for scoped queries (failover scenario, want fresh data)
+        if scope == QueryScope::Full {
+            let cache_key = QueryCacheKey::new(db_name, sql);
+            if let Some(cached_result) = self.query_cache.get(&cache_key) {
+                debug!("Query cache HIT for db={}", db_name);
+                return Ok(cached_result);
+            }
         }
 
         let table_refs = extract_table_references(sql, db_name);
 
+        // Register tables based on query scope
         for (catalog, schema, table) in &table_refs {
-            let _ = self.register_table(catalog, schema, table).await;
+            match scope {
+                QueryScope::Full => {
+                    // Normal: register with both memtable and parquet
+                    let _ = self.register_table(catalog, schema, table).await;
+                }
+                QueryScope::MemtableOnly => {
+                    // Standby failover: register only memtable
+                    let _ = self.register_memtable_only(catalog, schema, table).await;
+                }
+                QueryScope::ParquetOnly => {
+                    // Fallback Primary failover: register only parquet (skip memtable wrap)
+                    let _ = self.register_parquet_only(catalog, schema, table).await;
+                }
+            }
         }
 
         let qualified_sql = qualify_table_names(sql, db_name);
@@ -106,13 +155,17 @@ impl QueryEngine {
             }
         }
 
-        let referenced_tables: Vec<String> = table_refs
-            .iter()
-            .map(|(c, s, t)| format!("{}.{}.{}", c, s, t))
-            .collect();
+        // Only cache full-scope queries (not failover queries)
+        if scope == QueryScope::Full {
+            let referenced_tables: Vec<String> = table_refs
+                .iter()
+                .map(|(c, s, t)| format!("{}.{}.{}", c, s, t))
+                .collect();
 
-        self.query_cache
-            .put(cache_key, result.clone(), referenced_tables, query_time_ms);
+            let cache_key = QueryCacheKey::new(db_name, sql);
+            self.query_cache
+                .put(cache_key, result.clone(), referenced_tables, query_time_ms);
+        }
 
         Ok(result)
     }

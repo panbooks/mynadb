@@ -2,10 +2,20 @@
 //!
 //! This module handles executing distributed queries across data nodes,
 //! including fan-out to multiple nodes and collecting partial results.
+//!
+//! ## Standby Failover
+//!
+//! When a Primary node fails, the query is split into two parts:
+//! - Memtable data: Query the backing Standby (has replicated memtable)
+//! - Parquet data: Query any fallback Primary (S3 is shared storage)
+//!
+//! This ensures no data is lost during failover, as long as the Standby
+//! has been receiving memtable replications from the Primary.
 
 use super::sql_rewrite::rewrite_sql_with_node_filter;
 use super::types::{DistributedQueryPlan, QueryResult};
 use super::QueryCoordinator;
+use crate::router::client::QueryScope;
 use arrow::record_batch::RecordBatch;
 use std::future::Future;
 use std::pin::Pin;
@@ -199,6 +209,10 @@ impl QueryCoordinator {
         // - Optimal cache locality (owner has all table data)
         // - Single node for single-table queries (95% of time-series queries)
         // - Fan-out only for multi-table joins
+        //
+        // On Primary failover:
+        // - Query Standby for memtable data (has replicated memtable)
+        // - Query fallback Primary for Parquet data (S3 is shared)
         else if plan.table_owners.is_some() || !plan.target_nodes.is_empty() {
             // Query each target node
             for node in &plan.target_nodes {
@@ -206,6 +220,7 @@ impl QueryCoordinator {
                 let node_id = node.node_id.clone();
                 let sql = plan.sql.clone();
                 let catalog = plan.catalog.clone();
+                let backing_standby = node.backing_standby.clone();
                 let fallback_nodes: Vec<String> = reachable_nodes
                     .iter()
                     .filter(|n| *n != &node_id)
@@ -234,31 +249,139 @@ impl QueryCoordinator {
                                 || e.contains("Unknown data node")
                                 || e.contains("circuit breaker");
 
-                            if is_connection_error && !fallback_nodes.is_empty() {
-                                // Try fallback nodes (any node can read from object storage)
-                                warn!("Table owner {} unreachable, trying fallback nodes", node_id);
+                            if is_connection_error {
+                                // ============================================================
+                                // STANDBY FAILOVER: Split query for memtable + parquet data
+                                // ============================================================
+                                // When Primary fails, its memtable data may not be in Parquet yet.
+                                // The Standby has replicated memtable data, so we:
+                                // 1. Query Standby for memtable-only data
+                                // 2. Query fallback Primary for parquet-only data
+                                // 3. Merge the results
 
-                                for fallback_node in &fallback_nodes {
-                                    debug!("Retrying query on fallback node {}", fallback_node);
-                                    match pool.query(fallback_node, &catalog, &sql, None).await {
+                                if let Some(standby_id) = &backing_standby {
+                                    info!(
+                                        "Primary {} down, using standby failover (standby: {})",
+                                        node_id, standby_id
+                                    );
+
+                                    let mut all_batches = Vec::new();
+                                    let mut had_success = false;
+
+                                    // Step 1: Query Standby for memtable data
+                                    match pool
+                                        .query_with_scope(
+                                            standby_id,
+                                            &catalog,
+                                            &sql,
+                                            None,
+                                            QueryScope::MemtableOnly,
+                                        )
+                                        .await
+                                    {
                                         Ok(batches) => {
                                             let total_rows: usize =
                                                 batches.iter().map(|b| b.num_rows()).sum();
                                             info!(
-                                                "Fallback query succeeded on {}: {} rows",
-                                                fallback_node, total_rows
+                                                "Standby {} returned {} memtable rows",
+                                                standby_id, total_rows
                                             );
-                                            return Ok(batches);
+                                            all_batches.extend(batches);
+                                            had_success = true;
                                         }
-                                        Err(fallback_err) => {
+                                        Err(standby_err) => {
                                             warn!(
-                                                "Fallback query on {} also failed: {}",
-                                                fallback_node, fallback_err
+                                                "Standby {} memtable query failed: {} (memtable data may be lost)",
+                                                standby_id, standby_err
                                             );
-                                            continue;
+                                            // Continue anyway - we can still get parquet data
+                                        }
+                                    }
+
+                                    // Step 2: Query fallback Primary for parquet data
+                                    for fallback_node in &fallback_nodes {
+                                        match pool
+                                            .query_with_scope(
+                                                fallback_node,
+                                                &catalog,
+                                                &sql,
+                                                None,
+                                                QueryScope::ParquetOnly,
+                                            )
+                                            .await
+                                        {
+                                            Ok(batches) => {
+                                                let total_rows: usize =
+                                                    batches.iter().map(|b| b.num_rows()).sum();
+                                                info!(
+                                                    "Fallback {} returned {} parquet rows",
+                                                    fallback_node, total_rows
+                                                );
+                                                all_batches.extend(batches);
+                                                had_success = true;
+                                                break; // Only need one fallback for parquet
+                                            }
+                                            Err(fallback_err) => {
+                                                warn!(
+                                                    "Fallback {} parquet query failed: {}",
+                                                    fallback_node, fallback_err
+                                                );
+                                                continue;
+                                            }
+                                        }
+                                    }
+
+                                    if had_success {
+                                        let total_rows: usize =
+                                            all_batches.iter().map(|b| b.num_rows()).sum();
+                                        info!(
+                                            "Standby failover succeeded: {} total rows (memtable + parquet)",
+                                            total_rows
+                                        );
+                                        return Ok(all_batches);
+                                    }
+
+                                    error!(
+                                        "Standby failover failed: both standby and all fallbacks failed"
+                                    );
+                                    return Err(format!(
+                                        "Standby failover failed for {}: standby {} and {} fallbacks all failed",
+                                        node_id,
+                                        standby_id,
+                                        fallback_nodes.len()
+                                    ));
+                                }
+
+                                // No backing standby - fall back to simple failover (parquet only)
+                                if !fallback_nodes.is_empty() {
+                                    warn!(
+                                        "Primary {} down with no standby, trying fallback (parquet only)",
+                                        node_id
+                                    );
+
+                                    for fallback_node in &fallback_nodes {
+                                        debug!("Retrying query on fallback node {}", fallback_node);
+                                        match pool.query(fallback_node, &catalog, &sql, None).await {
+                                            Ok(batches) => {
+                                                let total_rows: usize =
+                                                    batches.iter().map(|b| b.num_rows()).sum();
+                                                info!(
+                                                    "Fallback query succeeded on {}: {} rows",
+                                                    fallback_node, total_rows
+                                                );
+                                                return Ok(batches);
+                                            }
+                                            Err(fallback_err) => {
+                                                warn!(
+                                                    "Fallback query on {} also failed: {}",
+                                                    fallback_node, fallback_err
+                                                );
+                                                continue;
+                                            }
                                         }
                                     }
                                 }
+
                                 // All fallbacks failed
                                 error!("Query failed on {} and all fallback nodes: {}", node_id, e);
                                 Err(format!(

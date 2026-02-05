@@ -5,4 +5,4 @@
 pub mod circuit_breaker;
 pub mod data_node_pool;
 
-pub use data_node_pool::DataNodePool;
+pub use data_node_pool::{DataNodePool, QueryScope};
