@@ -176,8 +176,21 @@ pub struct ShardCacheStats {
     pub active_node_count: usize,
     pub last_event_seq: u64,
     pub distribution_config_count: usize,
-    /// Number of partition cache entries
+
+    /// LEGACY: Number of partition cache entries (deprecated)
     pub partition_cache_entries: usize,
-    /// Total node references in partition cache
+    /// LEGACY: Total node references in partition cache (deprecated)
     pub partition_cache_node_refs: usize,
+
+    /// Hot cache: Number of partition entries
+    pub hot_cache_partitions: usize,
+    /// Hot cache: Active (non-expired) node references
+    pub hot_cache_active_node_refs: usize,
+
+    /// Cold cache: Number of partition entries
+    pub cold_cache_partitions: usize,
+    /// Cold cache: Maximum entries (LRU limit)
+    pub cold_cache_max_entries: usize,
+    /// Cold cache: Utilization percentage (0-100)
+    pub cold_cache_utilization_percent: usize,
 }

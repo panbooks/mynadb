@@ -2,23 +2,39 @@
 //!
 //! Handles partition-level and table-level routing for distributed queries.
 //!
-//! ## Partition-Level Routing (Hive Partition Architecture)
+//! ## Split Cache Architecture
 //!
-//! With node_id as a Hive partition key, queries are routed based on:
-//! 1. Extract table references and date filters from SQL
-//! 2. Look up partition cache: (table, date) → [node_ids]
-//! 3. Route query ONLY to nodes that have data for the requested partitions
+//! Query routing uses a split cache design to handle hot and cold data correctly:
 //!
-//! Benefits:
+//! ### Hot Cache (memtable data)
+//! - Source of Truth: Meta Service (via write notifications)
+//! - TTL: 5 minutes (matches flush_interval)
+//! - Always checked first for ALL dates (handles midnight edge case)
+//!
+//! ### Cold Cache (S3/Parquet data)
+//! - Source of Truth: S3 LIST (immutable once written)
+//! - Eviction: LRU with max_entries (NOT TTL - data never changes!)
+//! - Checked after hot cache, before S3 LIST
+//!
+//! ## Routing Flow
+//!
+//! 1. Extract date filters from SQL
+//! 2. Check HOT cache (for ALL dates, not just today)
+//! 3. Check COLD cache (for dates not found in hot)
+//! 4. S3 LIST discovery (for dates not found in cold)
+//! 5. Build partition assignments with cache affinity
+//!
+//! ## Midnight Edge Case
+//!
+//! Data written at 23:58 for date=2024-01-20 may still be in memtable at 00:02.
+//! We ALWAYS check hot cache first regardless of whether date == today.
+//! The hot cache TTL (5 min) handles the "is it still in memtable?" question.
+//!
+//! ## Benefits
 //! - **60-90% reduction in query fan-out** (only query relevant nodes)
-//! - **Cache affinity preserved** (writer = reader)
-//! - **Zero Meta storage** for routing (vs 16.8MB+ for file-level)
-//! - **Automatic pruning** via DataFusion's Hive partition support
-//!
-//! ## Fallback to Table-Level Routing
-//!
-//! When no date filter is present or partition cache is empty, falls back to
-//! table-level routing (query all table owners).
+//! - **Cache affinity preserved** (writer = reader for hot data)
+//! - **Zero Meta traffic** for query routing
+//! - **Bounded memory** with LRU eviction for cold cache
 
 use super::super::shard_cache::{DataNodeInfo, NodeState, ShardCache, TableKey};
 use super::types::{PartitionRoutingResult, TableRef, TimeRange};
@@ -37,14 +53,11 @@ impl QueryCoordinator {
 
     /// Try partition-level routing based on date filters in the query
     ///
-    /// Returns Some(PartitionRoutingResult) if partition cache has entries for all
-    /// requested dates, or if S3 LIST-based discovery finds the node_ids.
-    /// Returns None if discovery fails (fallback to table-level routing).
-    ///
-    /// Discovery flow:
-    /// 1. Check partition cache for all dates
-    /// 2. On cache miss, try S3 LIST to discover `node_id=*` subdirectories
-    /// 3. Cache discovered results for future queries
+    /// Uses split cache architecture:
+    /// 1. ALWAYS check hot cache first (for ALL dates - handles midnight edge case)
+    /// 2. Check cold cache for dates not found in hot
+    /// 3. S3 LIST discovery for dates not found in cold
+    /// 4. Cache S3 discoveries in cold cache
     ///
     /// ## Cache Affinity & Partition Assignments
     ///
@@ -53,16 +66,11 @@ impl QueryCoordinator {
     /// - If a node is down, its partition is reassigned to a fallback node
     /// - Each partition is assigned to exactly ONE node (no duplicates)
     ///
-    /// Example with 4 partition nodes, 1 down:
-    /// ```text
-    /// Partition nodes: [data-1, data-2, data-3, data-4]
-    /// data-3 is DOWN → fallback to data-1
+    /// ## Midnight Edge Case
     ///
-    /// Result:
-    ///   data-1 → ["data-1", "data-3"]  // queries own + fallback
-    ///   data-2 → ["data-2"]            // queries own
-    ///   data-4 → ["data-4"]            // queries own
-    /// ```
+    /// Data written at 23:58 for date=2024-01-20 may still be in memtable at 00:02.
+    /// We ALWAYS check hot cache first regardless of whether date == today.
+    /// The hot cache TTL (5 min) handles the "is it still in memtable?" question.
     pub(super) async fn try_partition_routing(
         &self,
         catalog: &str,
@@ -88,85 +96,100 @@ impl QueryCoordinator {
         let mut partition_node_ids: HashSet<String> = HashSet::new();
 
         for table in tables {
-            // Try to get nodes from partition cache for all requested dates
-            let nodes = self.shard_cache.get_partition_nodes_for_dates(
+            // ================================================================
+            // STEP 1: ALWAYS check hot cache first (for ALL dates)
+            // This handles the midnight edge case where data written at 23:58
+            // for yesterday's date may still be in memtable at 00:02.
+            // ================================================================
+            let hot_nodes = self.shard_cache.hot_partition_cache.get_for_dates(
                 catalog,
                 &table.schema,
                 &table.table,
                 &dates,
             );
 
-            match nodes {
-                Some(node_ids) if !node_ids.is_empty() => {
+            if !hot_nodes.is_empty() {
+                debug!(
+                    "Hot cache hit for {}/{}/{}: {} nodes",
+                    catalog, table.schema, table.table, hot_nodes.len()
+                );
+                partition_node_ids.extend(hot_nodes);
+            }
+
+            // ================================================================
+            // STEP 2: Check cold cache (for dates that might have S3 data)
+            // Returns (found_nodes, missing_dates) - allows partial hits
+            // ================================================================
+            let (cold_nodes, missing_dates) = self.shard_cache.cold_partition_cache.get_for_dates(
+                catalog,
+                &table.schema,
+                &table.table,
+                &dates,
+            );
+
+            if !cold_nodes.is_empty() {
+                debug!(
+                    "Cold cache hit for {}/{}/{}: {} nodes, {} dates missing",
+                    catalog,
+                    table.schema,
+                    table.table,
+                    cold_nodes.len(),
+                    missing_dates.len()
+                );
+                partition_node_ids.extend(cold_nodes);
+            }
+
+            // ================================================================
+            // STEP 3: S3 LIST discovery for missing dates (if storage available)
+            // Cache discoveries in cold cache for future queries
+            // ================================================================
+            if !missing_dates.is_empty() {
+                if let Some(ref storage) = self.storage {
                     debug!(
-                        "Partition cache hit for {}/{}/{}: {} nodes for {} dates",
+                        "Discovering {} missing dates via S3 LIST for {}/{}/{}",
+                        missing_dates.len(),
                         catalog,
                         table.schema,
-                        table.table,
-                        node_ids.len(),
-                        dates.len()
+                        table.table
                     );
-                    partition_node_ids.extend(node_ids);
-                }
-                Some(_) => {
-                    // Empty nodes list - this shouldn't happen but fallback
+
+                    for date in &missing_dates {
+                        let discovered = self
+                            .discover_partition_nodes(
+                                storage,
+                                catalog,
+                                &table.schema,
+                                &table.table,
+                                date,
+                            )
+                            .await;
+
+                        if discovered.is_empty() {
+                            debug!(
+                                "No node_id partitions found for {}/{}/{}/date={}",
+                                catalog, table.schema, table.table, date
+                            );
+                        } else {
+                            // Cache in COLD cache (S3 data is immutable)
+                            self.shard_cache.cold_partition_cache.insert(
+                                catalog,
+                                &table.schema,
+                                &table.table,
+                                date,
+                                discovered.clone(),
+                            );
+                            partition_node_ids.extend(discovered);
+                        }
+                    }
+                } else if partition_node_ids.is_empty() {
+                    // No storage for discovery AND no cached nodes - fallback
                     debug!(
-                        "Partition cache returned empty for {}/{}/{}",
+                        "No cache hits and no storage for {}/{}/{}, falling back",
                         catalog, table.schema, table.table
                     );
                     return None;
                 }
-                None => {
-                    // Cache miss - try S3 LIST-based discovery if storage is available
-                    if let Some(ref storage) = self.storage {
-                        debug!(
-                            "Partition cache miss for {}/{}/{}, trying S3 LIST discovery",
-                            catalog, table.schema, table.table
-                        );
-
-                        // Discover node_ids for each missing date via S3 LIST
-                        for date in &dates {
-                            let discovered = self
-                                .discover_partition_nodes(
-                                    storage,
-                                    catalog,
-                                    &table.schema,
-                                    &table.table,
-                                    date,
-                                )
-                                .await;
-
-                            if discovered.is_empty() {
-                                // No data found for this date - partition doesn't exist yet
-                                debug!(
-                                    "No node_id partitions found for {}/{}/{}/date={}",
-                                    catalog, table.schema, table.table, date
-                                );
-                                // Continue - maybe other dates have data
-                            } else {
-                                // Cache the discovered nodes
-                                for node_id in &discovered {
-                                    self.shard_cache.record_partition_node(
-                                        catalog,
-                                        &table.schema,
-                                        &table.table,
-                                        date,
-                                        node_id,
-                                    );
-                                }
-                                partition_node_ids.extend(discovered);
-                            }
-                        }
-                    } else {
-                        // No storage for discovery - fallback to table-level routing
-                        debug!(
-                            "Partition cache miss for {}/{}/{} and no storage for discovery, \
-                             falling back to table-level routing",
-                            catalog, table.schema, table.table
-                        );
-                        return None;
-                    }
-                }
+                // If we have some nodes from hot/cold cache, continue with those
             }
         }
 

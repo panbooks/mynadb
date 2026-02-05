@@ -59,6 +59,7 @@ rand = "0.8"
 openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 sled = "0.34"
 dashmap = "6.0"
+lru = "0.12"
 prometheus = "0.13"
 uuid = { version = "1.7", features = ["v4"] }
 hostname = "0.4"

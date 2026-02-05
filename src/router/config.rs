@@ -76,14 +76,33 @@ pub struct RoutingConfig {
     #[serde(default = "default_data_node_request_timeout_ms")]
     pub data_node_request_timeout_ms: u64,
 
-    /// Partition cache TTL in seconds (for partition → node_ids mapping)
+    /// DEPRECATED: Legacy partition cache TTL (use hot_cache_ttl_secs instead)
     /// Set to 0 to disable automatic eviction
     #[serde(default = "default_partition_cache_ttl_secs")]
     pub partition_cache_ttl_secs: u64,
 
-    /// Partition cache eviction interval in seconds
+    /// DEPRECATED: Legacy eviction interval (use hot_cache_eviction_interval_secs instead)
     #[serde(default = "default_partition_cache_eviction_interval_secs")]
     pub partition_cache_eviction_interval_secs: u64,
+
+    // ========================================================================
+    // Split Partition Cache Configuration
+    // ========================================================================
+
+    /// Hot cache TTL in seconds (for memtable data)
+    /// Should match cache.flush_interval_secs (default: 300 = 5 min)
+    /// After this TTL, data is assumed to be flushed to S3.
+    #[serde(default = "default_hot_cache_ttl_secs")]
+    pub hot_cache_ttl_secs: u64,
+
+    /// Hot cache eviction interval in seconds
+    #[serde(default = "default_hot_cache_eviction_interval_secs")]
+    pub hot_cache_eviction_interval_secs: u64,
+
+    /// Cold cache max entries (for S3/Parquet data)
+    /// LRU eviction when exceeded. Historical data is immutable, so no TTL needed.
+    #[serde(default = "default_cold_cache_max_entries")]
+    pub cold_cache_max_entries: usize,
 }
 
 /// Query configuration
@@ -170,11 +189,23 @@ fn default_data_node_request_timeout_ms() -> u64 {
 }
 
 fn default_partition_cache_ttl_secs() -> u64 {
-    300 // 5 minutes
+    300 // 5 minutes (DEPRECATED)
 }
 
 fn default_partition_cache_eviction_interval_secs() -> u64 {
+    60 // Run eviction every minute (DEPRECATED)
+}
+
+fn default_hot_cache_ttl_secs() -> u64 {
+    300 // 5 minutes - matches flush_interval
+}
+
+fn default_hot_cache_eviction_interval_secs() -> u64 {
     60 // Run eviction every minute
+}
+
+fn default_cold_cache_max_entries() -> usize {
+    100_000 // 100K partitions (bounded, LRU eviction)
 }
 
 fn default_cache_enabled() -> bool {
@@ -239,6 +270,10 @@ impl Default for RoutingConfig {
             data_node_request_timeout_ms: default_data_node_request_timeout_ms(),
             partition_cache_ttl_secs: default_partition_cache_ttl_secs(),
             partition_cache_eviction_interval_secs: default_partition_cache_eviction_interval_secs(),
+            // Split cache config
+            hot_cache_ttl_secs: default_hot_cache_ttl_secs(),
+            hot_cache_eviction_interval_secs: default_hot_cache_eviction_interval_secs(),
+            cold_cache_max_entries: default_cold_cache_max_entries(),
         }
     }
 }

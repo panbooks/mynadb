@@ -46,8 +46,11 @@ impl RouterAppState {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let router_config = config.router.clone().unwrap_or_default();
 
-        // Initialize shard cache
-        let shard_cache = Arc::new(ShardCache::new());
+        // Initialize shard cache with split cache configuration
+        let shard_cache = Arc::new(ShardCache::with_config(
+            router_config.routing.hot_cache_ttl_secs,
+            router_config.routing.cold_cache_max_entries,
+        ));
 
         // Initialize data node pool
         let pool_config = super::client::data_node_pool::PoolConfig::default();
