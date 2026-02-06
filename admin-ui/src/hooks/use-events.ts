@@ -1,12 +1,28 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { fetchEvents, createEventWebSocket } from '@/lib/api'
+import { fetchEvents, fetchEventSources, fetchEventStats, createEventWebSocket } from '@/lib/api'
 import type { EventFilter, AdminEvent } from '@/lib/types'
 
 export function useEvents(filter?: EventFilter) {
   return useQuery({
     queryKey: ['events', filter],
     queryFn: () => fetchEvents(filter),
+  })
+}
+
+export function useEventSources() {
+  return useQuery({
+    queryKey: ['event-sources'],
+    queryFn: fetchEventSources,
+    staleTime: 30000, // Cache for 30 seconds
+  })
+}
+
+export function useEventStats() {
+  return useQuery({
+    queryKey: ['event-stats'],
+    queryFn: fetchEventStats,
+    refetchInterval: 10000, // Refresh every 10 seconds
   })
 }
 

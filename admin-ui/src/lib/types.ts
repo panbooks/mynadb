@@ -270,10 +270,17 @@ export interface TableFilter {
 }
 
 export interface EventFilter {
-  type?: EventType
+  type?: string  // Can be comma-separated for multiple types
   source?: string
-  since?: string
+  since?: string  // Relative (1h, 24h, 7d) or ISO timestamp
+  search?: string
   limit?: number
+}
+
+export interface EventStats {
+  total: number
+  events_last_hour: number
+  by_type: Record<string, number>
 }
 
 // Pagination

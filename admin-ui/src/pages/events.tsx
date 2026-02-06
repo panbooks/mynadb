@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import {
   Activity,
   Wifi,
@@ -11,11 +11,15 @@ import {
   Table2,
   Database,
   AlertTriangle,
+  Search,
+  Clock,
+  BarChart3,
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -23,7 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { useEventStream, useEvents } from '@/hooks/use-events'
+import { useEventStream, useEvents, useEventSources, useEventStats } from '@/hooks/use-events'
 import { formatRelativeTime } from '@/lib/utils'
 import type { AdminEvent, EventType } from '@/lib/types'
 
@@ -44,26 +48,76 @@ const eventTypeIcons: Record<string, React.ComponentType<{ className?: string }>
   Unknown: AlertTriangle,
 }
 
+const TIME_RANGES = [
+  { value: 'all', label: 'All Time' },
+  { value: '1h', label: 'Last Hour' },
+  { value: '24h', label: 'Last 24 Hours' },
+  { value: '7d', label: 'Last 7 Days' },
+]
+
+const EVENT_TYPES = [
+  { value: 'NodeJoined', label: 'Node Joined' },
+  { value: 'NodeLeft', label: 'Node Left' },
+  { value: 'NodeStateChanged', label: 'Node State Changed' },
+  { value: 'LeaderChanged', label: 'Leader Changed' },
+  { value: 'TableReassigned', label: 'Table Reassigned' },
+  { value: 'TableOwnerAdded', label: 'Table Owner Added' },
+  { value: 'TableOwnerRemoved', label: 'Table Owner Removed' },
+  { value: 'TableOwnerExpired', label: 'Table Owner Expired' },
+  { value: 'FlushForRecovery', label: 'Flush for Recovery' },
+  { value: 'CacheInvalidate', label: 'Cache Invalidate' },
+  { value: 'SchemaChanged', label: 'Schema Changed' },
+  { value: 'DistributionConfigChanged', label: 'Distribution Config' },
+]
+
 export function EventsPage() {
-  const [typeFilter, setTypeFilter] = useState<EventType | 'all'>('all')
+  const [typeFilter, setTypeFilter] = useState<string>('all')
+  const [timeRange, setTimeRange] = useState<string>('all')
+  const [sourceFilter, setSourceFilter] = useState<string>('all')
+  const [searchQuery, setSearchQuery] = useState<string>('')
   const [selectedEvent, setSelectedEvent] = useState<AdminEvent | null>(null)
 
   const { events: realtimeEvents, isConnected, clearEvents, connect } = useEventStream()
-  const { data: historicalEvents, refetch, isFetching } = useEvents({
-    type: typeFilter === 'all' ? undefined : typeFilter,
-    limit: 50,
-  })
+  const { data: sources } = useEventSources()
+  const { data: stats } = useEventStats()
+
+  // Build filter for API
+  const apiFilter = useMemo(() => ({
+    type: typeFilter !== 'all' ? typeFilter : undefined,
+    since: timeRange !== 'all' ? timeRange : undefined,
+    source: sourceFilter !== 'all' ? sourceFilter : undefined,
+    search: searchQuery || undefined,
+    limit: 100,
+  }), [typeFilter, timeRange, sourceFilter, searchQuery])
+
+  const { data: historicalEvents, refetch, isFetching } = useEvents(apiFilter)
 
   // Combine realtime and historical events, deduplicate by ID
-  const allEvents = [...realtimeEvents, ...(historicalEvents ?? [])]
-  const uniqueEvents = allEvents.filter(
-    (event, index, self) => index === self.findIndex((e) => e.id === event.id)
-  )
+  const allEvents = useMemo(() => {
+    const combined = [...realtimeEvents, ...(historicalEvents ?? [])]
+    const seen = new Set<string>()
+    return combined.filter((event) => {
+      if (seen.has(event.id)) return false
+      seen.add(event.id)
+      return true
+    })
+  }, [realtimeEvents, historicalEvents])
 
-  const filteredEvents =
-    typeFilter === 'all'
-      ? uniqueEvents
-      : uniqueEvents.filter((e) => e.type === typeFilter)
+  // Apply client-side filters for real-time events
+  const filteredEvents = useMemo(() => {
+    return allEvents.filter((e) => {
+      if (typeFilter !== 'all' && e.type !== typeFilter) return false
+      if (sourceFilter !== 'all' && e.source !== sourceFilter) return false
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase()
+        const matchesMessage = e.message?.toLowerCase().includes(query)
+        const matchesType = e.type?.toLowerCase().includes(query)
+        const matchesPayload = JSON.stringify(e.payload).toLowerCase().includes(query)
+        if (!matchesMessage && !matchesType && !matchesPayload) return false
+      }
+      return true
+    })
+  }, [allEvents, typeFilter, sourceFilter, searchQuery])
 
   return (
     <div className="space-y-6">
@@ -115,6 +169,52 @@ export function EventsPage() {
         </div>
       </div>
 
+      {/* Stats Cards */}
+      {stats && (
+        <div className="grid gap-4 md:grid-cols-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Total Events</CardTitle>
+              <BarChart3 className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.total}</div>
+              <p className="text-xs text-muted-foreground">in cache</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Last Hour</CardTitle>
+              <Clock className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.events_last_hour}</div>
+              <p className="text-xs text-muted-foreground">events</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Event Types</CardTitle>
+              <Activity className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{Object.keys(stats.by_type).length}</div>
+              <p className="text-xs text-muted-foreground">unique types</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Sources</CardTitle>
+              <Server className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{sources?.length ?? 0}</div>
+              <p className="text-xs text-muted-foreground">nodes</p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {/* Filters */}
       <Card>
         <CardHeader className="pb-3">
@@ -124,31 +224,72 @@ export function EventsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex gap-4">
-            <div className="w-64">
-              <Select
-                value={typeFilter}
-                onValueChange={(v) => setTypeFilter(v as EventType | 'all')}
-              >
+          <div className="flex flex-wrap gap-4">
+            {/* Event Type Filter */}
+            <div className="w-48">
+              <label className="text-xs text-muted-foreground mb-1 block">Event Type</label>
+              <Select value={typeFilter} onValueChange={setTypeFilter}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Event Type" />
+                  <SelectValue placeholder="All Types" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Events</SelectItem>
-                  <SelectItem value="NodeJoined">Node Joined</SelectItem>
-                  <SelectItem value="NodeLeft">Node Left</SelectItem>
-                  <SelectItem value="NodeStateChanged">Node State Changed</SelectItem>
-                  <SelectItem value="LeaderChanged">Leader Changed</SelectItem>
-                  <SelectItem value="TableReassigned">Table Reassigned</SelectItem>
-                  <SelectItem value="TableOwnerAdded">Table Owner Added</SelectItem>
-                  <SelectItem value="TableOwnerRemoved">Table Owner Removed</SelectItem>
-                  <SelectItem value="TableOwnerExpired">Table Owner Expired</SelectItem>
-                  <SelectItem value="FlushForRecovery">Flush for Recovery</SelectItem>
-                  <SelectItem value="CacheInvalidate">Cache Invalidate</SelectItem>
-                  <SelectItem value="SchemaChanged">Schema Changed</SelectItem>
-                  <SelectItem value="DistributionConfigChanged">Distribution Config Changed</SelectItem>
+                  <SelectItem value="all">All Types</SelectItem>
+                  {EVENT_TYPES.map((type) => (
+                    <SelectItem key={type.value} value={type.value}>
+                      {type.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* Time Range Filter */}
+            <div className="w-40">
+              <label className="text-xs text-muted-foreground mb-1 block">Time Range</label>
+              <Select value={timeRange} onValueChange={setTimeRange}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All Time" />
+                </SelectTrigger>
+                <SelectContent>
+                  {TIME_RANGES.map((range) => (
+                    <SelectItem key={range.value} value={range.value}>
+                      {range.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Source Node Filter */}
+            <div className="w-48">
+              <label className="text-xs text-muted-foreground mb-1 block">Source Node</label>
+              <Select value={sourceFilter} onValueChange={setSourceFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All Sources" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Sources</SelectItem>
+                  {sources?.map((source) => (
+                    <SelectItem key={source} value={source}>
+                      {source}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Search Input */}
+            <div className="flex-1 min-w-[200px]">
+              <label className="text-xs text-muted-foreground mb-1 block">Search</label>
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search messages, payloads..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-8"
+                />
+              </div>
             </div>
           </div>
         </CardContent>
@@ -164,6 +305,7 @@ export function EventsPage() {
             </CardTitle>
             <CardDescription>
               {filteredEvents.length} event(s)
+              {typeFilter !== 'all' && ` (filtered by ${typeFilter})`}
             </CardDescription>
           </CardHeader>
           <CardContent className="p-0">
@@ -173,7 +315,9 @@ export function EventsPage() {
                   <Activity className="h-12 w-12 text-muted-foreground mb-4" />
                   <p className="text-lg font-medium">No events</p>
                   <p className="text-sm text-muted-foreground">
-                    Events will appear here as they occur
+                    {searchQuery || typeFilter !== 'all' || sourceFilter !== 'all'
+                      ? 'Try adjusting your filters'
+                      : 'Events will appear here as they occur'}
                   </p>
                 </div>
               ) : (

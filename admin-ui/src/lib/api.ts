@@ -16,6 +16,7 @@ import type {
   NodeFilter,
   TableFilter,
   EventFilter,
+  EventStats,
   PaginatedResponse,
 } from './types'
 
@@ -171,11 +172,20 @@ export async function fetchEvents(filter?: EventFilter): Promise<AdminEvent[]> {
   if (filter?.type) params.set('type', filter.type)
   if (filter?.source) params.set('source', filter.source)
   if (filter?.since) params.set('since', filter.since)
+  if (filter?.search) params.set('search', filter.search)
   if (filter?.limit) params.set('limit', filter.limit.toString())
 
   const query = params.toString()
   const response = await fetchApi<EventsResponse>(`/events${query ? `?${query}` : ''}`)
   return response.events
+}
+
+export async function fetchEventSources(): Promise<string[]> {
+  return fetchApi<string[]>('/events/sources')
+}
+
+export async function fetchEventStats(): Promise<EventStats> {
+  return fetchApi<EventStats>('/events/stats')
 }
 
 // WebSocket for real-time events

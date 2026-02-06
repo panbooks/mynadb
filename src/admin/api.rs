@@ -45,6 +45,8 @@ pub fn routes() -> Router<AdminState> {
         .route("/scale-in/execute", post(scale_in_execute))
         // Events
         .route("/events", get(list_events))
+        .route("/events/sources", get(list_event_sources))
+        .route("/events/stats", get(get_event_stats))
         .route("/events/ws", get(websocket::handler))
 }
 
@@ -874,14 +876,50 @@ async fn scale_in_execute(
 
 #[derive(Deserialize)]
 struct ListEventsQuery {
+    /// Filter by event type (can be comma-separated for multiple)
     #[serde(rename = "type")]
     event_type: Option<String>,
+    /// Filter by source node
+    source: Option<String>,
+    /// Filter events since (ISO timestamp or relative like "1h", "24h", "7d")
+    since: Option<String>,
+    /// Full-text search
+    search: Option<String>,
+    /// Maximum events to return
     #[serde(default = "default_events_limit")]
     limit: usize,
 }
 
 fn default_events_limit() -> usize {
     100
+}
+
+/// Parse relative time string (1h, 24h, 7d) or ISO timestamp to milliseconds
+fn parse_since(since: &str) -> Option<i64> {
+    let now = chrono::Utc::now();
+
+    // Try relative time first
+    if let Some(hours) = since.strip_suffix('h').and_then(|s| s.parse::<i64>().ok()) {
+        return Some((now - chrono::Duration::hours(hours)).timestamp_millis());
+    }
+    if let Some(days) = since.strip_suffix('d').and_then(|s| s.parse::<i64>().ok()) {
+        return Some((now - chrono::Duration::days(days)).timestamp_millis());
+    }
+    if let Some(minutes) = since.strip_suffix('m').and_then(|s| s.parse::<i64>().ok()) {
+        return Some((now - chrono::Duration::minutes(minutes)).timestamp_millis());
+    }
+
+    // Try ISO timestamp
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(since) {
+        return Some(dt.timestamp_millis());
+    }
+
+    // Try Unix timestamp in milliseconds
+    if let Ok(ts) = since.parse::<i64>() {
+        return Some(ts);
+    }
+
+    None
 }
 
 #[derive(Serialize)]
@@ -896,11 +934,29 @@ async fn list_events(
     State(state): State<AdminState>,
     Query(query): Query<ListEventsQuery>,
 ) -> impl IntoResponse {
-    // Get events from cache
-    let events = state
-        .get_cached_events(query.event_type.as_deref(), query.limit)
-        .await;
+    use super::state::EventFilter;
 
+    // Parse event types (comma-separated)
+    let event_types = query.event_type.map(|t| {
+        t.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+    });
+
+    // Parse since time
+    let since_ms = query.since.as_deref().and_then(parse_since);
+
+    let filter = EventFilter {
+        event_types,
+        source: query.source,
+        since_ms,
+        search: query.search,
+        limit: query.limit,
+    };
+
+    // Get events from cache
+    let events = state.get_cached_events(filter).await;
     let (cache_size, cache_max) = state.event_cache_stats().await;
 
     (
@@ -912,4 +968,16 @@ async fn list_events(
             cache_max,
         })),
     )
+}
+
+/// Get unique source nodes
+async fn list_event_sources(State(state): State<AdminState>) -> impl IntoResponse {
+    let sources = state.get_event_sources().await;
+    (StatusCode::OK, Json(ApiResponse::ok(sources)))
+}
+
+/// Get event statistics
+async fn get_event_stats(State(state): State<AdminState>) -> impl IntoResponse {
+    let stats = state.get_event_stats().await;
+    (StatusCode::OK, Json(ApiResponse::ok(stats)))
 }
