@@ -31,6 +31,8 @@ fn timestamp_to_rfc3339(ts_ms: i64) -> Option<String> {
 /// Build API routes (REST + WebSocket)
 pub fn routes() -> Router<AdminState> {
     Router::new()
+        // Health
+        .route("/health", get(health))
         // Cluster
         .route("/cluster/status", get(cluster_status))
         // Nodes
@@ -48,6 +50,9 @@ pub fn routes() -> Router<AdminState> {
         .route("/events/sources", get(list_event_sources))
         .route("/events/stats", get(get_event_stats))
         .route("/events/ws", get(websocket::handler))
+        // Meta operations
+        .route("/distribution", get(distribution))
+        .route("/meta/status", get(meta_status))
 }
 
 // ============ Response Types ============
@@ -980,4 +985,66 @@ async fn list_event_sources(State(state): State<AdminState>) -> impl IntoRespons
 async fn get_event_stats(State(state): State<AdminState>) -> impl IntoResponse {
     let stats = state.get_event_stats().await;
     (StatusCode::OK, Json(ApiResponse::ok(stats)))
+}
+
+// ============ Meta Endpoints ============
+
+/// Health check endpoint
+async fn health() -> impl IntoResponse {
+    (StatusCode::OK, Json(serde_json::json!({
+        "status": "ok",
+        "service": "admin"
+    })))
+}
+
+/// Get data distribution across nodes
+async fn distribution(State(state): State<AdminState>) -> impl IntoResponse {
+    let client = state.meta_client();
+
+    match client.list_tables().await {
+        Ok(tables) => {
+            // Group tables by assigned data node
+            let mut distribution: HashMap<String, Vec<String>> = HashMap::new();
+
+            for table in tables {
+                let node_id = table.assigned_node.unwrap_or_else(|| "unassigned".to_string());
+                distribution.entry(node_id).or_insert_with(Vec::new).push(table.key);
+            }
+
+            (StatusCode::OK, Json(ApiResponse::ok(distribution)))
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<HashMap<String, Vec<String>>>::error(format!("Failed to get distribution: {}", e)))
+        ),
+    }
+}
+
+#[derive(Serialize)]
+struct MetaStatusResponse {
+    leader: Option<String>,
+    term: Option<u64>,
+    state: String,
+    peer_count: usize,
+}
+
+/// Get meta node status
+async fn meta_status(State(state): State<AdminState>) -> impl IntoResponse {
+    let client = state.meta_client();
+
+    match client.get_meta_info().await {
+        Ok(info) => {
+            let response = MetaStatusResponse {
+                leader: info.leader_id,
+                term: Some(info.term),
+                state: "running".to_string(),
+                peer_count: info.peer_ids.len(),
+            };
+            (StatusCode::OK, Json(ApiResponse::ok(response)))
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<MetaStatusResponse>::error(format!("Failed to get meta status: {}", e)))
+        ),
+    }
 }
