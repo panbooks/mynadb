@@ -38,6 +38,7 @@ pub mod cache;
 pub mod catalog;
 pub mod executor;
 pub mod functions;
+pub mod influxql;
 pub mod logical_optimizers;
 pub mod physical_optimizers;
 pub mod providers;

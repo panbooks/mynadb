@@ -55,6 +55,22 @@ pub struct QueryParams {
     pub sql: String,
 }
 
+/// InfluxDB-compatible query parameters
+#[derive(Deserialize)]
+pub struct InfluxQueryParams {
+    /// The InfluxQL query
+    pub q: String,
+    /// Database name (optional, can be specified in path)
+    #[serde(default)]
+    pub db: Option<String>,
+    /// Response format (json or csv)
+    #[serde(default)]
+    pub format: Option<String>,
+    /// Epoch precision for timestamps
+    #[serde(default)]
+    pub epoch: Option<String>,
+}
+
 #[derive(Deserialize)]
 pub struct WriteQueryParams {
     pub db: String,
@@ -122,8 +138,12 @@ pub async fn home() -> &'static str {
      Data Operations:\n\
        POST   /write/:db              - Write data (line protocol)\n\
        POST   /write?db=:db           - Write data (InfluxDB-compatible)\n\
-       GET    /query/:db?sql=<query>  - Query data (GET)\n\
-       POST   /query/:db              - Query data (POST body)\n\n\
+       GET    /query/:db?sql=<query>  - Query data (SQL)\n\
+       POST   /query/:db              - Query data (SQL, POST body)\n\n\
+     InfluxQL Query (InfluxDB-compatible):\n\
+       GET    /influxql/query?q=<query>&db=<db>  - InfluxQL query\n\
+       POST   /influxql/query?db=<db>            - InfluxQL query (POST body)\n\
+       GET    /influxql/query/:db?q=<query>      - InfluxQL query with db in path\n\n\
      Prometheus Remote Storage:\n\
        POST   /api/v1/write/:db       - Remote write (snappy protobuf)\n\
        POST   /api/v1/read/:db        - Remote read (protobuf)\n\n\
@@ -920,6 +940,137 @@ async fn execute_query(db: String, sql: String, state: AppState) -> impl IntoRes
     }
 }
 
+// ===== InfluxQL Query Handler =====
+
+use crate::query::influxql::{
+    batches_to_response, get_measurement_name, has_tag_grouping, influxql_to_sql, parse,
+    InfluxResponse, TranspileContext,
+};
+
+/// InfluxDB-compatible query endpoint (GET /query)
+pub async fn influxql_query_handler(
+    AxumQuery(params): AxumQuery<InfluxQueryParams>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let db = params.db.unwrap_or_else(|| "default".to_string());
+    debug!("InfluxQL Query (GET): db={}, q={}", db, params.q);
+    execute_influxql_query(db, params.q, state).await
+}
+
+/// InfluxDB-compatible query endpoint (POST /query)
+pub async fn influxql_query_handler_post(
+    AxumQuery(params): AxumQuery<InfluxQueryParams>,
+    State(state): State<AppState>,
+    body: String,
+) -> impl IntoResponse {
+    // Query can be in body or in q parameter
+    let query = if body.starts_with("q=") {
+        // URL-encoded form body
+        body.strip_prefix("q=")
+            .map(|s| urlencoding::decode(s).unwrap_or_default().into_owned())
+            .unwrap_or(body)
+    } else if !body.is_empty() {
+        body
+    } else {
+        params.q.clone()
+    };
+
+    let db = params.db.unwrap_or_else(|| "default".to_string());
+    debug!("InfluxQL Query (POST): db={}, q={}", db, query);
+    execute_influxql_query(db, query, state).await
+}
+
+/// InfluxDB-compatible query endpoint with database in path
+pub async fn influxql_query_db_handler(
+    Path(db): Path<String>,
+    AxumQuery(params): AxumQuery<InfluxQueryParams>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    debug!("InfluxQL Query: db={}, q={}", db, params.q);
+    execute_influxql_query(db, params.q, state).await
+}
+
+async fn execute_influxql_query(
+    db: String,
+    query: String,
+    state: AppState,
+) -> impl IntoResponse {
+    use crate::metrics::METRICS;
+
+    let query_handle = METRICS.record_query_start();
+
+    // Parse InfluxQL
+    let stmt = match parse(&query) {
+        Ok(s) => s,
+        Err(e) => {
+            query_handle.finish(false);
+            let response = InfluxResponse::error(0, format!("Parse error: {}", e));
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(response),
+            );
+        }
+    };
+
+    // Get measurement name for response
+    let measurement = get_measurement_name(&stmt).unwrap_or_else(|| "result".to_string());
+
+    // Get tag columns for grouping
+    let tag_columns = has_tag_grouping(&stmt);
+
+    // Transpile to SQL
+    let ctx = TranspileContext {
+        database: db.clone(),
+        schema: state.config.schema.default_name.clone(),
+    };
+
+    let sql = match influxql_to_sql(&query, &ctx) {
+        Ok(s) => s,
+        Err(e) => {
+            query_handle.finish(false);
+            let response = InfluxResponse::error(0, format!("Transpile error: {}", e));
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(response),
+            );
+        }
+    };
+
+    debug!("InfluxQL transpiled to SQL: {}", sql);
+
+    // Execute SQL
+    match state.query_engine.execute_query_with_db(&sql, &db).await {
+        Ok(batches) => {
+            query_handle.finish(true);
+
+            // Convert to InfluxDB response format
+            let response = if let Some(ref tags) = tag_columns {
+                let tag_refs: Vec<&str> = tags.iter().map(|s| s.as_str()).collect();
+                crate::query::influxql::batches_to_grouped_response(
+                    &batches,
+                    &measurement,
+                    &tag_refs,
+                    0,
+                )
+            } else {
+                batches_to_response(&batches, &measurement, 0)
+            };
+
+            info!("InfluxQL query executed successfully");
+            (StatusCode::OK, Json(response))
+        }
+        Err(e) => {
+            query_handle.finish(false);
+            error!("InfluxQL query error: {}", e);
+            let response = InfluxResponse::error(0, format!("Query error: {}", e));
+            (
+                StatusCode::BAD_REQUEST,
+                Json(response),
+            )
+        }
+    }
+}
+
 // ===== EXPLAIN/ANALYZE Query Handlers =====
 
 /// Query parameters for EXPLAIN endpoint
@@ -1527,9 +1678,13 @@ pub fn build_router(state: AppState, auth_middleware: Arc<auth::AuthMiddleware>)
         .route("/debug/cpu", get(cpu_profile_handler))
         .route("/debug/profile/heap", get(heap_profile_handler))
         .route("/debug/profile/cpu", get(cpu_profile_handler))
-        // Query endpoints
+        // Query endpoints (SQL)
         .route("/query/:db", get(query_handler))
         .route("/query/:db", post(query_handler_post))
+        // InfluxQL query endpoints (InfluxDB-compatible)
+        .route("/influxql/query", get(influxql_query_handler))
+        .route("/influxql/query", post(influxql_query_handler_post))
+        .route("/influxql/query/:db", get(influxql_query_db_handler))
         // Query analysis endpoints
         .route("/explain/:db", get(explain_handler))
         .route("/explain/:db", post(explain_handler_post))

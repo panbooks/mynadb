@@ -28,10 +28,12 @@ impl Policy {
         // Parse the path to determine the required permission
         match (method.as_str(), path) {
             // ===== Read operations =====
-            // Query endpoints
+            // Query endpoints (SQL)
             (_, p) if p.starts_with("/query/") => Some((Permission::Read, true)),
             (_, p) if p.starts_with("/explain/") => Some((Permission::Read, true)),
             (_, p) if p.starts_with("/analyze/") => Some((Permission::Read, true)),
+            // InfluxQL query endpoints
+            (_, p) if p.starts_with("/influxql/query") => Some((Permission::Read, false)),
 
             // Schema/metadata endpoints
             ("GET", p) if p.starts_with("/schemas/") => Some((Permission::Read, true)),
@@ -125,6 +127,11 @@ impl Policy {
         match parts[0] {
             // /query/:db, /write/:db, /explain/:db, /analyze/:db
             "query" | "write" | "explain" | "analyze" => parts.get(1).map(|s| s.to_string()),
+
+            // /influxql/query/:db
+            "influxql" if parts.len() >= 3 && parts[1] == "query" => {
+                parts.get(2).map(|s| s.to_string())
+            }
 
             // /databases/:db, /schemas/:db
             "databases" | "schemas" => parts.get(1).map(|s| s.to_string()),
