@@ -187,84 +187,35 @@ impl ScaleInExecutor {
                 phase.phase_number, phase.description
             );
 
-            match phase.phase_type {
+            let phase_result = match phase.phase_type {
                 ScaleInPhaseType::MigrateTables => {
-                    match self
-                        .execute_migration_phase(phase, &plan.primaries_to_retire)
-                        .await
-                    {
-                        Ok(count) => {
-                            tables_migrated = count;
-                            completed_actions.push(format!("Migrated {} tables", count));
-                            info!("Phase 1 complete: {} tables migrated", count);
-                        }
-                        Err(e) => {
-                            error!("Phase 1 failed: {}", e);
-                            errors.push(format!("Migration phase failed: {}", e));
-
-                            // Check if this was a safety net failure
-                            if matches!(e, ScaleInError::SafetyNetLost { .. }) {
-                                return Err(ScaleInError::Aborted {
-                                    reason: e.to_string(),
-                                    phase: "MigrateTables".to_string(),
-                                    completed_actions,
-                                });
-                            }
-                            break;
-                        }
-                    }
+                    self.run_migrate_tables_phase(phase, &plan.primaries_to_retire, &mut tables_migrated).await
                 }
-
                 ScaleInPhaseType::RetirePrimaries => {
-                    match self
-                        .execute_retire_primaries_phase(phase, &plan.primaries_to_retire)
-                        .await
-                    {
-                        Ok(retired) => {
-                            primaries_retired = retired.clone();
-                            completed_actions.push(format!("Retired {} primaries", retired.len()));
-                            info!(
-                                "Phase 2 complete: {} primaries retired",
-                                primaries_retired.len()
-                            );
-                        }
-                        Err(e) => {
-                            error!("Phase 2 failed: {}", e);
-                            errors.push(format!("Primary retirement phase failed: {}", e));
-
-                            if matches!(e, ScaleInError::SafetyNetLost { .. }) {
-                                return Err(ScaleInError::Aborted {
-                                    reason: e.to_string(),
-                                    phase: "RetirePrimaries".to_string(),
-                                    completed_actions,
-                                });
-                            }
-                            break;
-                        }
-                    }
+                    self.run_retire_primaries_phase(phase, &plan.primaries_to_retire, &mut primaries_retired).await
                 }
-
                 ScaleInPhaseType::RetireStandbys => {
-                    // No Standby health check needed in Phase 3 - Primaries already safe
-                    match self.execute_retire_standbys_phase(phase).await {
-                        Ok(retired) => {
-                            standbys_retired = retired.clone();
-                            completed_actions.push(format!("Retired {} standbys", retired.len()));
-                            info!(
-                                "Phase 3 complete: {} standbys retired",
-                                standbys_retired.len()
-                            );
-                        }
-                        Err(e) => {
-                            error!("Phase 3 failed: {}", e);
-                            errors.push(format!("Standby retirement phase failed: {}", e));
-                            break;
-                        }
-                    }
+                    self.run_retire_standbys_phase(phase, &mut standbys_retired).await
                 }
-
                 ScaleInPhaseType::Completed => {
                     info!("Scale-in completed");
+                    Ok(None)
+                }
+            };
+
+            match phase_result {
+                Ok(Some(action)) => completed_actions.push(action),
+                Ok(None) => {}
+                Err((phase_name, e)) => {
+                    errors.push(format!("{} phase failed: {}", phase_name, e));
+                    if matches!(e, ScaleInError::SafetyNetLost { .. }) {
+                        return Err(ScaleInError::Aborted {
+                            reason: e.to_string(),
+                            phase: phase_name,
+                            completed_actions,
+                        });
+                    }
+                    break;
                 }
             }
         }
@@ -295,6 +246,69 @@ impl ScaleInExecutor {
             warnings,
         })
     }
+
+    // ============================================================================
+    // Phase Runners (wrapper methods for cleaner execute() flow)
+    // ============================================================================
+
+    /// Run Phase 1: Table Migration (wrapper for execute_migration_phase)
+    async fn run_migrate_tables_phase(
+        &self,
+        phase: &ScaleInPhase,
+        retiring_primaries: &[String],
+        tables_migrated: &mut usize,
+    ) -> Result<Option<String>, (String, ScaleInError)> {
+        match self.execute_migration_phase(phase, retiring_primaries).await {
+            Ok(count) => {
+                *tables_migrated = count;
+                info!("Migration phase complete: {} tables migrated", count);
+                Ok(Some(format!("Migrated {} tables", count)))
+            }
+            Err(e) => Err(("Migration".to_string(), e)),
+        }
+    }
+
+    /// Run Phase 2: Retire Primaries (wrapper for execute_retire_primaries_phase)
+    async fn run_retire_primaries_phase(
+        &self,
+        phase: &ScaleInPhase,
+        retiring_primaries: &[String],
+        primaries_retired: &mut Vec<String>,
+    ) -> Result<Option<String>, (String, ScaleInError)> {
+        match self
+            .execute_retire_primaries_phase(phase, retiring_primaries)
+            .await
+        {
+            Ok(retired) => {
+                let count = retired.len();
+                primaries_retired.extend(retired);
+                info!("Retire Primaries phase complete: {} nodes retired", count);
+                Ok(Some(format!("Retired {} Primary nodes", count)))
+            }
+            Err(e) => Err(("RetirePrimaries".to_string(), e)),
+        }
+    }
+
+    /// Run Phase 3: Retire Standbys (wrapper for execute_retire_standbys_phase)
+    async fn run_retire_standbys_phase(
+        &self,
+        phase: &ScaleInPhase,
+        standbys_retired: &mut Vec<String>,
+    ) -> Result<Option<String>, (String, ScaleInError)> {
+        match self.execute_retire_standbys_phase(phase).await {
+            Ok(retired) => {
+                let count = retired.len();
+                standbys_retired.extend(retired);
+                info!("Retire Standbys phase complete: {} nodes retired", count);
+                Ok(Some(format!("Retired {} Standby nodes", count)))
+            }
+            Err(e) => Err(("RetireStandbys".to_string(), e)),
+        }
+    }
+
+    // ============================================================================
+    // Phase Executors (actual implementation)
+    // ============================================================================
 
     /// Execute Phase 1: Table Migration
     ///

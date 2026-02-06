@@ -605,66 +605,26 @@ impl Wal {
     ///
     /// Returns: Vec of RecoveredWrite entries (either LineProtocol or Batch)
     pub async fn replay_writes(&self) -> Result<Vec<RecoveredWrite>, String> {
-        use arrow::ipc::reader::StreamReader;
-
-        // Read checkpoint timestamp - files older than this have been flushed to Parquet
         let checkpoint_timestamp = self.read_flush_checkpoint().await;
-
         let files = self.list_wal_files("data").await?;
         let mut entries = Vec::new();
         let mut skipped_files = 0;
 
         for file_path in files {
-            // Check if this file should be skipped based on checkpoint
-            if let Some(checkpoint_ts) = checkpoint_timestamp {
-                if let Some(file_ts) = Self::extract_wal_timestamp(&file_path) {
-                    if file_ts < checkpoint_ts {
-                        info!(
-                            "Skipping WAL file {} (timestamp {} < checkpoint {}, already flushed)",
-                            file_path, file_ts, checkpoint_ts
-                        );
-                        skipped_files += 1;
-                        continue;
-                    }
-                }
+            if Self::should_skip_file(&file_path, checkpoint_timestamp) {
+                info!(
+                    "Skipping WAL file {} (already flushed to Parquet)",
+                    file_path
+                );
+                skipped_files += 1;
+                continue;
             }
 
             debug!("Replaying WAL file: {}", file_path);
             let _ = self
                 .replay_file(&file_path, |entry| {
-                    match entry.entry_type {
-                        EntryType::DataWrite => {
-                            match String::from_utf8(entry.payload.clone()) {
-                                Ok(line_protocol) => {
-                                    entries.push(RecoveredWrite::LineProtocol {
-                                        db: entry.db_name.clone(),
-                                        line_protocol,
-                                    });
-                                }
-                                Err(e) => {
-                                    warn!("Invalid UTF-8 in DataWrite payload: {}", e);
-                                }
-                            }
-                        }
-                        EntryType::BatchWrite => {
-                            match Self::decode_batch_payload(&entry.payload) {
-                                Ok((catalog, schema, table, date, batch)) => {
-                                    entries.push(RecoveredWrite::Batch {
-                                        catalog,
-                                        schema,
-                                        table,
-                                        date,
-                                        batch,
-                                    });
-                                }
-                                Err(e) => {
-                                    warn!("Failed to decode BatchWrite entry: {}", e);
-                                }
-                            }
-                        }
-                        EntryType::SeriesTrack => {
-                            // Series tracking entries are not replayed for data recovery
-                        }
+                    if let Some(recovered) = Self::process_wal_entry(entry) {
+                        entries.push(recovered);
                     }
                     Ok(())
                 })
@@ -685,6 +645,53 @@ impl Wal {
         // Old WAL files will be cleaned up after successful flush to Parquet.
 
         Ok(entries)
+    }
+
+    /// Check if a WAL file should be skipped based on checkpoint timestamp
+    fn should_skip_file(file_path: &str, checkpoint_timestamp: Option<u128>) -> bool {
+        let checkpoint_ts = match checkpoint_timestamp {
+            Some(ts) => ts,
+            None => return false,
+        };
+        let file_ts = match Self::extract_wal_timestamp(file_path) {
+            Some(ts) => ts,
+            None => return false,
+        };
+        file_ts < checkpoint_ts
+    }
+
+    /// Process a single WAL entry and convert to RecoveredWrite if applicable
+    fn process_wal_entry(entry: &WalEntry) -> Option<RecoveredWrite> {
+        match entry.entry_type {
+            EntryType::DataWrite => {
+                match String::from_utf8(entry.payload.clone()) {
+                    Ok(line_protocol) => Some(RecoveredWrite::LineProtocol {
+                        db: entry.db_name.clone(),
+                        line_protocol,
+                    }),
+                    Err(e) => {
+                        warn!("Invalid UTF-8 in DataWrite payload: {}", e);
+                        None
+                    }
+                }
+            }
+            EntryType::BatchWrite => {
+                match Self::decode_batch_payload(&entry.payload) {
+                    Ok((catalog, schema, table, date, batch)) => Some(RecoveredWrite::Batch {
+                        catalog,
+                        schema,
+                        table,
+                        date,
+                        batch,
+                    }),
+                    Err(e) => {
+                        warn!("Failed to decode BatchWrite entry: {}", e);
+                        None
+                    }
+                }
+            }
+            EntryType::SeriesTrack => None, // Not replayed for data recovery
+        }
     }
 
     /// Decode batch write payload

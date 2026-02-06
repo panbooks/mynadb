@@ -354,6 +354,74 @@ fn parse_partition_date(date_str: &str) -> Option<i32> {
         .map(|d| d.num_days_from_ce() - 719163) // Days since 1970-01-01
 }
 
+/// Context for scanning a partition directory
+struct PartitionScanContext<'a> {
+    catalog: &'a str,
+    schema: &'a str,
+    table: &'a str,
+    partition_key: String,
+    partition_dir: String,
+}
+
+/// Scan parquet files in a partition directory and register them
+async fn scan_partition_files(
+    manager: &MemoryMetadataManager,
+    partition_path: &std::path::Path,
+    ctx: &PartitionScanContext<'_>,
+    node_prefix: Option<&str>,
+) -> Result<(), MetadataError> {
+    let mut files = tokio::fs::read_dir(partition_path)
+        .await
+        .map_err(|e| MetadataError::IoError(e.to_string()))?;
+
+    while let Some(file_entry) = files
+        .next_entry()
+        .await
+        .map_err(|e| MetadataError::IoError(e.to_string()))?
+    {
+        let file_name = file_entry.file_name().to_string_lossy().to_string();
+        if !file_name.ends_with(".parquet") {
+            continue;
+        }
+
+        let metadata = tokio::fs::metadata(file_entry.path())
+            .await
+            .map_err(|e| MetadataError::IoError(e.to_string()))?;
+
+        let path = match node_prefix {
+            Some(node_id) => format!(
+                "{}/{}/{}/{}/{}/{}",
+                node_id, ctx.catalog, ctx.schema, ctx.table, ctx.partition_dir, file_name
+            ),
+            None => file_entry.path().to_string_lossy().to_string(),
+        };
+
+        let level = FileInfo::parse_level(&file_name);
+
+        let file_info = FileInfo {
+            path,
+            file_name,
+            level,
+            size_bytes: metadata.len(),
+            row_count: 0,
+            row_group_count: 0,
+            partition_key: ctx.partition_key.clone(),
+            table: ctx.table.to_string(),
+            schema: ctx.schema.to_string(),
+            catalog: ctx.catalog.to_string(),
+            created_at: chrono::Utc::now().timestamp_millis(),
+            min_timestamp: None,
+            max_timestamp: None,
+            etag: None,
+            column_stats: None,
+        };
+
+        manager.register_file(file_info).await?;
+    }
+
+    Ok(())
+}
+
 #[async_trait]
 impl MetadataManager for MemoryMetadataManager {
     // ==================== Lifecycle ====================
@@ -530,47 +598,15 @@ impl MetadataManager for MemoryMetadataManager {
                             &partition_key,
                         );
 
-                        // Scan parquet files
-                        let mut files = tokio::fs::read_dir(partition_entry.path())
-                            .await
-                            .map_err(|e| MetadataError::IoError(e.to_string()))?;
-
-                        while let Some(file_entry) = files
-                            .next_entry()
-                            .await
-                            .map_err(|e| MetadataError::IoError(e.to_string()))?
-                        {
-                            let file_name = file_entry.file_name().to_string_lossy().to_string();
-
-                            if !file_name.ends_with(".parquet") {
-                                continue;
-                            }
-
-                            let metadata = file_entry
-                                .metadata()
-                                .await
-                                .map_err(|e| MetadataError::IoError(e.to_string()))?;
-
-                            let file_info = FileInfo {
-                                path: file_entry.path().to_string_lossy().to_string(),
-                                file_name: file_name.clone(),
-                                level: FileInfo::parse_level(&file_name),
-                                size_bytes: metadata.len(),
-                                row_count: 0, // Would need to read Parquet footer
-                                row_group_count: 0,
-                                partition_key: partition_key.clone(),
-                                table: table_name.clone(),
-                                schema: schema_name.clone(),
-                                catalog: catalog_name.clone(),
-                                created_at: chrono::Utc::now().timestamp_millis(),
-                                min_timestamp: None,
-                                max_timestamp: None,
-                                etag: None,
-                                column_stats: None,
-                            };
-
-                            self.register_file(file_info).await?;
-                        }
+                        // Scan parquet files using helper
+                        let ctx = PartitionScanContext {
+                            catalog: &catalog_name,
+                            schema: &schema_name,
+                            table: &table_name,
+                            partition_key: partition_key.clone(),
+                            partition_dir: partition_dir.clone(),
+                        };
+                        scan_partition_files(self, &partition_entry.path(), &ctx, None).await?;
 
                         // Update partition stats
                         self.update_partition_stats(
@@ -704,65 +740,15 @@ impl MetadataManager for MemoryMetadataManager {
                             &partition_key,
                         );
 
-                        // Scan Parquet files
-                        let mut files = tokio::fs::read_dir(partition_entry.path())
-                            .await
-                            .map_err(|e| MetadataError::IoError(e.to_string()))?;
-
-                        while let Some(file_entry) = files
-                            .next_entry()
-                            .await
-                            .map_err(|e| MetadataError::IoError(e.to_string()))?
-                        {
-                            let file_name = file_entry.file_name().to_string_lossy().to_string();
-
-                            if !file_name.ends_with(".parquet") {
-                                continue;
-                            }
-
-                            // Extract level from filename (L0_xxx.parquet)
-                            let level = if file_name.starts_with("L") {
-                                file_name[1..2].parse::<u8>().unwrap_or(0)
-                            } else {
-                                0
-                            };
-
-                            let metadata = tokio::fs::metadata(file_entry.path())
-                                .await
-                                .map_err(|e| MetadataError::IoError(e.to_string()))?;
-
-                            // Build the path including node_id prefix
-                            // Path format: {node_id}/{catalog}/{schema}/{table}/{partition}/{filename}
-                            let path = format!(
-                                "{}/{}/{}/{}/{}/{}",
-                                node_id,
-                                catalog_name,
-                                schema_name,
-                                table_name,
-                                partition_dir,
-                                file_name
-                            );
-
-                            let file_info = FileInfo {
-                                path,
-                                file_name,
-                                catalog: catalog_name.clone(),
-                                schema: schema_name.clone(),
-                                table: table_name.clone(),
-                                partition_key: partition_key.clone(),
-                                level,
-                                size_bytes: metadata.len(),
-                                row_count: 0, // Unknown without reading parquet metadata
-                                row_group_count: 0, // Unknown without reading parquet metadata
-                                created_at: current_timestamp_ms(),
-                                min_timestamp: None,
-                                max_timestamp: None,
-                                etag: None,
-                                column_stats: None,
-                            };
-
-                            self.register_file(file_info).await?;
-                        }
+                        // Scan Parquet files using helper
+                        let ctx = PartitionScanContext {
+                            catalog: &catalog_name,
+                            schema: &schema_name,
+                            table: &table_name,
+                            partition_key: partition_key.clone(),
+                            partition_dir: partition_dir.clone(),
+                        };
+                        scan_partition_files(self, &partition_entry.path(), &ctx, Some(node_id)).await?;
 
                         // Update partition stats
                         self.update_partition_stats(

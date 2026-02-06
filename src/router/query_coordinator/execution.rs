@@ -16,50 +16,44 @@ use super::sql_rewrite::rewrite_sql_with_node_filter;
 use super::types::{DistributedQueryPlan, QueryResult};
 use super::QueryCoordinator;
 use crate::router::client::QueryScope;
+use crate::router::client::DataNodePool;
 use arrow::record_batch::RecordBatch;
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
+/// Type alias for boxed query futures
+type QueryFuture = Pin<Box<dyn Future<Output = Result<Vec<RecordBatch>, String>> + Send>>;
+
+/// Context for executing a query with failover support
+struct QueryContext {
+    pool: Arc<DataNodePool>,
+    node_id: String,
+    catalog: String,
+    sql: String,
+    backing_standby: Option<String>,
+    fallback_nodes: Vec<String>,
+}
+
 impl QueryCoordinator {
     /// Execute a distributed query
     pub async fn execute_query(&self, catalog: &str, sql: &str) -> QueryResult {
         let start = Instant::now();
 
-        // Plan the distributed query
         let plan = match self.plan_distributed_query(catalog, sql).await {
             Ok(plan) => plan,
-            Err(e) => {
-                return QueryResult {
-                    success: false,
-                    batches: Vec::new(),
-                    total_rows: 0,
-                    bytes_scanned: 0,
-                    nodes_queried: 0,
-                    elapsed_ms: start.elapsed().as_millis() as u64,
-                    error: Some(e),
-                };
-            }
+            Err(e) => return QueryResult::error(e, start),
         };
 
         if plan.target_nodes.is_empty() {
-            return QueryResult {
-                success: false,
-                batches: Vec::new(),
-                total_rows: 0,
-                bytes_scanned: 0,
-                nodes_queried: 0,
-                elapsed_ms: start.elapsed().as_millis() as u64,
-                error: Some("No data nodes available for query".to_string()),
-            };
+            return QueryResult::error("No data nodes available for query".to_string(), start);
         }
 
-        // Execute query on target nodes
         let (partial_batches, errors) = self.fan_out_query(&plan).await;
 
-        // If there were errors, return early
         if !errors.is_empty() {
             return QueryResult {
                 success: false,
@@ -72,19 +66,14 @@ impl QueryCoordinator {
             };
         }
 
-        // Aggregate partial results if needed (ORDER BY, LIMIT, GROUP BY)
         let final_batches = match self.aggregate_results(&plan, partial_batches).await {
             Ok(batches) => batches,
             Err(e) => {
-                return QueryResult {
-                    success: false,
-                    batches: Vec::new(),
-                    total_rows: 0,
-                    bytes_scanned: 0,
-                    nodes_queried: plan.target_nodes.len(),
-                    elapsed_ms: start.elapsed().as_millis() as u64,
-                    error: Some(format!("Aggregation failed: {}", e)),
-                };
+                return QueryResult::error_with_nodes(
+                    format!("Aggregation failed: {}", e),
+                    plan.target_nodes.len(),
+                    start,
+                )
             }
         };
 
@@ -94,7 +83,7 @@ impl QueryCoordinator {
             success: true,
             batches: final_batches,
             total_rows,
-            bytes_scanned: 0, // TODO: Track bytes scanned
+            bytes_scanned: 0,
             nodes_queried: plan.target_nodes.len(),
             elapsed_ms: start.elapsed().as_millis() as u64,
             error: None,
@@ -102,30 +91,10 @@ impl QueryCoordinator {
     }
 
     /// Fan-out query to target nodes via Arrow Flight and collect results
-    ///
-    /// ## Routing Modes
-    ///
-    /// **Partition-Level Routing** (when `partition_assignments` is set):
-    /// - Each node receives SQL rewritten with `node_id IN (...)` filter
-    /// - Ensures cache affinity (nodes query partitions they wrote)
-    /// - Prevents duplicate data (each partition queried by exactly one node)
-    ///
-    /// **Table-Level Routing** (when `table_owners` is set):
-    /// - Each table's query goes to its owner node
-    /// - Owner has all data cached locally (excellent performance)
-    ///
-    /// **Broadcast** (fallback when neither is set):
-    /// - Query sent to all target nodes with same SQL
     pub(super) async fn fan_out_query(
         &self,
         plan: &DistributedQueryPlan,
     ) -> (Vec<RecordBatch>, Vec<String>) {
-        // Type alias for boxed futures (needed because different async blocks have different types)
-        type QueryFuture = Pin<Box<dyn Future<Output = Result<Vec<RecordBatch>, String>> + Send>>;
-
-        let mut futures: Vec<QueryFuture> = Vec::new();
-
-        // Get all reachable nodes for fallback
         let reachable_nodes = self.data_node_pool.get_reachable_node_ids();
         if reachable_nodes.is_empty() {
             return (
@@ -134,275 +103,118 @@ impl QueryCoordinator {
             );
         }
 
-        // ====================================================================
-        // PARTITION-LEVEL ROUTING (Cache Affinity, No Duplicates)
-        // ====================================================================
-        // When partition_assignments is set, rewrite SQL for each node to only
-        // query its assigned partitions. This ensures:
-        // - Cache affinity: nodes query partitions they wrote (hot cache)
-        // - No duplicates: each partition queried by exactly one node
-        // - Fallback support: down nodes' partitions reassigned to healthy nodes
+        let futures = if plan.partition_assignments.is_some() {
+            self.build_partition_level_queries(plan)
+        } else {
+            self.build_table_level_queries(plan, &reachable_nodes)
+        };
 
-        if let Some(ref partition_assignments) = plan.partition_assignments {
-            info!(
-                "Using partition-level routing with {} node assignments",
-                partition_assignments.len()
+        Self::collect_query_results(futures).await
+    }
+
+    /// Build queries for partition-level routing (cache affinity, no duplicates)
+    fn build_partition_level_queries(&self, plan: &DistributedQueryPlan) -> Vec<QueryFuture> {
+        let partition_assignments = match &plan.partition_assignments {
+            Some(assignments) => assignments,
+            None => return Vec::new(),
+        };
+
+        info!(
+            "Using partition-level routing with {} node assignments",
+            partition_assignments.len()
+        );
+
+        let mut futures = Vec::new();
+
+        for node in &plan.target_nodes {
+            let assigned_partitions = partition_assignments
+                .get(&node.node_id)
+                .cloned()
+                .unwrap_or_default();
+
+            if assigned_partitions.is_empty() {
+                debug!("Node {} has no assigned partitions, skipping", node.node_id);
+                continue;
+            }
+
+            let pool = Arc::clone(&self.data_node_pool);
+            let node_id = node.node_id.clone();
+            let catalog = plan.catalog.clone();
+            let sql = rewrite_sql_with_node_filter(&plan.sql, &assigned_partitions);
+
+            debug!(
+                "Node {} assigned partitions {:?}, SQL: {}",
+                node_id, assigned_partitions, sql
             );
 
-            for node in &plan.target_nodes {
-                let pool = Arc::clone(&self.data_node_pool);
-                let node_id = node.node_id.clone();
-                let catalog = plan.catalog.clone();
-
-                // Get this node's assigned partitions
-                let assigned_partitions = partition_assignments
-                    .get(&node_id)
-                    .cloned()
-                    .unwrap_or_default();
-
-                if assigned_partitions.is_empty() {
-                    debug!("Node {} has no assigned partitions, skipping", node_id);
-                    continue;
-                }
-
-                // Rewrite SQL with node_id filter for this node's assigned partitions
-                let sql = rewrite_sql_with_node_filter(&plan.sql, &assigned_partitions);
-
-                debug!(
-                    "Node {} assigned partitions {:?}, SQL: {}",
-                    node_id, assigned_partitions, sql
-                );
-
-                let future: QueryFuture = Box::pin(async move {
-                    // Execute query via Arrow Flight DoGet
-                    match pool.query(&node_id, &catalog, &sql, None).await {
-                        Ok(batches) => {
-                            let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-                            debug!(
-                                "Received {} batches ({} rows) from {} (partition-level)",
-                                batches.len(),
-                                total_rows,
-                                node_id
-                            );
-                            Ok(batches)
-                        }
-                        Err(e) => {
-                            // For partition-level routing, we don't do runtime fallback
-                            // because the partition assignments are pre-computed with fallbacks.
-                            // If this node fails, it means both primary AND fallback failed.
-                            error!(
-                                "Query failed on {} (partition-level, no runtime fallback): {}",
-                                node_id, e
-                            );
-                            Err(format!("Failed to query {} (partition): {}", node_id, e))
-                        }
-                    }
-                });
-
-                futures.push(future);
-            }
+            futures.push(Self::create_partition_query(pool, node_id, catalog, sql));
         }
-        // ====================================================================
-        // TABLE-LEVEL ROUTING (RECOMMENDED for non-partitioned queries)
-        // ====================================================================
-        // Route to table owner nodes directly. This provides:
-        // - Optimal cache locality (owner has all table data)
-        // - Single node for single-table queries (95% of time-series queries)
-        // - Fan-out only for multi-table joins
-        //
-        // On Primary failover:
-        // - Query Standby for memtable data (has replicated memtable)
-        // - Query fallback Primary for Parquet data (S3 is shared)
-        else if plan.table_owners.is_some() || !plan.target_nodes.is_empty() {
-            // Query each target node
-            for node in &plan.target_nodes {
-                let pool = Arc::clone(&self.data_node_pool);
-                let node_id = node.node_id.clone();
-                let sql = plan.sql.clone();
-                let catalog = plan.catalog.clone();
-                let backing_standby = node.backing_standby.clone();
-                let fallback_nodes: Vec<String> = reachable_nodes
+
+        futures
+    }
+
+    /// Create a single partition-level query future
+    fn create_partition_query(
+        pool: Arc<DataNodePool>,
+        node_id: String,
+        catalog: String,
+        sql: String,
+    ) -> QueryFuture {
+        Box::pin(async move {
+            match pool.query(&node_id, &catalog, &sql, None).await {
+                Ok(batches) => {
+                    log_query_success(&batches, &node_id, "partition-level");
+                    Ok(batches)
+                }
+                Err(e) => {
+                    error!(
+                        "Query failed on {} (partition-level, no runtime fallback): {}",
+                        node_id, e
+                    );
+                    Err(format!("Failed to query {} (partition): {}", node_id, e))
+                }
+            }
+        })
+    }
+
+    /// Build queries for table-level routing with failover support
+    fn build_table_level_queries(
+        &self,
+        plan: &DistributedQueryPlan,
+        reachable_nodes: &[String],
+    ) -> Vec<QueryFuture> {
+        let reachable_set: HashSet<_> = reachable_nodes.iter().cloned().collect();
+
+        plan.target_nodes
+            .iter()
+            .map(|node| {
+                let fallback_nodes: Vec<String> = reachable_set
                     .iter()
-                    .filter(|n| *n != &node_id)
+                    .filter(|n| *n != &node.node_id)
                     .cloned()
                     .collect();
 
-                let future: QueryFuture = Box::pin(async move {
-                    debug!("Querying table owner {}: {}", node_id, sql);
+                let ctx = QueryContext {
+                    pool: Arc::clone(&self.data_node_pool),
+                    node_id: node.node_id.clone(),
+                    catalog: plan.catalog.clone(),
+                    sql: plan.sql.clone(),
+                    backing_standby: node.backing_standby.clone(),
+                    fallback_nodes,
+                };
 
-                    // Execute query via Arrow Flight DoGet
-                    match pool.query(&node_id, &catalog, &sql, None).await {
-                        Ok(batches) => {
-                            let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-                            debug!(
-                                "Received {} batches ({} rows) from {} (table-level)",
-                                batches.len(),
-                                total_rows,
-                                node_id
-                            );
-                            Ok(batches)
-                        }
-                        Err(e) => {
-                            // Check if this is a connection error (node down)
-                            let is_connection_error = e.contains("connect error")
-                                || e.contains("Unavailable")
-                                || e.contains("Unknown data node")
-                                || e.contains("circuit breaker");
+                Self::create_table_query_with_failover(ctx)
+            })
+            .collect()
+    }
 
-                            if is_connection_error {
-                                // ============================================================
-                                // STANDBY FAILOVER: Split query for memtable + parquet data
-                                // ============================================================
-                                // When Primary fails, its memtable data may not be in Parquet yet.
-                                // The Standby has replicated memtable data, so we:
-                                // 1. Query Standby for memtable-only data
-                                // 2. Query fallback Primary for parquet-only data
-                                // 3. Merge the results
+    /// Create a table-level query future with failover support
+    fn create_table_query_with_failover(ctx: QueryContext) -> QueryFuture {
+        Box::pin(async move { execute_with_failover(ctx).await })
+    }
 
-                                if let Some(standby_id) = &backing_standby {
-                                    info!(
-                                        "Primary {} down, using standby failover (standby: {})",
-                                        node_id, standby_id
-                                    );
-
-                                    let mut all_batches = Vec::new();
-                                    let mut had_success = false;
-
-                                    // Step 1: Query Standby for memtable data
-                                    match pool
-                                        .query_with_scope(
-                                            standby_id,
-                                            &catalog,
-                                            &sql,
-                                            None,
-                                            QueryScope::MemtableOnly,
-                                        )
-                                        .await
-                                    {
-                                        Ok(batches) => {
-                                            let total_rows: usize =
-                                                batches.iter().map(|b| b.num_rows()).sum();
-                                            info!(
-                                                "Standby {} returned {} memtable rows",
-                                                standby_id, total_rows
-                                            );
-                                            all_batches.extend(batches);
-                                            had_success = true;
-                                        }
-                                        Err(standby_err) => {
-                                            warn!(
-                                                "Standby {} memtable query failed: {} (memtable data may be lost)",
-                                                standby_id, standby_err
-                                            );
-                                            // Continue anyway - we can still get parquet data
-                                        }
-                                    }
-
-                                    // Step 2: Query fallback Primary for parquet data
-                                    for fallback_node in &fallback_nodes {
-                                        match pool
-                                            .query_with_scope(
-                                                fallback_node,
-                                                &catalog,
-                                                &sql,
-                                                None,
-                                                QueryScope::ParquetOnly,
-                                            )
-                                            .await
-                                        {
-                                            Ok(batches) => {
-                                                let total_rows: usize =
-                                                    batches.iter().map(|b| b.num_rows()).sum();
-                                                info!(
-                                                    "Fallback {} returned {} parquet rows",
-                                                    fallback_node, total_rows
-                                                );
-                                                all_batches.extend(batches);
-                                                had_success = true;
-                                                break; // Only need one fallback for parquet
-                                            }
-                                            Err(fallback_err) => {
-                                                warn!(
-                                                    "Fallback {} parquet query failed: {}",
-                                                    fallback_node, fallback_err
-                                                );
-                                                continue;
-                                            }
-                                        }
-                                    }
-
-                                    if had_success {
-                                        let total_rows: usize =
-                                            all_batches.iter().map(|b| b.num_rows()).sum();
-                                        info!(
-                                            "Standby failover succeeded: {} total rows (memtable + parquet)",
-                                            total_rows
-                                        );
-                                        return Ok(all_batches);
-                                    }
-
-                                    error!(
-                                        "Standby failover failed: both standby and all fallbacks failed"
-                                    );
-                                    return Err(format!(
-                                        "Standby failover failed for {}: standby {} and {} fallbacks all failed",
-                                        node_id,
-                                        standby_id,
-                                        fallback_nodes.len()
-                                    ));
-                                }
-
-                                // No backing standby - fall back to simple failover (parquet only)
-                                if !fallback_nodes.is_empty() {
-                                    warn!(
-                                        "Primary {} down with no standby, trying fallback (parquet only)",
-                                        node_id
-                                    );
-
-                                    for fallback_node in &fallback_nodes {
-                                        debug!("Retrying query on fallback node {}", fallback_node);
-                                        match pool.query(fallback_node, &catalog, &sql, None).await {
-                                            Ok(batches) => {
-                                                let total_rows: usize =
-                                                    batches.iter().map(|b| b.num_rows()).sum();
-                                                info!(
-                                                    "Fallback query succeeded on {}: {} rows",
-                                                    fallback_node, total_rows
-                                                );
-                                                return Ok(batches);
-                                            }
-                                            Err(fallback_err) => {
-                                                warn!(
-                                                    "Fallback query on {} also failed: {}",
-                                                    fallback_node, fallback_err
-                                                );
-                                                continue;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // All fallbacks failed
-                                error!("Query failed on {} and all fallback nodes: {}", node_id, e);
-                                Err(format!(
-                                    "Failed to query {} (and {} fallbacks): {}",
-                                    node_id,
-                                    fallback_nodes.len(),
-                                    e
-                                ))
-                            } else {
-                                error!("Query failed on {}: {}", node_id, e);
-                                Err(format!("Failed to query {}: {}", node_id, e))
-                            }
-                        }
-                    }
-                });
-
-                futures.push(future);
-            }
-        }
-
-        // Execute all queries in parallel
+    /// Collect results from all query futures
+    async fn collect_query_results(futures: Vec<QueryFuture>) -> (Vec<RecordBatch>, Vec<String>) {
         let results = futures::future::join_all(futures).await;
 
         let mut all_batches = Vec::new();
@@ -416,5 +228,242 @@ impl QueryCoordinator {
         }
 
         (all_batches, errors)
+    }
+}
+
+// ============================================================================
+// Query Execution with Failover (standalone async functions to reduce nesting)
+// ============================================================================
+
+/// Execute query with automatic failover on connection errors
+async fn execute_with_failover(ctx: QueryContext) -> Result<Vec<RecordBatch>, String> {
+    debug!("Querying table owner {}: {}", ctx.node_id, ctx.sql);
+
+    // Try primary node first
+    match ctx.pool.query(&ctx.node_id, &ctx.catalog, &ctx.sql, None).await {
+        Ok(batches) => {
+            log_query_success(&batches, &ctx.node_id, "table-level");
+            return Ok(batches);
+        }
+        Err(e) => {
+            if !is_connection_error(&e) {
+                error!("Query failed on {}: {}", ctx.node_id, e);
+                return Err(format!("Failed to query {}: {}", ctx.node_id, e));
+            }
+            // Connection error - proceed with failover
+            debug!("Connection error on {}, attempting failover: {}", ctx.node_id, e);
+        }
+    }
+
+    // Primary failed with connection error - try failover
+    handle_failover(&ctx).await
+}
+
+/// Handle failover when primary node is unreachable
+async fn handle_failover(ctx: &QueryContext) -> Result<Vec<RecordBatch>, String> {
+    // Try standby failover if available
+    if let Some(standby_id) = &ctx.backing_standby {
+        info!(
+            "Primary {} down, using standby failover (standby: {})",
+            ctx.node_id, standby_id
+        );
+        if let Ok(batches) = try_standby_failover(ctx, standby_id).await {
+            return Ok(batches);
+        }
+    }
+
+    // Fall back to simple failover (parquet only)
+    if ctx.fallback_nodes.is_empty() {
+        return Err(format!(
+            "Primary {} down with no fallback nodes available",
+            ctx.node_id
+        ));
+    }
+
+    warn!(
+        "Primary {} down, trying simple fallback (parquet only)",
+        ctx.node_id
+    );
+    try_simple_fallback(ctx).await
+}
+
+/// Try standby failover: query standby for memtable + fallback for parquet
+async fn try_standby_failover(
+    ctx: &QueryContext,
+    standby_id: &str,
+) -> Result<Vec<RecordBatch>, String> {
+    let mut all_batches = Vec::new();
+    let mut had_success = false;
+
+    // Step 1: Query Standby for memtable data
+    if let Some(batches) = query_standby_memtable(ctx, standby_id).await {
+        all_batches.extend(batches);
+        had_success = true;
+    }
+
+    // Step 2: Query fallback Primary for parquet data
+    if let Some(batches) = query_fallback_parquet(ctx).await {
+        all_batches.extend(batches);
+        had_success = true;
+    }
+
+    if !had_success {
+        error!("Standby failover failed: both standby and all fallbacks failed");
+        return Err(format!(
+            "Standby failover failed for {}: standby {} and {} fallbacks all failed",
+            ctx.node_id,
+            standby_id,
+            ctx.fallback_nodes.len()
+        ));
+    }
+
+    let total_rows: usize = all_batches.iter().map(|b| b.num_rows()).sum();
+    info!(
+        "Standby failover succeeded: {} total rows (memtable + parquet)",
+        total_rows
+    );
+    Ok(all_batches)
+}
+
+/// Query standby node for memtable data
+async fn query_standby_memtable(ctx: &QueryContext, standby_id: &str) -> Option<Vec<RecordBatch>> {
+    match ctx
+        .pool
+        .query_with_scope(
+            standby_id,
+            &ctx.catalog,
+            &ctx.sql,
+            None,
+            QueryScope::MemtableOnly,
+        )
+        .await
+    {
+        Ok(batches) => {
+            let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            info!("Standby {} returned {} memtable rows", standby_id, total_rows);
+            Some(batches)
+        }
+        Err(e) => {
+            warn!(
+                "Standby {} memtable query failed: {} (memtable data may be lost)",
+                standby_id, e
+            );
+            None
+        }
+    }
+}
+
+/// Query fallback nodes for parquet data (try each until one succeeds)
+async fn query_fallback_parquet(ctx: &QueryContext) -> Option<Vec<RecordBatch>> {
+    for fallback_node in &ctx.fallback_nodes {
+        match ctx
+            .pool
+            .query_with_scope(
+                fallback_node,
+                &ctx.catalog,
+                &ctx.sql,
+                None,
+                QueryScope::ParquetOnly,
+            )
+            .await
+        {
+            Ok(batches) => {
+                let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+                info!(
+                    "Fallback {} returned {} parquet rows",
+                    fallback_node, total_rows
+                );
+                return Some(batches);
+            }
+            Err(e) => {
+                warn!("Fallback {} parquet query failed: {}", fallback_node, e);
+            }
+        }
+    }
+    None
+}
+
+/// Try simple fallback (no standby, parquet only)
+async fn try_simple_fallback(ctx: &QueryContext) -> Result<Vec<RecordBatch>, String> {
+    for fallback_node in &ctx.fallback_nodes {
+        debug!("Retrying query on fallback node {}", fallback_node);
+
+        match ctx
+            .pool
+            .query(fallback_node, &ctx.catalog, &ctx.sql, None)
+            .await
+        {
+            Ok(batches) => {
+                let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+                info!(
+                    "Fallback query succeeded on {}: {} rows",
+                    fallback_node, total_rows
+                );
+                return Ok(batches);
+            }
+            Err(e) => {
+                warn!("Fallback query on {} also failed: {}", fallback_node, e);
+            }
+        }
+    }
+
+    Err(format!(
+        "Failed to query {} and all {} fallback nodes",
+        ctx.node_id,
+        ctx.fallback_nodes.len()
+    ))
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/// Check if error indicates a connection failure (node down)
+fn is_connection_error(e: &str) -> bool {
+    e.contains("connect error")
+        || e.contains("Unavailable")
+        || e.contains("Unknown data node")
+        || e.contains("circuit breaker")
+}
+
+/// Log successful query result
+fn log_query_success(batches: &[RecordBatch], node_id: &str, routing_type: &str) {
+    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    debug!(
+        "Received {} batches ({} rows) from {} ({})",
+        batches.len(),
+        total_rows,
+        node_id,
+        routing_type
+    );
+}
+
+// ============================================================================
+// QueryResult Helper Methods
+// ============================================================================
+
+impl QueryResult {
+    fn error(msg: String, start: Instant) -> Self {
+        Self {
+            success: false,
+            batches: Vec::new(),
+            total_rows: 0,
+            bytes_scanned: 0,
+            nodes_queried: 0,
+            elapsed_ms: start.elapsed().as_millis() as u64,
+            error: Some(msg),
+        }
+    }
+
+    fn error_with_nodes(msg: String, nodes: usize, start: Instant) -> Self {
+        Self {
+            success: false,
+            batches: Vec::new(),
+            total_rows: 0,
+            bytes_scanned: 0,
+            nodes_queried: nodes,
+            elapsed_ms: start.elapsed().as_millis() as u64,
+            error: Some(msg),
+        }
     }
 }

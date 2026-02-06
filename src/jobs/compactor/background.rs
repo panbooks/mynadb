@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-use super::{CompactionConfig, Compactor};
+use super::{CompactionConfig, CompactionResult, Compactor};
 
 impl Compactor {
     /// Start background LSM compaction task for all catalogs
@@ -28,50 +28,31 @@ impl Compactor {
 
             loop {
                 ticker.tick().await;
-
-                // Discover catalogs using Object Store
-                match self.storage.list_prefixes("").await {
-                    Ok(catalogs) => {
-                        for catalog_name in catalogs {
-                            // Skip hidden directories
-                            if catalog_name.starts_with('.') {
-                                continue;
-                            }
-
-                            // LSM compaction for this catalog
-                            match self.compact_catalog(&catalog_name, &config).await {
-                                Ok(results) => {
-                                    if !results.is_empty() {
-                                        info!(
-                                            "LSM compaction: {} partitions compacted",
-                                            results.len()
-                                        );
-                                        for result in &results {
-                                            info!(
-                                                "{}.{}.{}/{}: {} → {} files, {:.2} MB",
-                                                result.catalog,
-                                                result.schema,
-                                                result.table,
-                                                result.date_partition,
-                                                result.files_before,
-                                                result.files_after,
-                                                result.bytes_before as f64 / 1024.0 / 1024.0
-                                            );
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("LSM compaction error for {}: {}", catalog_name, e);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to list catalogs for compaction: {}", e);
-                    }
-                }
+                self.run_lsm_compaction_cycle(&config).await;
             }
         });
+    }
+
+    /// Run a single LSM compaction cycle across all catalogs
+    async fn run_lsm_compaction_cycle(&self, config: &CompactionConfig) {
+        let catalogs = match self.storage.list_prefixes("").await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Failed to list catalogs for compaction: {}", e);
+                return;
+            }
+        };
+
+        for catalog_name in catalogs {
+            if catalog_name.starts_with('.') {
+                continue;
+            }
+
+            match self.compact_catalog(&catalog_name, config).await {
+                Ok(results) => log_compaction_results("LSM", &results),
+                Err(e) => error!("LSM compaction error for {}: {}", catalog_name, e),
+            }
+        }
     }
 
     /// Start background full compaction task
@@ -93,30 +74,33 @@ impl Compactor {
             loop {
                 ticker.tick().await;
 
-                // Full compaction for yesterday's partitions (checks hour internally)
                 match self.full_compact_yesterday(&config).await {
-                    Ok(results) => {
-                        if !results.is_empty() {
-                            info!("Full compaction: {} partitions compacted", results.len());
-                            for result in &results {
-                                info!(
-                                    "{}.{}.{}/{}: {} → {} files, {:.2} MB",
-                                    result.catalog,
-                                    result.schema,
-                                    result.table,
-                                    result.date_partition,
-                                    result.files_before,
-                                    result.files_after,
-                                    result.bytes_before as f64 / 1024.0 / 1024.0
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Full compaction error: {}", e);
-                    }
+                    Ok(results) => log_compaction_results("Full", &results),
+                    Err(e) => error!("Full compaction error: {}", e),
                 }
             }
         });
+    }
+}
+
+/// Log compaction results if any partitions were compacted
+fn log_compaction_results(compaction_type: &str, results: &[CompactionResult]) {
+    if results.is_empty() {
+        return;
+    }
+
+    info!("{} compaction: {} partitions compacted", compaction_type, results.len());
+
+    for result in results {
+        info!(
+            "{}.{}.{}/{}: {} → {} files, {:.2} MB",
+            result.catalog,
+            result.schema,
+            result.table,
+            result.date_partition,
+            result.files_before,
+            result.files_after,
+            result.bytes_before as f64 / 1024.0 / 1024.0
+        );
     }
 }
