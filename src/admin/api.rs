@@ -999,16 +999,36 @@ async fn health() -> impl IntoResponse {
 
 /// Get data distribution across nodes
 async fn distribution(State(state): State<AdminState>) -> impl IntoResponse {
-    let client = state.meta_client();
+    let client = match state.get_meta_client().await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<HashMap<String, Vec<String>>>::error(format!("Failed to connect to meta: {}", e)))
+            )
+        }
+    };
 
-    match client.list_tables().await {
+    match client.list_tables(None, None).await {
         Ok(tables) => {
-            // Group tables by assigned data node
+            // Group tables by owner nodes
             let mut distribution: HashMap<String, Vec<String>> = HashMap::new();
 
             for table in tables {
-                let node_id = table.assigned_node.unwrap_or_else(|| "unassigned".to_string());
-                distribution.entry(node_id).or_insert_with(Vec::new).push(table.key);
+                let table_key = format!("{}.{}.{}", table.catalog, table.schema, table.table);
+
+                // Get primary owner (first non-expired owner)
+                if let Some(owner) = table.owners.first() {
+                    distribution
+                        .entry(owner.node_id.clone())
+                        .or_insert_with(Vec::new)
+                        .push(table_key);
+                } else {
+                    distribution
+                        .entry("unassigned".to_string())
+                        .or_insert_with(Vec::new)
+                        .push(table_key);
+                }
             }
 
             (StatusCode::OK, Json(ApiResponse::ok(distribution)))
@@ -1030,15 +1050,23 @@ struct MetaStatusResponse {
 
 /// Get meta node status
 async fn meta_status(State(state): State<AdminState>) -> impl IntoResponse {
-    let client = state.meta_client();
+    let client = match state.get_meta_client().await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<MetaStatusResponse>::error(format!("Failed to connect to meta: {}", e)))
+            )
+        }
+    };
 
-    match client.get_meta_info().await {
-        Ok(info) => {
+    match client.get_cluster_status().await {
+        Ok(status) => {
             let response = MetaStatusResponse {
-                leader: info.leader_id,
-                term: Some(info.term),
+                leader: Some(status.meta_leader),
+                term: None,
                 state: "running".to_string(),
-                peer_count: info.peer_ids.len(),
+                peer_count: status.meta_nodes as usize,
             };
             (StatusCode::OK, Json(ApiResponse::ok(response)))
         }

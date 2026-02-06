@@ -21,6 +21,7 @@ mod jobs;
 mod meta;
 mod metrics;
 mod node;
+mod observability;
 mod query;
 mod router;
 mod services;

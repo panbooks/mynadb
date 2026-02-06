@@ -20,7 +20,7 @@ pub async fn start_metrics_updater(
         interval.tick().await;
 
         // Update WAL size
-        if let Some(wal_ref) = &wal {
+        if let Some(_wal_ref) = &wal {
             if let Ok(size) = get_wal_size(&config.storage.data_dir).await {
                 METRICS.set_wal_size(size);
             }
