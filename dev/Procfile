@@ -1,5 +1,5 @@
 # MynaDB Cluster Development Environment
-# Full cluster: 3 meta nodes + 1 router + 2 data nodes
+# Full cluster: 3 meta nodes + 1 router + 2 data nodes + 1 admin
 #
 # Port assignments (base + offset pattern):
 #   meta1:   HTTP 6000, gRPC 6001
@@ -8,6 +8,7 @@
 #   router1: HTTP 7000, Flight 7001, MySQL 7002
 #   data1:   HTTP 5000, Flight 5001
 #   data2:   HTTP 5100, Flight 5101
+#   admin:   HTTP 18080
 #
 # Start with: goreman start
 
@@ -17,3 +18,4 @@ meta3: ./target/debug/mynadb -c ./dev/configs/cluster/meta3.toml meta start
 router1: sleep 3 && ./target/debug/mynadb -c ./dev/configs/cluster/router1.toml router start
 data1: sleep 3 && ./target/debug/mynadb -c ./dev/configs/cluster/data1.toml data start
 data2: sleep 3 && ./target/debug/mynadb -c ./dev/configs/cluster/data2.toml data start
+admin: sleep 5 && ./target/debug/mynadb -c ./dev/configs/cluster/admin.toml admin start

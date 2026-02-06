@@ -1,4 +1,6 @@
 //! Static file serving for admin console
+//!
+//! Serves the React admin dashboard from admin-ui/dist/
 
 use axum::{
     body::Body,
@@ -8,28 +10,104 @@ use axum::{
     routing::get,
     Router,
 };
+use std::path::PathBuf;
+use tokio::fs;
 
 use super::state::AdminState;
+
+/// Directory containing the built React app
+const DIST_DIR: &str = "admin-ui/dist";
 
 /// Build static file routes
 pub fn routes() -> Router<AdminState> {
     Router::new()
         .route("/", get(serve_index))
         .route("/index.html", get(serve_index))
+        .route("/favicon.svg", get(serve_favicon))
         .route("/assets/*path", get(serve_asset))
-        .route("/style/*path", get(serve_style))
         // SPA routes - serve index.html for known SPA paths
         .route("/nodes", get(serve_index))
         .route("/nodes/*path", get(serve_index))
         .route("/scale-in", get(serve_index))
         .route("/tables", get(serve_index))
         .route("/events", get(serve_index))
+        .route("/meta-operations", get(serve_index))
+        .route("/data-operations", get(serve_index))
+        .route("/router-operations", get(serve_index))
+        .route("/settings", get(serve_index))
 }
 
 /// Serve the index.html file
 async fn serve_index() -> impl IntoResponse {
-    // In production, this would use rust-embed to serve embedded files
-    // For now, return a placeholder that explains how to build the frontend
+    let index_path = PathBuf::from(DIST_DIR).join("index.html");
+
+    match fs::read(&index_path).await {
+        Ok(contents) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .header(header::CACHE_CONTROL, "no-cache")
+            .body(Body::from(contents))
+            .unwrap(),
+        Err(_) => serve_fallback_index(),
+    }
+}
+
+/// Serve the favicon
+async fn serve_favicon() -> impl IntoResponse {
+    let favicon_path = PathBuf::from(DIST_DIR).join("favicon.svg");
+
+    match fs::read(&favicon_path).await {
+        Ok(contents) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "image/svg+xml")
+            .header(header::CACHE_CONTROL, "public, max-age=86400")
+            .body(Body::from(contents))
+            .unwrap(),
+        Err(_) => not_found(),
+    }
+}
+
+/// Serve asset files (JS, CSS, etc.)
+async fn serve_asset(Path(path): Path<String>) -> impl IntoResponse {
+    let asset_path = PathBuf::from(DIST_DIR).join("assets").join(&path);
+
+    // Determine content type based on file extension
+    let content_type = match asset_path.extension().and_then(|e| e.to_str()) {
+        Some("js") => "application/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("wasm") => "application/wasm",
+        Some("json") => "application/json; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("ico") => "image/x-icon",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        Some("ttf") => "font/ttf",
+        Some("map") => "application/json",
+        _ => "application/octet-stream",
+    };
+
+    match fs::read(&asset_path).await {
+        Ok(contents) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, content_type)
+            .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+            .body(Body::from(contents))
+            .unwrap(),
+        Err(_) => not_found(),
+    }
+}
+
+fn not_found() -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .body(Body::from("Not Found"))
+        .unwrap()
+}
+
+/// Serve a fallback index.html when the React app is not built
+fn serve_fallback_index() -> Response<Body> {
     let html = r#"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -53,7 +131,7 @@ async fn serve_index() -> impl IntoResponse {
             border-radius: 8px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
-        h1 { color: #1a56db; margin-top: 0; }
+        h1 { color: #3b82f6; margin-top: 0; }
         code {
             background: #f3f4f6;
             padding: 2px 6px;
@@ -68,8 +146,8 @@ async fn serve_index() -> impl IntoResponse {
             overflow-x: auto;
         }
         .note {
-            background: #fef3c7;
-            border-left: 4px solid #f59e0b;
+            background: #dbeafe;
+            border-left: 4px solid #3b82f6;
             padding: 1rem;
             margin-top: 1rem;
         }
@@ -81,17 +159,20 @@ async fn serve_index() -> impl IntoResponse {
         <p>The admin frontend is not yet built. To build and serve the frontend:</p>
 
         <h3>Development Mode</h3>
-        <pre>cd admin-frontend
-trunk serve</pre>
-        <p>Then access the admin console at <code>http://localhost:8080</code></p>
+        <pre>cd admin-ui
+npm install
+npm run dev</pre>
+        <p>Then access the admin console at <code>http://localhost:3000/admin</code></p>
 
         <h3>Production Build</h3>
-        <pre>cd admin-frontend
-trunk build --release</pre>
-        <p>The built files will be in <code>admin-frontend/dist/</code></p>
+        <pre>cd admin-ui
+npm install
+npm run build</pre>
+        <p>The built files will be in <code>admin-ui/dist/</code></p>
+        <p>After building, restart the server to serve the built files.</p>
 
         <div class="note">
-            <strong>Note:</strong> The API is available at <code>/admin/api/v1/</code>
+            <strong>API Available:</strong> The API is available at <code>/admin/api/v1/</code>
             <br>Try: <a href="/admin/api/v1/cluster/status">/admin/api/v1/cluster/status</a>
         </div>
     </div>
@@ -102,24 +183,5 @@ trunk build --release</pre>
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
         .body(Body::from(html))
-        .unwrap()
-}
-
-/// Serve asset files (JS, WASM, etc.)
-async fn serve_asset(Path(_path): Path<String>) -> impl IntoResponse {
-    // In production with rust-embed, this would serve actual files
-    not_found()
-}
-
-/// Serve style files (CSS)
-async fn serve_style(Path(_path): Path<String>) -> impl IntoResponse {
-    // In production with rust-embed, this would serve actual files
-    not_found()
-}
-
-fn not_found() -> Response<Body> {
-    Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .body(Body::from("Not Found"))
         .unwrap()
 }
