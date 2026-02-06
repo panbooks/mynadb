@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import {
   Activity,
   Wifi,
@@ -14,6 +14,11 @@ import {
   Search,
   Clock,
   BarChart3,
+  Pause,
+  Play,
+  Download,
+  ArrowDownToLine,
+  X,
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -30,6 +35,19 @@ import {
 import { useEventStream, useEvents, useEventSources, useEventStats } from '@/hooks/use-events'
 import { formatRelativeTime } from '@/lib/utils'
 import type { AdminEvent, EventType } from '@/lib/types'
+
+// Helper to download file
+function downloadFile(content: string, filename: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
 
 const eventTypeIcons: Record<string, React.ComponentType<{ className?: string }>> = {
   NodeJoined: Server,
@@ -76,10 +94,60 @@ export function EventsPage() {
   const [sourceFilter, setSourceFilter] = useState<string>('all')
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [selectedEvent, setSelectedEvent] = useState<AdminEvent | null>(null)
+  const [autoScroll, setAutoScroll] = useState(true)
+  const scrollRef = useRef<HTMLDivElement>(null)
 
-  const { events: realtimeEvents, isConnected, clearEvents, connect } = useEventStream()
+  const {
+    events: realtimeEvents,
+    isConnected,
+    isPaused,
+    missedCount,
+    clearEvents,
+    connect,
+    pause,
+    resume,
+  } = useEventStream()
   const { data: sources } = useEventSources()
   const { data: stats } = useEventStats()
+
+  // Check if any filters are active
+  const hasActiveFilters = typeFilter !== 'all' || timeRange !== 'all' ||
+    sourceFilter !== 'all' || searchQuery !== ''
+
+  // Clear all filters
+  const clearFilters = () => {
+    setTypeFilter('all')
+    setTimeRange('all')
+    setSourceFilter('all')
+    setSearchQuery('')
+  }
+
+  // Export events to JSON
+  const exportToJson = () => {
+    const data = JSON.stringify(filteredEvents, null, 2)
+    downloadFile(data, 'events.json', 'application/json')
+  }
+
+  // Export events to CSV
+  const exportToCsv = () => {
+    const headers = ['ID', 'Type', 'Timestamp', 'Source', 'Message']
+    const rows = filteredEvents.map(e => [
+      e.id,
+      e.type,
+      e.timestamp,
+      e.source || '',
+      `"${(e.message || '').replace(/"/g, '""')}"`,
+    ])
+    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+    downloadFile(csv, 'events.csv', 'text/csv')
+  }
+
+  // Auto-scroll to top when new events arrive
+  useEffect(() => {
+    if (autoScroll && scrollRef.current && realtimeEvents.length > 0) {
+      scrollRef.current.scrollTop = 0
+    }
+  }, [realtimeEvents, autoScroll])
 
   // Build filter for API
   const apiFilter = useMemo(() => ({
@@ -145,12 +213,51 @@ export function EventsPage() {
             )}
           </Badge>
 
+          {/* Paused indicator */}
+          {isPaused && (
+            <Badge variant="warning">
+              <Pause className="mr-1 h-3 w-3" />
+              Paused {missedCount > 0 && `(${missedCount} missed)`}
+            </Badge>
+          )}
+
           {!isConnected && (
             <Button variant="outline" size="sm" onClick={connect}>
               <RefreshCw className="mr-2 h-4 w-4" />
               Reconnect
             </Button>
           )}
+
+          {/* Pause/Resume button */}
+          {isConnected && (
+            <Button
+              variant={isPaused ? 'default' : 'outline'}
+              size="sm"
+              onClick={isPaused ? resume : pause}
+            >
+              {isPaused ? (
+                <>
+                  <Play className="mr-2 h-4 w-4" />
+                  Resume
+                </>
+              ) : (
+                <>
+                  <Pause className="mr-2 h-4 w-4" />
+                  Pause
+                </>
+              )}
+            </Button>
+          )}
+
+          {/* Auto-scroll toggle */}
+          <Button
+            variant={autoScroll ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setAutoScroll(!autoScroll)}
+            title={autoScroll ? 'Auto-scroll enabled' : 'Auto-scroll disabled'}
+          >
+            <ArrowDownToLine className="h-4 w-4" />
+          </Button>
 
           <Button
             variant="outline"
@@ -166,6 +273,18 @@ export function EventsPage() {
             <Trash2 className="mr-2 h-4 w-4" />
             Clear
           </Button>
+
+          {/* Export dropdown */}
+          <Select onValueChange={(v) => v === 'json' ? exportToJson() : exportToCsv()}>
+            <SelectTrigger className="w-[110px]">
+              <Download className="mr-2 h-4 w-4" />
+              Export
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="json">Export JSON</SelectItem>
+              <SelectItem value="csv">Export CSV</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
@@ -291,6 +410,16 @@ export function EventsPage() {
                 />
               </div>
             </div>
+
+            {/* Clear Filters */}
+            {hasActiveFilters && (
+              <div className="flex items-end">
+                <Button variant="ghost" size="sm" onClick={clearFilters}>
+                  <X className="mr-2 h-4 w-4" />
+                  Clear Filters
+                </Button>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -309,7 +438,7 @@ export function EventsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="p-0">
-            <ScrollArea className="h-[500px]">
+            <ScrollArea className="h-[500px]" ref={scrollRef}>
               {filteredEvents.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 px-6">
                   <Activity className="h-12 w-12 text-muted-foreground mb-4" />

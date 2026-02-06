@@ -26,11 +26,21 @@ export function useEventStats() {
   })
 }
 
+const MAX_REALTIME_EVENTS = 200
+
 export function useEventStream() {
   const [events, setEvents] = useState<AdminEvent[]>([])
   const [isConnected, setIsConnected] = useState(false)
+  const [isPaused, setIsPaused] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [missedCount, setMissedCount] = useState(0)
   const wsRef = useRef<WebSocket | null>(null)
+  const isPausedRef = useRef(isPaused)
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    isPausedRef.current = isPaused
+  }, [isPaused])
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -39,7 +49,11 @@ export function useEventStream() {
 
     wsRef.current = createEventWebSocket(
       (event) => {
-        setEvents((prev) => [event, ...prev].slice(0, 100)) // Keep last 100 events
+        if (isPausedRef.current) {
+          setMissedCount((prev) => prev + 1)
+          return
+        }
+        setEvents((prev) => [event, ...prev].slice(0, MAX_REALTIME_EVENTS))
       },
       () => {
         setError('WebSocket connection error')
@@ -69,6 +83,16 @@ export function useEventStream() {
     setEvents([])
   }, [])
 
+  const pause = useCallback(() => {
+    setIsPaused(true)
+    setMissedCount(0)
+  }, [])
+
+  const resume = useCallback(() => {
+    setIsPaused(false)
+    setMissedCount(0)
+  }, [])
+
   useEffect(() => {
     connect()
     return () => disconnect()
@@ -77,9 +101,13 @@ export function useEventStream() {
   return {
     events,
     isConnected,
+    isPaused,
+    missedCount,
     error,
     connect,
     disconnect,
     clearEvents,
+    pause,
+    resume,
   }
 }
