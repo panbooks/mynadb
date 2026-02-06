@@ -10,10 +10,21 @@ use axum::{
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 
 use super::state::AdminState;
 use crate::meta::types::{DataNodeMode, NodeRole, NodeState};
+
+// ============ Helpers ============
+
+/// Convert Unix timestamp (milliseconds) to RFC3339 string
+fn timestamp_to_rfc3339(ts_ms: i64) -> Option<String> {
+    if ts_ms <= 0 {
+        return None;
+    }
+    let secs = (ts_ms / 1000) as i64;
+    let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
+    chrono::DateTime::from_timestamp(secs, nsecs).map(|dt| dt.to_rfc3339())
+}
 
 /// Build API routes
 pub fn routes() -> Router<AdminState> {
@@ -307,15 +318,7 @@ async fn list_nodes(
                 })
                 .map(|n| {
                     let zone = n.zone().map(|s| s.to_string());
-                    // Convert timestamp (ms) to ISO string
-                    let last_heartbeat = if n.last_heartbeat > 0 {
-                        let secs = (n.last_heartbeat / 1000) as i64;
-                        let nsecs = ((n.last_heartbeat % 1000) * 1_000_000) as u32;
-                        chrono::DateTime::from_timestamp(secs, nsecs)
-                            .map(|dt| dt.to_rfc3339())
-                    } else {
-                        None
-                    };
+                    let last_heartbeat = timestamp_to_rfc3339(n.last_heartbeat);
                     NodeSummary {
                         id: n.node_id,
                         role: format!("{:?}", n.role),
@@ -323,7 +326,7 @@ async fn list_nodes(
                         mode: n.mode.map(|m| format!("{:?}", m)),
                         advertise_addr: n.advertise_addr,
                         zone,
-                        tables_owned: None, // TODO: Count from table list
+                        tables_owned: None,
                         last_heartbeat,
                     }
                 })
@@ -416,33 +419,12 @@ async fn get_node(
                     .await
                     .unwrap_or_default();
 
-                let now = std::time::SystemTime::now()
+                let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_millis() as i64;
-                let heartbeat_age_ms = now - node.last_heartbeat;
-
-                // Convert timestamps to ISO strings
-                let last_heartbeat_str = if node.last_heartbeat > 0 {
-                    let secs = (node.last_heartbeat / 1000) as i64;
-                    let nsecs = ((node.last_heartbeat % 1000) * 1_000_000) as u32;
-                    chrono::DateTime::from_timestamp(secs, nsecs)
-                        .map(|dt| dt.to_rfc3339())
-                } else {
-                    None
-                };
-
-                let registered_at_str = if node.registered_at > 0 {
-                    let secs = (node.registered_at / 1000) as i64;
-                    let nsecs = ((node.registered_at % 1000) * 1_000_000) as u32;
-                    chrono::DateTime::from_timestamp(secs, nsecs)
-                        .map(|dt| dt.to_rfc3339())
-                } else {
-                    None
-                };
-
-                let zone = node.zone().map(|s| s.to_string());
-                let tables_owned = Some(tables_meta.len() as u32);
+                let heartbeat_age_ms = now_ms - node.last_heartbeat;
+                let last_heartbeat_str = timestamp_to_rfc3339(node.last_heartbeat);
 
                 let tables: Vec<TableInfo> = tables_meta
                     .iter()
@@ -455,11 +437,15 @@ async fn get_node(
                     .collect();
 
                 let health = last_heartbeat_str.as_ref().map(|hb| NodeHealthInfo {
-                    is_healthy: heartbeat_age_ms < 30_000, // 30 seconds
+                    is_healthy: heartbeat_age_ms < 30_000,
                     last_heartbeat: hb.clone(),
                     heartbeat_age_ms,
                     message: None,
                 });
+
+                let zone = node.zone().map(|s| s.to_string());
+                let registered_at = timestamp_to_rfc3339(node.registered_at);
+                let tables_owned = Some(tables_meta.len() as u32);
 
                 let response = NodeDetailResponse {
                     id: node.node_id,
@@ -474,10 +460,10 @@ async fn get_node(
                     paired_node_id: node.backing_standby,
                     last_heartbeat: last_heartbeat_str,
                     tables_owned,
-                    registered_at: registered_at_str,
+                    registered_at,
                     health,
                     tables: Some(tables),
-                    stats: None, // Stats would come from data node directly
+                    stats: None,
                 };
 
                 (StatusCode::OK, Json(ApiResponse::ok(response)))
@@ -883,35 +869,21 @@ async fn scale_in_execute(
 
 // ============ Events Endpoints ============
 
-#[derive(Deserialize, Default)]
-struct ListEventsQuery {
-    #[serde(default = "default_event_limit")]
-    #[allow(dead_code)]
-    limit: u32,
-}
-
-fn default_event_limit() -> u32 {
-    100
-}
-
 #[derive(Serialize)]
 struct ListEventsResponse {
-    events: Vec<JsonValue>,
+    events: Vec<serde_json::Value>,
     total: usize,
     message: String,
 }
 
-async fn list_events(
-    State(_state): State<AdminState>,
-    Query(_query): Query<ListEventsQuery>,
-) -> impl IntoResponse {
-    // Events API not yet implemented in MetaClient
-    // Return placeholder response
-    let response = ListEventsResponse {
-        events: Vec::new(),
-        total: 0,
-        message: "Events API not yet implemented. Use WebSocket at /api/v1/events/ws for real-time events.".to_string(),
-    };
-
-    (StatusCode::OK, Json(ApiResponse::ok(response)))
+async fn list_events(State(_state): State<AdminState>) -> impl IntoResponse {
+    // Events API not yet implemented - use WebSocket at /api/v1/events/ws
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(ListEventsResponse {
+            events: Vec::new(),
+            total: 0,
+            message: "Use WebSocket at /api/v1/events/ws for real-time events".to_string(),
+        })),
+    )
 }
