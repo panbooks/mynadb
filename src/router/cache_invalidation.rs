@@ -146,6 +146,28 @@ impl CacheInvalidationHandler {
                     nodes_with_mode,
                     attempt + 1
                 );
+
+                // Also fetch all table owners to ensure consistent routing from startup
+                // This prevents race conditions where different routers route new tables
+                // to different nodes during the initialization window
+                match meta_client.list_tables(None, None).await {
+                    Ok(tables) => {
+                        if !tables.is_empty() {
+                            self.shard_cache.rebuild_table_owners(tables.clone());
+                            info!(
+                                "Pre-fetched {} table owners from Meta for consistent routing",
+                                tables.len()
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to fetch table owners from Meta: {}. Tables will be discovered on-demand.",
+                            e
+                        );
+                    }
+                }
+
                 return Ok(());
             }
 
@@ -260,6 +282,24 @@ impl CacheInvalidationHandler {
                 updated,
                 self.shard_cache.get_active_data_nodes().len()
             );
+        }
+
+        // Also resync table owners to ensure consistency
+        match meta_client.list_tables(None, None).await {
+            Ok(tables) => {
+                if !tables.is_empty() {
+                    let current_count = self.shard_cache.table_owner_count();
+                    self.shard_cache.rebuild_table_owners(tables.clone());
+                    debug!(
+                        "Resynced table owners: {} -> {} entries",
+                        current_count,
+                        tables.len()
+                    );
+                }
+            }
+            Err(e) => {
+                debug!("Failed to resync table owners: {}", e);
+            }
         }
 
         Ok(())

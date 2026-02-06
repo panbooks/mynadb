@@ -1,5 +1,6 @@
 use super::database_manager::DatabaseManager;
 use crate::config::RetentionConfig;
+use crate::meta::client::MetaClient;
 use crate::storage::storage::Storage;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,10 +11,16 @@ use tracing::{debug, error, info, warn};
 ///
 /// Supports both standalone (local filesystem) and cluster (S3/MinIO) modes.
 /// All storage operations use the Object Store abstraction.
+///
+/// In cluster mode, when all partitions for a table are deleted, it also
+/// removes the table metadata from Meta to prevent unbounded growth of
+/// the /tables/ prefix in Meta's storage.
 pub struct RetentionManager {
     db_manager: Arc<DatabaseManager>,
     /// Storage backend for Object Store operations
     storage: Arc<Storage>,
+    /// Optional Meta client for cluster mode table cleanup
+    meta_client: Option<Arc<MetaClient>>,
 }
 
 impl RetentionManager {
@@ -21,7 +28,27 @@ impl RetentionManager {
     ///
     /// All operations use the Object Store abstraction for both local and S3 storage.
     pub fn new(db_manager: Arc<DatabaseManager>, storage: Arc<Storage>) -> Self {
-        RetentionManager { db_manager, storage }
+        RetentionManager {
+            db_manager,
+            storage,
+            meta_client: None,
+        }
+    }
+
+    /// Create a new RetentionManager with Meta client for cluster mode
+    ///
+    /// When Meta client is provided, the retention manager will also clean up
+    /// table metadata from Meta when all partitions for a table are deleted.
+    pub fn with_meta_client(
+        db_manager: Arc<DatabaseManager>,
+        storage: Arc<Storage>,
+        meta_client: Arc<MetaClient>,
+    ) -> Self {
+        RetentionManager {
+            db_manager,
+            storage,
+            meta_client: Some(meta_client),
+        }
     }
 
     /// Start background retention task
@@ -233,6 +260,41 @@ impl RetentionManager {
                 "Deleted {} partition(s) from {}.{}.{}",
                 deleted_count, catalog, schema, table
             );
+
+            // Check if all partitions are deleted (table is now empty)
+            // Only do this check if we deleted something, to avoid unnecessary calls
+            let remaining_partitions = self
+                .db_manager
+                .discover_table_partitions_async(catalog, schema, table)
+                .await
+                .unwrap_or_default();
+
+            if remaining_partitions.is_empty() {
+                info!(
+                    "All partitions deleted from {}.{}.{}, cleaning up table metadata",
+                    catalog, schema, table
+                );
+
+                // Clean up table metadata from Meta (cluster mode only)
+                if let Some(ref meta_client) = self.meta_client {
+                    match meta_client.remove_table(catalog, schema, table).await {
+                        Ok(()) => {
+                            info!(
+                                "Removed empty table {}.{}.{} from Meta",
+                                catalog, schema, table
+                            );
+                        }
+                        Err(e) => {
+                            // Log but don't fail - table may already be removed or
+                            // Meta might be temporarily unavailable
+                            warn!(
+                                "Failed to remove empty table {}.{}.{} from Meta: {}",
+                                catalog, schema, table, e
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())
