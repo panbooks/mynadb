@@ -9,6 +9,8 @@ import { EventsPage } from '@/pages/events'
 import { MetaOperationsPage } from '@/pages/meta-operations'
 import { DataOperationsPage } from '@/pages/data-operations'
 import { RouterOperationsPage } from '@/pages/router-operations'
+import { QueryPage } from '@/pages/query'
+import { StoragePage } from '@/pages/storage'
 
 function App() {
   return (
@@ -16,6 +18,8 @@ function App() {
       <Routes>
         <Route path="/" element={<MainLayout />}>
           <Route index element={<Dashboard />} />
+          <Route path="query" element={<QueryPage />} />
+          <Route path="storage" element={<StoragePage />} />
           <Route path="nodes" element={<NodesPage />} />
           <Route path="nodes/:id" element={<NodeDetailPage />} />
           <Route path="tables" element={<TablesPage />} />

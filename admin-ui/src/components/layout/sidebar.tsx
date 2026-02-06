@@ -9,11 +9,15 @@ import {
   Settings,
   Network,
   HardDrive,
+  Terminal,
+  FolderTree,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
+  { name: 'Query Console', href: '/query', icon: Terminal },
+  { name: 'Storage Browser', href: '/storage', icon: FolderTree },
   { name: 'Nodes', href: '/nodes', icon: Server },
   { name: 'Tables', href: '/tables', icon: Table2 },
   { name: 'Scale-In', href: '/scale-in', icon: ArrowDownToLine },

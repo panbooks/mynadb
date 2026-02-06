@@ -291,3 +291,130 @@ export interface PaginatedResponse<T> {
   page_size: number
   total_pages: number
 }
+
+// Query Console types
+export interface QueryRequest {
+  sql: string
+  catalog: string
+  format?: 'json' | 'csv'
+  limit?: number
+}
+
+export interface QueryResult {
+  columns: ColumnInfo[]
+  rows: Record<string, unknown>[]
+  row_count: number
+  execution_time_ms: number
+  truncated?: boolean
+}
+
+export interface ColumnInfo {
+  name: string
+  data_type: string
+  nullable: boolean
+}
+
+export interface QueryExplain {
+  logical_plan: string
+  physical_plan: string
+  optimizations: string[]
+}
+
+export interface QueryAnalysis {
+  tables: string[]
+  time_range?: { start?: string; end?: string }
+  partitions_to_scan: number
+  files_to_scan: number
+  optimizations: string[]
+  plan_summary: string
+}
+
+export interface SavedQuery {
+  id: string
+  name: string
+  sql: string
+  catalog: string
+  created_at: string
+  updated_at: string
+}
+
+export interface QueryHistoryEntry {
+  id: string
+  sql: string
+  catalog: string
+  executed_at: string
+  execution_time_ms: number
+  row_count: number
+  status: 'success' | 'error'
+  error?: string
+}
+
+// Storage Browser types
+export interface StorageInfo {
+  backend: string
+  bucket?: string
+  endpoint?: string
+  total_size_bytes: number
+  file_count: number
+}
+
+export interface CatalogInfo {
+  name: string
+  schemas: number
+  tables: number
+  partitions: number
+  total_size_bytes: number
+}
+
+export interface SchemaInfo {
+  catalog: string
+  name: string
+  tables: number
+  partitions: number
+  total_size_bytes: number
+}
+
+export interface TableStorageInfo {
+  catalog: string
+  schema: string
+  name: string
+  partitions: PartitionInfo[]
+  total_size_bytes: number
+  total_rows: number
+  file_count: number
+}
+
+export interface PartitionInfo {
+  date: string
+  files: FileInfo[]
+  size_bytes: number
+  row_count: number
+}
+
+export interface FileInfo {
+  path: string
+  name: string
+  level: number
+  size_bytes: number
+  row_count: number
+  created_at: string
+  row_groups?: number
+  compression?: string
+}
+
+export interface ParquetFileDetails {
+  path: string
+  schema: ColumnInfo[]
+  row_count: number
+  row_groups: number
+  file_size_bytes: number
+  compression: string
+  created_at: string
+  statistics?: ParquetStatistics
+}
+
+export interface ParquetStatistics {
+  min_values: Record<string, unknown>
+  max_values: Record<string, unknown>
+  null_counts: Record<string, number>
+}

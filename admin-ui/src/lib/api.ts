@@ -18,6 +18,17 @@ import type {
   EventFilter,
   EventStats,
   PaginatedResponse,
+  QueryRequest,
+  QueryResult,
+  QueryExplain,
+  QueryAnalysis,
+  SavedQuery,
+  QueryHistoryEntry,
+  StorageInfo,
+  CatalogInfo,
+  SchemaInfo,
+  TableStorageInfo,
+  ParquetFileDetails,
 } from './types'
 
 const API_BASE = '/admin/api/v1'
@@ -248,4 +259,102 @@ export async function setDistributionConfig(config: DistributionConfig): Promise
     method: 'POST',
     body: JSON.stringify(config),
   })
+}
+
+// Query Console API
+export async function executeQuery(request: QueryRequest): Promise<QueryResult> {
+  return fetchApi<QueryResult>('/query/execute', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  })
+}
+
+export async function explainQuery(catalog: string, sql: string): Promise<QueryExplain> {
+  const params = new URLSearchParams({ sql })
+  return fetchApi<QueryExplain>(`/query/explain/${encodeURIComponent(catalog)}?${params}`)
+}
+
+export async function analyzeQuery(catalog: string, sql: string): Promise<QueryAnalysis> {
+  const params = new URLSearchParams({ sql })
+  return fetchApi<QueryAnalysis>(`/query/analyze/${encodeURIComponent(catalog)}?${params}`)
+}
+
+export async function fetchCatalogs(): Promise<string[]> {
+  return fetchApi<string[]>('/query/catalogs')
+}
+
+export async function fetchSchemas(catalog: string): Promise<string[]> {
+  return fetchApi<string[]>(`/query/schemas/${encodeURIComponent(catalog)}`)
+}
+
+export async function fetchTableColumns(catalog: string, schema: string, table: string): Promise<{ name: string; data_type: string }[]> {
+  return fetchApi<{ name: string; data_type: string }[]>(
+    `/query/columns/${encodeURIComponent(catalog)}/${encodeURIComponent(schema)}/${encodeURIComponent(table)}`
+  )
+}
+
+export async function fetchSavedQueries(): Promise<SavedQuery[]> {
+  return fetchApi<SavedQuery[]>('/query/saved')
+}
+
+export async function saveQuery(query: { name: string; sql: string; catalog: string }): Promise<SavedQuery> {
+  return fetchApi<SavedQuery>('/query/saved', {
+    method: 'POST',
+    body: JSON.stringify(query),
+  })
+}
+
+export async function deleteSavedQuery(id: string): Promise<{ success: boolean }> {
+  return fetchApi<{ success: boolean }>(`/query/saved/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function fetchQueryHistory(limit?: number): Promise<QueryHistoryEntry[]> {
+  const params = limit ? `?limit=${limit}` : ''
+  return fetchApi<QueryHistoryEntry[]>(`/query/history${params}`)
+}
+
+export async function clearQueryHistory(): Promise<{ success: boolean }> {
+  return fetchApi<{ success: boolean }>('/query/history', {
+    method: 'DELETE',
+  })
+}
+
+// Storage Browser API
+export async function fetchStorageInfo(): Promise<StorageInfo> {
+  return fetchApi<StorageInfo>('/storage/info')
+}
+
+export async function fetchStorageCatalogs(): Promise<CatalogInfo[]> {
+  return fetchApi<CatalogInfo[]>('/storage/catalogs')
+}
+
+export async function fetchStorageSchemas(catalog: string): Promise<SchemaInfo[]> {
+  return fetchApi<SchemaInfo[]>(`/storage/catalogs/${encodeURIComponent(catalog)}/schemas`)
+}
+
+export async function fetchStorageTable(catalog: string, schema: string, table: string): Promise<TableStorageInfo> {
+  return fetchApi<TableStorageInfo>(
+    `/storage/catalogs/${encodeURIComponent(catalog)}/schemas/${encodeURIComponent(schema)}/tables/${encodeURIComponent(table)}`
+  )
+}
+
+export async function fetchParquetDetails(path: string): Promise<ParquetFileDetails> {
+  const params = new URLSearchParams({ path })
+  return fetchApi<ParquetFileDetails>(`/storage/file?${params}`)
+}
+
+export async function deletePartition(catalog: string, schema: string, table: string, date: string): Promise<{ success: boolean; deleted_files: number; freed_bytes: number }> {
+  return fetchApi<{ success: boolean; deleted_files: number; freed_bytes: number }>(
+    `/storage/catalogs/${encodeURIComponent(catalog)}/schemas/${encodeURIComponent(schema)}/tables/${encodeURIComponent(table)}/partitions/${encodeURIComponent(date)}`,
+    { method: 'DELETE' }
+  )
+}
+
+export async function triggerCompaction(catalog: string, schema?: string, table?: string): Promise<{ success: boolean; message: string }> {
+  let endpoint = `/storage/compact/${encodeURIComponent(catalog)}`
+  if (schema) endpoint += `/${encodeURIComponent(schema)}`
+  if (table) endpoint += `/${encodeURIComponent(table)}`
+  return fetchApi<{ success: boolean; message: string }>(endpoint, { method: 'POST' })
 }

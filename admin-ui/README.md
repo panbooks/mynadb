@@ -17,6 +17,7 @@ A modern React-based administration dashboard for managing MynaDB clusters. This
 
 ## Features
 
+### Core Features
 - **Cluster Overview**: Real-time health monitoring, node counts, and warnings
 - **Node Management**: View, filter, and manage cluster nodes with detailed status
 - **Table Browser**: Search, filter, and reassign tables across nodes
@@ -25,6 +26,21 @@ A modern React-based administration dashboard for managing MynaDB clusters. This
 - **Real-time Events**: WebSocket-powered event stream with filtering
 - **Dark/Light Mode**: Theme toggle for comfortable viewing
 - **Auto-refresh**: Automatic data refresh every 5 seconds
+
+### New Features (v1.0)
+- **💻 SQL Query Console**: Interactive SQL editor powered by Monaco Editor
+  - Execute queries with real-time results (CSV/JSON export)
+  - EXPLAIN and ANALYZE query plans
+  - Query history and saved queries (LocalStorage)
+  - Keyboard shortcuts (`Ctrl+Enter` to run, `Ctrl+Shift+E` to explain)
+  - SQL templates for common operations
+
+- **📁 Storage Browser**: File system explorer for Parquet data
+  - Tree navigation (Catalog → Schema → Table → Partition → File)
+  - Storage statistics and size tracking
+  - Partition management (view, delete)
+  - Compaction trigger at any level (catalog/schema/table)
+  - Parquet file inspector (schema, statistics, min/max values)
 
 ## Prerequisites
 
@@ -132,12 +148,16 @@ admin-ui/
 │   │   ├── use-nodes.ts      # Node management hooks
 │   │   ├── use-tables.ts     # Table management hooks
 │   │   ├── use-scale-in.ts   # Scale-in operation hooks
-│   │   └── use-events.ts     # Event stream hooks (WebSocket)
+│   │   ├── use-events.ts     # Event stream hooks (WebSocket)
+│   │   ├── use-query.ts      # Query execution hooks ⭐ NEW
+│   │   └── use-storage.ts    # Storage browser hooks ⭐ NEW
 │   ├── components/
 │   │   ├── ui/               # shadcn/ui components (button, card, etc.)
 │   │   └── layout/           # Layout components (sidebar, header)
 │   └── pages/
 │       ├── dashboard.tsx     # Main dashboard
+│       ├── query.tsx         # SQL Query Console ⭐ NEW
+│       ├── storage.tsx       # Storage Browser ⭐ NEW
 │       ├── nodes/
 │       │   ├── index.tsx     # Nodes list
 │       │   └── [id].tsx      # Node detail
@@ -320,6 +340,58 @@ Real-time event monitoring:
 - Event detail panel
 - Auto-reconnect on disconnect
 
+### Query Console (`/admin/query`) ⭐ NEW
+
+Interactive SQL query interface:
+- **Monaco Editor**: Professional SQL editor with syntax highlighting
+- **Catalog Selection**: Query any catalog in your cluster
+- **Execute Queries**: Run SQL and see results in table format
+- **Export Results**: Download as CSV or JSON
+- **EXPLAIN/ANALYZE**: View query plans and optimization details
+- **Query History**: Last 100 queries with status (success/error)
+- **Saved Queries**: Bookmark frequently used queries
+- **Keyboard Shortcuts**:
+  - `Ctrl+Enter` / `Cmd+Enter` - Run query
+  - `Ctrl+Shift+E` / `Cmd+Shift+E` - Explain query
+- **SQL Templates**: Common patterns (SHOW TABLES, time bucketing, etc.)
+
+**Features:**
+- Column schema display (name + data type)
+- Execution time tracking
+- Row count display
+- Copy to clipboard
+- Multi-tab results (Results, Explain)
+- Search history
+- LocalStorage persistence
+
+### Storage Browser (`/admin/storage`) ⭐ NEW
+
+File system explorer for Parquet storage:
+- **Tree Navigation**: Browse Catalog → Schema → Table → Partition → File hierarchy
+- **Storage Overview**: Backend type (S3/Local), total size, file count
+- **Statistics Cards**: Per-level metrics (schemas, tables, partitions, size)
+- **Compaction Management**:
+  - Trigger at catalog, schema, or table level
+  - View compaction level distribution (L0, L1, L2+)
+  - Visual progress bars for file distribution
+- **Partition Management**:
+  - View all date partitions for a table
+  - Delete old partitions with confirmation
+  - See files per partition
+- **Parquet Inspector**:
+  - File metadata (row count, row groups, compression)
+  - Column schema with data types
+  - Min/Max statistics per column
+  - Null count tracking
+- **Search**: Filter catalogs by name
+
+**Use Cases:**
+- Monitor storage growth and distribution
+- Clean up old partitions manually
+- Trigger compaction for tables with many L0 files
+- Inspect Parquet file quality (compression, row groups)
+- Verify schema after writes
+
 ## API Reference
 
 All API endpoints are under `/admin/api/v1/`.
@@ -374,6 +446,35 @@ All API endpoints are under `/admin/api/v1/`.
 | `/meta/status` | GET | Meta cluster status |
 | `/distribution` | GET | List distribution configs |
 | `/distribution` | POST | Set distribution config |
+
+### Query Console ⭐ NEW
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/query/execute` | POST | Execute SQL query |
+| `/query/explain/:catalog` | GET | Get query execution plan |
+| `/query/analyze/:catalog` | GET | Analyze query (partitions, files) |
+| `/query/catalogs` | GET | List available catalogs |
+| `/query/schemas/:catalog` | GET | List schemas in catalog |
+| `/query/columns/:catalog/:schema/:table` | GET | Get table columns |
+| `/query/saved` | GET | List saved queries (optional) |
+| `/query/saved` | POST | Save a query (optional) |
+| `/query/saved/:id` | DELETE | Delete saved query (optional) |
+| `/query/history` | GET | Get query history (optional) |
+
+### Storage Browser ⭐ NEW
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/storage/info` | GET | Storage backend information |
+| `/storage/catalogs` | GET | List catalogs with statistics |
+| `/storage/catalogs/:catalog/schemas` | GET | List schemas with statistics |
+| `/storage/catalogs/:catalog/schemas/:schema/tables/:table` | GET | Get table storage details |
+| `/storage/file?path=...` | GET | Get Parquet file details |
+| `/storage/catalogs/:catalog/schemas/:schema/tables/:table/partitions/:date` | DELETE | Delete partition |
+| `/storage/compact/:catalog[/:schema[/:table]]` | POST | Trigger compaction |
+
+**Note**: Saved queries and history endpoints are optional. The frontend uses LocalStorage as a fallback if these endpoints are not implemented.
 
 ## Configuration
 
@@ -474,6 +575,38 @@ node --version  # Should be v20.x
 3. **View admin server logs**: Watch the terminal where admin server is running
 
 4. **Enable React Query DevTools**: Uncomment in `main.tsx` for debugging queries
+
+## Documentation
+
+Comprehensive guides for the new features:
+
+- **📘 User Guide**: `/docs/admin-ui-query-storage-guide.md`
+  - Complete feature documentation
+  - Step-by-step tutorials
+  - Best practices
+  - Troubleshooting
+  - Backend API specifications
+
+- **📋 Quick Reference**: `/docs/admin-ui-quick-reference.md`
+  - Cheat sheet for common tasks
+  - Keyboard shortcuts
+  - SQL templates
+  - API endpoints summary
+  - Performance tips
+
+## Dependencies
+
+New dependencies added in v1.0:
+
+```json
+{
+  "@monaco-editor/react": "^4.6.0"  // SQL Editor component
+}
+```
+
+Total bundle size impact:
+- Monaco Editor: ~2.5 MB (lazy-loaded only on Query Console page)
+- No impact on other pages
 
 ## License
 
