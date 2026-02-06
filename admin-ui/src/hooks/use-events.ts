@@ -28,19 +28,58 @@ export function useEventStats() {
 
 const MAX_REALTIME_EVENTS = 200
 
-export function useEventStream() {
+// Critical event types that trigger notifications
+const CRITICAL_EVENT_TYPES = new Set([
+  'NodeLeft',
+  'FlushForRecovery',
+  'TableOwnerExpired',
+])
+
+// Request browser notification permission
+export function requestNotificationPermission(): Promise<NotificationPermission> {
+  if (!('Notification' in window)) {
+    return Promise.resolve('denied' as NotificationPermission)
+  }
+  return Notification.requestPermission()
+}
+
+// Show browser notification
+function showNotification(event: AdminEvent) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') {
+    return
+  }
+
+  const notification = new Notification(`MynaDB: ${event.type}`, {
+    body: event.message || 'New event occurred',
+    icon: '/favicon.ico',
+    tag: event.id, // Prevent duplicate notifications
+  })
+
+  // Auto-close after 5 seconds
+  setTimeout(() => notification.close(), 5000)
+}
+
+export function useEventStream(options?: { enableNotifications?: boolean }) {
   const [events, setEvents] = useState<AdminEvent[]>([])
   const [isConnected, setIsConnected] = useState(false)
   const [isPaused, setIsPaused] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [missedCount, setMissedCount] = useState(0)
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    options?.enableNotifications ?? false
+  )
   const wsRef = useRef<WebSocket | null>(null)
   const isPausedRef = useRef(isPaused)
+  const notificationsEnabledRef = useRef(notificationsEnabled)
 
-  // Keep ref in sync with state
+  // Keep refs in sync with state
   useEffect(() => {
     isPausedRef.current = isPaused
   }, [isPaused])
+
+  useEffect(() => {
+    notificationsEnabledRef.current = notificationsEnabled
+  }, [notificationsEnabled])
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -49,6 +88,11 @@ export function useEventStream() {
 
     wsRef.current = createEventWebSocket(
       (event) => {
+        // Show notification for critical events
+        if (notificationsEnabledRef.current && CRITICAL_EVENT_TYPES.has(event.type)) {
+          showNotification(event)
+        }
+
         if (isPausedRef.current) {
           setMissedCount((prev) => prev + 1)
           return
@@ -98,16 +142,29 @@ export function useEventStream() {
     return () => disconnect()
   }, [connect, disconnect])
 
+  const toggleNotifications = useCallback(async () => {
+    if (!notificationsEnabled) {
+      const permission = await requestNotificationPermission()
+      if (permission === 'granted') {
+        setNotificationsEnabled(true)
+      }
+    } else {
+      setNotificationsEnabled(false)
+    }
+  }, [notificationsEnabled])
+
   return {
     events,
     isConnected,
     isPaused,
     missedCount,
+    notificationsEnabled,
     error,
     connect,
     disconnect,
     clearEvents,
     pause,
     resume,
+    toggleNotifications,
   }
 }

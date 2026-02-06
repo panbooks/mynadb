@@ -19,6 +19,8 @@ import {
   Download,
   ArrowDownToLine,
   X,
+  Bell,
+  BellOff,
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -102,10 +104,12 @@ export function EventsPage() {
     isConnected,
     isPaused,
     missedCount,
+    notificationsEnabled,
     clearEvents,
     connect,
     pause,
     resume,
+    toggleNotifications,
   } = useEventStream()
   const { data: sources } = useEventSources()
   const { data: stats } = useEventStats()
@@ -259,6 +263,20 @@ export function EventsPage() {
             <ArrowDownToLine className="h-4 w-4" />
           </Button>
 
+          {/* Notifications toggle */}
+          <Button
+            variant={notificationsEnabled ? 'default' : 'outline'}
+            size="sm"
+            onClick={toggleNotifications}
+            title={notificationsEnabled ? 'Notifications enabled' : 'Enable notifications'}
+          >
+            {notificationsEnabled ? (
+              <Bell className="h-4 w-4" />
+            ) : (
+              <BellOff className="h-4 w-4" />
+            )}
+          </Button>
+
           <Button
             variant="outline"
             size="sm"
@@ -313,22 +331,37 @@ export function EventsPage() {
           </Card>
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Event Types</CardTitle>
-              <Activity className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{Object.keys(stats.by_type).length}</div>
-              <p className="text-xs text-muted-foreground">unique types</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Sources</CardTitle>
               <Server className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{sources?.length ?? 0}</div>
               <p className="text-xs text-muted-foreground">nodes</p>
+            </CardContent>
+          </Card>
+          {/* Event Type Breakdown */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">By Type</CardTitle>
+              <Activity className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="space-y-1 max-h-24 overflow-y-auto">
+                {Object.entries(stats.by_type)
+                  .sort(([, a], [, b]) => b - a)
+                  .slice(0, 5)
+                  .map(([type, count]) => (
+                    <div key={type} className="flex items-center justify-between text-xs">
+                      <span className="truncate text-muted-foreground">{type}</span>
+                      <span className="font-medium">{count}</span>
+                    </div>
+                  ))}
+                {Object.keys(stats.by_type).length > 5 && (
+                  <p className="text-xs text-muted-foreground">
+                    +{Object.keys(stats.by_type).length - 5} more
+                  </p>
+                )}
+              </div>
             </CardContent>
           </Card>
         </div>
