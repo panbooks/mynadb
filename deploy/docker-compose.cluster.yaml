@@ -101,7 +101,7 @@ services:
     image: mynadb:latest
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: deploy/docker/Dockerfile
     container_name: mynadb-1
     environment:
       MYNADB_NODE_ID: mynadb-1
@@ -134,7 +134,7 @@ services:
     image: mynadb:latest
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: deploy/docker/Dockerfile
     container_name: mynadb-2
     environment:
       MYNADB_NODE_ID: mynadb-2
@@ -167,7 +167,7 @@ services:
     image: mynadb:latest
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: deploy/docker/Dockerfile
     container_name: mynadb-3
     environment:
       MYNADB_NODE_ID: mynadb-3

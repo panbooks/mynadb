@@ -28,7 +28,7 @@ An AI-generated interactive dashboard for visualizing MynaDB CPU metrics.
 
 3. **Start the dashboard server:**
    ```bash
-   cd temp_web
+   cd web/dashboard
    python3 -m http.server 8080
    ```
 
@@ -40,7 +40,7 @@ An AI-generated interactive dashboard for visualizing MynaDB CPU metrics.
 ## File Structure
 
 ```
-temp_web/
+web/dashboard/
 ├── index.html          # Main dashboard HTML
 ├── css/
 │   └── styles.css      # Dark/light theme styles

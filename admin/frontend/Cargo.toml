@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 leptos = { version = "0.6", features = ["csr"] }
 leptos_router = { version = "0.6", features = ["csr"] }
-admin-types = { path = "../admin-types" }
+admin-types = { path = "../types" }
 gloo-net = "0.5"
 gloo-timers = "0.3"
 wasm-bindgen = "0.2"

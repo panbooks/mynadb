@@ -62,7 +62,7 @@ fn main() {
 }
 
 fn compile_protos() {
-    let proto_files = ["proto/meta.proto"];
+    let proto_files = ["src/proto/meta.proto"];
 
     // Rerun if proto files change
     for proto in &proto_files {
@@ -70,7 +70,7 @@ fn compile_protos() {
     }
 
     // Check if proto directory exists (skip if not - allows building without protos)
-    if !std::path::Path::new("proto").exists() {
+    if !std::path::Path::new("src/proto").exists() {
         return;
     }
 
@@ -78,6 +78,6 @@ fn compile_protos() {
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
-        .compile_protos(&proto_files, &["proto"])
+        .compile_protos(&proto_files, &["src/proto"])
         .expect("Failed to compile protobuf files");
 }
