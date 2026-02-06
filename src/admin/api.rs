@@ -69,9 +69,10 @@ impl<T> ApiResponse<T> {
 struct ClusterStatusResponse {
     healthy: bool,
     meta_leader: Option<String>,
+    meta_term: Option<u64>,
     node_counts: NodeCounts,
-    total_tables: u32,
-    total_partitions: u32,
+    table_count: u32,
+    partition_count: u32,
     warnings: Vec<String>,
 }
 
@@ -188,8 +189,8 @@ async fn cluster_status(State(state): State<AdminState>) -> impl IntoResponse {
         Err(_) => Vec::new(),
     };
 
-    let total_tables = tables.len() as u32;
-    let total_partitions: u32 = tables.iter().map(|t| t.partition_count).sum();
+    let table_count = tables.len() as u32;
+    let partition_count: u32 = tables.iter().map(|t| t.partition_count).sum();
 
     // Check for warnings
     let mut warnings = Vec::new();
@@ -219,9 +220,10 @@ async fn cluster_status(State(state): State<AdminState>) -> impl IntoResponse {
     let response = ClusterStatusResponse {
         healthy,
         meta_leader,
+        meta_term: None, // Not currently available from MetaClient
         node_counts,
-        total_tables,
-        total_partitions,
+        table_count,
+        partition_count,
         warnings,
     };
 
@@ -239,20 +241,14 @@ struct ListNodesQuery {
 
 #[derive(Serialize)]
 struct NodeSummary {
-    node_id: String,
+    id: String,
     role: String,
     state: String,
     mode: Option<String>,
     advertise_addr: String,
     zone: Option<String>,
-    tables_owned: u32,
-    last_heartbeat_ago_secs: i64,
-}
-
-#[derive(Serialize)]
-struct ListNodesResponse {
-    nodes: Vec<NodeSummary>,
-    total: usize,
+    tables_owned: Option<u32>,
+    last_heartbeat: Option<String>,
 }
 
 async fn list_nodes(
@@ -264,7 +260,7 @@ async fn list_nodes(
         Err(e) => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(ApiResponse::<ListNodesResponse>::error(format!(
+                Json(ApiResponse::<Vec<NodeSummary>>::error(format!(
                     "Failed to connect to Meta: {}",
                     e
                 ))),
@@ -293,11 +289,6 @@ async fn list_nodes(
 
     match meta_client.list_nodes(role_filter, state_filter).await {
         Ok(nodes) => {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64;
-
             let mut summaries: Vec<NodeSummary> = nodes
                 .into_iter()
                 .filter(|n| {
@@ -315,35 +306,36 @@ async fn list_nodes(
                     true
                 })
                 .map(|n| {
-                    let heartbeat_ago = (now - n.last_heartbeat) / 1000;
                     let zone = n.zone().map(|s| s.to_string());
+                    // Convert timestamp (ms) to ISO string
+                    let last_heartbeat = if n.last_heartbeat > 0 {
+                        let secs = (n.last_heartbeat / 1000) as i64;
+                        let nsecs = ((n.last_heartbeat % 1000) * 1_000_000) as u32;
+                        chrono::DateTime::from_timestamp(secs, nsecs)
+                            .map(|dt| dt.to_rfc3339())
+                    } else {
+                        None
+                    };
                     NodeSummary {
-                        node_id: n.node_id,
+                        id: n.node_id,
                         role: format!("{:?}", n.role),
                         state: format!("{:?}", n.state),
                         mode: n.mode.map(|m| format!("{:?}", m)),
                         advertise_addr: n.advertise_addr,
                         zone,
-                        tables_owned: 0, // TODO: Count from table list
-                        last_heartbeat_ago_secs: heartbeat_ago,
+                        tables_owned: None, // TODO: Count from table list
+                        last_heartbeat,
                     }
                 })
                 .collect();
 
-            summaries.sort_by(|a, b| a.node_id.cmp(&b.node_id));
-            let total = summaries.len();
+            summaries.sort_by(|a, b| a.id.cmp(&b.id));
 
-            (
-                StatusCode::OK,
-                Json(ApiResponse::ok(ListNodesResponse {
-                    nodes: summaries,
-                    total,
-                })),
-            )
+            (StatusCode::OK, Json(ApiResponse::ok(summaries)))
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<ListNodesResponse>::error(format!(
+            Json(ApiResponse::<Vec<NodeSummary>>::error(format!(
                 "Failed to list nodes: {}",
                 e
             ))),
@@ -351,34 +343,51 @@ async fn list_nodes(
     }
 }
 
+/// Node detail response - matches frontend NodeDetail type
 #[derive(Serialize)]
 struct NodeDetailResponse {
-    node: NodeDetail,
-    tables_owned: Vec<String>,
-    health: NodeHealth,
-}
-
-#[derive(Serialize)]
-struct NodeDetail {
-    node_id: String,
+    id: String,
     role: String,
     state: String,
     mode: Option<String>,
     advertise_addr: String,
     http_addr: Option<String>,
     flight_addr: Option<String>,
-    registered_at: i64,
-    last_heartbeat: i64,
     labels: std::collections::HashMap<String, String>,
-    backing_standby: Option<String>,
-    backed_primaries: Vec<String>,
+    zone: Option<String>,
+    paired_node_id: Option<String>,
+    last_heartbeat: Option<String>,
+    tables_owned: Option<u32>,
+    registered_at: Option<String>,
+    health: Option<NodeHealthInfo>,
+    tables: Option<Vec<TableInfo>>,
+    stats: Option<NodeStatsInfo>,
 }
 
 #[derive(Serialize)]
-struct NodeHealth {
-    healthy: bool,
-    last_heartbeat_ms: i64,
-    heartbeat_age_secs: i64,
+struct NodeHealthInfo {
+    is_healthy: bool,
+    last_heartbeat: String,
+    heartbeat_age_ms: i64,
+    message: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TableInfo {
+    key: String,
+    catalog: String,
+    schema: String,
+    table: String,
+}
+
+#[derive(Serialize)]
+struct NodeStatsInfo {
+    memory_used_bytes: Option<u64>,
+    memory_total_bytes: Option<u64>,
+    cache_hits: Option<u64>,
+    cache_misses: Option<u64>,
+    active_queries: Option<u32>,
+    compaction_status: Option<String>,
 }
 
 async fn get_node(
@@ -402,7 +411,7 @@ async fn get_node(
         Ok(nodes) => {
             if let Some(node) = nodes.into_iter().find(|n| n.node_id == node_id) {
                 // Get tables owned by this node
-                let tables = meta_client
+                let tables_meta = meta_client
                     .list_tables_for_node(&node_id)
                     .await
                     .unwrap_or_default();
@@ -411,29 +420,64 @@ async fn get_node(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_millis() as i64;
-                let heartbeat_age = (now - node.last_heartbeat) / 1000;
+                let heartbeat_age_ms = now - node.last_heartbeat;
+
+                // Convert timestamps to ISO strings
+                let last_heartbeat_str = if node.last_heartbeat > 0 {
+                    let secs = (node.last_heartbeat / 1000) as i64;
+                    let nsecs = ((node.last_heartbeat % 1000) * 1_000_000) as u32;
+                    chrono::DateTime::from_timestamp(secs, nsecs)
+                        .map(|dt| dt.to_rfc3339())
+                } else {
+                    None
+                };
+
+                let registered_at_str = if node.registered_at > 0 {
+                    let secs = (node.registered_at / 1000) as i64;
+                    let nsecs = ((node.registered_at % 1000) * 1_000_000) as u32;
+                    chrono::DateTime::from_timestamp(secs, nsecs)
+                        .map(|dt| dt.to_rfc3339())
+                } else {
+                    None
+                };
+
+                let zone = node.zone().map(|s| s.to_string());
+                let tables_owned = Some(tables_meta.len() as u32);
+
+                let tables: Vec<TableInfo> = tables_meta
+                    .iter()
+                    .map(|t| TableInfo {
+                        key: t.table_key(),
+                        catalog: t.catalog.clone(),
+                        schema: t.schema.clone(),
+                        table: t.table.clone(),
+                    })
+                    .collect();
+
+                let health = last_heartbeat_str.as_ref().map(|hb| NodeHealthInfo {
+                    is_healthy: heartbeat_age_ms < 30_000, // 30 seconds
+                    last_heartbeat: hb.clone(),
+                    heartbeat_age_ms,
+                    message: None,
+                });
 
                 let response = NodeDetailResponse {
-                    node: NodeDetail {
-                        node_id: node.node_id,
-                        role: format!("{:?}", node.role),
-                        state: format!("{:?}", node.state),
-                        mode: node.mode.map(|m| format!("{:?}", m)),
-                        advertise_addr: node.advertise_addr,
-                        http_addr: node.http_addr,
-                        flight_addr: node.flight_addr,
-                        registered_at: node.registered_at,
-                        last_heartbeat: node.last_heartbeat,
-                        labels: node.labels,
-                        backing_standby: node.backing_standby,
-                        backed_primaries: node.backed_primaries,
-                    },
-                    tables_owned: tables.into_iter().map(|t| t.table_key()).collect(),
-                    health: NodeHealth {
-                        healthy: heartbeat_age < 30,
-                        last_heartbeat_ms: node.last_heartbeat,
-                        heartbeat_age_secs: heartbeat_age,
-                    },
+                    id: node.node_id,
+                    role: format!("{:?}", node.role),
+                    state: format!("{:?}", node.state),
+                    mode: node.mode.map(|m| format!("{:?}", m)),
+                    advertise_addr: node.advertise_addr,
+                    http_addr: node.http_addr,
+                    flight_addr: node.flight_addr,
+                    labels: node.labels,
+                    zone,
+                    paired_node_id: node.backing_standby,
+                    last_heartbeat: last_heartbeat_str,
+                    tables_owned,
+                    registered_at: registered_at_str,
+                    health,
+                    tables: Some(tables),
+                    stats: None, // Stats would come from data node directly
                 };
 
                 (StatusCode::OK, Json(ApiResponse::ok(response)))
@@ -462,34 +506,41 @@ struct ListTablesQuery {
     schema: Option<String>,
     owner: Option<String>,
     search: Option<String>,
-    #[serde(default)]
-    offset: u32,
-    #[serde(default = "default_limit")]
-    limit: u32,
+    #[serde(default = "default_page")]
+    page: u32,
+    #[serde(default = "default_page_size")]
+    page_size: u32,
 }
 
-fn default_limit() -> u32 {
-    100
+fn default_page() -> u32 {
+    1
 }
 
+fn default_page_size() -> u32 {
+    20
+}
+
+/// Table summary - matches frontend TableSummary type
 #[derive(Serialize)]
 struct TableSummary {
+    key: String,
     catalog: String,
     schema: String,
     table: String,
-    primary_owner: Option<String>,
-    owner_count: u32,
+    owner_node_id: Option<String>,
     partition_count: u32,
     total_bytes: u64,
     total_rows: u64,
 }
 
+/// Paginated response - matches frontend PaginatedResponse type
 #[derive(Serialize)]
 struct ListTablesResponse {
-    tables: Vec<TableSummary>,
+    items: Vec<TableSummary>,
     total: usize,
-    offset: u32,
-    limit: u32,
+    page: u32,
+    page_size: u32,
+    total_pages: u32,
 }
 
 async fn list_tables(
@@ -536,14 +587,13 @@ async fn list_tables(
                     true
                 })
                 .map(|t| {
-                    let primary_owner = t.primary_owner().map(|s| s.to_string());
-                    let owner_count = t.owner_node_ids.len() as u32;
+                    let owner_node_id = t.primary_owner().map(|s| s.to_string());
                     TableSummary {
+                        key: t.table_key(),
                         catalog: t.catalog,
                         schema: t.schema,
                         table: t.table,
-                        primary_owner,
-                        owner_count,
+                        owner_node_id,
                         partition_count: t.partition_count,
                         total_bytes: t.total_bytes,
                         total_rows: t.total_rows,
@@ -553,18 +603,22 @@ async fn list_tables(
 
             let total = summaries.len();
 
-            // Apply pagination
-            let offset = query.offset as usize;
-            let limit = query.limit as usize;
-            summaries = summaries.into_iter().skip(offset).take(limit).collect();
+            // Apply pagination (page is 1-based)
+            let page = query.page.max(1);
+            let page_size = query.page_size;
+            let offset = ((page - 1) * page_size) as usize;
+            let total_pages = ((total as u32) + page_size - 1) / page_size;
+
+            summaries = summaries.into_iter().skip(offset).take(page_size as usize).collect();
 
             (
                 StatusCode::OK,
                 Json(ApiResponse::ok(ListTablesResponse {
-                    tables: summaries,
+                    items: summaries,
                     total,
-                    offset: query.offset,
-                    limit: query.limit,
+                    page,
+                    page_size,
+                    total_pages,
                 })),
             )
         }

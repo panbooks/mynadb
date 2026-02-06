@@ -48,7 +48,7 @@ async fn serve_index() -> impl IntoResponse {
             .header(header::CACHE_CONTROL, "no-cache")
             .body(Body::from(contents))
             .unwrap(),
-        Err(_) => serve_fallback_index(),
+        Err(_) => serve_not_built_error(),
     }
 }
 
@@ -102,86 +102,18 @@ async fn serve_asset(Path(path): Path<String>) -> impl IntoResponse {
 fn not_found() -> Response<Body> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
-        .body(Body::from("Not Found"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"error":"Not found"}"#))
         .unwrap()
 }
 
-/// Serve a fallback index.html when the React app is not built
-fn serve_fallback_index() -> Response<Body> {
-    let html = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MynaDB Admin Console</title>
-    <style>
-        body {
-            font-family: system-ui, -apple-system, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            background: #f3f4f6;
-        }
-        .container {
-            max-width: 600px;
-            padding: 2rem;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        h1 { color: #3b82f6; margin-top: 0; }
-        code {
-            background: #f3f4f6;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 14px;
-        }
-        pre {
-            background: #1f2937;
-            color: #f9fafb;
-            padding: 1rem;
-            border-radius: 8px;
-            overflow-x: auto;
-        }
-        .note {
-            background: #dbeafe;
-            border-left: 4px solid #3b82f6;
-            padding: 1rem;
-            margin-top: 1rem;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>MynaDB Admin Console</h1>
-        <p>The admin frontend is not yet built. To build and serve the frontend:</p>
-
-        <h3>Development Mode</h3>
-        <pre>cd admin-ui
-npm install
-npm run dev</pre>
-        <p>Then access the admin console at <code>http://localhost:3000/admin</code></p>
-
-        <h3>Production Build</h3>
-        <pre>cd admin-ui
-npm install
-npm run build</pre>
-        <p>The built files will be in <code>admin-ui/dist/</code></p>
-        <p>After building, restart the server to serve the built files.</p>
-
-        <div class="note">
-            <strong>API Available:</strong> The API is available at <code>/admin/api/v1/</code>
-            <br>Try: <a href="/admin/api/v1/cluster/status">/admin/api/v1/cluster/status</a>
-        </div>
-    </div>
-</body>
-</html>"#;
-
+/// Return error when the React app is not built
+fn serve_not_built_error() -> Response<Body> {
     Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-        .body(Body::from(html))
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            r#"{"error":"Frontend not built","message":"Run 'cd admin-ui && npm install && npm run build' to build the frontend"}"#
+        ))
         .unwrap()
 }

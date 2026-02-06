@@ -1,6 +1,5 @@
 [workspace]
-members = [".", "admin/types"]
-# Note: admin/frontend is built separately with trunk
+members = ["."]
 
 [package]
 name = "mynadb"
@@ -66,7 +65,6 @@ uuid = { version = "1.7", features = ["v4"] }
 hostname = "0.4"
 
 # Admin Console
-admin-types = { path = "admin/types" }
 futures-util = "0.3"
 axum-extra = { version = "0.9", features = ["typed-header"] }
 tower-http = { version = "0.5", features = ["cors", "fs"] }
