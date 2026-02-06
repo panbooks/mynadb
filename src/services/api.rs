@@ -1414,6 +1414,12 @@ pub fn build_router(state: AppState, auth_middleware: Arc<auth::AuthMiddleware>)
         .route("/explain/:db", post(explain_handler_post))
         .route("/analyze/:db", get(analyze_handler))
         .route("/analyze/:db", post(analyze_handler_post))
+        // Grafana datasource endpoints
+        .route("/grafana/search", get(super::grafana::search_handler))
+        .route("/grafana/query", post(super::grafana::query_handler))
+        .route("/grafana/tag-keys", get(super::grafana::tag_keys_handler))
+        .route("/grafana/tag-values", get(super::grafana::tag_values_handler))
+        .route("/grafana/health", get(super::grafana::health_handler))
         // Database management
         .route("/databases", get(list_databases_handler))
         .route("/databases", post(create_database_handler))

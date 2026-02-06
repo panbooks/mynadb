@@ -1,0 +1,44 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/master/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "datasource",
+  "name": "MynaDB",
+  "id": "mynadb-datasource",
+  "metrics": true,
+  "backend": false,
+  "streaming": false,
+  "alerting": false,
+  "annotations": false,
+  "logs": false,
+  "tracing": false,
+
+  "info": {
+    "description": "MynaDB time series database datasource plugin for Grafana",
+    "author": {
+      "name": "MynaDB Team",
+      "url": "https://github.com/panbooks/mynadb"
+    },
+    "keywords": ["mynadb", "timeseries", "sql", "datasource"],
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "links": [
+      {
+        "name": "GitHub",
+        "url": "https://github.com/panbooks/mynadb"
+      },
+      {
+        "name": "Documentation",
+        "url": "https://github.com/panbooks/mynadb/blob/main/README.md"
+      }
+    ],
+    "screenshots": [],
+    "version": "1.0.0",
+    "updated": "2026-02-06"
+  },
+
+  "dependencies": {
+    "grafanaDependency": ">=9.0.0",
+    "plugins": []
+  }
+}

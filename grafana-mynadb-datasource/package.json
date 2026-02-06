@@ -1,0 +1,29 @@
+{
+  "name": "mynadb-datasource",
+  "version": "1.0.0",
+  "description": "MynaDB datasource plugin for Grafana",
+  "scripts": {
+    "build": "grafana-toolkit plugin:build",
+    "dev": "grafana-toolkit plugin:dev",
+    "watch": "grafana-toolkit plugin:dev --watch",
+    "test": "grafana-toolkit plugin:test",
+    "sign": "grafana-toolkit plugin:sign"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/panbooks/mynadb"
+  },
+  "author": "MynaDB Team",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@grafana/data": "^10.0.0",
+    "@grafana/runtime": "^10.0.0",
+    "@grafana/toolkit": "^10.0.0",
+    "@grafana/ui": "^10.0.0",
+    "@types/react": "^18.0.0"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}
