@@ -45,6 +45,8 @@ pub struct AppState {
     pub metadata_manager: Option<SharedMetadataManager>,
     /// File cache for Object Store Parquet files
     pub file_cache: Option<SharedFileCache>,
+    /// Query tracer for observability
+    pub query_tracer: Option<Arc<crate::observability::QueryTracer>>,
 }
 
 #[derive(Deserialize)]
@@ -1353,6 +1355,109 @@ pub async fn delete_old_partitions_handler(
     }
 }
 
+// ===== Query Tracing & Profiling Handlers =====
+
+#[derive(Deserialize)]
+pub struct TraceListParams {
+    /// Maximum number of timelines to return (default: 100)
+    #[serde(default = "default_trace_limit")]
+    pub limit: usize,
+}
+
+fn default_trace_limit() -> usize {
+    100
+}
+
+/// GET /traces/recent - Get recent query timelines
+pub async fn recent_traces_handler(
+    State(state): State<AppState>,
+    AxumQuery(params): AxumQuery<TraceListParams>,
+) -> impl IntoResponse {
+    debug!("Recent Traces Request: limit={}", params.limit);
+
+    if let Some(ref tracer) = state.query_tracer {
+        let timelines = tracer.get_recent_timelines(params.limit);
+        (StatusCode::OK, Json(serde_json::json!(timelines)))
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "Query tracing is not enabled"
+            })),
+        )
+    }
+}
+
+/// GET /traces/:query_id - Get a specific query timeline
+pub async fn get_trace_handler(
+    Path(query_id): Path<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    debug!("Get Trace Request: query_id={}", query_id);
+
+    if let Some(ref tracer) = state.query_tracer {
+        if let Some(timeline) = tracer.get_timeline(&query_id) {
+            (StatusCode::OK, Json(serde_json::json!(timeline)))
+        } else {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("Timeline not found: {}", query_id)
+                })),
+            )
+        }
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "Query tracing is not enabled"
+            })),
+        )
+    }
+}
+
+/// GET /traces/slow - Get recent slow queries
+pub async fn slow_queries_handler(
+    State(state): State<AppState>,
+    AxumQuery(params): AxumQuery<TraceListParams>,
+) -> impl IntoResponse {
+    debug!("Slow Queries Request: limit={}", params.limit);
+
+    if let Some(ref tracer) = state.query_tracer {
+        let slow_queries = tracer.get_recent_slow_queries(params.limit);
+        (StatusCode::OK, Json(serde_json::json!(slow_queries)))
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "Query tracing is not enabled"
+            })),
+        )
+    }
+}
+
+/// POST /traces/clear - Clear all trace data
+pub async fn clear_traces_handler(State(state): State<AppState>) -> impl IntoResponse {
+    info!("Clear Traces Request");
+
+    if let Some(ref tracer) = state.query_tracer {
+        tracer.clear();
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "message": "Query traces cleared successfully"
+            })),
+        )
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "Query tracing is not enabled"
+            })),
+        )
+    }
+}
+
 // ===== Fallback Handler =====
 
 pub async fn log_request(req: Request) -> impl IntoResponse {
@@ -1457,6 +1562,11 @@ pub fn build_router(state: AppState, auth_middleware: Arc<auth::AuthMiddleware>)
             "/retention/:catalog/:schema/:table",
             post(delete_old_partitions_handler),
         )
+        // Query tracing endpoints
+        .route("/traces/recent", get(recent_traces_handler))
+        .route("/traces/slow", get(slow_queries_handler))
+        .route("/traces/:query_id", get(get_trace_handler))
+        .route("/traces/clear", post(clear_traces_handler))
         .fallback(log_request)
         .with_state(state)
         .layer(axum::middleware::from_fn(auth::auth_middleware_fn))

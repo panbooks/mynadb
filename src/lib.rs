@@ -12,6 +12,7 @@ pub mod flight_protocol;
 pub mod jobs;
 pub mod meta;
 pub mod node;
+pub mod observability;
 pub mod query;
 pub mod router;
 pub mod services;

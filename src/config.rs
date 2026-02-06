@@ -48,6 +48,9 @@ pub struct Config {
     /// Admin console configuration (for --role admin)
     #[serde(default)]
     pub admin: Option<AdminConfig>,
+    /// Query tracing and profiling configuration
+    #[serde(default)]
+    pub tracing: crate::observability::TracingConfig,
 }
 
 /// Admin console configuration

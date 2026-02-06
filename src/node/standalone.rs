@@ -146,6 +146,31 @@ pub async fn run(config_path: &str) {
     let cache_for_shutdown = cache.clone();
     let data_dir_for_shutdown = config.storage.data_dir.clone();
 
+    // Initialize query tracer if enabled
+    let query_tracer = if config.tracing.enabled || config.tracing.slow_query_logging {
+        use crate::observability::{QueryTracer, SlowQueryLogger};
+        use crate::observability::timeline::TimelineStore;
+
+        let timeline_store = if config.tracing.timeline_enabled {
+            Some(Arc::new(TimelineStore::new(config.tracing.max_timelines)))
+        } else {
+            None
+        };
+
+        let slow_query_logger = if config.tracing.slow_query_logging {
+            Some(Arc::new(SlowQueryLogger::new(
+                config.tracing.slow_query_threshold_ms,
+                true,
+            )))
+        } else {
+            None
+        };
+
+        Some(Arc::new(QueryTracer::new(timeline_store, slow_query_logger)))
+    } else {
+        None
+    };
+
     // Build application state
     let state = api::AppState {
         cache,
@@ -156,6 +181,7 @@ pub async fn run(config_path: &str) {
         wal,
         metadata_manager: Some(metadata_manager),
         file_cache,
+        query_tracer,
     };
 
     // Initialize authentication

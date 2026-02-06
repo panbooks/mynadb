@@ -10,6 +10,7 @@
 use crate::query::analyzers::default_analyzer_rules;
 use crate::query::logical_optimizers::default_optimizer_rules;
 use crate::query::physical_optimizers::default_physical_optimizer_rules;
+use crate::observability::QueryTracer;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::Result;
@@ -18,6 +19,7 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
 use futures::StreamExt;
+use std::sync::Arc;
 
 /// Create a SessionState with custom analyzer and optimizer rules
 pub fn create_custom_session_state(base_state: SessionState) -> SessionState {
@@ -50,6 +52,7 @@ pub fn create_custom_session_state(base_state: SessionState) -> SessionState {
 /// Custom query executor with integrated DataFusion pipeline
 pub struct CustomQueryExecutor {
     ctx: SessionContext,
+    tracer: Arc<QueryTracer>,
 }
 
 impl CustomQueryExecutor {
@@ -57,12 +60,25 @@ impl CustomQueryExecutor {
     pub fn new(base_ctx: SessionContext) -> Self {
         let custom_state = create_custom_session_state(base_ctx.state());
         let ctx = SessionContext::new_with_state(custom_state);
-        Self { ctx }
+        Self {
+            ctx,
+            tracer: Arc::new(QueryTracer::disabled()),
+        }
+    }
+
+    /// Create a new executor with tracing enabled
+    pub fn new_with_tracer(base_ctx: SessionContext, tracer: Arc<QueryTracer>) -> Self {
+        let custom_state = create_custom_session_state(base_ctx.state());
+        let ctx = SessionContext::new_with_state(custom_state);
+        Self { ctx, tracer }
     }
 
     /// Create from an existing SessionContext without modifying it
     pub fn from_context(ctx: SessionContext) -> Self {
-        Self { ctx }
+        Self {
+            ctx,
+            tracer: Arc::new(QueryTracer::disabled()),
+        }
     }
 
     /// Get the underlying session context
@@ -119,58 +135,158 @@ impl CustomQueryExecutor {
         }
     }
 
-    /// Execute with explicit state control (advanced usage)
-    pub async fn execute_with_state(&self, sql: &str) -> Result<Vec<RecordBatch>> {
+    /// Execute with explicit state control and detailed tracing (advanced usage)
+    pub async fn execute_with_state(&self, sql: &str, database: &str) -> Result<Vec<RecordBatch>> {
         let state = self.ctx.state();
 
+        // Start tracing if enabled
+        let mut trace = if self.tracer.is_enabled() {
+            Some(self.tracer.start_query(sql.to_string(), database.to_string()))
+        } else {
+            None
+        };
+
         // Parse
-        let logical_plan = state.create_logical_plan(sql).await?;
-        tracing::debug!("Parsed logical plan");
+        if let Some(ref mut t) = trace {
+            t.start_phase("parse");
+        }
+        let logical_plan = match state.create_logical_plan(sql).await {
+            Ok(plan) => {
+                tracing::debug!("Parsed logical plan");
+                plan
+            }
+            Err(e) => {
+                if let Some(t) = trace {
+                    t.complete_with_error(e.to_string());
+                }
+                return Err(e);
+            }
+        };
 
         // Analyze (custom + builtin rules)
-        let analyzed_plan = state.analyzer().execute_and_check(
+        if let Some(ref mut t) = trace {
+            t.start_phase("analyze");
+        }
+        let analyzed_plan = match state.analyzer().execute_and_check(
             logical_plan,
             state.config_options(),
             |_plan, rule| {
                 tracing::trace!("Analyzer rule '{}' applied", rule.name());
             },
-        )?;
-        tracing::debug!("Analysis complete");
+        ) {
+            Ok(plan) => {
+                tracing::debug!("Analysis complete");
+                plan
+            }
+            Err(e) => {
+                if let Some(t) = trace {
+                    t.complete_with_error(e.to_string());
+                }
+                return Err(e);
+            }
+        };
 
         // Logical optimize (custom + builtin rules)
-        let optimized_plan = state
+        if let Some(ref mut t) = trace {
+            t.start_phase("optimize_logical");
+        }
+        let optimized_plan = match state
             .optimizer()
             .optimize(analyzed_plan, &state, |_plan, rule| {
                 tracing::trace!("Optimizer rule '{}' applied", rule.name());
-            })?;
-        tracing::debug!("Logical optimization complete");
+            }) {
+            Ok(plan) => {
+                tracing::debug!("Logical optimization complete");
+                plan
+            }
+            Err(e) => {
+                if let Some(t) = trace {
+                    t.complete_with_error(e.to_string());
+                }
+                return Err(e);
+            }
+        };
 
         // Physical plan
-        let physical_plan = state.create_physical_plan(&optimized_plan).await?;
-        tracing::debug!("Physical plan created");
+        if let Some(ref mut t) = trace {
+            t.start_phase("create_physical_plan");
+        }
+        let physical_plan = match state.create_physical_plan(&optimized_plan).await {
+            Ok(plan) => {
+                tracing::debug!("Physical plan created");
+                plan
+            }
+            Err(e) => {
+                if let Some(t) = trace {
+                    t.complete_with_error(e.to_string());
+                }
+                return Err(e);
+            }
+        };
 
         // Physical optimize (custom + builtin rules)
-        let physical_plan =
-            state
-                .physical_optimizers()
-                .iter()
-                .try_fold(physical_plan, |plan, optimizer| {
-                    let result = optimizer.optimize(plan, state.config_options())?;
-                    tracing::trace!("Physical optimizer '{}' applied", optimizer.name());
-                    Ok(result) as Result<_>
-                })?;
-        tracing::debug!("Physical optimization complete");
+        if let Some(ref mut t) = trace {
+            t.start_phase("optimize_physical");
+        }
+        let physical_plan = match state
+            .physical_optimizers()
+            .iter()
+            .try_fold(physical_plan, |plan, optimizer| {
+                let result = optimizer.optimize(plan, state.config_options())?;
+                tracing::trace!("Physical optimizer '{}' applied", optimizer.name());
+                Ok(result) as Result<_>
+            }) {
+            Ok(plan) => {
+                tracing::debug!("Physical optimization complete");
+                plan
+            }
+            Err(e) => {
+                if let Some(t) = trace {
+                    t.complete_with_error(e.to_string());
+                }
+                return Err(e);
+            }
+        };
 
         // Execute
+        if let Some(ref mut t) = trace {
+            t.start_phase("execute");
+        }
         let task_ctx = state.task_ctx();
-        let mut stream = execute_stream(physical_plan, task_ctx)?;
+        let mut stream = match execute_stream(physical_plan, task_ctx) {
+            Ok(stream) => stream,
+            Err(e) => {
+                if let Some(t) = trace {
+                    t.complete_with_error(e.to_string());
+                }
+                return Err(e);
+            }
+        };
 
         let mut batches = Vec::new();
+        let mut total_rows = 0;
         while let Some(batch_result) = stream.next().await {
-            batches.push(batch_result?);
+            match batch_result {
+                Ok(batch) => {
+                    total_rows += batch.num_rows();
+                    batches.push(batch);
+                }
+                Err(e) => {
+                    if let Some(t) = trace {
+                        t.complete_with_error(e.to_string());
+                    }
+                    return Err(e);
+                }
+            }
         }
 
-        tracing::debug!("Execution complete, {} batches", batches.len());
+        tracing::debug!("Execution complete, {} batches, {} rows", batches.len(), total_rows);
+
+        // Complete trace with success
+        if let Some(t) = trace {
+            t.complete(total_rows, 0, 0, 0); // TODO: collect actual partition/file stats
+        }
+
         Ok(batches)
     }
 }

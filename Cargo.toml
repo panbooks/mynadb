@@ -34,6 +34,10 @@ toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
+tracing-opentelemetry = "0.26"
+opentelemetry = { version = "0.25", features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.25", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.25", features = ["tonic", "trace"] }
 clap = { version = "4.5", features = ["derive"] }
 msql-srv = "0.10"
 crc32fast = "1.4"
