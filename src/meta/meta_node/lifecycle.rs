@@ -85,6 +85,55 @@ impl MetaNode {
             });
         }
 
+        // Ownership TTL cleanup task (only runs on leader)
+        if self.config.ownership.enabled {
+            let node = Arc::clone(self);
+            let interval_secs = self.config.ownership.check_interval_secs;
+
+            info!(
+                "Starting ownership TTL cleanup task (TTL: {}s, interval: {}s)",
+                self.config.ownership.ttl_secs, interval_secs
+            );
+
+            tokio::spawn(async move {
+                // Initial delay to let the cluster stabilize
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+                loop {
+                    interval.tick().await;
+
+                    // Only run on leader
+                    if !node.is_leader().await {
+                        continue;
+                    }
+
+                    // Cleanup expired ownership entries
+                    match node.cleanup_expired_owners().await {
+                        Ok((removed_count, orphaned_tables)) => {
+                            if removed_count > 0 {
+                                info!(
+                                    "Ownership TTL cleanup: {} expired owners removed, {} orphaned tables",
+                                    removed_count,
+                                    orphaned_tables.len()
+                                );
+                            }
+                            if !orphaned_tables.is_empty() {
+                                warn!(
+                                    "Tables with no owners after TTL cleanup: {:?}",
+                                    orphaned_tables
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Ownership TTL cleanup failed: {}", e);
+                        }
+                    }
+                }
+            });
+        }
+
         // Table rebalancer task (only runs on leader)
         if self.config.rebalancer.enabled {
             let node = Arc::clone(self);
@@ -148,9 +197,9 @@ impl MetaNode {
         for table in tables {
             let table_path = format!("{}.{}.{}", table.catalog, table.schema, table.table);
 
-            // Find dead owners
-            let dead_owners: Vec<String> = table
-                .owner_node_ids
+            // Find dead owners (includes expired owners)
+            let all_owner_ids = table.all_owners();
+            let dead_owners: Vec<String> = all_owner_ids
                 .iter()
                 .filter(|owner_id| !active_nodes.contains(*owner_id))
                 .cloned()
@@ -190,8 +239,7 @@ impl MetaNode {
             }
 
             // Check if table is now orphaned
-            let live_owners: Vec<&String> = table
-                .owner_node_ids
+            let live_owners: Vec<&String> = all_owner_ids
                 .iter()
                 .filter(|owner_id| active_nodes.contains(*owner_id))
                 .collect();
@@ -253,7 +301,7 @@ impl MetaNode {
         let all_tables = self.state_machine.list_all_tables();
         let nodes_with_tables: std::collections::HashSet<String> = all_tables
             .iter()
-            .flat_map(|t| t.owner_node_ids.iter().cloned())
+            .flat_map(|t| t.all_owners())
             .collect();
 
         // Check each drained node with O(1) lookup

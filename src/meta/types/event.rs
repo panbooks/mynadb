@@ -55,6 +55,13 @@ pub enum EventType {
     /// Routers should rebuild their table_owners cache from Meta.
     /// Payload: {"evicted_count": N, "remaining_count": M}
     TablesCacheRefresh = 18,
+
+    /// Table owner expired (TTL-based ownership cleanup)
+    ///
+    /// Published when a table owner's TTL expires and is cleaned up.
+    /// Routers should update their routing cache to remove the expired owner.
+    /// Payload: {"catalog": "...", "schema": "...", "table": "...", "expired_owner": "...", "remaining_owners": [...]}
+    TableOwnerExpired = 19,
 }
 
 impl From<i32> for EventType {
@@ -74,6 +81,7 @@ impl From<i32> for EventType {
             16 => EventType::TableReassigned,
             17 => EventType::DistributionConfigChanged,
             18 => EventType::TablesCacheRefresh,
+            19 => EventType::TableOwnerExpired,
             _ => EventType::Unknown,
         }
     }

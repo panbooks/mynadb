@@ -220,7 +220,18 @@ impl MetaStateMachine {
                 schema,
                 table,
                 owner_node_id,
-            } => self.add_table_owner(&catalog, &schema, &table, &owner_node_id),
+                ttl_ms,
+            } => self.add_table_owner(&catalog, &schema, &table, &owner_node_id, ttl_ms),
+
+            MetaCommand::RefreshOwnerTTL {
+                catalog,
+                schema,
+                table,
+                owner_node_id,
+                ttl_ms,
+            } => self.refresh_owner_ttl(&catalog, &schema, &table, &owner_node_id, ttl_ms),
+
+            MetaCommand::CleanupExpiredOwners => self.cleanup_expired_owners(),
 
             MetaCommand::RemoveTableOwner {
                 catalog,

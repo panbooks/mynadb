@@ -45,13 +45,34 @@ pub enum MetaCommand {
     /// Add an additional owner to a table (for rerouted writes)
     ///
     /// Called when a write is rerouted to a fallback node after primary failure.
-    /// The new node becomes a secondary owner.
+    /// The new node becomes a secondary owner with the specified TTL.
     AddTableOwner {
         catalog: String,
         schema: String,
         table: String,
         owner_node_id: String,
+        /// TTL in milliseconds for this ownership (0 = use default)
+        ttl_ms: u64,
     },
+
+    /// Refresh the TTL for an existing table owner
+    ///
+    /// Called periodically by data nodes to keep their ownership alive.
+    /// If the owner is not found, this is a no-op.
+    RefreshOwnerTTL {
+        catalog: String,
+        schema: String,
+        table: String,
+        owner_node_id: String,
+        /// New TTL in milliseconds (0 = use current TTL)
+        ttl_ms: u64,
+    },
+
+    /// Cleanup expired owner entries across all tables
+    ///
+    /// Called periodically by the Meta leader to remove stale owners.
+    /// Returns the number of expired entries removed.
+    CleanupExpiredOwners,
 
     /// Remove an owner from a table
     ///
@@ -311,6 +332,10 @@ pub enum MetaResponse {
         schema: String,
         table: String,
         new_owner: String,
+        /// TTL in milliseconds for this ownership
+        ttl_ms: u64,
+        /// Expiration timestamp
+        expires_at: i64,
         /// All owner nodes after addition
         all_owners: Vec<String>,
         version: u64,
@@ -333,7 +358,36 @@ pub enum MetaResponse {
         schema: String,
         table: String,
         node_id: String,
+        /// TTL was refreshed
+        ttl_refreshed: bool,
+        /// New expiration timestamp (if refreshed)
+        expires_at: i64,
         all_owners: Vec<String>,
+    },
+
+    /// Owner TTL refreshed successfully
+    OwnerTTLRefreshed {
+        catalog: String,
+        schema: String,
+        table: String,
+        owner_node_id: String,
+        expires_at: i64,
+    },
+
+    /// Owner not found for TTL refresh
+    OwnerNotFound {
+        catalog: String,
+        schema: String,
+        table: String,
+        owner_node_id: String,
+    },
+
+    /// Expired owners cleaned up
+    ExpiredOwnersCleaned {
+        /// Number of expired owner entries removed
+        removed_count: usize,
+        /// Tables that lost all owners and were removed
+        orphaned_tables: Vec<String>,
     },
 
     /// Table removed successfully

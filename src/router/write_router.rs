@@ -484,7 +484,7 @@ impl WriteRouter {
         shard_cache.finish_registration(table_key, node_id);
 
         match result {
-            Ok((already_owner, all_owners, version)) => {
+            Ok((already_owner, all_owners, version, _expires_at)) => {
                 if !already_owner {
                     info!(
                         "Registered node {} as owner for table {} (v{})",

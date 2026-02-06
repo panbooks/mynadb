@@ -68,6 +68,13 @@ pub struct MetaConfig {
     /// Write routing only needs recent table ownership; old entries can be evicted.
     #[serde(default)]
     pub table_cache: TableCacheConfig,
+
+    /// Table ownership TTL configuration
+    ///
+    /// Controls ephemeral ownership with automatic expiration.
+    /// Owners must refresh their TTL periodically to maintain ownership.
+    #[serde(default)]
+    pub ownership: OwnershipConfig,
 }
 
 /// Raft consensus configuration
@@ -420,6 +427,81 @@ impl TableCacheConfig {
     }
 }
 
+/// Table Ownership TTL Configuration
+///
+/// Controls ephemeral ownership with automatic expiration.
+/// Each owner entry has a TTL that must be refreshed by periodic heartbeats.
+/// Expired owners are automatically cleaned up by a background task.
+///
+/// This allows automatic cleanup when nodes crash without proper deregistration,
+/// preventing stale routing entries from lingering indefinitely.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OwnershipConfig {
+    /// Enable ownership TTL feature
+    ///
+    /// When enabled:
+    /// - Each owner entry has an expiration timestamp
+    /// - Owners must refresh their TTL periodically
+    /// - Background task cleans up expired entries
+    ///
+    /// When disabled:
+    /// - Ownership entries persist indefinitely
+    /// - Manual cleanup required via RemoveTableOwner
+    #[serde(default = "default_ownership_enabled")]
+    pub enabled: bool,
+
+    /// Default TTL for ownership in seconds
+    ///
+    /// How long an ownership entry remains valid without refresh.
+    /// Shorter = faster stale owner detection, more refresh traffic.
+    /// Longer = less traffic, slower cleanup of crashed nodes.
+    ///
+    /// Recommended: 600 seconds (10 minutes) for production.
+    #[serde(default = "default_ownership_ttl_secs")]
+    pub ttl_secs: u64,
+
+    /// Interval between cleanup checks in seconds
+    ///
+    /// How often the background task scans for expired owners.
+    /// Should be less than ttl_secs to ensure timely cleanup.
+    #[serde(default = "default_ownership_check_interval_secs")]
+    pub check_interval_secs: u64,
+}
+
+fn default_ownership_enabled() -> bool {
+    false // Disabled by default for backward compatibility
+}
+
+fn default_ownership_ttl_secs() -> u64 {
+    600 // 10 minutes
+}
+
+fn default_ownership_check_interval_secs() -> u64 {
+    30 // Check every 30 seconds
+}
+
+impl Default for OwnershipConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_ownership_enabled(),
+            ttl_secs: default_ownership_ttl_secs(),
+            check_interval_secs: default_ownership_check_interval_secs(),
+        }
+    }
+}
+
+impl OwnershipConfig {
+    /// Get TTL in milliseconds
+    pub fn ttl_ms(&self) -> u64 {
+        self.ttl_secs * 1000
+    }
+
+    /// Get check interval as Duration
+    pub fn check_interval(&self) -> Duration {
+        Duration::from_secs(self.check_interval_secs)
+    }
+}
+
 /// Cold Standby Architecture Configuration
 ///
 /// Controls how Data nodes are assigned as Primary (active) or Standby (cold backup).
@@ -756,6 +838,7 @@ impl Default for MetaConfig {
             failover: FailoverConfig::default(),
             rebalancer: RebalancerConfig::default(),
             table_cache: TableCacheConfig::default(),
+            ownership: OwnershipConfig::default(),
         }
     }
 }

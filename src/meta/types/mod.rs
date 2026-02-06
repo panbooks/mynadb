@@ -17,7 +17,7 @@ pub use event::{Event, EventType};
 pub use lock::{LeaderInfo, LeaseInfo, LockInfo};
 pub use node::{node_labels, DataNodeMode, NodeInfo, NodeRole, NodeState};
 pub use scale_in::{RetireStatus, ScaleInRecommendation, ScaleInRequest};
-pub use table::{TableMeta, TableStatsDelta};
+pub use table::{TableMeta, TableOwnerEntry, TableStatsDelta, DEFAULT_OWNER_TTL_MS};
 
 /// Key prefixes for sled storage
 pub mod keys {

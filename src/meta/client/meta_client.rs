@@ -27,6 +27,55 @@ fn mode_to_proto(mode: Option<DataNodeMode>) -> i32 {
     }
 }
 
+/// Convert proto TableMeta to internal TableMeta
+fn convert_proto_table_meta(meta: proto::TableMeta) -> TableMeta {
+    // Convert proto TableOwnerEntry to internal TableOwnerEntry
+    let owners: Vec<TableOwnerEntry> = if meta.owners.is_empty() {
+        // Legacy: convert owner_node_ids to owners with default TTL
+        meta.owner_node_ids
+            .into_iter()
+            .map(TableOwnerEntry::with_default_ttl)
+            .collect()
+    } else {
+        meta.owners
+            .into_iter()
+            .map(|o| TableOwnerEntry {
+                node_id: o.node_id,
+                ttl_ms: o.ttl_ms,
+                acquired_at: o.acquired_at,
+                last_write_at: o.last_write_at,
+                expires_at: o.expires_at,
+            })
+            .collect()
+    };
+
+    TableMeta {
+        catalog: meta.catalog,
+        schema: meta.schema,
+        table: meta.table,
+        owners,
+        owner_node_ids: Vec::new(), // Legacy field, empty
+        partition_count: meta.partition_count,
+        total_bytes: meta.total_bytes,
+        total_rows: meta.total_rows,
+        oldest_partition: if meta.oldest_partition.is_empty() {
+            None
+        } else {
+            Some(meta.oldest_partition)
+        },
+        newest_partition: if meta.newest_partition.is_empty() {
+            None
+        } else {
+            Some(meta.newest_partition)
+        },
+        min_time: meta.min_time,
+        max_time: meta.max_time,
+        created_at: meta.created_at,
+        last_modified: meta.last_modified,
+        version: meta.version,
+    }
+}
+
 /// Result of node registration with Meta service
 #[derive(Debug, Clone)]
 pub struct NodeRegistrationResult {
@@ -548,7 +597,7 @@ impl MetaClient {
 
     /// Add an additional owner to a table (for rerouted writes)
     ///
-    /// Returns (already_owner, all_owners, version) on success.
+    /// Returns (already_owner, all_owners, version, expires_at) on success.
     /// If the table doesn't exist, it's automatically registered with this owner.
     pub async fn add_table_owner(
         &self,
@@ -556,12 +605,30 @@ impl MetaClient {
         schema: &str,
         table: &str,
         owner_node_id: &str,
-    ) -> Result<(bool, Vec<String>, u64), String> {
+    ) -> Result<(bool, Vec<String>, u64, i64), String> {
+        self.add_table_owner_with_ttl(catalog, schema, table, owner_node_id, 0)
+            .await
+    }
+
+    /// Add an additional owner to a table with specific TTL
+    ///
+    /// Returns (already_owner, all_owners, version, expires_at) on success.
+    /// If the table doesn't exist, it's automatically registered with this owner.
+    /// ttl_ms=0 means use default TTL.
+    pub async fn add_table_owner_with_ttl(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        owner_node_id: &str,
+        ttl_ms: u64,
+    ) -> Result<(bool, Vec<String>, u64, i64), String> {
         let request = proto::AddTableOwnerRequest {
             catalog: catalog.to_string(),
             schema: schema.to_string(),
             table: table.to_string(),
             owner_node_id: owner_node_id.to_string(),
+            ttl_ms,
         };
 
         let response = self
@@ -576,7 +643,68 @@ impl MetaClient {
                 response.already_owner,
                 response.all_owners,
                 response.version,
+                response.expires_at,
             ))
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Refresh TTL for an existing table owner
+    ///
+    /// Returns expires_at on success.
+    /// ttl_ms=0 means use current TTL.
+    pub async fn refresh_owner_ttl(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        owner_node_id: &str,
+        ttl_ms: u64,
+    ) -> Result<i64, String> {
+        let request = proto::RefreshOwnerTtlRequest {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            owner_node_id: owner_node_id.to_string(),
+            ttl_ms,
+        };
+
+        let response = self
+            .with_retry("refresh_owner_ttl", |mut client| {
+                let req = request.clone();
+                async move { client.refresh_owner_ttl(req).await.map(|r| r.into_inner()) }
+            })
+            .await?;
+
+        if response.success {
+            Ok(response.expires_at)
+        } else {
+            Err(response.error)
+        }
+    }
+
+    /// Cleanup expired owner entries across all tables
+    ///
+    /// Returns (removed_count, orphaned_tables) on success.
+    /// Called by Meta leader periodically.
+    pub async fn cleanup_expired_owners(&self) -> Result<(u32, Vec<String>), String> {
+        let request = proto::CleanupExpiredOwnersRequest {};
+
+        let response = self
+            .with_retry("cleanup_expired_owners", |mut client| {
+                let req = request.clone();
+                async move {
+                    client
+                        .cleanup_expired_owners(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            })
+            .await?;
+
+        if response.success {
+            Ok((response.removed_count, response.orphaned_tables))
         } else {
             Err(response.error)
         }
@@ -698,34 +826,7 @@ impl MetaClient {
             .await?;
 
         if response.found {
-            if let Some(meta) = response.table_meta {
-                Ok(Some(TableMeta {
-                    catalog: meta.catalog,
-                    schema: meta.schema,
-                    table: meta.table,
-                    owner_node_ids: meta.owner_node_ids,
-                    partition_count: meta.partition_count,
-                    total_bytes: meta.total_bytes,
-                    total_rows: meta.total_rows,
-                    oldest_partition: if meta.oldest_partition.is_empty() {
-                        None
-                    } else {
-                        Some(meta.oldest_partition)
-                    },
-                    newest_partition: if meta.newest_partition.is_empty() {
-                        None
-                    } else {
-                        Some(meta.newest_partition)
-                    },
-                    min_time: meta.min_time,
-                    max_time: meta.max_time,
-                    created_at: meta.created_at,
-                    last_modified: meta.last_modified,
-                    version: meta.version,
-                }))
-            } else {
-                Ok(None)
-            }
+            Ok(response.table_meta.map(convert_proto_table_meta))
         } else {
             Ok(None)
         }
@@ -752,30 +853,7 @@ impl MetaClient {
         Ok(response
             .tables
             .into_iter()
-            .map(|meta| TableMeta {
-                catalog: meta.catalog,
-                schema: meta.schema,
-                table: meta.table,
-                owner_node_ids: meta.owner_node_ids,
-                partition_count: meta.partition_count,
-                total_bytes: meta.total_bytes,
-                total_rows: meta.total_rows,
-                oldest_partition: if meta.oldest_partition.is_empty() {
-                    None
-                } else {
-                    Some(meta.oldest_partition)
-                },
-                newest_partition: if meta.newest_partition.is_empty() {
-                    None
-                } else {
-                    Some(meta.newest_partition)
-                },
-                min_time: meta.min_time,
-                max_time: meta.max_time,
-                created_at: meta.created_at,
-                last_modified: meta.last_modified,
-                version: meta.version,
-            })
+            .map(convert_proto_table_meta)
             .collect())
     }
 
@@ -800,30 +878,7 @@ impl MetaClient {
         Ok(response
             .tables
             .into_iter()
-            .map(|meta| TableMeta {
-                catalog: meta.catalog,
-                schema: meta.schema,
-                table: meta.table,
-                owner_node_ids: meta.owner_node_ids,
-                partition_count: meta.partition_count,
-                total_bytes: meta.total_bytes,
-                total_rows: meta.total_rows,
-                oldest_partition: if meta.oldest_partition.is_empty() {
-                    None
-                } else {
-                    Some(meta.oldest_partition)
-                },
-                newest_partition: if meta.newest_partition.is_empty() {
-                    None
-                } else {
-                    Some(meta.newest_partition)
-                },
-                min_time: meta.min_time,
-                max_time: meta.max_time,
-                created_at: meta.created_at,
-                last_modified: meta.last_modified,
-                version: meta.version,
-            })
+            .map(convert_proto_table_meta)
             .collect())
     }
 

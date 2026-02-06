@@ -22,6 +22,37 @@ fn mode_to_proto(mode: Option<DataNodeMode>) -> i32 {
         None => 0,                        // DATA_NODE_MODE_UNSPECIFIED
     }
 }
+
+/// Convert internal TableMeta to proto TableMeta
+fn table_meta_to_proto(meta: &TableMeta) -> proto::TableMeta {
+    proto::TableMeta {
+        catalog: meta.catalog.clone(),
+        schema: meta.schema.clone(),
+        table: meta.table.clone(),
+        owner_node_ids: meta.all_owners(), // For backward compatibility
+        owners: meta
+            .all_owner_entries()
+            .iter()
+            .map(|o| proto::TableOwnerEntry {
+                node_id: o.node_id.clone(),
+                ttl_ms: o.ttl_ms,
+                acquired_at: o.acquired_at,
+                last_write_at: o.last_write_at,
+                expires_at: o.expires_at,
+            })
+            .collect(),
+        partition_count: meta.partition_count,
+        total_bytes: meta.total_bytes,
+        total_rows: meta.total_rows,
+        oldest_partition: meta.oldest_partition.clone().unwrap_or_default(),
+        newest_partition: meta.newest_partition.clone().unwrap_or_default(),
+        min_time: meta.min_time,
+        max_time: meta.max_time,
+        created_at: meta.created_at,
+        last_modified: meta.last_modified,
+        version: meta.version,
+    }
+}
 use openraft::raft::{AppendEntriesRequest, InstallSnapshotRequest, VoteRequest};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -420,27 +451,12 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
         match table_meta {
             Some(meta) => {
                 let primary_owner = meta.primary_owner().unwrap_or("").to_string();
-                let all_owners = meta.owner_node_ids.clone();
+                let active_owners = meta.active_owner_ids();
                 Ok(Response::new(proto::GetTableOwnerResponse {
                     found: true,
                     primary_owner_id: primary_owner,
-                    all_owner_ids: all_owners.clone(),
-                    table_meta: Some(proto::TableMeta {
-                        catalog: meta.catalog,
-                        schema: meta.schema,
-                        table: meta.table,
-                        owner_node_ids: all_owners,
-                        partition_count: meta.partition_count,
-                        total_bytes: meta.total_bytes,
-                        total_rows: meta.total_rows,
-                        oldest_partition: meta.oldest_partition.unwrap_or_default(),
-                        newest_partition: meta.newest_partition.unwrap_or_default(),
-                        min_time: meta.min_time,
-                        max_time: meta.max_time,
-                        created_at: meta.created_at,
-                        last_modified: meta.last_modified,
-                        version: meta.version,
-                    }),
+                    all_owner_ids: active_owners,
+                    table_meta: Some(table_meta_to_proto(&meta)),
                 }))
             }
             None => Ok(Response::new(proto::GetTableOwnerResponse {
@@ -460,17 +476,35 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
 
         let result = self
             .node
-            .add_table_owner(&req.catalog, &req.schema, &req.table, &req.owner_node_id)
+            .add_table_owner_with_ttl(
+                &req.catalog,
+                &req.schema,
+                &req.table,
+                &req.owner_node_id,
+                req.ttl_ms,
+            )
             .await;
 
         match result {
             Ok((already_owner, all_owners, version)) => {
+                // Get the entry to return TTL info
+                let table_meta = self
+                    .node
+                    .get_table_meta(&req.catalog, &req.schema, &req.table)
+                    .await;
+                let (ttl_ms, expires_at) = table_meta
+                    .and_then(|m| m.get_owner_entry(&req.owner_node_id).cloned())
+                    .map(|e| (e.ttl_ms, e.expires_at))
+                    .unwrap_or((0, 0));
+
                 Ok(Response::new(proto::AddTableOwnerResponse {
                     success: true,
                     error: String::new(),
                     already_owner,
                     all_owners,
                     version,
+                    ttl_ms,
+                    expires_at,
                 }))
             }
             Err(e) => Ok(Response::new(proto::AddTableOwnerResponse {
@@ -479,6 +513,63 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
                 already_owner: false,
                 all_owners: Vec::new(),
                 version: 0,
+                ttl_ms: 0,
+                expires_at: 0,
+            })),
+        }
+    }
+
+    async fn refresh_owner_ttl(
+        &self,
+        request: Request<proto::RefreshOwnerTtlRequest>,
+    ) -> Result<Response<proto::RefreshOwnerTtlResponse>, Status> {
+        let req = request.into_inner();
+
+        let result = self
+            .node
+            .refresh_owner_ttl(
+                &req.catalog,
+                &req.schema,
+                &req.table,
+                &req.owner_node_id,
+                req.ttl_ms,
+            )
+            .await;
+
+        match result {
+            Ok(expires_at) => Ok(Response::new(proto::RefreshOwnerTtlResponse {
+                success: true,
+                error: String::new(),
+                expires_at,
+            })),
+            Err(e) => Ok(Response::new(proto::RefreshOwnerTtlResponse {
+                success: false,
+                error: e,
+                expires_at: 0,
+            })),
+        }
+    }
+
+    async fn cleanup_expired_owners(
+        &self,
+        _request: Request<proto::CleanupExpiredOwnersRequest>,
+    ) -> Result<Response<proto::CleanupExpiredOwnersResponse>, Status> {
+        let result = self.node.cleanup_expired_owners().await;
+
+        match result {
+            Ok((removed_count, orphaned_tables)) => {
+                Ok(Response::new(proto::CleanupExpiredOwnersResponse {
+                    success: true,
+                    error: String::new(),
+                    removed_count,
+                    orphaned_tables,
+                }))
+            }
+            Err(e) => Ok(Response::new(proto::CleanupExpiredOwnersResponse {
+                success: false,
+                error: e,
+                removed_count: 0,
+                orphaned_tables: Vec::new(),
             })),
         }
     }
@@ -518,25 +609,8 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
 
         let tables = self.node.list_tables_for_node(&req.node_id).await;
 
-        let proto_tables: Vec<proto::TableMeta> = tables
-            .into_iter()
-            .map(|m| proto::TableMeta {
-                catalog: m.catalog,
-                schema: m.schema,
-                table: m.table,
-                owner_node_ids: m.owner_node_ids,
-                partition_count: m.partition_count,
-                total_bytes: m.total_bytes,
-                total_rows: m.total_rows,
-                oldest_partition: m.oldest_partition.unwrap_or_default(),
-                newest_partition: m.newest_partition.unwrap_or_default(),
-                min_time: m.min_time,
-                max_time: m.max_time,
-                created_at: m.created_at,
-                last_modified: m.last_modified,
-                version: m.version,
-            })
-            .collect();
+        let proto_tables: Vec<proto::TableMeta> =
+            tables.iter().map(table_meta_to_proto).collect();
 
         Ok(Response::new(proto::ListTablesForNodeResponse {
             tables: proto_tables,
@@ -559,25 +633,8 @@ impl proto::meta_service_server::MetaService for MetaGrpcService {
             self.node.list_all_tables().await
         };
 
-        let proto_tables: Vec<proto::TableMeta> = tables
-            .into_iter()
-            .map(|m| proto::TableMeta {
-                catalog: m.catalog,
-                schema: m.schema,
-                table: m.table,
-                owner_node_ids: m.owner_node_ids,
-                partition_count: m.partition_count,
-                total_bytes: m.total_bytes,
-                total_rows: m.total_rows,
-                oldest_partition: m.oldest_partition.unwrap_or_default(),
-                newest_partition: m.newest_partition.unwrap_or_default(),
-                min_time: m.min_time,
-                max_time: m.max_time,
-                created_at: m.created_at,
-                last_modified: m.last_modified,
-                version: m.version,
-            })
-            .collect();
+        let proto_tables: Vec<proto::TableMeta> =
+            tables.iter().map(table_meta_to_proto).collect();
 
         Ok(Response::new(proto::ListTablesResponse {
             tables: proto_tables,

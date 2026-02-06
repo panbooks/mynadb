@@ -359,6 +359,9 @@ impl CacheInvalidationHandler {
                 EventType::TablesCacheRefresh => {
                     Self::handle_tables_cache_refresh(&shard_cache, &event);
                 }
+                EventType::TableOwnerExpired => {
+                    Self::handle_table_owner_expired(&shard_cache, &event);
+                }
                 _ => {
                     // FlushForRecovery handled by Data nodes directly
                     // Other events not relevant to Router
@@ -567,6 +570,54 @@ impl CacheInvalidationHandler {
                 "Tables cache refresh: Meta evicted {} entries ({} remaining), cleared {} local entries",
                 evicted_count, remaining_count, local_count
             );
+        }
+    }
+
+    /// Handle table owner expired event
+    ///
+    /// Triggered when an owner's TTL expires and is cleaned up by Meta.
+    /// Updates the local cache to reflect the new owner list.
+    fn handle_table_owner_expired(shard_cache: &ShardCache, event: &MetaEvent) {
+        if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
+            let catalog = payload["catalog"].as_str().unwrap_or_default();
+            let schema = payload["schema"].as_str().unwrap_or_default();
+            let table = payload["table"].as_str().unwrap_or_default();
+            let expired_owner = payload["expired_owner"].as_str().unwrap_or_default();
+            let remaining_owners: Vec<String> = payload["remaining_owners"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if catalog.is_empty() || schema.is_empty() || table.is_empty() {
+                return;
+            }
+
+            let table_key = TableKey::new(catalog, schema, table);
+
+            if remaining_owners.is_empty() {
+                // Table has no owners left - remove from cache
+                info!(
+                    "Owner {} expired for table {}, no owners remaining - removing from cache",
+                    expired_owner,
+                    table_key.to_path()
+                );
+                shard_cache.remove_table_owner(&table_key);
+            } else {
+                // Update cache with remaining owners
+                debug!(
+                    "Owner {} expired for table {}, remaining: {:?}",
+                    expired_owner,
+                    table_key.to_path(),
+                    remaining_owners
+                );
+                // Use version 0 to indicate this is a cache update (not authoritative)
+                // Next lookup will fetch fresh data from Meta
+                shard_cache.set_table_owners(&table_key, remaining_owners, 0);
+            }
         }
     }
 

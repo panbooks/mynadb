@@ -637,16 +637,17 @@ impl QueryCoordinator {
             .await
         {
             Ok(Some(table_meta)) => {
-                // Cache the updated metadata
+                // Cache the updated metadata (only active owners)
+                let active_owners = table_meta.active_owner_ids();
                 self.shard_cache.set_table_owners(
                     table_key,
-                    table_meta.all_owners().to_vec(),
+                    active_owners.clone(),
                     table_meta.version,
                 );
 
                 // Add active owners
                 let count = self.add_queryable_owners(
-                    table_meta.all_owners(),
+                    &active_owners,
                     table_key,
                     owners,
                     nodes_to_query,
@@ -757,16 +758,17 @@ impl QueryCoordinator {
             .await
         {
             Ok(Some(table_meta)) => {
-                // Cache the result
+                // Cache the result (only active owners)
+                let active_owners = table_meta.active_owner_ids();
                 self.shard_cache.set_table_owners(
                     table_key,
-                    table_meta.all_owners().to_vec(),
+                    active_owners.clone(),
                     table_meta.version,
                 );
 
                 // Add queryable owners
                 let count = self.add_queryable_owners(
-                    table_meta.all_owners(),
+                    &active_owners,
                     table_key,
                     owners,
                     nodes_to_query,

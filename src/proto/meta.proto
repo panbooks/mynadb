@@ -30,6 +30,8 @@ service MetaService {
     rpc GetTableOwner(GetTableOwnerRequest) returns (GetTableOwnerResponse);
     rpc ListTablesForNode(ListTablesForNodeRequest) returns (ListTablesForNodeResponse);
     rpc ListTables(ListTablesRequest) returns (ListTablesResponse);
+    rpc RefreshOwnerTTL(RefreshOwnerTTLRequest) returns (RefreshOwnerTTLResponse);
+    rpc CleanupExpiredOwners(CleanupExpiredOwnersRequest) returns (CleanupExpiredOwnersResponse);
 
     // =========================================================================
     // Write Distribution Configuration
@@ -179,12 +181,21 @@ message ListNodesResponse {
 // Table-Level Routing (Recommended)
 // ============================================================================
 
+// Table owner entry with TTL
+message TableOwnerEntry {
+    string node_id = 1;
+    uint64 ttl_ms = 2;                  // TTL in milliseconds
+    int64 acquired_at = 3;              // When ownership was acquired
+    int64 last_write_at = 4;            // Last write activity
+    int64 expires_at = 5;               // When ownership expires
+}
+
 // Table metadata for routing and statistics
 message TableMeta {
     string catalog = 1;
     string schema = 2;
     string table = 3;
-    repeated string owner_node_ids = 4; // Data nodes that own partitions (first is primary)
+    repeated string owner_node_ids = 4; // DEPRECATED: use owners field instead
     uint32 partition_count = 5;         // Number of date partitions
     uint64 total_bytes = 6;             // Total storage size
     uint64 total_rows = 7;              // Total row count
@@ -196,6 +207,7 @@ message TableMeta {
     int64 last_modified = 13;
     uint64 version = 14;                // For optimistic concurrency
     // Field 15 removed (was legacy_prefixes)
+    repeated TableOwnerEntry owners = 16; // Owner entries with TTL (replaces owner_node_ids)
 }
 
 // Statistics delta for updating table stats
@@ -231,14 +243,42 @@ message AddTableOwnerRequest {
     string schema = 2;
     string table = 3;
     string owner_node_id = 4;           // New owner to add
+    uint64 ttl_ms = 5;                  // TTL in milliseconds (0 = use default)
 }
 
 message AddTableOwnerResponse {
     bool success = 1;
     string error = 2;
-    bool already_owner = 3;             // True if already an owner
+    bool already_owner = 3;             // True if already an owner (TTL refreshed)
     repeated string all_owners = 4;     // All owners after operation
     uint64 version = 5;
+    uint64 ttl_ms = 6;                  // Effective TTL
+    int64 expires_at = 7;               // Expiration timestamp
+}
+
+// Refresh TTL for an existing table owner
+message RefreshOwnerTTLRequest {
+    string catalog = 1;
+    string schema = 2;
+    string table = 3;
+    string owner_node_id = 4;
+    uint64 ttl_ms = 5;                  // New TTL (0 = use current TTL)
+}
+
+message RefreshOwnerTTLResponse {
+    bool success = 1;
+    string error = 2;
+    int64 expires_at = 3;               // New expiration timestamp
+}
+
+// Cleanup expired owner entries (called by Meta leader)
+message CleanupExpiredOwnersRequest {}
+
+message CleanupExpiredOwnersResponse {
+    bool success = 1;
+    string error = 2;
+    uint32 removed_count = 3;           // Number of expired entries removed
+    repeated string orphaned_tables = 4; // Tables that lost all owners
 }
 
 // Remove an owner from a table
@@ -512,6 +552,18 @@ enum EventType {
     EVENT_TYPE_DATA_NODE_MODE_CHANGED = 12;
     // Table ownership changed (scale-in, failover)
     EVENT_TYPE_TABLE_OWNERSHIP_CHANGED = 13;
+    // Table owner added
+    EVENT_TYPE_TABLE_OWNER_ADDED = 14;
+    // Table owner removed
+    EVENT_TYPE_TABLE_OWNER_REMOVED = 15;
+    // Table reassigned to new primary
+    EVENT_TYPE_TABLE_REASSIGNED = 16;
+    // Distribution config changed
+    EVENT_TYPE_DISTRIBUTION_CONFIG_CHANGED = 17;
+    // Tables cache refresh (stale entries evicted)
+    EVENT_TYPE_TABLES_CACHE_REFRESH = 18;
+    // Table owner expired (TTL-based cleanup)
+    EVENT_TYPE_TABLE_OWNER_EXPIRED = 19;
 }
 
 message Event {

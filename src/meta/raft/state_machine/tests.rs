@@ -737,7 +737,7 @@ fn test_get_table_owner_filters_drained_nodes() {
     assert_eq!(sm.get_table_owner("mydb", "default", "cpu"), None);
 
     // Add data-2 as owner
-    sm.add_table_owner("mydb", "default", "cpu", "data-2");
+    sm.add_table_owner("mydb", "default", "cpu", "data-2", 0);
 
     // Now get_table_owner should return data-2 (skipping Drained data-1)
     assert_eq!(
@@ -782,7 +782,7 @@ fn test_drained_node_cleanup_logic() {
     let all_tables = sm.list_all_tables();
     let nodes_with_tables: std::collections::HashSet<String> = all_tables
         .iter()
-        .flat_map(|t| t.owner_node_ids.iter().cloned())
+        .flat_map(|t| t.all_owners())
         .collect();
 
     // data-1 should still be in the set (table ownership not yet cleaned)
@@ -804,7 +804,7 @@ fn test_drained_node_cleanup_logic() {
     let all_tables = sm.list_all_tables();
     let nodes_with_tables: std::collections::HashSet<String> = all_tables
         .iter()
-        .flat_map(|t| t.owner_node_ids.iter().cloned())
+        .flat_map(|t| t.all_owners())
         .collect();
 
     // Now data-1 is not in the set (no tables), safe to remove

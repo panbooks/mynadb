@@ -100,11 +100,27 @@ impl MetaNode {
         table: &str,
         owner_node_id: &str,
     ) -> Result<(bool, Vec<String>, u64), String> {
+        self.add_table_owner_with_ttl(catalog, schema, table, owner_node_id, 0)
+            .await
+    }
+
+    /// Add table owner with specific TTL
+    /// ttl_ms=0 means use default TTL.
+    /// Returns (already_owner, all_owners, version) on success
+    pub async fn add_table_owner_with_ttl(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        owner_node_id: &str,
+        ttl_ms: u64,
+    ) -> Result<(bool, Vec<String>, u64), String> {
         let cmd = MetaCommand::AddTableOwner {
             catalog: catalog.to_string(),
             schema: schema.to_string(),
             table: table.to_string(),
             owner_node_id: owner_node_id.to_string(),
+            ttl_ms,
         };
 
         let result = self.raft.client_write(cmd).await;
@@ -257,5 +273,58 @@ impl MetaNode {
             standby_node_id
         );
         Ok(0)
+    }
+
+    /// Refresh TTL for an existing table owner
+    ///
+    /// Returns expires_at on success.
+    /// ttl_ms=0 means use current TTL.
+    pub async fn refresh_owner_ttl(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        owner_node_id: &str,
+        ttl_ms: u64,
+    ) -> Result<i64, String> {
+        let cmd = MetaCommand::RefreshOwnerTTL {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            owner_node_id: owner_node_id.to_string(),
+            ttl_ms,
+        };
+
+        let result = self.raft.client_write(cmd).await;
+        match result {
+            Ok(response) => match response.data {
+                MetaResponse::OwnerTTLRefreshed { expires_at, .. } => Ok(expires_at),
+                MetaResponse::TableNotFound { .. } => Err("Table not found".to_string()),
+                MetaResponse::OwnerNotFound { .. } => Err("Owner not found".to_string()),
+                MetaResponse::Error { message } => Err(message),
+                _ => Err("Unexpected response".to_string()),
+            },
+            Err(e) => Err(format!("Failed to refresh owner TTL: {}", e)),
+        }
+    }
+
+    /// Cleanup expired owner entries across all tables
+    ///
+    /// Returns (removed_count, orphaned_tables) on success.
+    pub async fn cleanup_expired_owners(&self) -> Result<(u32, Vec<String>), String> {
+        let cmd = MetaCommand::CleanupExpiredOwners;
+
+        let result = self.raft.client_write(cmd).await;
+        match result {
+            Ok(response) => match response.data {
+                MetaResponse::ExpiredOwnersCleaned {
+                    removed_count,
+                    orphaned_tables,
+                } => Ok((removed_count as u32, orphaned_tables)),
+                MetaResponse::Error { message } => Err(message),
+                _ => Err("Unexpected response".to_string()),
+            },
+            Err(e) => Err(format!("Failed to cleanup expired owners: {}", e)),
+        }
     }
 }

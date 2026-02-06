@@ -12,7 +12,8 @@
 //! - Excellent cache locality for time-series workloads
 
 use crate::meta::types::{
-    keys, Event, EventType, MetaResponse, NodeState, TableMeta, TableStatsDelta,
+    keys, Event, EventType, MetaResponse, NodeState, TableMeta, TableOwnerEntry, TableStatsDelta,
+    DEFAULT_OWNER_TTL_MS,
 };
 use tracing::{debug, info, warn};
 
@@ -37,32 +38,52 @@ impl MetaStateMachine {
         table: &str,
         owner_node_id: &str,
     ) -> MetaResponse {
+        self.register_table_with_ttl(catalog, schema, table, owner_node_id, DEFAULT_OWNER_TTL_MS)
+    }
+
+    /// Register a new table with its owner node and specific TTL
+    pub(crate) fn register_table_with_ttl(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        owner_node_id: &str,
+        ttl_ms: u64,
+    ) -> MetaResponse {
         let key = TableMeta::key_for(catalog, schema, table);
 
         // Check if table already exists
         if let Ok(Some(existing)) = self.db.get(key.as_bytes()) {
-            if let Ok(meta) = bincode::deserialize::<TableMeta>(&existing) {
+            if let Ok(mut meta) = bincode::deserialize::<TableMeta>(&existing) {
+                // Migrate legacy owners if needed
+                meta.migrate_legacy_owners();
+
                 let primary = meta.primary_owner().unwrap_or("").to_string();
                 debug!(
                     "Table already exists: {}.{}.{} owned by {:?} (primary: {})",
-                    catalog, schema, table, meta.owner_node_ids, primary
+                    catalog,
+                    schema,
+                    table,
+                    meta.all_owners(),
+                    primary
                 );
                 return MetaResponse::TableAlreadyExists {
                     catalog: catalog.to_string(),
                     schema: schema.to_string(),
                     table: table.to_string(),
                     current_owner: primary,
-                    all_owners: meta.owner_node_ids.clone(),
+                    all_owners: meta.all_owners(),
                 };
             }
         }
 
-        // Create new table metadata
-        let meta = TableMeta::new(
+        // Create new table metadata with TTL
+        let meta = TableMeta::new_with_ttl(
             catalog.to_string(),
             schema.to_string(),
             table.to_string(),
             owner_node_id.to_string(),
+            ttl_ms,
         );
 
         // Store in sled
@@ -77,8 +98,8 @@ impl MetaStateMachine {
         }
 
         info!(
-            "Table registered: {}.{}.{} -> {}",
-            catalog, schema, table, owner_node_id
+            "Table registered: {}.{}.{} -> {} (ttl_ms: {})",
+            catalog, schema, table, owner_node_id, ttl_ms
         );
 
         // Publish event for cache invalidation
@@ -87,6 +108,7 @@ impl MetaStateMachine {
             "schema": schema,
             "table": table,
             "owner_node_ids": [owner_node_id],
+            "ttl_ms": ttl_ms,
         });
         let seq = self.next_sequence();
         let event = Event::new(
@@ -121,13 +143,23 @@ impl MetaStateMachine {
         schema: &str,
         table: &str,
         new_owner_node_id: &str,
+        ttl_ms: u64,
     ) -> MetaResponse {
+        let effective_ttl = if ttl_ms == 0 {
+            DEFAULT_OWNER_TTL_MS
+        } else {
+            ttl_ms
+        };
+
         let key = TableMeta::key_for(catalog, schema, table);
 
         // Load existing table
         let existing = match self.db.get(key.as_bytes()) {
             Ok(Some(data)) => match bincode::deserialize::<TableMeta>(&data) {
-                Ok(meta) => meta,
+                Ok(mut meta) => {
+                    meta.migrate_legacy_owners();
+                    meta
+                }
                 Err(e) => {
                     return MetaResponse::Error {
                         message: format!("Failed to deserialize table: {}", e),
@@ -136,7 +168,13 @@ impl MetaStateMachine {
             },
             Ok(None) => {
                 // Table doesn't exist - register it with this node as primary
-                return self.register_table(catalog, schema, table, new_owner_node_id);
+                return self.register_table_with_ttl(
+                    catalog,
+                    schema,
+                    table,
+                    new_owner_node_id,
+                    effective_ttl,
+                );
             }
             Err(e) => {
                 return MetaResponse::Error {
@@ -145,20 +183,41 @@ impl MetaStateMachine {
             }
         };
 
-        // Check if already an owner
-        if existing.is_owner(new_owner_node_id) {
+        // Check if already an owner (including expired entries)
+        if existing.has_owner_entry(new_owner_node_id) {
+            // Refresh TTL for existing owner
+            let mut updated = existing;
+            updated.refresh_owner_ttl_with(new_owner_node_id, effective_ttl);
+
+            // Store updated table
+            if let Err(e) = self
+                .db
+                .insert(key.as_bytes(), bincode::serialize(&updated).unwrap())
+            {
+                return MetaResponse::Error {
+                    message: format!("Failed to refresh owner TTL: {}", e),
+                };
+            }
+
+            let entry = updated.get_owner_entry(new_owner_node_id).unwrap();
             return MetaResponse::TableOwnerExists {
                 catalog: catalog.to_string(),
                 schema: schema.to_string(),
                 table: table.to_string(),
                 node_id: new_owner_node_id.to_string(),
-                all_owners: existing.owner_node_ids.clone(),
+                ttl_refreshed: true,
+                expires_at: entry.expires_at,
+                all_owners: updated.all_owners(),
             };
         }
 
-        // Add new owner
+        // Add new owner with TTL
         let mut updated = existing;
-        updated.add_owner(new_owner_node_id.to_string());
+        updated.add_owner_with_ttl(new_owner_node_id.to_string(), effective_ttl);
+
+        // Get the new entry for response
+        let new_entry = updated.get_owner_entry(new_owner_node_id).unwrap();
+        let expires_at = new_entry.expires_at;
 
         // Store updated table
         if let Err(e) = self
@@ -171,8 +230,12 @@ impl MetaStateMachine {
         }
 
         info!(
-            "Table owner added: {}.{}.{} now owned by {:?}",
-            catalog, schema, table, updated.owner_node_ids
+            "Table owner added: {}.{}.{} now owned by {:?} (ttl_ms: {})",
+            catalog,
+            schema,
+            table,
+            updated.all_owners(),
+            effective_ttl
         );
 
         // Publish event for cache invalidation
@@ -181,7 +244,9 @@ impl MetaStateMachine {
             "schema": schema,
             "table": table,
             "added_owner": new_owner_node_id,
-            "all_owners": updated.owner_node_ids,
+            "ttl_ms": effective_ttl,
+            "expires_at": expires_at,
+            "all_owners": updated.all_owners(),
         });
         let seq = self.next_sequence();
         let event = Event::new(
@@ -201,7 +266,9 @@ impl MetaStateMachine {
             schema: schema.to_string(),
             table: table.to_string(),
             new_owner: new_owner_node_id.to_string(),
-            all_owners: updated.owner_node_ids,
+            ttl_ms: effective_ttl,
+            expires_at,
+            all_owners: updated.all_owners(),
             version: updated.version,
         }
     }
@@ -222,7 +289,10 @@ impl MetaStateMachine {
         // Load existing table
         let existing = match self.db.get(key.as_bytes()) {
             Ok(Some(data)) => match bincode::deserialize::<TableMeta>(&data) {
-                Ok(meta) => meta,
+                Ok(mut meta) => {
+                    meta.migrate_legacy_owners();
+                    meta
+                }
                 Err(e) => {
                     return MetaResponse::Error {
                         message: format!("Failed to deserialize table: {}", e),
@@ -244,7 +314,7 @@ impl MetaStateMachine {
         };
 
         // Check if this is the only owner
-        if existing.owner_node_ids.len() == 1 && existing.is_owner(node_id) {
+        if existing.owners.len() == 1 && existing.has_owner_entry(node_id) {
             return MetaResponse::Error {
                 message: format!(
                     "Cannot remove last owner {} from table {}.{}.{}",
@@ -254,7 +324,7 @@ impl MetaStateMachine {
         }
 
         // Check if node is an owner
-        if !existing.is_owner(node_id) {
+        if !existing.has_owner_entry(node_id) {
             return MetaResponse::Error {
                 message: format!(
                     "Node {} is not an owner of table {}.{}.{}",
@@ -279,7 +349,10 @@ impl MetaStateMachine {
 
         info!(
             "Table owner removed: {}.{}.{} now owned by {:?}",
-            catalog, schema, table, updated.owner_node_ids
+            catalog,
+            schema,
+            table,
+            updated.all_owners()
         );
 
         // Publish event
@@ -288,7 +361,7 @@ impl MetaStateMachine {
             "schema": schema,
             "table": table,
             "removed_owner": node_id,
-            "all_owners": updated.owner_node_ids,
+            "all_owners": updated.all_owners(),
         });
         let seq = self.next_sequence();
         let event = Event::new(
@@ -308,8 +381,179 @@ impl MetaStateMachine {
             schema: schema.to_string(),
             table: table.to_string(),
             removed_owner: node_id.to_string(),
-            all_owners: updated.owner_node_ids,
+            all_owners: updated.all_owners(),
             version: updated.version,
+        }
+    }
+
+    /// Refresh TTL for an existing table owner
+    ///
+    /// Called periodically by data nodes to keep their ownership alive.
+    pub(crate) fn refresh_owner_ttl(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        owner_node_id: &str,
+        ttl_ms: u64,
+    ) -> MetaResponse {
+        let key = TableMeta::key_for(catalog, schema, table);
+
+        // Load existing table
+        let existing = match self.db.get(key.as_bytes()) {
+            Ok(Some(data)) => match bincode::deserialize::<TableMeta>(&data) {
+                Ok(mut meta) => {
+                    meta.migrate_legacy_owners();
+                    meta
+                }
+                Err(e) => {
+                    return MetaResponse::Error {
+                        message: format!("Failed to deserialize table: {}", e),
+                    }
+                }
+            },
+            Ok(None) => {
+                return MetaResponse::TableNotFound {
+                    catalog: catalog.to_string(),
+                    schema: schema.to_string(),
+                    table: table.to_string(),
+                }
+            }
+            Err(e) => {
+                return MetaResponse::Error {
+                    message: format!("Failed to read table: {}", e),
+                }
+            }
+        };
+
+        // Check if owner exists
+        if !existing.has_owner_entry(owner_node_id) {
+            return MetaResponse::OwnerNotFound {
+                catalog: catalog.to_string(),
+                schema: schema.to_string(),
+                table: table.to_string(),
+                owner_node_id: owner_node_id.to_string(),
+            };
+        }
+
+        // Refresh TTL
+        let mut updated = existing;
+        if ttl_ms > 0 {
+            updated.refresh_owner_ttl_with(owner_node_id, ttl_ms);
+        } else {
+            updated.refresh_owner_ttl(owner_node_id);
+        }
+
+        let expires_at = updated.get_owner_entry(owner_node_id).unwrap().expires_at;
+
+        // Store updated table
+        if let Err(e) = self
+            .db
+            .insert(key.as_bytes(), bincode::serialize(&updated).unwrap())
+        {
+            return MetaResponse::Error {
+                message: format!("Failed to refresh owner TTL: {}", e),
+            };
+        }
+
+        debug!(
+            "Owner TTL refreshed: {}.{}.{} owner {} expires_at {}",
+            catalog, schema, table, owner_node_id, expires_at
+        );
+
+        MetaResponse::OwnerTTLRefreshed {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            owner_node_id: owner_node_id.to_string(),
+            expires_at,
+        }
+    }
+
+    /// Cleanup expired owner entries across all tables
+    ///
+    /// Called periodically by the Meta leader to remove stale owners.
+    /// Returns the number of expired entries removed.
+    pub(crate) fn cleanup_expired_owners(&self) -> MetaResponse {
+        let prefix = keys::PREFIX_TABLE;
+        let mut total_removed = 0usize;
+        let mut orphaned_tables = Vec::new();
+        let mut tables_to_update = Vec::new();
+
+        // First pass: find tables with expired owners
+        for (key, value) in self.db.scan_prefix(prefix).flatten() {
+            if let Ok(mut meta) = bincode::deserialize::<TableMeta>(&value) {
+                meta.migrate_legacy_owners();
+
+                let expired: Vec<_> = meta.expired_owners().iter().map(|o| o.node_id.clone()).collect();
+                if expired.is_empty() {
+                    continue;
+                }
+
+                // Clean up expired owners
+                let removed = meta.cleanup_expired_owners();
+                total_removed += removed;
+
+                // Publish events for each expired owner
+                for expired_owner in &expired {
+                    let payload = serde_json::json!({
+                        "catalog": meta.catalog,
+                        "schema": meta.schema,
+                        "table": meta.table,
+                        "expired_owner": expired_owner,
+                        "remaining_owners": meta.all_owners(),
+                    });
+                    let seq = self.next_sequence();
+                    let event = Event::new(
+                        seq,
+                        EventType::TableOwnerExpired,
+                        format!("{}.{}.{}", meta.catalog, meta.schema, meta.table),
+                        serde_json::to_vec(&payload).unwrap_or_default(),
+                        "system".to_string(),
+                    );
+                    let _ = self.db.insert(
+                        event.storage_key().as_bytes(),
+                        bincode::serialize(&event).unwrap(),
+                    );
+                }
+
+                if meta.owners.is_empty() {
+                    // Table has no owners left - mark for removal
+                    orphaned_tables.push(meta.table_key());
+                    tables_to_update.push((key, None));
+                } else {
+                    tables_to_update.push((key, Some(meta)));
+                }
+            }
+        }
+
+        // Second pass: update/remove tables
+        for (key, meta_opt) in tables_to_update {
+            match meta_opt {
+                Some(meta) => {
+                    if let Err(e) = self.db.insert(&key, bincode::serialize(&meta).unwrap()) {
+                        warn!("Failed to update table after cleanup: {}", e);
+                    }
+                }
+                None => {
+                    if let Err(e) = self.db.remove(&key) {
+                        warn!("Failed to remove orphaned table: {}", e);
+                    }
+                }
+            }
+        }
+
+        if total_removed > 0 {
+            info!(
+                "Cleaned up {} expired owner entries, {} orphaned tables removed",
+                total_removed,
+                orphaned_tables.len()
+            );
+        }
+
+        MetaResponse::ExpiredOwnersCleaned {
+            removed_count: total_removed,
+            orphaned_tables,
         }
     }
 
@@ -398,7 +642,10 @@ impl MetaStateMachine {
         // Load existing table
         let existing = match self.db.get(key.as_bytes()) {
             Ok(Some(data)) => match bincode::deserialize::<TableMeta>(&data) {
-                Ok(meta) => meta,
+                Ok(mut meta) => {
+                    meta.migrate_legacy_owners();
+                    meta
+                }
                 Err(e) => {
                     return MetaResponse::Error {
                         message: format!("Failed to deserialize table: {}", e),
@@ -437,7 +684,12 @@ impl MetaStateMachine {
 
         info!(
             "Table reassigned: {}.{}.{} primary {} -> {}, all owners: {:?}",
-            catalog, schema, table, old_primary, new_owner_node_id, updated.owner_node_ids
+            catalog,
+            schema,
+            table,
+            old_primary,
+            new_owner_node_id,
+            updated.all_owners()
         );
 
         // Publish event for cache invalidation
@@ -447,7 +699,7 @@ impl MetaStateMachine {
             "table": table,
             "old_primary": old_primary,
             "new_primary": new_owner_node_id,
-            "all_owners": updated.owner_node_ids,
+            "all_owners": updated.all_owners(),
         });
         let seq = self.next_sequence();
         let event = Event::new(
@@ -468,7 +720,7 @@ impl MetaStateMachine {
             table: table.to_string(),
             old_owner: old_primary,
             new_owner: new_owner_node_id.to_string(),
-            all_owners: updated.owner_node_ids,
+            all_owners: updated.all_owners(),
             version: updated.version,
         }
     }
@@ -533,28 +785,36 @@ impl MetaStateMachine {
 
     /// Get the primary owner node for a table (for new write routing)
     ///
-    /// This returns the first non-Drained owner for routing new writes.
-    /// Filters out Drained nodes to avoid routing to departed nodes.
+    /// This returns the first non-Drained, non-expired owner for routing new writes.
+    /// Filters out:
+    /// - Expired owners (TTL elapsed)
+    /// - Drained nodes (departed)
     /// If a node doesn't exist in Meta, it's returned (could be legacy/external).
     /// For queries, use get_table_all_owners() to scatter-gather.
     pub fn get_table_owner(&self, catalog: &str, schema: &str, table: &str) -> Option<String> {
         let key = TableMeta::key_for(catalog, schema, table);
 
-        let meta = self
+        let mut meta = self
             .db
             .get(key.as_bytes())
             .ok()
             .flatten()
             .and_then(|data| bincode::deserialize::<TableMeta>(&data).ok())?;
 
-        // Return first non-Drained owner
-        // - If node exists and is Active → return (good)
+        // Migrate legacy owners if needed
+        meta.migrate_legacy_owners();
+
+        // Return first non-expired, non-Drained owner
+        // - If owner is expired → skip
         // - If node exists and is Drained → skip (departed)
         // - If node doesn't exist → return (legacy/external, let Router handle)
-        for owner_id in &meta.owner_node_ids {
-            match self.get_node(owner_id) {
+        for owner in &meta.owners {
+            if owner.is_expired() {
+                continue;
+            }
+            match self.get_node(&owner.node_id) {
                 Some(node) if node.state == NodeState::Drained => continue, // Skip drained
-                _ => return Some(owner_id.clone()), // Active or unknown → return
+                _ => return Some(owner.node_id.clone()), // Active or unknown → return
             }
         }
         None
@@ -562,14 +822,16 @@ impl MetaStateMachine {
 
     /// Get all owner nodes for a table (for scatter-gather queries)
     ///
-    /// Returns all non-Drained nodes that have data for this table.
-    /// Filters out Drained nodes to avoid routing to departed nodes.
+    /// Returns all non-Drained, non-expired nodes that have data for this table.
+    /// Filters out:
+    /// - Expired owners (TTL elapsed)
+    /// - Drained nodes (departed)
     /// If a node doesn't exist in Meta, it's included (could be legacy/external).
     /// Queries should fan-out to all owners to get complete results.
     pub fn get_table_all_owners(&self, catalog: &str, schema: &str, table: &str) -> Vec<String> {
         let key = TableMeta::key_for(catalog, schema, table);
 
-        let meta = match self
+        let mut meta = match self
             .db
             .get(key.as_bytes())
             .ok()
@@ -580,15 +842,22 @@ impl MetaStateMachine {
             None => return Vec::new(),
         };
 
-        // Filter out Drained owners, keep Active and unknown (legacy/external)
-        meta.owner_node_ids
+        // Migrate legacy owners if needed
+        meta.migrate_legacy_owners();
+
+        // Filter out expired and Drained owners, keep Active and unknown (legacy/external)
+        meta.owners
             .into_iter()
-            .filter(|owner_id| {
-                match self.get_node(owner_id) {
+            .filter(|owner| {
+                if owner.is_expired() {
+                    return false;
+                }
+                match self.get_node(&owner.node_id) {
                     Some(node) => node.state != NodeState::Drained,
                     None => true, // Unknown node → include (legacy/external)
                 }
             })
+            .map(|o| o.node_id)
             .collect()
     }
 
@@ -707,14 +976,16 @@ impl MetaStateMachine {
     ///
     /// A node may appear multiple times if it's owner of multiple tables.
     /// Secondary owners (from rerouted writes) are also counted.
+    /// Only counts non-expired owners.
     pub fn count_all_table_owners(&self) -> std::collections::HashMap<String, usize> {
         let prefix = keys::PREFIX_TABLE;
         let mut counts = std::collections::HashMap::new();
 
         for (_, v) in self.db.scan_prefix(prefix).flatten() {
-            if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
-                for owner in &meta.owner_node_ids {
-                    *counts.entry(owner.clone()).or_insert(0) += 1;
+            if let Ok(mut meta) = bincode::deserialize::<TableMeta>(&v) {
+                meta.migrate_legacy_owners();
+                for owner in meta.active_owners() {
+                    *counts.entry(owner.node_id.clone()).or_insert(0) += 1;
                 }
             }
         }
