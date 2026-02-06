@@ -7,6 +7,7 @@ name = "mynadb"
 version = "0.1.0"
 edition = "2021"
 description = "mynadb, the voice of your machines"
+default-run = "mynadb"
 
 [lib]
 name = "mynadb"
