@@ -1,0 +1,109 @@
+# MynaDB Configuration with RBAC Authentication
+# Example configuration demonstrating multi-user setup
+#
+# IMPORTANT: Generate password hashes using:
+#   mynadb hash-password "your_password"
+#
+# The hashes below are EXAMPLES ONLY. Generate new ones for production!
+
+[server]
+http_port = 7000
+flight_port = 7001
+mysql_enabled = true
+mysql_port = 7002
+
+[storage]
+data_dir = "/data/mynadb"
+
+[storage.object_store]
+backend = "local"
+
+[schema]
+strategy = "service_as_schema"
+tag_keys = ["service"]
+default_name = "default"
+prefix_numeric = true
+
+[cache]
+flush_interval_secs = 60
+max_size_mb = 256
+
+[wal]
+enabled = true
+sync_on_write = false
+rotate_size_mb = 64
+
+[compaction]
+min_files = 5
+max_level = 3
+
+[retention]
+enabled = true
+default_days = 30
+
+[logging]
+level = "info"
+
+# =============================================================================
+# Authentication Configuration (RBAC)
+# =============================================================================
+#
+# Permission Model:
+#   - Read:  SELECT queries, schema inspection
+#   - Write: INSERT data via write endpoints
+#   - Admin: DELETE partitions, compaction, retention, cache management
+#
+# Built-in Roles:
+#   - admin:  Read + Write + Admin (full access)
+#   - writer: Read + Write
+#   - reader: Read only
+#
+# Access Restrictions:
+#   - databases: List of allowed databases (None = all databases)
+#   - tables: List of allowed tables in format "db.schema.table"
+#            Supports wildcards: "db.*.table" or "db.schema.*"
+#
+[auth]
+enabled = true
+
+# Users can be defined inline (below) or loaded from external file:
+# users_file = "/etc/mynadb/users.toml"
+
+# -----------------------------------------------------------------------------
+# Admin User - Full access to all operations and databases
+# -----------------------------------------------------------------------------
+[[auth.users]]
+username = "admin"
+# Password: "changeme" - REPLACE WITH YOUR OWN HASH
+# Generate with: mynadb hash-password "your_secure_password"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$EXAMPLE_SALT_REPLACE_ME$EXAMPLE_HASH_REPLACE_ME"
+roles = ["admin"]
+
+# -----------------------------------------------------------------------------
+# Application Writer - Can read/write to specific databases only
+# -----------------------------------------------------------------------------
+[[auth.users]]
+username = "app_writer"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$EXAMPLE_SALT_REPLACE_ME$EXAMPLE_HASH_REPLACE_ME"
+roles = ["writer"]
+databases = ["production", "staging"]
+
+# -----------------------------------------------------------------------------
+# Metrics Collector - Dedicated account for metrics ingestion
+# -----------------------------------------------------------------------------
+[[auth.users]]
+username = "metrics"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$EXAMPLE_SALT_REPLACE_ME$EXAMPLE_HASH_REPLACE_ME"
+roles = ["writer"]
+databases = ["metrics"]
+# Only allowed to write to specific tables:
+tables = ["metrics.default.cpu", "metrics.default.memory", "metrics.*.disk"]
+
+# -----------------------------------------------------------------------------
+# Dashboard Reader - Read-only access for visualization tools
+# -----------------------------------------------------------------------------
+[[auth.users]]
+username = "grafana"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$EXAMPLE_SALT_REPLACE_ME$EXAMPLE_HASH_REPLACE_ME"
+roles = ["reader"]
+databases = ["production", "metrics"]

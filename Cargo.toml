@@ -68,6 +68,9 @@ prometheus = "0.13"
 uuid = { version = "1.7", features = ["v4"] }
 hostname = "0.4"
 
+# Authentication (RBAC)
+argon2 = "0.5"
+
 # Admin Console
 futures-util = "0.3"
 axum-extra = { version = "0.9", features = ["typed-header"] }

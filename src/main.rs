@@ -14,6 +14,7 @@
 
 mod admin;
 mod aggregates;
+mod auth;
 mod config;
 mod data;
 mod flight_protocol;
@@ -114,6 +115,12 @@ enum Commands {
 
     /// Show version information
     Version,
+
+    /// Hash a password for use in config file
+    HashPassword {
+        /// Password to hash (if not provided, prompts for input)
+        password: Option<String>,
+    },
 }
 
 /// Standalone mode actions
@@ -181,6 +188,32 @@ async fn main() {
         // Version
         Some(Commands::Version) => {
             version::print_version();
+        }
+
+        // Hash password
+        Some(Commands::HashPassword { password }) => {
+            let pwd = match password {
+                Some(p) => p,
+                None => {
+                    // Read from stdin
+                    eprint!("Enter password: ");
+                    let mut input = String::new();
+                    std::io::stdin()
+                        .read_line(&mut input)
+                        .expect("Failed to read password");
+                    input.trim().to_string()
+                }
+            };
+
+            match auth::hash_password(&pwd) {
+                Ok(hash) => {
+                    println!("{}", hash);
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }

@@ -551,24 +551,42 @@ pub struct WalConfig {
     pub retention_hours: u64,
 }
 
-/// Authentication configuration
+/// Authentication and authorization configuration (RBAC)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
-    /// Enable authentication (default: false for backward compatibility)
+    /// Enable authentication (default: false)
     #[serde(default = "default_auth_enabled")]
     pub enabled: bool,
 
-    /// Username for basic authentication
-    #[serde(default = "default_auth_username")]
+    /// User definitions with roles and permissions
+    #[serde(default)]
+    pub users: Vec<AuthUserConfig>,
+
+    /// Path to external users file (optional, alternative to inline users)
+    #[serde(default)]
+    pub users_file: Option<String>,
+}
+
+/// User configuration for RBAC
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthUserConfig {
+    /// Username (unique identifier)
     pub username: String,
 
-    /// Password for basic authentication (plaintext in config)
-    #[serde(default = "default_auth_password")]
-    pub password: String,
+    /// Password hash (Argon2) - use `mynadb hash-password` to generate
+    pub password_hash: String,
 
-    /// Endpoints that are always public (even if auth is enabled)
-    #[serde(default = "default_auth_public_endpoints")]
-    pub public_endpoints: Vec<String>,
+    /// Role names: "admin" (all permissions), "writer" (read+write), "reader" (read-only)
+    #[serde(default)]
+    pub roles: Vec<String>,
+
+    /// Optional: restrict access to specific databases (supports wildcards like "prod_*")
+    #[serde(default)]
+    pub databases: Option<Vec<String>>,
+
+    /// Optional: restrict access to specific tables (format: "database.schema.table")
+    #[serde(default)]
+    pub tables: Option<Vec<String>>,
 }
 
 // Default value functions
@@ -761,19 +779,7 @@ fn default_wal_retention_hours() -> u64 {
 }
 
 fn default_auth_enabled() -> bool {
-    false // Disabled by default for backward compatibility
-}
-
-fn default_auth_username() -> String {
-    "admin".to_string()
-}
-
-fn default_auth_password() -> String {
-    "".to_string() // Empty by default, must be set if auth is enabled
-}
-
-fn default_auth_public_endpoints() -> Vec<String> {
-    vec!["/health".to_string(), "/stats".to_string()]
+    false
 }
 
 impl Default for ServerConfig {
@@ -829,9 +835,8 @@ impl Default for AuthConfig {
     fn default() -> Self {
         Self {
             enabled: default_auth_enabled(),
-            username: default_auth_username(),
-            password: default_auth_password(),
-            public_endpoints: default_auth_public_endpoints(),
+            users: Vec::new(),
+            users_file: None,
         }
     }
 }

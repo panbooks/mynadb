@@ -193,35 +193,46 @@ pub async fn run(config_path: &str) {
         query_tracer,
     };
 
-    // Initialize authentication
-    let auth_middleware = Arc::new(auth::AuthMiddleware::new(Arc::new(config.auth.clone())));
+    // Initialize authentication (RBAC)
+    let auth_middleware = Arc::new(auth::AuthMiddleware::new(&config.auth));
     info!(
-        "Authentication: {} (username: {})",
+        "Authentication: {} ({} users configured)",
         if config.auth.enabled {
             "ENABLED"
         } else {
             "DISABLED"
         },
-        config.auth.username
+        config.auth.users.len()
     );
 
     // Build router (standalone mode)
-    let app = api::build_router(state.clone(), auth_middleware);
+    let app = api::build_router(state.clone(), auth_middleware.clone());
 
     print_server_info(&config);
 
-    // Start Arrow Flight server
-    let flight_handle =
-        common::start_flight_server(&config.flight_addr(), query_engine.clone()).await;
+    // Get user store for other protocols
+    let user_store = auth_middleware.user_store();
+    let auth_enabled = auth_middleware.is_enabled();
+
+    // Start Arrow Flight server (with auth)
+    let flight_handle = common::start_flight_server_with_auth(
+        &config.flight_addr(),
+        query_engine.clone(),
+        Some(user_store.clone()),
+        auth_enabled,
+    )
+    .await;
     welcome!("  Arrow Flight server started successfully!");
 
-    // Start MySQL server (if enabled)
+    // Start MySQL server (if enabled, with auth)
     let mysql_handle = if config.server.mysql_enabled {
-        let handle = common::start_mysql_server(
+        let handle = common::start_mysql_server_with_auth(
             &config.mysql_addr(),
             state.query_engine.clone(),
             config.storage.data_dir.clone(),
             Arc::new(state.cache.clone()),
+            Some(user_store.clone()),
+            auth_enabled,
         );
         welcome!("  MySQL server started successfully!");
         Some(handle)

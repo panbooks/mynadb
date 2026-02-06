@@ -6,6 +6,7 @@
 // Internal modules
 pub mod admin;
 pub mod aggregates;
+pub mod auth;
 pub mod config;
 pub mod data;
 pub mod flight_protocol;

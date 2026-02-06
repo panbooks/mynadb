@@ -1,0 +1,47 @@
+# MynaDB External Users File
+# Reference this file in your config.toml with:
+#   [auth]
+#   enabled = true
+#   users_file = "/path/to/users.toml"
+#
+# Generate password hashes using:
+#   mynadb hash-password "your_password"
+
+# =============================================================================
+# User Definitions
+# =============================================================================
+
+[[users]]
+username = "admin"
+# Password: "admin123" (generate your own!)
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$EXAMPLE_SALT_REPLACE_ME$EXAMPLE_HASH_REPLACE_ME"
+roles = ["admin"]
+# Admin has access to all databases and tables by default
+
+[[users]]
+username = "analytics_writer"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$EXAMPLE_SALT_REPLACE_ME$EXAMPLE_HASH_REPLACE_ME"
+roles = ["writer"]
+# Restrict to specific databases
+databases = ["analytics", "reporting"]
+
+[[users]]
+username = "metrics_collector"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$EXAMPLE_SALT_REPLACE_ME$EXAMPLE_HASH_REPLACE_ME"
+roles = ["writer"]
+databases = ["metrics"]
+# Further restrict to specific tables (format: "database.schema.table")
+# Supports wildcards: "db.*.table" or "db.schema.*"
+tables = ["metrics.default.cpu", "metrics.default.memory", "metrics.*.disk"]
+
+[[users]]
+username = "grafana"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$EXAMPLE_SALT_REPLACE_ME$EXAMPLE_HASH_REPLACE_ME"
+roles = ["reader"]
+databases = ["metrics", "production"]
+
+[[users]]
+username = "readonly"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$EXAMPLE_SALT_REPLACE_ME$EXAMPLE_HASH_REPLACE_ME"
+roles = ["reader"]
+# No database restriction = can read all databases

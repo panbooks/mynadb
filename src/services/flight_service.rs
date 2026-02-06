@@ -1,3 +1,5 @@
+//! Arrow Flight service with RBAC authentication
+
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::IpcWriteOptions;
@@ -7,16 +9,19 @@ use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaAsIpc, SchemaResult, Ticket,
 };
+use base64::{engine::general_purpose, Engine as _};
 use futures::{stream, Stream, TryStreamExt};
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status, Streaming};
+use tracing::{debug, info, warn};
 
+use crate::auth::{AuthContext, Permission, UserStore};
 use crate::query::query_engine::QueryEngine;
 
 /// Convert DataFusion DataType to Arrow DataType
-/// This is needed because DataFusion may use a different arrow version
 fn convert_data_type(dt: &arrow::datatypes::DataType) -> arrow::datatypes::DataType {
     use arrow::datatypes::DataType;
     use datafusion::arrow::datatypes::DataType as DfDataType;
@@ -42,13 +47,26 @@ fn convert_data_type(dt: &arrow::datatypes::DataType) -> arrow::datatypes::DataT
         DfDataType::Timestamp(unit, tz) => DataType::Timestamp(*unit, tz.clone()),
         DfDataType::Date32 => DataType::Date32,
         DfDataType::Date64 => DataType::Date64,
-        _ => DataType::Utf8, // Fallback for unsupported types
+        _ => DataType::Utf8,
     }
 }
 
-/// Flight service implementation for DataFusion SQL queries
+/// Session state for an authenticated Flight connection
+struct FlightSession {
+    current_db: Option<String>,
+    auth_context: AuthContext,
+}
+
+/// Flight service implementation with RBAC authentication
 pub struct StatsFlightService {
     query_engine: Arc<QueryEngine>,
+    /// Per-connection session state (keyed by a session token)
+    sessions: Arc<RwLock<HashMap<String, FlightSession>>>,
+    /// User store for authentication
+    user_store: Option<Arc<dyn UserStore>>,
+    /// Whether auth is enabled
+    auth_enabled: bool,
+    /// Legacy: current database for unauthenticated connections
     current_db: Arc<RwLock<Option<String>>>,
 }
 
@@ -56,13 +74,111 @@ impl StatsFlightService {
     pub fn new(query_engine: Arc<QueryEngine>) -> Self {
         Self {
             query_engine,
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            user_store: None,
+            auth_enabled: false,
             current_db: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Enable authentication with the given user store
+    pub fn with_auth(mut self, user_store: Arc<dyn UserStore>, enabled: bool) -> Self {
+        self.user_store = Some(user_store);
+        self.auth_enabled = enabled;
+        self
     }
 
     /// Create a FlightServiceServer from this service
     pub fn into_server(self) -> FlightServiceServer<Self> {
         FlightServiceServer::new(self)
+    }
+
+    /// Extract auth context from request metadata
+    async fn get_auth_context<T>(&self, request: &Request<T>) -> Result<AuthContext, Status> {
+        if !self.auth_enabled {
+            return Ok(AuthContext::anonymous());
+        }
+
+        // Try to get session token from metadata
+        if let Some(token) = request.metadata().get("authorization") {
+            let token_str = token
+                .to_str()
+                .map_err(|_| Status::unauthenticated("Invalid authorization header"))?;
+
+            // Check if it's a Bearer token (session token from handshake)
+            if token_str.starts_with("Bearer ") {
+                let session_token = &token_str[7..];
+                let sessions = self.sessions.read().await;
+                if let Some(session) = sessions.get(session_token) {
+                    return Ok(session.auth_context.clone());
+                }
+            }
+
+            // Check if it's Basic auth
+            if token_str.starts_with("Basic ") {
+                let encoded = &token_str[6..];
+                if let Ok(decoded) = general_purpose::STANDARD.decode(encoded) {
+                    if let Ok(credentials) = String::from_utf8(decoded) {
+                        let parts: Vec<&str> = credentials.splitn(2, ':').collect();
+                        if parts.len() == 2 {
+                            if let Some(ref store) = self.user_store {
+                                if let Some(user) = store.authenticate(parts[0], parts[1]) {
+                                    return Ok(AuthContext::authenticated(user));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(Status::unauthenticated("Authentication required"))
+    }
+
+    /// Get current database for a session
+    async fn get_current_db<T>(&self, request: &Request<T>) -> Option<String> {
+        if !self.auth_enabled {
+            return self.current_db.read().await.clone();
+        }
+
+        // Try to get session token
+        if let Some(token) = request.metadata().get("authorization") {
+            if let Ok(token_str) = token.to_str() {
+                if token_str.starts_with("Bearer ") {
+                    let session_token = &token_str[7..];
+                    let sessions = self.sessions.read().await;
+                    if let Some(session) = sessions.get(session_token) {
+                        return session.current_db.clone();
+                    }
+                }
+            }
+        }
+
+        self.current_db.read().await.clone()
+    }
+
+    /// Set current database for a session
+    async fn set_current_db<T>(&self, request: &Request<T>, db: String) {
+        if !self.auth_enabled {
+            *self.current_db.write().await = Some(db);
+            return;
+        }
+
+        // Try to get session token
+        if let Some(token) = request.metadata().get("authorization") {
+            if let Ok(token_str) = token.to_str() {
+                if token_str.starts_with("Bearer ") {
+                    let session_token = &token_str[7..];
+                    let mut sessions = self.sessions.write().await;
+                    if let Some(session) = sessions.get_mut(session_token) {
+                        session.current_db = Some(db);
+                        return;
+                    }
+                }
+            }
+        }
+
+        *self.current_db.write().await = Some(db);
     }
 }
 
@@ -81,13 +197,78 @@ impl Flight for StatsFlightService {
     type DoExchangeStream =
         Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
 
+    /// Handshake for authentication
     async fn handshake(
         &self,
-        _request: Request<Streaming<HandshakeRequest>>,
+        request: Request<Streaming<HandshakeRequest>>,
     ) -> Result<Response<Self::HandshakeStream>, Status> {
+        if !self.auth_enabled {
+            // No auth required, return empty handshake
+            let response = HandshakeResponse {
+                protocol_version: 0,
+                payload: b"".to_vec().into(),
+            };
+            let output = stream::once(async { Ok(response) });
+            return Ok(Response::new(Box::pin(output)));
+        }
+
+        // Collect handshake request
+        let mut stream = request.into_inner();
+        let handshake_req = stream
+            .try_next()
+            .await?
+            .ok_or_else(|| Status::invalid_argument("No handshake request"))?;
+
+        // Parse credentials from payload (expect "username:password" or base64 encoded)
+        let payload_str = String::from_utf8(handshake_req.payload.to_vec())
+            .map_err(|_| Status::invalid_argument("Invalid UTF-8 in payload"))?;
+
+        let (username, password) = if payload_str.contains(':') {
+            // Direct username:password
+            let parts: Vec<&str> = payload_str.splitn(2, ':').collect();
+            if parts.len() != 2 {
+                return Err(Status::unauthenticated("Invalid credentials format"));
+            }
+            (parts[0].to_string(), parts[1].to_string())
+        } else {
+            // Try base64 decode
+            let decoded = general_purpose::STANDARD
+                .decode(&payload_str)
+                .map_err(|_| Status::unauthenticated("Invalid credentials encoding"))?;
+            let credentials = String::from_utf8(decoded)
+                .map_err(|_| Status::unauthenticated("Invalid credentials encoding"))?;
+            let parts: Vec<&str> = credentials.splitn(2, ':').collect();
+            if parts.len() != 2 {
+                return Err(Status::unauthenticated("Invalid credentials format"));
+            }
+            (parts[0].to_string(), parts[1].to_string())
+        };
+
+        // Authenticate
+        let user = if let Some(ref store) = self.user_store {
+            store
+                .authenticate(&username, &password)
+                .ok_or_else(|| Status::unauthenticated("Invalid username or password"))?
+        } else {
+            return Err(Status::unauthenticated("Authentication not configured"));
+        };
+
+        info!("Flight: User '{}' authenticated", username);
+
+        // Generate session token
+        let session_token = uuid::Uuid::new_v4().to_string();
+
+        // Store session
+        let session = FlightSession {
+            current_db: None,
+            auth_context: AuthContext::authenticated(user),
+        };
+        self.sessions.write().await.insert(session_token.clone(), session);
+
+        // Return token in response
         let response = HandshakeResponse {
             protocol_version: 0,
-            payload: b"".to_vec().into(),
+            payload: session_token.as_bytes().to_vec().into(),
         };
         let output = stream::once(async { Ok(response) });
         Ok(Response::new(Box::pin(output)))
@@ -95,8 +276,14 @@ impl Flight for StatsFlightService {
 
     async fn list_flights(
         &self,
-        _request: Request<Criteria>,
+        request: Request<Criteria>,
     ) -> Result<Response<Self::ListFlightsStream>, Status> {
+        // Check auth
+        let ctx = self.get_auth_context(&request).await?;
+        if !ctx.has_permission(Permission::Read) {
+            return Err(Status::permission_denied("Read permission required"));
+        }
+
         let output = stream::empty();
         Ok(Response::new(Box::pin(output)))
     }
@@ -105,9 +292,26 @@ impl Flight for StatsFlightService {
         &self,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
+        // Check auth
+        let ctx = self.get_auth_context(&request).await?;
+        if !ctx.has_permission(Permission::Read) {
+            return Err(Status::permission_denied("Read permission required"));
+        }
+
+        let db = self.get_current_db(&request).await.ok_or_else(|| {
+            Status::failed_precondition("No database selected. Use: USE <database>;")
+        })?;
+
+        // Check database access
+        if !ctx.can_access_database(&db) {
+            return Err(Status::permission_denied(format!(
+                "Access denied to database: {}",
+                db
+            )));
+        }
+
         let descriptor = request.into_inner();
 
-        // Extract SQL query from command
         let sql = match descriptor.cmd.is_empty() {
             false => String::from_utf8(descriptor.cmd.to_vec())
                 .map_err(|e| Status::invalid_argument(format!("Invalid UTF-8: {}", e)))?,
@@ -116,19 +320,12 @@ impl Flight for StatsFlightService {
             }
         };
 
-        // Parse database from SQL or use current database
-        let db = self.current_db.read().await.clone().ok_or_else(|| {
-            Status::failed_precondition("No database selected. Use: USE <database>;")
-        })?;
-
-        // Get schema from query
         let schema = self
             .query_engine
             .get_query_schema(&db, &sql)
             .await
             .map_err(|e| Status::internal(format!("Schema error: {}", e)))?;
 
-        // Serialize schema using SchemaAsIpc
         let _schema_ipc = SchemaAsIpc::new(&schema, &Default::default());
 
         let flight_info = FlightInfo::new()
@@ -146,17 +343,29 @@ impl Flight for StatsFlightService {
         &self,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<SchemaResult>, Status> {
+        // Check auth
+        let ctx = self.get_auth_context(&request).await?;
+        if !ctx.has_permission(Permission::Read) {
+            return Err(Status::permission_denied("Read permission required"));
+        }
+
+        let db = self
+            .get_current_db(&request)
+            .await
+            .ok_or_else(|| Status::failed_precondition("No database selected"))?;
+
+        // Check database access
+        if !ctx.can_access_database(&db) {
+            return Err(Status::permission_denied(format!(
+                "Access denied to database: {}",
+                db
+            )));
+        }
+
         let descriptor = request.into_inner();
 
         let sql = String::from_utf8(descriptor.cmd.to_vec())
             .map_err(|e| Status::invalid_argument(format!("Invalid UTF-8: {}", e)))?;
-
-        let db = self
-            .current_db
-            .read()
-            .await
-            .clone()
-            .ok_or_else(|| Status::failed_precondition("No database selected"))?;
 
         let schema = self
             .query_engine
@@ -164,10 +373,9 @@ impl Flight for StatsFlightService {
             .await
             .map_err(|e| Status::internal(format!("Schema error: {}", e)))?;
 
-        // Create SchemaResult using IpcMessage
         use arrow_flight::IpcMessage;
         let options = IpcWriteOptions::default();
-        let schema_ref: &Schema = &schema; // Dereference Arc<Schema> to &Schema
+        let schema_ref: &Schema = &schema;
         let message = IpcMessage::try_from(SchemaAsIpc::new(schema_ref, &options))
             .map_err(|e| Status::internal(format!("Schema encoding error: {}", e)))?;
 
@@ -180,28 +388,47 @@ impl Flight for StatsFlightService {
         &self,
         request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
+        // Check auth
+        let ctx = self.get_auth_context(&request).await?;
+        if !ctx.has_permission(Permission::Read) {
+            return Err(Status::permission_denied("Read permission required"));
+        }
+
         let ticket = request.into_inner();
 
-        // Extract SQL from ticket
         let sql = String::from_utf8(ticket.ticket.to_vec())
             .map_err(|e| Status::invalid_argument(format!("Invalid UTF-8: {}", e)))?;
 
         // Check for USE database command
         if sql.trim().to_uppercase().starts_with("USE ") {
             let db_name = sql.trim()[4..].trim().trim_end_matches(';').to_string();
-            *self.current_db.write().await = Some(db_name.clone());
 
-            // Return empty stream for USE command
+            // Check database access
+            if !ctx.can_access_database(&db_name) {
+                return Err(Status::permission_denied(format!(
+                    "Access denied to database: {}",
+                    db_name
+                )));
+            }
+
+            *self.current_db.write().await = Some(db_name);
+
             let output = stream::empty();
             return Ok(Response::new(Box::pin(output)));
         }
 
-        // Get current database
         let db = self.current_db.read().await.clone().ok_or_else(|| {
             Status::failed_precondition("No database selected. Use: USE <database>;")
         })?;
 
-        // Execute query (returns datafusion::arrow RecordBatches)
+        // Check database access
+        if !ctx.can_access_database(&db) {
+            return Err(Status::permission_denied(format!(
+                "Access denied to database: {}",
+                db
+            )));
+        }
+
         let df_batches = self
             .query_engine
             .execute_query_with_db(&sql, &db)
@@ -213,12 +440,9 @@ impl Flight for StatsFlightService {
             return Ok(Response::new(Box::pin(output)));
         }
 
-        // Convert DataFusion RecordBatches to Arrow RecordBatches
-        // They have the same structure but different types due to version mismatch
         let arrow_batches: Vec<RecordBatch> = df_batches
             .into_iter()
             .map(|df_batch| {
-                // Get schema and convert
                 let schema = df_batch.schema();
                 let arrow_schema = arrow::datatypes::Schema::new(
                     schema
@@ -234,12 +458,10 @@ impl Flight for StatsFlightService {
                         .collect::<Vec<_>>(),
                 );
 
-                // Create new RecordBatch with same data
                 RecordBatch::try_new(Arc::new(arrow_schema), df_batch.columns().to_vec()).unwrap()
             })
             .collect();
 
-        // Use FlightDataEncoder
         let batch_stream = stream::iter(
             arrow_batches
                 .into_iter()
@@ -264,12 +486,24 @@ impl Flight for StatsFlightService {
         &self,
         request: Request<Action>,
     ) -> Result<Response<Self::DoActionStream>, Status> {
+        // Check auth for actions
+        let ctx = self.get_auth_context(&request).await?;
+
         let action = request.into_inner();
 
         match action.r#type.as_str() {
             "USE" => {
                 let db_name = String::from_utf8(action.body.to_vec())
                     .map_err(|e| Status::invalid_argument(format!("Invalid UTF-8: {}", e)))?;
+
+                // Check database access
+                if !ctx.can_access_database(&db_name) {
+                    return Err(Status::permission_denied(format!(
+                        "Access denied to database: {}",
+                        db_name
+                    )));
+                }
+
                 *self.current_db.write().await = Some(db_name);
 
                 let output = stream::empty();
@@ -301,7 +535,6 @@ impl Flight for StatsFlightService {
         Err(Status::unimplemented("DoExchange not implemented"))
     }
 
-    // Fix: Implement the missing poll_flight_info method
     async fn poll_flight_info(
         &self,
         _request: Request<FlightDescriptor>,

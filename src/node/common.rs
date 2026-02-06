@@ -428,11 +428,24 @@ pub async fn start_flight_server(
     addr: &str,
     query_engine: Arc<query_engine::QueryEngine>,
 ) -> tokio::task::JoinHandle<()> {
-    let flight_service = flight_service::StatsFlightService::new(query_engine);
+    start_flight_server_with_auth(addr, query_engine, None, false).await
+}
+
+/// Start Arrow Flight server with optional authentication
+pub async fn start_flight_server_with_auth(
+    addr: &str,
+    query_engine: Arc<query_engine::QueryEngine>,
+    user_store: Option<Arc<dyn crate::auth::UserStore>>,
+    auth_enabled: bool,
+) -> tokio::task::JoinHandle<()> {
+    let mut flight_service = flight_service::StatsFlightService::new(query_engine);
+    if let Some(store) = user_store {
+        flight_service = flight_service.with_auth(store, auth_enabled);
+    }
     let addr = addr.parse().expect("Invalid flight address");
 
     tokio::spawn(async move {
-        info!("Arrow Flight server starting on {}", addr);
+        info!("Arrow Flight server starting on {} (auth={})", addr, auth_enabled);
         Server::builder()
             .add_service(flight_service.into_server())
             .serve(addr)
@@ -448,12 +461,27 @@ pub fn start_mysql_server(
     data_dir: String,
     cache: Arc<cache::DataCache>,
 ) -> tokio::task::JoinHandle<()> {
-    let mysql_service = mysql_service::MysqlService::new(
+    start_mysql_server_with_auth(addr, query_engine, data_dir, cache, None, false)
+}
+
+/// Start MySQL server with optional authentication
+pub fn start_mysql_server_with_auth(
+    addr: &str,
+    query_engine: Arc<query_engine::QueryEngine>,
+    data_dir: String,
+    cache: Arc<cache::DataCache>,
+    user_store: Option<Arc<dyn crate::auth::UserStore>>,
+    auth_enabled: bool,
+) -> tokio::task::JoinHandle<()> {
+    let mut mysql_service = mysql_service::MysqlService::new(
         query_engine,
         tokio::runtime::Handle::current(),
         data_dir,
         cache,
     );
+    if let Some(store) = user_store {
+        mysql_service = mysql_service.with_auth(store, auth_enabled);
+    }
     let addr = addr.to_string();
 
     tokio::task::spawn_blocking(move || {

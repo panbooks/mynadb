@@ -1,3 +1,6 @@
+//! MySQL wire protocol service with RBAC authentication
+
+use crate::auth::{AuthContext, Permission, User, UserStore};
 use crate::query::query_engine::QueryEngine;
 use crate::storage::cache::DataCache;
 use msql_srv::{
@@ -9,7 +12,7 @@ use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::sync::Arc;
 use tokio::runtime::Handle;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// MySQL protocol service for MynaDB
 pub struct MysqlService {
@@ -17,6 +20,8 @@ pub struct MysqlService {
     runtime_handle: Handle,
     data_dir: String,
     data_cache: Arc<DataCache>,
+    user_store: Option<Arc<dyn UserStore>>,
+    auth_enabled: bool,
 }
 
 impl MysqlService {
@@ -31,14 +36,23 @@ impl MysqlService {
             runtime_handle,
             data_dir,
             data_cache,
+            user_store: None,
+            auth_enabled: false,
         }
+    }
+
+    /// Enable authentication with the given user store
+    pub fn with_auth(mut self, user_store: Arc<dyn UserStore>, enabled: bool) -> Self {
+        self.user_store = Some(user_store);
+        self.auth_enabled = enabled;
+        self
     }
 
     /// Run the MySQL server on the given address
     /// This blocks and should be run in a dedicated thread
     pub fn run(&self, addr: &str) -> io::Result<()> {
         let listener = TcpListener::bind(addr)?;
-        info!("MySQL server listening on {}", addr);
+        info!("MySQL server listening on {} (auth={})", addr, self.auth_enabled);
 
         for stream in listener.incoming() {
             match stream {
@@ -47,9 +61,18 @@ impl MysqlService {
                     let runtime_handle = self.runtime_handle.clone();
                     let data_dir = self.data_dir.clone();
                     let data_cache = self.data_cache.clone();
+                    let user_store = self.user_store.clone();
+                    let auth_enabled = self.auth_enabled;
+
                     std::thread::spawn(move || {
-                        let session =
-                            MysqlSession::new(query_engine, runtime_handle, data_dir, data_cache);
+                        let session = MysqlSession::new(
+                            query_engine,
+                            runtime_handle,
+                            data_dir,
+                            data_cache,
+                            user_store,
+                            auth_enabled,
+                        );
                         if let Err(e) = MysqlIntermediary::run_on_tcp(session, stream) {
                             error!("MySQL session error: {}", e);
                         }
@@ -74,6 +97,10 @@ struct MysqlSession {
     current_db: Option<String>,
     prepared_statements: HashMap<u32, PreparedStatement>,
     next_stmt_id: u32,
+    // Auth state
+    user_store: Option<Arc<dyn UserStore>>,
+    auth_enabled: bool,
+    auth_context: AuthContext,
 }
 
 #[derive(Clone)]
@@ -89,7 +116,16 @@ impl MysqlSession {
         runtime_handle: Handle,
         data_dir: String,
         data_cache: Arc<DataCache>,
+        user_store: Option<Arc<dyn UserStore>>,
+        auth_enabled: bool,
     ) -> Self {
+        let auth_context = if auth_enabled {
+            // Will be set after authentication
+            AuthContext::anonymous()
+        } else {
+            AuthContext::anonymous()
+        };
+
         Self {
             query_engine,
             runtime_handle,
@@ -98,7 +134,44 @@ impl MysqlSession {
             current_db: None,
             prepared_statements: HashMap::new(),
             next_stmt_id: 1,
+            user_store,
+            auth_enabled,
+            auth_context,
         }
+    }
+
+    /// Authenticate user with username and password
+    fn authenticate(&mut self, username: &str, password: &str) -> bool {
+        if !self.auth_enabled {
+            return true;
+        }
+
+        if let Some(ref store) = self.user_store {
+            if let Some(user) = store.authenticate(username, password) {
+                info!("MySQL: User '{}' authenticated", username);
+                self.auth_context = AuthContext::authenticated(user);
+                return true;
+            }
+        }
+
+        warn!("MySQL: Authentication failed for user '{}'", username);
+        false
+    }
+
+    /// Check if user has permission
+    fn check_permission(&self, permission: Permission) -> bool {
+        if !self.auth_enabled {
+            return true;
+        }
+        self.auth_context.has_permission(permission)
+    }
+
+    /// Check if user can access database
+    fn check_database_access(&self, database: &str) -> bool {
+        if !self.auth_enabled {
+            return true;
+        }
+        self.auth_context.can_access_database(database)
     }
 
     /// Execute a query and write results
@@ -107,6 +180,14 @@ impl MysqlSession {
         sql: &str,
         results: QueryResultWriter<W>,
     ) -> io::Result<()> {
+        // Check read permission
+        if !self.check_permission(Permission::Read) {
+            return results.error(
+                ErrorKind::ER_ACCESS_DENIED_ERROR,
+                b"Access denied: read permission required",
+            );
+        }
+
         let db = match &self.current_db {
             Some(db) => db.clone(),
             None => {
@@ -116,6 +197,14 @@ impl MysqlSession {
                 );
             }
         };
+
+        // Check database access
+        if !self.check_database_access(&db) {
+            return results.error(
+                ErrorKind::ER_ACCESS_DENIED_ERROR,
+                format!("Access denied to database: {}", db).as_bytes(),
+            );
+        }
 
         // Run async query using stored runtime handle
         let query_result = self.runtime_handle.block_on(async {
@@ -312,9 +401,55 @@ fn arrow_value_to_mysql(
 impl<W: Read + Write> MysqlShim<W> for MysqlSession {
     type Error = io::Error;
 
+    /// Called after MySQL authentication handshake completes
+    /// Note: MySQL protocol handles password verification internally.
+    /// We use the username to look up the user and apply authorization.
+    fn after_authentication(
+        &mut self,
+        context: &msql_srv::AuthenticationContext<'_>,
+    ) -> Result<(), Self::Error> {
+        if !self.auth_enabled {
+            return Ok(());
+        }
+
+        // Get username from context
+        let username = context
+            .username
+            .as_ref()
+            .map(|u| String::from_utf8_lossy(u).to_string())
+            .unwrap_or_default();
+
+        if username.is_empty() {
+            warn!("MySQL: No username provided");
+            return Ok(()); // Let subsequent queries fail with permission denied
+        }
+
+        // Look up user (note: MySQL protocol handles password verification)
+        // We just need to set up the auth context for authorization
+        if let Some(ref store) = self.user_store {
+            if let Some(user) = store.get_user(&username) {
+                info!("MySQL: User '{}' connected", username);
+                self.auth_context = AuthContext::authenticated(user);
+            } else {
+                warn!("MySQL: Unknown user '{}' - will deny queries", username);
+                // Keep anonymous context - queries will be denied
+            }
+        }
+
+        Ok(())
+    }
+
     /// Called when client sends USE database
     fn on_init(&mut self, database: &str, writer: InitWriter<W>) -> io::Result<()> {
         info!("MySQL: USE {}", database);
+
+        // Check database access permission
+        if !self.check_database_access(database) {
+            return writer.error(
+                ErrorKind::ER_ACCESS_DENIED_ERROR,
+                format!("Access denied to database: {}", database).as_bytes(),
+            );
+        }
 
         // Check if database exists by trying to discover it
         let _db_exists = self.runtime_handle.block_on(async {
@@ -338,6 +473,15 @@ impl<W: Read + Write> MysqlShim<W> for MysqlSession {
         // Handle USE command (some clients send it as query, not init)
         if query_upper.starts_with("USE ") {
             let db = query.trim()[4..].trim().trim_end_matches(';').to_string();
+
+            // Check database access
+            if !self.check_database_access(&db) {
+                return results.error(
+                    ErrorKind::ER_ACCESS_DENIED_ERROR,
+                    format!("Access denied to database: {}", db).as_bytes(),
+                );
+            }
+
             self.current_db = Some(db.clone());
             info!("MySQL: USE {} (via query)", db);
             let writer = results.start(&[])?;
@@ -464,11 +608,19 @@ impl<W: Read + Write> MysqlShim<W> for MysqlSession {
 
 impl MysqlSession {
     /// Handle SHOW DATABASES command
-    /// Returns databases from both filesystem and in-memory cache
+    /// Returns databases from both filesystem and in-memory cache (filtered by access)
     fn handle_show_databases<W: Read + Write>(
         &self,
         results: QueryResultWriter<W>,
     ) -> io::Result<()> {
+        // Check read permission
+        if !self.check_permission(Permission::Read) {
+            return results.error(
+                ErrorKind::ER_ACCESS_DENIED_ERROR,
+                b"Access denied: read permission required",
+            );
+        }
+
         // List databases from data directory
         let data_dir = self.data_dir.clone();
         let data_cache = self.data_cache.clone();
@@ -501,6 +653,12 @@ impl MysqlSession {
             databases
         });
 
+        // Filter by access permissions
+        let accessible: Vec<_> = databases
+            .into_iter()
+            .filter(|db| self.check_database_access(db))
+            .collect();
+
         let columns = vec![Column {
             table: String::new(),
             column: "Database".to_string(),
@@ -509,7 +667,7 @@ impl MysqlSession {
         }];
 
         let mut writer = results.start(&columns)?;
-        for db in databases {
+        for db in accessible {
             writer.write_col(&db)?;
             writer.end_row()?;
         }
@@ -519,12 +677,28 @@ impl MysqlSession {
     /// Handle SHOW TABLES command
     /// Returns tables from both filesystem and in-memory cache
     fn handle_show_tables<W: Read + Write>(&self, results: QueryResultWriter<W>) -> io::Result<()> {
+        // Check read permission
+        if !self.check_permission(Permission::Read) {
+            return results.error(
+                ErrorKind::ER_ACCESS_DENIED_ERROR,
+                b"Access denied: read permission required",
+            );
+        }
+
         let db = match &self.current_db {
             Some(db) => db.clone(),
             None => {
                 return results.error(ErrorKind::ER_NO_DB_ERROR, b"No database selected");
             }
         };
+
+        // Check database access
+        if !self.check_database_access(&db) {
+            return results.error(
+                ErrorKind::ER_ACCESS_DENIED_ERROR,
+                format!("Access denied to database: {}", db).as_bytes(),
+            );
+        }
 
         let data_cache = self.data_cache.clone();
 
