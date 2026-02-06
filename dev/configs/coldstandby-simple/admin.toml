@@ -1,0 +1,19 @@
+# MynaDB Admin Console Configuration
+# Cold Standby Simple (single meta node)
+#
+# Access the dashboard at: http://{http_host}:{http_port}/admin/
+# API available at: http://{http_host}:{http_port}/admin/api/v1/
+
+[admin]
+http_host = "127.0.0.1"
+http_port = 18080
+
+# Single meta node (gRPC port)
+meta_endpoints = ["127.0.0.1:6001"]
+
+[logging]
+level = "info"
+log_dir = "./dev/logs/coldstandby-simple/admin"
+file_prefix = "admin"
+rotation = "daily"
+max_files = 7

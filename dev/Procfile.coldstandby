@@ -3,6 +3,7 @@
 # - 3 Meta nodes (Raft consensus)
 # - 6 Data nodes (4 Primary + 2 Standby with 2:1 ratio)
 # - 1 Router
+# - 1 Admin console
 #
 # Port assignments (base + offset pattern):
 #   meta1:   HTTP 6000, gRPC 6001
@@ -15,6 +16,7 @@
 #   data4:   HTTP 5300, Flight 5301 (zone-a, Primary)
 #   data5:   HTTP 5400, Flight 5401 (zone-b, Standby)
 #   data6:   HTTP 5500, Flight 5501 (zone-c, Standby)
+#   admin:   HTTP 18080
 #
 # Cold Standby: 4 Primaries serve traffic, 2 Standbys are cold backups
 # On Primary failure, a Standby is promoted (no avalanche effect)
@@ -34,3 +36,5 @@ data3: sleep 15 && MYNADB_ZONE=zone-c ./target/debug/mynadb -c ./dev/configs/col
 data4: sleep 15 && MYNADB_ZONE=zone-a ./target/debug/mynadb -c ./dev/configs/coldstandby/data4.toml data start
 data5: sleep 16 && MYNADB_ZONE=zone-b ./target/debug/mynadb -c ./dev/configs/coldstandby/data5.toml data start
 data6: sleep 16 && MYNADB_ZONE=zone-c ./target/debug/mynadb -c ./dev/configs/coldstandby/data6.toml data start
+# Admin console: wait for cluster to be ready
+admin: sleep 20 && ./target/debug/mynadb -c ./dev/configs/coldstandby/admin.toml admin start

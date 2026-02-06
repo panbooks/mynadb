@@ -1,5 +1,11 @@
-# MynaDB Cold Standby - Simplified (1 meta, 4 data, 1 router)
+# MynaDB Cold Standby - Simplified (1 meta, 4 data, 1 router, 1 admin)
 # For testing Cold Standby architecture without multi-meta complexity
+#
+# Port assignments:
+#   meta1:   HTTP 6000, gRPC 6001
+#   router1: HTTP 7000, Flight 7001, MySQL 7002
+#   data1-4: HTTP 5000-5300, Flight 5001-5301
+#   admin:   HTTP 18080
 
 meta1: ./target/debug/mynadb -c ./dev/configs/coldstandby-simple/meta1.toml meta start
 router1: sleep 8 && ./target/debug/mynadb -c ./dev/configs/coldstandby-simple/router1.toml router start
@@ -7,3 +13,4 @@ data1: sleep 8 && MYNADB_ZONE=zone-a ./target/debug/mynadb -c ./dev/configs/cold
 data2: sleep 9 && MYNADB_ZONE=zone-b ./target/debug/mynadb -c ./dev/configs/coldstandby-simple/data2.toml data start
 data3: sleep 10 && MYNADB_ZONE=zone-a ./target/debug/mynadb -c ./dev/configs/coldstandby-simple/data3.toml data start
 data4: sleep 11 && MYNADB_ZONE=zone-b ./target/debug/mynadb -c ./dev/configs/coldstandby-simple/data4.toml data start
+admin: sleep 12 && ./target/debug/mynadb -c ./dev/configs/coldstandby-simple/admin.toml admin start

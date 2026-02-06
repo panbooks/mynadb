@@ -1,0 +1,26 @@
+# MynaDB Admin Console Configuration
+# Cold Standby Architecture cluster
+#
+# The admin console provides a web-based dashboard for managing
+# the MynaDB cluster. It connects to meta nodes via gRPC.
+#
+# Access the dashboard at: http://{http_host}:{http_port}/admin/
+# API available at: http://{http_host}:{http_port}/admin/api/v1/
+
+[admin]
+# HTTP server bind address
+http_host = "127.0.0.1"
+
+# HTTP server port
+http_port = 18080
+
+# Meta service endpoints (gRPC ports, not HTTP)
+# These should match the gRPC ports of your meta nodes
+meta_endpoints = ["127.0.0.1:6001", "127.0.0.1:6101", "127.0.0.1:6201"]
+
+[logging]
+level = "info"
+log_dir = "./dev/logs/coldstandby/admin"
+file_prefix = "admin"
+rotation = "daily"
+max_files = 7
