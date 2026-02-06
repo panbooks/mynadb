@@ -203,24 +203,24 @@ mod tests {
             Field::new("region", DataType::Utf8, false),
         ]));
 
-        let ids = Int64Array::from((0..1000).collect::<Vec<_>>());
+        let ids = Int64Array::from((0..10000).collect::<Vec<_>>());
 
-        // Low cardinality - good for dictionary encoding
-        let services: Vec<&str> = (0..1000)
+        // Low cardinality with longer values - good for dictionary encoding
+        let services: Vec<&str> = (0..10000)
             .map(|i| match i % 5 {
-                0 => "web",
-                1 => "api",
-                2 => "db",
-                3 => "cache",
-                _ => "worker",
+                0 => "web-frontend-service",
+                1 => "api-gateway-service",
+                2 => "database-primary-service",
+                3 => "cache-redis-service",
+                _ => "worker-background-service",
             })
             .collect();
 
-        let regions: Vec<&str> = (0..1000)
+        let regions: Vec<&str> = (0..10000)
             .map(|i| match i % 3 {
-                0 => "us-west",
-                1 => "us-east",
-                _ => "eu-west",
+                0 => "us-west-2-production",
+                1 => "us-east-1-production",
+                _ => "eu-west-1-production",
             })
             .collect();
 
