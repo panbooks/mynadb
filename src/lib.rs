@@ -11,6 +11,7 @@ pub mod data;
 pub mod flight_protocol;
 pub mod jobs;
 pub mod meta;
+pub mod metrics;
 pub mod node;
 pub mod observability;
 pub mod query;

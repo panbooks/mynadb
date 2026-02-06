@@ -537,6 +537,8 @@ impl Wal {
     /// Persist a segment to storage (must hold lock)
     /// This writes the full buffer and marks it as persisted (for incremental writes)
     async fn persist_segment_locked(&self, segment: &mut WalSegment) -> Result<(), String> {
+        use crate::metrics::METRICS;
+
         if segment.is_empty() || !segment.has_unpersisted() {
             return Ok(());
         }
@@ -548,6 +550,7 @@ impl Wal {
         self.storage.put(&path, data).await?;
         segment.mark_persisted();
 
+        METRICS.record_wal_flush();
         debug!("Persisted WAL segment: {} ({} entries)", path, entries);
         Ok(())
     }

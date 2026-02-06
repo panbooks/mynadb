@@ -100,6 +100,8 @@ impl TableMetadataCache {
         schema: &str,
         table: &str,
     ) -> Option<CachedTableInfo> {
+        use crate::metrics::METRICS;
+
         let key = (catalog.to_string(), schema.to_string(), table.to_string());
         let tables = self.tables.read();
 
@@ -107,10 +109,12 @@ impl TableMetadataCache {
             // Check TTL
             if info.cached_at.elapsed() < Duration::from_secs(TABLE_CACHE_TTL_SECS) {
                 self.stats.table_hits.fetch_add(1, Ordering::Relaxed);
+                METRICS.record_metadata_hit();
                 return Some(info.clone());
             }
         }
         self.stats.table_misses.fetch_add(1, Ordering::Relaxed);
+        METRICS.record_metadata_miss();
         None
     }
 

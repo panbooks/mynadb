@@ -19,6 +19,7 @@ mod data;
 mod flight_protocol;
 mod jobs;
 mod meta;
+mod metrics;
 mod node;
 mod query;
 mod router;

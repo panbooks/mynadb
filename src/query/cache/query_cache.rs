@@ -217,6 +217,8 @@ impl QueryResultCache {
 
     /// Get cached query result if available and not expired
     pub fn get(&self, key: &QueryCacheKey) -> Option<Vec<RecordBatch>> {
+        use crate::metrics::METRICS;
+
         if !self.config.enabled {
             return None;
         }
@@ -226,11 +228,13 @@ impl QueryResultCache {
         if let Some(entry) = cache.get(key) {
             if entry.is_expired() {
                 self.stats.misses.fetch_add(1, Ordering::Relaxed);
+                METRICS.record_query_cache_miss();
                 return None;
             }
 
             entry.hit_count.fetch_add(1, Ordering::Relaxed);
             self.stats.hits.fetch_add(1, Ordering::Relaxed);
+            METRICS.record_query_cache_hit();
 
             debug!(
                 "Query cache HIT: db={}, sql_hash={}, rows={}, size={}",
@@ -241,6 +245,7 @@ impl QueryResultCache {
         }
 
         self.stats.misses.fetch_add(1, Ordering::Relaxed);
+        METRICS.record_query_cache_miss();
         None
     }
 

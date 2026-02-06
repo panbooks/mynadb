@@ -133,6 +133,15 @@ pub async fn run(config_path: &str) {
         Arc::clone(&retention_manager).start_background_retention(config.retention.clone());
     }
 
+    // Start background metrics updater
+    info!("Starting metrics updater");
+    let metrics_config = Arc::clone(&config);
+    let metrics_cache = Arc::clone(&cache_arc);
+    let metrics_wal = wal.clone();
+    tokio::spawn(async move {
+        crate::metrics::start_metrics_updater(metrics_config, metrics_cache, metrics_wal).await;
+    });
+
     // Start background WAL tasks
     if let Some(ref wal_arc) = wal {
         wal_arc.start_background_flush();

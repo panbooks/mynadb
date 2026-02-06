@@ -160,85 +160,40 @@ pub async fn health() -> &'static str {
 ///       - targets: ['localhost:7000']
 ///     metrics_path: '/metrics'
 /// ```
+/// Prometheus metrics endpoint (comprehensive dashboard metrics)
 pub async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let mut output = String::new();
+    use crate::metrics::{to_prometheus_format, METRICS};
 
-    // Get cache stats
+    let snapshot = METRICS.snapshot();
+    let mut output = to_prometheus_format(&snapshot);
+
+    // Add legacy data cache metrics (backward compatibility)
     let cache_stats = state.cache.stats().await;
-
-    // Cache metrics
-    output.push_str("# HELP mynadb_cache_rows_total Total number of rows in the data cache\n");
-    output.push_str("# TYPE mynadb_cache_rows_total gauge\n");
-    output.push_str(&format!(
-        "mynadb_cache_rows_total {}\n",
-        cache_stats.total_rows
-    ));
-
-    output.push_str("# HELP mynadb_cache_tables_total Number of tables in the data cache\n");
-    output.push_str("# TYPE mynadb_cache_tables_total gauge\n");
-    output.push_str(&format!(
-        "mynadb_cache_tables_total {}\n",
-        cache_stats.num_measurements
-    ));
-
-    output.push_str("# HELP mynadb_cache_size_bytes Current size of the data cache in bytes\n");
-    output.push_str("# TYPE mynadb_cache_size_bytes gauge\n");
-    output.push_str(&format!(
-        "mynadb_cache_size_bytes {}\n",
-        cache_stats.size_bytes
-    ));
-
-    output.push_str("# HELP mynadb_cache_max_size_bytes Maximum size of the data cache in bytes\n");
-    output.push_str("# TYPE mynadb_cache_max_size_bytes gauge\n");
-    output.push_str(&format!(
-        "mynadb_cache_max_size_bytes {}\n",
-        cache_stats.max_size_bytes
-    ));
-
-    output.push_str("# HELP mynadb_cache_usage_ratio Cache usage as a ratio (0.0-1.0)\n");
-    output.push_str("# TYPE mynadb_cache_usage_ratio gauge\n");
-    output.push_str(&format!(
-        "mynadb_cache_usage_ratio {:.4}\n",
-        cache_stats.usage_percent() as f64 / 100.0
-    ));
+    output.push_str("# HELP mynadb_data_cache_rows_total Total number of rows in the data cache\n");
+    output.push_str("# TYPE mynadb_data_cache_rows_total gauge\n");
+    output.push_str(&format!("mynadb_data_cache_rows_total {}\n", cache_stats.total_rows));
+    output.push_str("# HELP mynadb_data_cache_tables_total Number of tables in the data cache\n");
+    output.push_str("# TYPE mynadb_data_cache_tables_total gauge\n");
+    output.push_str(&format!("mynadb_data_cache_tables_total {}\n", cache_stats.num_measurements));
 
     // File cache metrics (if available)
     if let Some(fc) = &state.file_cache {
         let fc_stats = fc.stats().await;
         output.push_str("# HELP mynadb_file_cache_files_total Number of files in file cache\n");
         output.push_str("# TYPE mynadb_file_cache_files_total gauge\n");
-        output.push_str(&format!(
-            "mynadb_file_cache_files_total {}\n",
-            fc_stats.file_count
-        ));
-
+        output.push_str(&format!("mynadb_file_cache_files_total {}\n", fc_stats.file_count));
         output.push_str("# HELP mynadb_file_cache_size_bytes File cache size in bytes\n");
         output.push_str("# TYPE mynadb_file_cache_size_bytes gauge\n");
-        output.push_str(&format!(
-            "mynadb_file_cache_size_bytes {}\n",
-            fc_stats.total_size_bytes
-        ));
-
-        output.push_str("# HELP mynadb_file_cache_max_size_bytes File cache max size in bytes\n");
-        output.push_str("# TYPE mynadb_file_cache_max_size_bytes gauge\n");
-        output.push_str(&format!(
-            "mynadb_file_cache_max_size_bytes {}\n",
-            fc_stats.max_size_bytes
-        ));
-
+        output.push_str(&format!("mynadb_file_cache_size_bytes {}\n", fc_stats.total_size_bytes));
         output.push_str("# HELP mynadb_file_cache_hits_total Total file cache hits\n");
         output.push_str("# TYPE mynadb_file_cache_hits_total counter\n");
         output.push_str(&format!("mynadb_file_cache_hits_total {}\n", fc_stats.hits));
-
         output.push_str("# HELP mynadb_file_cache_misses_total Total file cache misses\n");
         output.push_str("# TYPE mynadb_file_cache_misses_total counter\n");
-        output.push_str(&format!(
-            "mynadb_file_cache_misses_total {}\n",
-            fc_stats.misses
-        ));
+        output.push_str(&format!("mynadb_file_cache_misses_total {}\n", fc_stats.misses));
     }
 
-    // Build info (constant metric)
+    // Build info
     output.push_str("# HELP mynadb_build_info Build information\n");
     output.push_str("# TYPE mynadb_build_info gauge\n");
     output.push_str(&format!(
@@ -247,7 +202,7 @@ pub async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse
         env!("GIT_HASH")
     ));
 
-    // Up metric (always 1 when service is running)
+    // Up metric
     output.push_str("# HELP mynadb_up Whether the MynaDB server is up\n");
     output.push_str("# TYPE mynadb_up gauge\n");
     output.push_str("mynadb_up 1\n");
@@ -272,6 +227,14 @@ pub async fn version_handler() -> impl IntoResponse {
         "rustc_version": env!("RUSTC_VERSION"),
     });
     (StatusCode::OK, Json(version_info))
+}
+
+/// JSON metrics endpoint for dashboard consumption
+pub async fn metrics_json_handler() -> impl IntoResponse {
+    use crate::metrics::METRICS;
+
+    let snapshot = METRICS.snapshot();
+    (StatusCode::OK, Json(snapshot))
 }
 
 // ===== Database Management Handlers =====
@@ -935,12 +898,18 @@ pub async fn query_handler_post(
 }
 
 async fn execute_query(db: String, sql: String, state: AppState) -> impl IntoResponse {
+    use crate::metrics::METRICS;
+
+    let query_handle = METRICS.record_query_start();
+
     match shared::execute_query_impl(&state.query_engine, &db, &sql).await {
         Ok(json) => {
+            query_handle.finish(true);
             info!("Query executed successfully");
             (StatusCode::OK, json)
         }
         Err(e) => {
+            query_handle.finish(false);
             error!("Query error: {}", e);
             (StatusCode::BAD_REQUEST, e)
         }
@@ -1121,16 +1090,24 @@ pub async fn write_handler_query_param(
 }
 
 async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCode, String) {
+    use crate::metrics::METRICS;
+
     debug!("Processing write data: {} bytes", data.len());
+
+    let start = std::time::Instant::now();
+    let data_len = data.len() as u64;
 
     match shared::process_write_impl(&state.cache, &state.config, state.wal.as_ref(), db, data)
         .await
     {
         Ok(point_count) => {
+            let latency_ms = start.elapsed().as_micros() as f64 / 1000.0;
+            METRICS.record_write(point_count as u64, data_len, latency_ms);
             debug!("Added {} points to cache", point_count);
             (StatusCode::NO_CONTENT, "".to_string())
         }
         Err(e) => {
+            METRICS.record_write_failure();
             if e.contains("WAL error") {
                 error!("WAL write failed: {}", e);
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{}\n", e))
@@ -1482,6 +1459,7 @@ pub fn build_router(state: AppState, auth_middleware: Arc<auth::AuthMiddleware>)
         .route("/", get(home))
         .route("/health", get(health))
         .route("/metrics", get(metrics_handler))
+        .route("/metrics.json", get(metrics_json_handler))
         .route("/version", get(version_handler))
         // Write endpoints
         .route("/write/:db", post(write_handler))
