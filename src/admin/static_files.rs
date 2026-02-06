@@ -34,6 +34,8 @@ pub fn routes() -> Router<AdminState> {
         .route("/meta-operations", get(serve_index))
         .route("/data-operations", get(serve_index))
         .route("/router-operations", get(serve_index))
+        .route("/query", get(serve_index))
+        .route("/storage", get(serve_index))
         .route("/settings", get(serve_index))
 }
 

@@ -7,8 +7,9 @@ use tokio::sync::RwLock;
 
 use crate::config::AdminConfig;
 use crate::meta::client::MetaClient;
+use crate::meta::types::{NodeRole, NodeState};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::events::AdminEventDetail;
 
@@ -45,6 +46,39 @@ pub struct EventStats {
 /// Maximum number of events to keep in the cache
 const MAX_EVENT_CACHE_SIZE: usize = 1000;
 
+/// Maximum number of query history entries
+const MAX_QUERY_HISTORY: usize = 100;
+
+/// Maximum number of saved queries
+const MAX_SAVED_QUERIES: usize = 100;
+
+// ============ Query Console Types ============
+
+/// Saved query entry
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedQuery {
+    pub id: String,
+    pub name: String,
+    pub sql: String,
+    pub catalog: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Query history entry
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QueryHistoryEntry {
+    pub id: String,
+    pub sql: String,
+    pub catalog: String,
+    pub executed_at: String,
+    pub execution_time_ms: f64,
+    pub row_count: usize,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Shared admin server state
 #[derive(Clone)]
 pub struct AdminState {
@@ -52,20 +86,34 @@ pub struct AdminState {
     pub meta_endpoints: Vec<String>,
     pub meta_client: Arc<RwLock<Option<Arc<MetaClient>>>>,
     pub event_tx: broadcast::Sender<AdminEvent>,
+    /// HTTP client for forwarding requests to data nodes
+    pub http_client: reqwest::Client,
     /// Cache of recent events for historical queries
     event_cache: Arc<RwLock<VecDeque<AdminEventDetail>>>,
+    /// Saved queries (in-memory store)
+    saved_queries: Arc<RwLock<Vec<SavedQuery>>>,
+    /// Query execution history (in-memory store)
+    query_history: Arc<RwLock<VecDeque<QueryHistoryEntry>>>,
 }
 
 impl AdminState {
     pub fn new(config: AdminConfig, meta_endpoints: Vec<String>) -> Self {
         let (event_tx, _) = broadcast::channel(1000);
 
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap_or_default();
+
         Self {
             config,
             meta_endpoints,
             meta_client: Arc::new(RwLock::new(None)),
             event_tx,
+            http_client,
             event_cache: Arc::new(RwLock::new(VecDeque::with_capacity(MAX_EVENT_CACHE_SIZE))),
+            saved_queries: Arc::new(RwLock::new(Vec::new())),
+            query_history: Arc::new(RwLock::new(VecDeque::with_capacity(MAX_QUERY_HISTORY))),
         }
     }
 
@@ -89,6 +137,32 @@ impl AdminState {
         }
 
         Ok(client)
+    }
+
+    /// Get the HTTP URL of an active data node for forwarding requests
+    pub async fn get_data_node_url(&self) -> Result<String, String> {
+        let meta_client = self.get_meta_client().await?;
+        let nodes = meta_client
+            .list_nodes(Some(NodeRole::Data), Some(NodeState::Active))
+            .await
+            .map_err(|e| format!("Failed to list data nodes: {}", e))?;
+
+        let node = nodes
+            .first()
+            .ok_or_else(|| "No active data nodes available".to_string())?;
+
+        // Prefer http_addr, fallback to advertise_addr
+        let addr = node
+            .http_addr
+            .as_ref()
+            .unwrap_or(&node.advertise_addr);
+
+        // Ensure URL has scheme
+        if addr.starts_with("http://") || addr.starts_with("https://") {
+            Ok(addr.clone())
+        } else {
+            Ok(format!("http://{}", addr))
+        }
     }
 
     /// Broadcast an event to all connected WebSocket clients
@@ -214,5 +288,64 @@ impl AdminState {
     pub async fn event_cache_stats(&self) -> (usize, usize) {
         let cache = self.event_cache.read().await;
         (cache.len(), MAX_EVENT_CACHE_SIZE)
+    }
+
+    // ============ Saved Queries ============
+
+    /// List all saved queries
+    pub async fn list_saved_queries(&self) -> Vec<SavedQuery> {
+        let queries = self.saved_queries.read().await;
+        queries.clone()
+    }
+
+    /// Save a new query
+    pub async fn save_query(&self, name: String, sql: String, catalog: String) -> SavedQuery {
+        let now = chrono::Utc::now().to_rfc3339();
+        let query = SavedQuery {
+            id: uuid::Uuid::new_v4().to_string(),
+            name,
+            sql,
+            catalog,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+
+        let mut queries = self.saved_queries.write().await;
+        if queries.len() >= MAX_SAVED_QUERIES {
+            queries.remove(0);
+        }
+        queries.push(query.clone());
+        query
+    }
+
+    /// Delete a saved query by ID
+    pub async fn delete_saved_query(&self, id: &str) -> bool {
+        let mut queries = self.saved_queries.write().await;
+        let initial_len = queries.len();
+        queries.retain(|q| q.id != id);
+        queries.len() < initial_len
+    }
+
+    // ============ Query History ============
+
+    /// Add a query to history
+    pub async fn add_query_history(&self, entry: QueryHistoryEntry) {
+        let mut history = self.query_history.write().await;
+        if history.len() >= MAX_QUERY_HISTORY {
+            history.pop_front();
+        }
+        history.push_back(entry);
+    }
+
+    /// Get query history
+    pub async fn get_query_history(&self, limit: usize) -> Vec<QueryHistoryEntry> {
+        let history = self.query_history.read().await;
+        history.iter().rev().take(limit).cloned().collect()
+    }
+
+    /// Clear query history
+    pub async fn clear_query_history(&self) {
+        let mut history = self.query_history.write().await;
+        history.clear();
     }
 }

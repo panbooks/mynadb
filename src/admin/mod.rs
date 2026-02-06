@@ -4,8 +4,10 @@
 
 mod api;
 pub mod events;
+mod query_api;
 mod state;
 mod static_files;
+mod storage_api;
 mod websocket;
 
 use axum::Router;

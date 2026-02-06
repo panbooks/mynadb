@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{state::AdminState, websocket};
+use super::{query_api, state::AdminState, storage_api, websocket};
 use crate::meta::types::{DataNodeMode, NodeRole, NodeState};
 
 // ============ Helpers ============
@@ -53,6 +53,10 @@ pub fn routes() -> Router<AdminState> {
         // Meta operations
         .route("/distribution", get(distribution))
         .route("/meta/status", get(meta_status))
+        // Query Console
+        .merge(query_api::routes())
+        // Storage Browser
+        .merge(storage_api::routes())
 }
 
 // ============ Response Types ============
