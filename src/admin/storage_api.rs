@@ -305,6 +305,73 @@ struct FileInfo {
     compression: Option<String>,
 }
 
+/// Parse column info from the data node's schema response.
+/// The response can be JSON or Rust Debug format (DFSchema { ... }).
+fn parse_schema_columns(text: &str) -> Vec<ParquetColumnInfo> {
+    // Try JSON first
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+        if let Some(fields) = value.get("fields").and_then(|v| v.as_array()) {
+            return fields
+                .iter()
+                .filter_map(|f| {
+                    let name = f.get("name")?.as_str()?.to_string();
+                    let data_type = f
+                        .get("data_type")
+                        .or_else(|| f.get("type"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    Some(ParquetColumnInfo {
+                        name,
+                        data_type,
+                        nullable: true,
+                    })
+                })
+                .collect();
+        }
+    }
+
+    // Parse Rust Debug format
+    let mut columns = Vec::new();
+    let mut in_field = false;
+    let mut current_name = String::new();
+    let mut current_type = String::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Field {") || trimmed == "Field {" {
+            in_field = true;
+            current_name.clear();
+            current_type.clear();
+        } else if in_field {
+            if trimmed.starts_with("name:") {
+                if let Some(start) = trimmed.find('"') {
+                    if let Some(end) = trimmed[start + 1..].find('"') {
+                        current_name = trimmed[start + 1..start + 1 + end].to_string();
+                    }
+                }
+            } else if trimmed.starts_with("data_type:") {
+                current_type = trimmed
+                    .trim_start_matches("data_type:")
+                    .trim()
+                    .trim_end_matches(',')
+                    .to_string();
+            } else if trimmed == "}," || trimmed == "}" {
+                if !current_name.is_empty() {
+                    columns.push(ParquetColumnInfo {
+                        name: current_name.clone(),
+                        data_type: current_type.clone(),
+                        nullable: true,
+                    });
+                }
+                in_field = false;
+            }
+        }
+    }
+
+    columns
+}
+
 /// Parse compaction level from file name (e.g., "L0_xxx.parquet" → 0)
 fn parse_level(filename: &str) -> u32 {
     if let Some(rest) = filename.strip_prefix('L') {
@@ -529,42 +596,22 @@ async fn get_parquet_details(
     // Try to get schema info if we can parse the table path
     if path_parts.len() >= 3 {
         let catalog = path_parts[0];
-        let schema = path_parts[1];
+        let schema_name = path_parts[1];
         let table = path_parts[2];
 
-        let url = format!("{}/schema/{}/{}.{}", node_url, catalog, schema, table);
+        let url = format!("{}/schema/{}/{}/{}", node_url, catalog, schema_name, table);
         if let Ok(response) = state.http_client.get(&url).send().await {
             if response.status().is_success() {
                 if let Ok(body) = response.text().await {
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
-                        let columns: Vec<ParquetColumnInfo> =
-                            if let Some(fields) = value.get("fields").and_then(|v| v.as_array()) {
-                                fields
-                                    .iter()
-                                    .filter_map(|f| {
-                                        let name = f.get("name")?.as_str()?.to_string();
-                                        let data_type = f
-                                            .get("data_type")
-                                            .or_else(|| f.get("type"))
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("Unknown")
-                                            .to_string();
-                                        Some(ParquetColumnInfo {
-                                            name,
-                                            data_type,
-                                            nullable: true,
-                                        })
-                                    })
-                                    .collect()
-                            } else {
-                                Vec::new()
+                    if !body.is_empty() {
+                        let columns = parse_schema_columns(&body);
+                        if !columns.is_empty() {
+                            let enriched = ParquetFileDetails {
+                                schema: columns,
+                                ..result
                             };
-
-                        let enriched = ParquetFileDetails {
-                            schema: columns,
-                            ..result
-                        };
-                        return (StatusCode::OK, Json(ApiResponse::ok(enriched)));
+                            return (StatusCode::OK, Json(ApiResponse::ok(enriched)));
+                        }
                     }
                 }
             }

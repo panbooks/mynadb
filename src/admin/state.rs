@@ -102,6 +102,7 @@ impl AdminState {
 
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
+            .no_proxy()
             .build()
             .unwrap_or_default();
 

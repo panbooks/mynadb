@@ -1,0 +1,9 @@
+# MynaDB Cluster with Local Storage (no MinIO required)
+# 3 meta + 1 router + 2 data (local) + 1 admin
+meta1: ./target/debug/mynadb -c ./dev/configs/cluster/meta1.toml meta start
+meta2: ./target/debug/mynadb -c ./dev/configs/cluster/meta2.toml meta start
+meta3: ./target/debug/mynadb -c ./dev/configs/cluster/meta3.toml meta start
+router1: sleep 3 && ./target/debug/mynadb -c ./dev/configs/cluster/router1.toml router start
+data1: sleep 3 && ./target/debug/mynadb -c ./dev/configs/cluster-local/data1.toml data start
+data2: sleep 3 && ./target/debug/mynadb -c ./dev/configs/cluster-local/data2.toml data start
+admin: sleep 5 && ./target/debug/mynadb -c ./dev/configs/cluster/admin.toml admin start

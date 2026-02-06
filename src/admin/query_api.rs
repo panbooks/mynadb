@@ -690,9 +690,8 @@ async fn get_columns(
         }
     };
 
-    // Forward to data node's GET /schema/:catalog/:schema.:table
-    // The data node expects /schema/:db/:table where table can be schema.table format
-    let url = format!("{}/schema/{}/{}.{}", node_url, catalog, schema, table);
+    // Forward to data node's GET /schema/:db/:schema/:table
+    let url = format!("{}/schema/{}/{}/{}", node_url, catalog, schema, table);
     let response = match state.http_client.get(&url).send().await {
         Ok(r) => r,
         Err(e) => {
@@ -720,57 +719,92 @@ async fn get_columns(
         }
     };
 
-    if !status.is_success() {
+    if !status.is_success() || body.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<Vec<ColumnDetail>>::error(body)),
+            Json(ApiResponse::<Vec<ColumnDetail>>::error(if body.is_empty() {
+                "Table not found or no schema available".to_string()
+            } else {
+                body
+            })),
         );
     }
 
-    // Parse schema response - the data node returns field info as JSON
-    let value: serde_json::Value = match serde_json::from_str(&body) {
-        Ok(v) => v,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<Vec<ColumnDetail>>::error(format!(
-                    "Failed to parse schema response: {}",
-                    e
-                ))),
-            );
+    // The data node returns the schema in Rust Debug format (DFSchema { ... })
+    // Try JSON first, then fall back to parsing the debug text format
+    let columns = if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
+        // JSON format
+        if let Some(fields) = value.get("fields").and_then(|v| v.as_array()) {
+            fields
+                .iter()
+                .filter_map(|f| {
+                    let name = f.get("name")?.as_str()?.to_string();
+                    let data_type = f
+                        .get("data_type")
+                        .or_else(|| f.get("type"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    Some(ColumnDetail { name, data_type })
+                })
+                .collect()
+        } else {
+            Vec::new()
         }
-    };
-
-    // Extract columns from the schema response
-    // Format may vary - try common patterns
-    let columns = if let Some(fields) = value.get("fields").and_then(|v| v.as_array()) {
-        fields
-            .iter()
-            .filter_map(|f| {
-                let name = f.get("name")?.as_str()?.to_string();
-                let data_type = f
-                    .get("data_type")
-                    .or_else(|| f.get("type"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Unknown")
-                    .to_string();
-                Some(ColumnDetail { name, data_type })
-            })
-            .collect()
-    } else if let Some(obj) = value.as_object() {
-        // Simple key-value format: {"column_name": "type"}
-        obj.iter()
-            .filter(|(k, _)| *k != "table" && *k != "schema" && *k != "database")
-            .map(|(name, type_val)| ColumnDetail {
-                name: name.clone(),
-                data_type: type_val.as_str().unwrap_or("Unknown").to_string(),
-            })
-            .collect()
     } else {
-        Vec::new()
+        // Parse Rust Debug format: extract Field { name: "...", data_type: ..., ... } blocks
+        parse_debug_schema(&body)
     };
 
     (StatusCode::OK, Json(ApiResponse::ok(columns)))
+}
+
+/// Parse column info from Rust's Debug format of DFSchema/Arrow Schema.
+/// Extracts Field { name: "col_name", data_type: TypeName, ... } blocks.
+fn parse_debug_schema(text: &str) -> Vec<ColumnDetail> {
+    let mut columns = Vec::new();
+    let mut in_field = false;
+    let mut current_name = String::new();
+    let mut current_type = String::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("Field {") || trimmed == "Field {" {
+            in_field = true;
+            current_name.clear();
+            current_type.clear();
+            continue;
+        }
+
+        if in_field {
+            if trimmed.starts_with("name:") {
+                // Extract name: "column_name",
+                if let Some(start) = trimmed.find('"') {
+                    if let Some(end) = trimmed[start + 1..].find('"') {
+                        current_name = trimmed[start + 1..start + 1 + end].to_string();
+                    }
+                }
+            } else if trimmed.starts_with("data_type:") {
+                // Extract data_type: TypeName,
+                current_type = trimmed
+                    .trim_start_matches("data_type:")
+                    .trim()
+                    .trim_end_matches(',')
+                    .to_string();
+            } else if trimmed == "}," || trimmed == "}" {
+                if !current_name.is_empty() {
+                    columns.push(ColumnDetail {
+                        name: current_name.clone(),
+                        data_type: current_type.clone(),
+                    });
+                }
+                in_field = false;
+            }
+        }
+    }
+
+    columns
 }
 
 // ============ Saved Queries ============

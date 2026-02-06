@@ -194,7 +194,13 @@ async fn register_with_meta(
             role: NodeRole::Data,
             state: NodeState::Active,
             advertise_addr: config.advertise_addr.clone(),
-            http_addr: None,
+            http_addr: if config.http_port > 0 {
+                // Derive HTTP address from advertise_addr host + http_port
+                let host = config.advertise_addr.split(':').next().unwrap_or("127.0.0.1");
+                Some(format!("http://{}:{}", host, config.http_port))
+            } else {
+                None
+            },
             flight_addr: Some(config.advertise_addr.clone()),
             registered_at: current_timestamp_ms(),
             last_heartbeat: current_timestamp_ms(),
