@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::meta_node::MetaNode;
+use crate::meta::meta_node::MetaNode;
 use crate::meta::scale_in::{
     ScaleInConfig, ScaleInManager, ScaleInPlan, ScaleInPlanRequest, ScaleInResult, ScaleInStrategy,
 };

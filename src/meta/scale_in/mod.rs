@@ -52,7 +52,7 @@ pub use planner::ScaleInPlanner;
 pub use types::*;
 pub use validator::ScaleInValidator;
 
-use crate::meta::service::MetaNode;
+use crate::meta::meta_node::MetaNode;
 use crate::meta::types::{DataNodeMode, NodeInfo, NodeRole, NodeState, ScaleInRecommendation};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};

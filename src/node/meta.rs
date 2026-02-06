@@ -7,9 +7,9 @@
 use super::common;
 use crate::config::Config;
 use crate::meta::config::MetaConfig;
+use crate::meta::meta_node::MetaNode;
 use crate::meta::service::grpc::{start_grpc_server, MetaGrpcService, RaftInternalService};
 use crate::meta::service::http::{start_http_server, MetaHttpState};
-use crate::meta::service::meta_node::MetaNode;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{error, info};

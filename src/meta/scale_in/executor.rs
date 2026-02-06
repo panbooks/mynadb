@@ -39,7 +39,7 @@
 
 use super::types::*;
 use super::validator::ScaleInValidator;
-use crate::meta::service::MetaNode;
+use crate::meta::meta_node::MetaNode;
 use crate::meta::types::{DataNodeMode, MetaCommand, NodeRole, NodeState};
 use std::collections::HashSet;
 use std::sync::Arc;

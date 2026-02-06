@@ -28,7 +28,7 @@ pub mod types;
 pub use types::*;
 
 use crate::meta::config::{FailoverConfig, StandbyConfig};
-use crate::meta::service::MetaNode;
+use crate::meta::meta_node::MetaNode;
 use crate::meta::types::{DataNodeMode, MetaCommand, NodeRole, NodeState};
 use std::collections::HashMap;
 use std::sync::Arc;

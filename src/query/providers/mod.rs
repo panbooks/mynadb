@@ -8,10 +8,10 @@
 
 pub mod memtable_provider;
 pub mod multi_union_provider;
-pub mod table_provider;
+pub mod parquet;
 pub mod union_provider;
 
 pub use memtable_provider::MemtableProvider;
 pub use multi_union_provider::MultiUnionTableProvider;
-pub use table_provider::{ParquetExecPlan, ParquetFileInfo, ParquetTableConfig, ParquetTableProvider};
+pub use parquet::{ParquetExecPlan, ParquetFileInfo, ParquetTableConfig, ParquetTableProvider};
 pub use union_provider::UnionTableProvider;

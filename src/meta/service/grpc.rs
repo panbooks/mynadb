@@ -1,8 +1,8 @@
 //! gRPC service implementation for Meta service
 
+use crate::meta::meta_node::MetaNode;
 use crate::meta::proto;
 use crate::meta::raft::TypeConfig;
-use crate::meta::service::MetaNode;
 use crate::meta::types::*;
 
 /// Convert proto DataNodeMode to internal DataNodeMode

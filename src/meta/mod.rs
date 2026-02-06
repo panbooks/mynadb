@@ -30,6 +30,7 @@
 
 pub mod client;
 pub mod config;
+pub mod meta_node;
 pub mod raft;
 pub mod recovery;
 pub mod scale_in;
