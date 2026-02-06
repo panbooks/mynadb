@@ -1,4 +1,6 @@
 //! Admin API handlers
+//!
+//! All REST and WebSocket API routes for the admin console.
 
 use axum::{
     extract::{Path, Query, State},
@@ -11,7 +13,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::state::AdminState;
+use super::{state::AdminState, websocket};
 use crate::meta::types::{DataNodeMode, NodeRole, NodeState};
 
 // ============ Helpers ============
@@ -26,7 +28,7 @@ fn timestamp_to_rfc3339(ts_ms: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(secs, nsecs).map(|dt| dt.to_rfc3339())
 }
 
-/// Build API routes
+/// Build API routes (REST + WebSocket)
 pub fn routes() -> Router<AdminState> {
     Router::new()
         // Cluster
@@ -41,8 +43,9 @@ pub fn routes() -> Router<AdminState> {
         .route("/scale-in/recommend", get(scale_in_recommend))
         .route("/scale-in/plan", post(scale_in_plan))
         .route("/scale-in/execute", post(scale_in_execute))
-        // Events (placeholder for now)
+        // Events
         .route("/events", get(list_events))
+        .route("/events/ws", get(websocket::handler))
 }
 
 // ============ Response Types ============
