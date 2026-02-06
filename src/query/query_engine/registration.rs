@@ -259,7 +259,7 @@ impl QueryEngine {
             // Extract the path from the URL (remove scheme like file://, s3://)
             let base_path = Self::extract_path_from_url(table_path);
 
-            ParquetTableProvider::try_new(storage.object_store(), base_path, config)
+            ParquetTableProvider::try_new(storage.object_store(), base_path, catalog_name, schema_name, config)
                 .await
                 .map_err(|e| {
                     format!("Failed to create table provider for '{}': {}", full_name, e)
@@ -271,7 +271,7 @@ impl QueryEngine {
                 std::sync::Arc::new(object_store::local::LocalFileSystem::new_with_prefix(local_path)
                     .map_err(|e| format!("Failed to create local store for '{}': {}", local_path, e))?);
 
-            ParquetTableProvider::try_new(local_store, "", config)
+            ParquetTableProvider::try_new(local_store, "", catalog_name, schema_name, config)
                 .await
                 .map_err(|e| {
                     format!("Failed to create table provider for '{}': {}", full_name, e)
@@ -282,6 +282,9 @@ impl QueryEngine {
         if let Some(ref cache) = self.parquet_cache {
             provider = provider.with_parquet_cache(cache.clone());
         }
+
+        // Add hot partition cache
+        provider = provider.with_hot_partition_cache(self.hot_partition_cache.clone());
 
         self.register_provider(catalog_name, schema_name, table_name, Arc::new(provider))
     }
@@ -485,7 +488,7 @@ impl QueryEngine {
 
             let mut provider = if let Some(ref storage) = self.storage {
                 let base_path = Self::extract_path_from_url(table_path);
-                ParquetTableProvider::try_new(storage.object_store(), base_path, config)
+                ParquetTableProvider::try_new(storage.object_store(), base_path, catalog_name, schema_name, config)
                     .await
                     .map_err(|e| format!("Failed to create table provider: {}", e))?
             } else {
@@ -493,7 +496,7 @@ impl QueryEngine {
                 let local_store: Arc<dyn object_store::ObjectStore> =
                     Arc::new(object_store::local::LocalFileSystem::new_with_prefix(local_path)
                         .map_err(|e| format!("Failed to create local store: {}", e))?);
-                ParquetTableProvider::try_new(local_store, "", config)
+                ParquetTableProvider::try_new(local_store, "", catalog_name, schema_name, config)
                     .await
                     .map_err(|e| format!("Failed to create table provider: {}", e))?
             };
@@ -501,6 +504,8 @@ impl QueryEngine {
             if let Some(ref cache) = self.parquet_cache {
                 provider = provider.with_parquet_cache(cache.clone());
             }
+
+            provider = provider.with_hot_partition_cache(self.hot_partition_cache.clone());
 
             Arc::new(provider)
         } else {

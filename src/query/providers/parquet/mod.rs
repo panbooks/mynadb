@@ -55,6 +55,12 @@ pub struct ParquetTableProvider {
     object_store: Arc<dyn ObjectStore>,
     /// Local parquet cache for cluster mode (optional)
     parquet_cache: Option<Arc<crate::data::cache::ParquetLocalCache>>,
+    /// Hot partition cache for decoded RecordBatches (optional)
+    hot_partition_cache: Option<Arc<crate::query::cache::hot_partition_cache::HotPartitionCache>>,
+    /// Catalog name (for cache key)
+    catalog: String,
+    /// Schema name (for cache key)
+    schema_name: String,
 }
 
 impl fmt::Debug for ParquetTableProvider {
@@ -77,10 +83,14 @@ impl ParquetTableProvider {
     /// # Arguments
     /// * `object_store` - The ObjectStore to use for file operations
     /// * `base_path` - The base path/prefix for the table (without URL scheme)
+    /// * `catalog` - Catalog name (database)
+    /// * `schema_name` - Schema name
     /// * `config` - Table configuration
     pub async fn try_new(
         object_store: Arc<dyn ObjectStore>,
         base_path: impl Into<String>,
+        catalog: impl Into<String>,
+        schema_name: impl Into<String>,
         config: ParquetTableConfig,
     ) -> Result<Self> {
         let base_path_str = base_path.into();
@@ -94,6 +104,9 @@ impl ParquetTableProvider {
             base_path: base_path_str,
             object_store,
             parquet_cache: None,
+            hot_partition_cache: None,
+            catalog: catalog.into(),
+            schema_name: schema_name.into(),
         })
     }
 
@@ -103,6 +116,8 @@ impl ParquetTableProvider {
     pub fn new_with_schema(
         object_store: Arc<dyn ObjectStore>,
         base_path: impl Into<String>,
+        catalog: impl Into<String>,
+        schema_name: impl Into<String>,
         schema: SchemaRef,
         config: ParquetTableConfig,
     ) -> Self {
@@ -112,6 +127,9 @@ impl ParquetTableProvider {
             base_path: base_path.into(),
             object_store,
             parquet_cache: None,
+            hot_partition_cache: None,
+            catalog: catalog.into(),
+            schema_name: schema_name.into(),
         }
     }
 
@@ -121,6 +139,15 @@ impl ParquetTableProvider {
         cache: Arc<crate::data::cache::ParquetLocalCache>,
     ) -> Self {
         self.parquet_cache = Some(cache);
+        self
+    }
+
+    /// Set hot partition cache for decoded RecordBatches
+    pub fn with_hot_partition_cache(
+        mut self,
+        cache: Arc<crate::query::cache::hot_partition_cache::HotPartitionCache>,
+    ) -> Self {
+        self.hot_partition_cache = Some(cache);
         self
     }
 
@@ -199,6 +226,10 @@ impl TableProvider for ParquetTableProvider {
             self.config.clone(),
             Arc::clone(&self.object_store),
             self.parquet_cache.clone(),
+            self.hot_partition_cache.clone(),
+            self.catalog.clone(),
+            self.schema_name.clone(),
+            self.config.table_name.clone(),
         );
 
         Ok(Arc::new(exec))
@@ -258,7 +289,7 @@ mod tests {
 
         let object_store = create_local_object_store(temp_dir.path());
         let config = ParquetTableConfig::new("test");
-        let provider = ParquetTableProvider::try_new(object_store, "", config)
+        let provider = ParquetTableProvider::try_new(object_store, "", "testdb", "default", config)
             .await
             .unwrap();
 
@@ -286,7 +317,7 @@ mod tests {
 
         let object_store = create_local_object_store(temp_dir.path());
         let config = ParquetTableConfig::new("test");
-        let provider = ParquetTableProvider::try_new(object_store, "", config)
+        let provider = ParquetTableProvider::try_new(object_store, "", "testdb", "default", config)
             .await
             .unwrap();
 
@@ -305,7 +336,7 @@ mod tests {
 
         let object_store = create_local_object_store(temp_dir.path());
         let config = ParquetTableConfig::new("test_table");
-        let provider = ParquetTableProvider::try_new(object_store, "", config)
+        let provider = ParquetTableProvider::try_new(object_store, "", "testdb", "default", config)
             .await
             .unwrap();
 
@@ -334,7 +365,7 @@ mod tests {
 
         let object_store = create_local_object_store(temp_dir.path());
         let config = ParquetTableConfig::new("test_table");
-        let provider = ParquetTableProvider::try_new(object_store, "", config)
+        let provider = ParquetTableProvider::try_new(object_store, "", "testdb", "default", config)
             .await
             .unwrap();
 
@@ -367,7 +398,7 @@ mod tests {
 
         let object_store = create_local_object_store(temp_dir.path());
         let config = ParquetTableConfig::new("test_table");
-        let provider = ParquetTableProvider::try_new(object_store, "", config)
+        let provider = ParquetTableProvider::try_new(object_store, "", "testdb", "default", config)
             .await
             .unwrap();
 

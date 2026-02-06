@@ -65,6 +65,8 @@ pub struct DataCache {
     /// This prevents race conditions where cleanup_old_data_wal_files() could
     /// delete WAL files that another concurrent flush is still relying on
     flush_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Hot partition cache (for invalidation on flush)
+    hot_partition_cache: Option<Arc<crate::query::cache::hot_partition_cache::HotPartitionCache>>,
 }
 
 impl DataCache {
@@ -94,6 +96,7 @@ impl DataCache {
             cardinality_tracker: Arc::new(RwLock::new(HashMap::new())),
             node_id,
             flush_lock: Arc::new(tokio::sync::Mutex::new(())),
+            hot_partition_cache: None,
         }
     }
 
@@ -112,6 +115,11 @@ impl DataCache {
     /// Get the node_id for this cache
     pub fn node_id(&self) -> &str {
         &self.node_id
+    }
+
+    /// Set hot partition cache (for invalidation on flush)
+    pub fn set_hot_partition_cache(&mut self, cache: Arc<crate::query::cache::hot_partition_cache::HotPartitionCache>) {
+        self.hot_partition_cache = Some(cache);
     }
 
     /// Get shard index for a key (hash-based distribution)
@@ -159,6 +167,13 @@ impl DataCache {
             error!("Failed to convert points to RecordBatch: {}", e);
             CacheFullError::ConversionError(e)
         })?;
+
+        // Apply dictionary encoding to reduce memory usage for tag columns
+        let batch = crate::query::cache::dictionary_encoding::encode_batch(&batch)
+            .unwrap_or_else(|e| {
+                warn!("Failed to encode batch: {}, using original", e);
+                batch
+            });
 
         let batch_size = batch.get_array_memory_size();
         let current_size = self.total_size_bytes.load(Ordering::Relaxed);
@@ -226,6 +241,13 @@ impl DataCache {
         if batch.num_rows() == 0 {
             return Ok(());
         }
+
+        // Apply dictionary encoding to reduce memory usage for tag columns
+        let batch = crate::query::cache::dictionary_encoding::encode_batch(&batch)
+            .unwrap_or_else(|e| {
+                warn!("Failed to encode batch: {}, using original", e);
+                batch
+            });
 
         let key = (
             catalog.to_string(),
@@ -301,6 +323,13 @@ impl DataCache {
         if batch.num_rows() == 0 {
             return Ok(());
         }
+
+        // Apply dictionary encoding to reduce memory usage for tag columns
+        let batch = crate::query::cache::dictionary_encoding::encode_batch(&batch)
+            .unwrap_or_else(|e| {
+                warn!("Failed to encode batch: {}, using original", e);
+                batch
+            });
 
         let key = (
             catalog.to_string(),
@@ -551,6 +580,24 @@ impl DataCache {
             }
         }
 
+        // Invalidate hot partition cache for flushed partitions
+        if let Some(ref hot_cache) = self.hot_partition_cache {
+            for file_result in &written_files {
+                // Extract catalog, schema, table from path
+                // Path format: data_dir/catalog/schema/table/date=YYYY-MM-DD/node_id=XXX/file.parquet
+                let parts: Vec<&str> = file_result.path.split('/').collect();
+
+                if parts.len() >= 5 {
+                    let catalog = parts[parts.len() - 5];
+                    let schema = parts[parts.len() - 4];
+                    let table = parts[parts.len() - 3];
+
+                    debug!("Invalidating hot partition cache for {}.{}.{}", catalog, schema, table);
+                    hot_cache.invalidate_table(catalog, schema, table);
+                }
+            }
+        }
+
         Ok(written_files)
     }
 
@@ -674,6 +721,7 @@ impl DataCache {
         schema: &str,
         table: &str,
         date_filter: Option<i32>,
+        projection: Option<&[usize]>,
     ) -> Vec<RecordBatch> {
         let mut result = Vec::new();
 
@@ -689,7 +737,16 @@ impl DataCache {
                         }
                     }
                     // Clone batches to avoid holding lock (extract RecordBatch from SeqBatch tuple)
-                    result.extend(batches.iter().map(|(_, b)| b.clone()));
+                    if let Some(proj) = projection {
+                        // Apply column projection
+                        for (_, batch) in batches.iter() {
+                            if let Ok(projected) = batch.project(proj) {
+                                result.push(projected);
+                            }
+                        }
+                    } else {
+                        result.extend(batches.iter().map(|(_, b)| b.clone()));
+                    }
                 }
             }
         }
@@ -712,6 +769,7 @@ impl DataCache {
         table: &str,
         min_date: Option<i32>,
         max_date: Option<i32>,
+        projection: Option<&[usize]>,
     ) -> Vec<RecordBatch> {
         let mut result = Vec::new();
 
@@ -731,7 +789,16 @@ impl DataCache {
                             continue;
                         }
                     }
-                    result.extend(batches.iter().map(|(_, b)| b.clone()));
+                    // Apply column projection if provided
+                    if let Some(proj) = projection {
+                        for (_, batch) in batches.iter() {
+                            if let Ok(projected) = batch.project(proj) {
+                                result.push(projected);
+                            }
+                        }
+                    } else {
+                        result.extend(batches.iter().map(|(_, b)| b.clone()));
+                    }
                 }
             }
         }

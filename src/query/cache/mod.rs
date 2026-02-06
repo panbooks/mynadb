@@ -25,9 +25,11 @@
 //!
 //! See `docs/architecture-meta-routing.md` for details.
 
+pub mod dictionary_encoding;
 pub mod hot_partition_cache;
 pub mod metadata_cache;
 pub mod partition_files_cache;
+pub mod predicate_eval;
 pub mod query_cache;
 
 pub use partition_files_cache::{PartitionFilesCache, SharedPartitionFilesCache};

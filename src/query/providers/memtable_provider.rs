@@ -296,35 +296,27 @@ impl ExecutionPlan for MemtableExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // Get all batches from cache for this table (date column is already included)
-        let batches =
-            self.cache
-                .get_table_batches(&self.catalog, &self.schema_name, &self.table_name, None);
-
-        debug!(
-            "MemtableExec execute: table={}, batches={}",
-            self.full_name(),
-            batches.len()
+        // Get batches from cache with projection applied
+        let batches = self.cache.get_table_batches(
+            &self.catalog,
+            &self.schema_name,
+            &self.table_name,
+            None,
+            self.projection.as_deref(),
         );
 
-        // Apply projection if needed
-        let projected_batches: Vec<Result<RecordBatch>> = batches
-            .into_iter()
-            .map(|batch| {
-                if let Some(ref proj) = self.projection {
-                    // Project columns
-                    project_batch(&batch, proj, &self.schema)
-                } else if batch.schema() == self.schema {
-                    Ok(batch)
-                } else {
-                    // Schema mismatch - try to align
-                    align_batch_to_schema(&batch, &self.schema)
-                }
-            })
-            .collect();
+        debug!(
+            "MemtableExec execute: table={}, batches={}, projection={:?}",
+            self.full_name(),
+            batches.len(),
+            self.projection
+        );
+
+        // Batches already have projection applied by DataCache
+        let batch_results: Vec<Result<RecordBatch>> = batches.into_iter().map(Ok).collect();
 
         // Create stream from batches
-        let stream = stream::iter(projected_batches);
+        let stream = stream::iter(batch_results);
         let stream = RecordBatchStreamAdapter::new(self.schema.clone(), stream);
 
         Ok(Box::pin(stream))
@@ -333,60 +325,6 @@ impl ExecutionPlan for MemtableExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
-}
-
-/// Project a batch to only include specified columns
-fn project_batch(
-    batch: &RecordBatch,
-    _projection: &[usize],
-    target_schema: &SchemaRef,
-) -> Result<RecordBatch> {
-    // Map projection indices from target schema to source batch
-    let source_schema = batch.schema();
-
-    let columns: Result<Vec<Arc<dyn datafusion::arrow::array::Array>>> = target_schema
-        .fields()
-        .iter()
-        .map(|field| {
-            // Find this field in the source batch
-            source_schema
-                .index_of(field.name())
-                .map(|idx| batch.column(idx).clone())
-                .map_err(|_| {
-                    DataFusionError::Internal(format!(
-                        "Field '{}' not found in memtable batch",
-                        field.name()
-                    ))
-                })
-        })
-        .collect();
-
-    RecordBatch::try_new(target_schema.clone(), columns?)
-        .map_err(|e| DataFusionError::External(Box::new(e)))
-}
-
-/// Align a batch to match target schema by selecting columns by name
-fn align_batch_to_schema(batch: &RecordBatch, target_schema: &SchemaRef) -> Result<RecordBatch> {
-    let source_schema = batch.schema();
-
-    let columns: Result<Vec<Arc<dyn datafusion::arrow::array::Array>>> = target_schema
-        .fields()
-        .iter()
-        .map(|field| {
-            source_schema
-                .index_of(field.name())
-                .map(|idx| batch.column(idx).clone())
-                .map_err(|_| {
-                    DataFusionError::Internal(format!(
-                        "Field '{}' not found in memtable batch",
-                        field.name()
-                    ))
-                })
-        })
-        .collect();
-
-    RecordBatch::try_new(target_schema.clone(), columns?)
-        .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 #[cfg(test)]
@@ -418,12 +356,10 @@ mod tests {
     #[test]
     fn test_project_batch() {
         let batch = create_test_batch();
-        let target_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new("value", DataType::Float64, true),
-        ]));
 
-        let result = align_batch_to_schema(&batch, &target_schema).unwrap();
+        // Test projection using Arrow's built-in project
+        let projection = vec![0, 2]; // id and value columns
+        let result = batch.project(&projection).unwrap();
 
         assert_eq!(result.num_columns(), 2);
         assert_eq!(result.num_rows(), 3);

@@ -8,6 +8,7 @@
 
 use chrono::{Datelike, Local, NaiveDate};
 use datafusion::arrow::array::RecordBatch;
+use datafusion::physical_expr::PhysicalExpr;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -15,7 +16,10 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+use super::dictionary_encoding;
+use super::predicate_eval;
 
 /// Key for identifying a cached partition
 #[derive(Clone, Debug)]
@@ -240,7 +244,16 @@ impl HotPartitionCache {
     }
 
     /// Get cached partition data if available and not expired
-    pub fn get(&self, key: &PartitionKey) -> Option<Vec<RecordBatch>> {
+    ///
+    /// Parameters:
+    /// - projection: If provided, only the specified columns are returned
+    /// - predicates: If provided, filter batches to only include matching rows
+    pub fn get(
+        &self,
+        key: &PartitionKey,
+        projection: Option<&[usize]>,
+        predicates: &[Arc<dyn PhysicalExpr>],
+    ) -> Option<Vec<RecordBatch>> {
         if !self.config.enabled {
             return None;
         }
@@ -257,17 +270,39 @@ impl HotPartitionCache {
             entry.hit_count.fetch_add(1, Ordering::Relaxed);
             self.stats.hits.fetch_add(1, Ordering::Relaxed);
 
+            let mut batches = entry.batches.clone();
+
+            // Apply predicates first (before projection to reduce data volume)
+            if !predicates.is_empty() {
+                match predicate_eval::filter_batches_with_predicates(&batches, predicates) {
+                    Ok(filtered) => batches = filtered,
+                    Err(e) => {
+                        warn!("Failed to apply predicates in cache: {}, returning unfiltered", e);
+                    }
+                }
+            }
+
+            // Apply projection if requested
+            if let Some(proj) = projection {
+                batches = batches
+                    .iter()
+                    .filter_map(|batch| batch.project(proj).ok())
+                    .collect();
+            }
+
             debug!(
-                "Hot partition cache HIT: {}.{}.{} date={}, rows={}, size={}KB",
+                "Hot partition cache HIT: {}.{}.{} date={}, rows={}, size={}KB, projection={:?}, predicates={}",
                 key.catalog,
                 key.schema,
                 key.table,
                 key.date_str(),
-                entry.row_count,
-                entry.size_bytes / 1024
+                batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+                entry.size_bytes / 1024,
+                projection,
+                predicates.len()
             );
 
-            return Some(entry.batches.clone());
+            return Some(batches);
         }
 
         self.stats.misses.fetch_add(1, Ordering::Relaxed);
@@ -293,9 +328,21 @@ impl HotPartitionCache {
             return false;
         }
 
-        // Calculate size
-        let size_bytes = Self::estimate_batch_size(&batches);
-        let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
+        // Apply dictionary encoding to reduce memory usage
+        let encoded_batches: Vec<RecordBatch> = batches
+            .iter()
+            .filter_map(|batch| match dictionary_encoding::encode_batch(batch) {
+                Ok(encoded) => Some(encoded),
+                Err(e) => {
+                    warn!("Failed to encode batch: {}, using original", e);
+                    Some(batch.clone())
+                }
+            })
+            .collect();
+
+        // Calculate size after encoding
+        let size_bytes = Self::estimate_batch_size(&encoded_batches);
+        let row_count: usize = encoded_batches.iter().map(|b| b.num_rows()).sum();
 
         // Skip very large partitions (> 25% of max cache)
         if size_bytes > self.config.max_size_bytes / 4 {
@@ -314,7 +361,7 @@ impl HotPartitionCache {
         self.ensure_space(size_bytes);
 
         let entry = CachedPartition {
-            batches,
+            batches: encoded_batches,
             created_at: Instant::now(),
             size_bytes,
             row_count,
@@ -338,7 +385,7 @@ impl HotPartitionCache {
             .fetch_add(row_count as u64, Ordering::Relaxed);
 
         debug!(
-            "Hot partition cache PUT: {}.{}.{} date={}, rows={}, size={}KB, files={}",
+            "Hot partition cache PUT: {}.{}.{} date={}, rows={}, size={}KB (encoded), files={}",
             key.catalog,
             key.schema,
             key.table,
@@ -633,16 +680,25 @@ mod tests {
         // Put into cache
         assert!(cache.put(key.clone(), vec![batch], 1));
 
-        // Get from cache
-        let result = cache.get(&key);
+        // Get from cache (no projection, no predicates)
+        let result = cache.get(&key, None, &[]);
         assert!(result.is_some());
         let cached = result.unwrap();
         assert_eq!(cached.len(), 1);
         assert_eq!(cached[0].num_rows(), 100);
+        assert_eq!(cached[0].num_columns(), 2);
+
+        // Get with projection (only first column)
+        let result = cache.get(&key, Some(&[0]), &[]);
+        assert!(result.is_some());
+        let cached = result.unwrap();
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].num_rows(), 100);
+        assert_eq!(cached[0].num_columns(), 1);
 
         // Check stats
         let stats = cache.stats();
-        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.hits, 2);
         assert_eq!(stats.entry_count, 1);
     }
 
@@ -651,7 +707,7 @@ mod tests {
         let cache = HotPartitionCache::with_defaults();
 
         let key = PartitionKey::new("testdb", "default", "cpu", 20240115);
-        let result = cache.get(&key);
+        let result = cache.get(&key, None, &[]);
 
         assert!(result.is_none());
 
@@ -685,8 +741,8 @@ mod tests {
         cache.invalidate_table("testdb", "default", "cpu");
 
         assert_eq!(cache.stats().entry_count, 0);
-        assert!(cache.get(&key1).is_none());
-        assert!(cache.get(&key2).is_none());
+        assert!(cache.get(&key1, None, &[]).is_none());
+        assert!(cache.get(&key2, None, &[]).is_none());
     }
 
     #[test]
@@ -719,7 +775,7 @@ mod tests {
         let batch = create_test_batch(10);
 
         assert!(!cache.put(key.clone(), vec![batch], 1));
-        assert!(cache.get(&key).is_none());
+        assert!(cache.get(&key, None, &[]).is_none());
     }
 
     #[test]
