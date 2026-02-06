@@ -115,21 +115,50 @@ pub async fn start(config_path: &str) {
     // No per-router hot cache needed - table owner has memtable for recent partitions.
     // Cold cache uses LRU eviction (automatic, no background task needed).
 
+    // Validate TLS if enabled
+    let tls_opt = if config.tls.enabled {
+        if let Err(e) = config.tls.validate() {
+            error!("TLS configuration error: {}", e);
+            common::remove_pid_file(&config.storage.data_dir, NODE_TYPE);
+            std::process::exit(1);
+        }
+        welcome!("  TLS/SSL: ENABLED");
+        Some(&config.tls)
+    } else {
+        None
+    };
+
     // Build HTTP API
     let app = router_api::build_router(state.clone());
 
-    // Start HTTP server
+    // Start HTTP server (with TLS)
     let http_addr = format!("0.0.0.0:{}", router_config.http_port);
-    let http_handle = common::start_http_server(&http_addr, app).await;
+    let http_handle = common::start_http_server_with_tls(&http_addr, app, tls_opt).await;
     welcome!("  HTTP server started on {}", http_addr);
 
-    // Start Flight server
+    // Start Flight server (with TLS)
     let flight_addr = format!("0.0.0.0:{}", router_config.flight_port);
     let flight_service = RouterFlightService::new(state.clone());
-    let flight_addr_parsed = flight_addr.parse().expect("Invalid flight address");
+    let flight_addr_parsed: std::net::SocketAddr =
+        flight_addr.parse().expect("Invalid flight address");
+
+    let tonic_tls = tls_opt.map(|c| {
+        crate::services::tls::tonic_tls_config(c).expect("Failed to build Router Flight TLS config")
+    });
+    let flight_tls_enabled = tonic_tls.is_some();
+
     let flight_handle = tokio::spawn(async move {
-        info!("Router Flight server starting on {}", flight_addr);
-        Server::builder()
+        info!(
+            "Router Flight server starting on {} (tls={})",
+            flight_addr, flight_tls_enabled
+        );
+        let mut builder = Server::builder();
+        if let Some(tls) = tonic_tls {
+            builder = builder
+                .tls_config(tls)
+                .expect("Failed to apply Router Flight TLS config");
+        }
+        builder
             .add_service(flight_service.into_server())
             .serve(flight_addr_parsed)
             .await

@@ -6,3 +6,4 @@ pub mod mysql_service;
 pub mod prometheus;
 pub mod rate_limiter;
 pub mod shared;
+pub mod tls;

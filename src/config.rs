@@ -51,6 +51,9 @@ pub struct Config {
     /// Query tracing and profiling configuration
     #[serde(default)]
     pub tracing: crate::observability::TracingConfig,
+    /// TLS/SSL encryption configuration
+    #[serde(default)]
+    pub tls: TlsConfig,
 }
 
 /// Admin console configuration
@@ -587,6 +590,71 @@ pub struct AuthUserConfig {
     /// Optional: restrict access to specific tables (format: "database.schema.table")
     #[serde(default)]
     pub tables: Option<Vec<String>>,
+}
+
+/// TLS/SSL encryption configuration
+///
+/// When enabled, all protocols (HTTP, Arrow Flight, MySQL) use TLS encryption.
+/// Requires PEM-encoded certificate and private key files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsConfig {
+    /// Enable TLS encryption (default: false)
+    #[serde(default = "default_tls_enabled")]
+    pub enabled: bool,
+
+    /// Path to PEM-encoded certificate file (server certificate chain)
+    #[serde(default)]
+    pub cert_file: String,
+
+    /// Path to PEM-encoded private key file
+    #[serde(default)]
+    pub key_file: String,
+
+    /// Path to PEM-encoded CA certificate file (optional, enables mTLS)
+    #[serde(default)]
+    pub ca_file: Option<String>,
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_tls_enabled(),
+            cert_file: String::new(),
+            key_file: String::new(),
+            ca_file: None,
+        }
+    }
+}
+
+impl TlsConfig {
+    /// Validate the TLS configuration
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.cert_file.is_empty() {
+            return Err("TLS enabled but cert_file is not set".to_string());
+        }
+        if self.key_file.is_empty() {
+            return Err("TLS enabled but key_file is not set".to_string());
+        }
+        if !Path::new(&self.cert_file).exists() {
+            return Err(format!("TLS cert_file not found: {}", self.cert_file));
+        }
+        if !Path::new(&self.key_file).exists() {
+            return Err(format!("TLS key_file not found: {}", self.key_file));
+        }
+        if let Some(ref ca_file) = self.ca_file {
+            if !ca_file.is_empty() && !Path::new(ca_file).exists() {
+                return Err(format!("TLS ca_file not found: {}", ca_file));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn default_tls_enabled() -> bool {
+    false
 }
 
 // Default value functions

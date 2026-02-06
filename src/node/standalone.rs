@@ -210,21 +210,36 @@ pub async fn run(config_path: &str) {
 
     print_server_info(&config);
 
+    // Validate TLS configuration if enabled
+    if config.tls.enabled {
+        if let Err(e) = config.tls.validate() {
+            error!("TLS configuration error: {}", e);
+            std::process::exit(1);
+        }
+        welcome!("  TLS/SSL: ENABLED");
+    }
+
     // Get user store for other protocols
     let user_store = auth_middleware.user_store();
     let auth_enabled = auth_middleware.is_enabled();
+    let tls_opt = if config.tls.enabled {
+        Some(&config.tls)
+    } else {
+        None
+    };
 
-    // Start Arrow Flight server (with auth)
+    // Start Arrow Flight server (with auth + TLS)
     let flight_handle = common::start_flight_server_with_auth(
         &config.flight_addr(),
         query_engine.clone(),
         Some(user_store.clone()),
         auth_enabled,
+        tls_opt,
     )
     .await;
     welcome!("  Arrow Flight server started successfully!");
 
-    // Start MySQL server (if enabled, with auth)
+    // Start MySQL server (if enabled, with auth + TLS)
     let mysql_handle = if config.server.mysql_enabled {
         let handle = common::start_mysql_server_with_auth(
             &config.mysql_addr(),
@@ -233,6 +248,7 @@ pub async fn run(config_path: &str) {
             Arc::new(state.cache.clone()),
             Some(user_store.clone()),
             auth_enabled,
+            tls_opt,
         );
         welcome!("  MySQL server started successfully!");
         Some(handle)
@@ -240,8 +256,9 @@ pub async fn run(config_path: &str) {
         None
     };
 
-    // Start HTTP server
-    let http_handle = common::start_http_server(&config.http_addr(), app).await;
+    // Start HTTP server (with TLS)
+    let http_handle =
+        common::start_http_server_with_tls(&config.http_addr(), app, tls_opt).await;
     welcome!("  HTTP server started successfully!");
     welcome!("===============================================");
 
@@ -307,7 +324,8 @@ fn print_welcome_banner(config: &Config) {
     welcome!("===============================================");
     welcome!("");
     welcome!("  Starting server...");
-    welcome!("   HTTP API: http://{}", config.http_addr());
+    let scheme = if config.tls.enabled { "https" } else { "http" };
+    welcome!("   HTTP API: {}://{}", scheme, config.http_addr());
     welcome!("   Flight API: {}", config.flight_addr());
     if config.server.mysql_enabled {
         welcome!("   MySQL API: {}", config.mysql_addr());

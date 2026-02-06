@@ -22,6 +22,7 @@ pub struct MysqlService {
     data_cache: Arc<DataCache>,
     user_store: Option<Arc<dyn UserStore>>,
     auth_enabled: bool,
+    tls_config: Option<Arc<rustls::ServerConfig>>,
 }
 
 impl MysqlService {
@@ -38,6 +39,7 @@ impl MysqlService {
             data_cache,
             user_store: None,
             auth_enabled: false,
+            tls_config: None,
         }
     }
 
@@ -48,11 +50,21 @@ impl MysqlService {
         self
     }
 
+    /// Enable TLS encryption with the given rustls ServerConfig
+    pub fn with_tls(mut self, tls_config: Arc<rustls::ServerConfig>) -> Self {
+        self.tls_config = Some(tls_config);
+        self
+    }
+
     /// Run the MySQL server on the given address
     /// This blocks and should be run in a dedicated thread
     pub fn run(&self, addr: &str) -> io::Result<()> {
         let listener = TcpListener::bind(addr)?;
-        info!("MySQL server listening on {} (auth={})", addr, self.auth_enabled);
+        let tls_enabled = self.tls_config.is_some();
+        info!(
+            "MySQL server listening on {} (auth={}, tls={})",
+            addr, self.auth_enabled, tls_enabled
+        );
 
         for stream in listener.incoming() {
             match stream {
@@ -63,6 +75,7 @@ impl MysqlService {
                     let data_cache = self.data_cache.clone();
                     let user_store = self.user_store.clone();
                     let auth_enabled = self.auth_enabled;
+                    let tls_config = self.tls_config.clone();
 
                     std::thread::spawn(move || {
                         let session = MysqlSession::new(
@@ -72,6 +85,7 @@ impl MysqlService {
                             data_cache,
                             user_store,
                             auth_enabled,
+                            tls_config,
                         );
                         if let Err(e) = MysqlIntermediary::run_on_tcp(session, stream) {
                             error!("MySQL session error: {}", e);
@@ -101,6 +115,8 @@ struct MysqlSession {
     user_store: Option<Arc<dyn UserStore>>,
     auth_enabled: bool,
     auth_context: AuthContext,
+    // TLS state
+    tls_config: Option<Arc<rustls::ServerConfig>>,
 }
 
 #[derive(Clone)]
@@ -118,6 +134,7 @@ impl MysqlSession {
         data_cache: Arc<DataCache>,
         user_store: Option<Arc<dyn UserStore>>,
         auth_enabled: bool,
+        tls_config: Option<Arc<rustls::ServerConfig>>,
     ) -> Self {
         let auth_context = if auth_enabled {
             // Will be set after authentication
@@ -137,6 +154,7 @@ impl MysqlSession {
             user_store,
             auth_enabled,
             auth_context,
+            tls_config,
         }
     }
 
@@ -400,6 +418,11 @@ fn arrow_value_to_mysql(
 
 impl<W: Read + Write> MysqlShim<W> for MysqlSession {
     type Error = io::Error;
+
+    /// Returns TLS configuration for MySQL STARTTLS support
+    fn tls_config(&self) -> Option<Arc<rustls::ServerConfig>> {
+        self.tls_config.clone()
+    }
 
     /// Called after MySQL authentication handshake completes
     /// Note: MySQL protocol handles password verification internally.

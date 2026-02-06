@@ -58,9 +58,22 @@ pub async fn start(config_path: &str) {
             .allow_headers(Any),
     );
 
-    // Start HTTP server
+    // Validate TLS if enabled
+    let tls_opt = if config.tls.enabled {
+        if let Err(e) = config.tls.validate() {
+            error!("TLS configuration error: {}", e);
+            common::remove_pid_file(&config.storage.data_dir, NODE_TYPE);
+            std::process::exit(1);
+        }
+        welcome!("  TLS/SSL: ENABLED");
+        Some(&config.tls)
+    } else {
+        None
+    };
+
+    // Start HTTP server (with TLS)
     let http_addr = format!("{}:{}", admin_config.http_host, admin_config.http_port);
-    let http_handle = common::start_http_server(&http_addr, app).await;
+    let http_handle = common::start_http_server_with_tls(&http_addr, app, tls_opt).await;
     welcome!("  HTTP server started on {}", http_addr);
 
     welcome!("  Admin console started");

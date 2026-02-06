@@ -1,13 +1,14 @@
 //! Common initialization routines shared across node types
 
-use crate::config::Config;
+use crate::config::{Config, TlsConfig};
 use crate::jobs::logger;
 use crate::query::cache::{hot_partition_cache, query_cache};
 use crate::query::{catalog, query_engine};
-use crate::services::{api, flight_service, mysql_service};
+use crate::services::{api, flight_service, mysql_service, tls};
 use crate::storage::{cache, file_cache, parquet_writer, storage as storage_mod, wal};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use tonic::transport::Server;
@@ -428,25 +429,42 @@ pub async fn start_flight_server(
     addr: &str,
     query_engine: Arc<query_engine::QueryEngine>,
 ) -> tokio::task::JoinHandle<()> {
-    start_flight_server_with_auth(addr, query_engine, None, false).await
+    start_flight_server_with_auth(addr, query_engine, None, false, None).await
 }
 
-/// Start Arrow Flight server with optional authentication
+/// Start Arrow Flight server with optional authentication and TLS
 pub async fn start_flight_server_with_auth(
     addr: &str,
     query_engine: Arc<query_engine::QueryEngine>,
     user_store: Option<Arc<dyn crate::auth::UserStore>>,
     auth_enabled: bool,
+    tls_config: Option<&TlsConfig>,
 ) -> tokio::task::JoinHandle<()> {
     let mut flight_service = flight_service::StatsFlightService::new(query_engine);
     if let Some(store) = user_store {
         flight_service = flight_service.with_auth(store, auth_enabled);
     }
-    let addr = addr.parse().expect("Invalid flight address");
+    let addr: SocketAddr = addr.parse().expect("Invalid flight address");
+
+    // Build TLS config if enabled
+    let tonic_tls = tls_config
+        .filter(|c| c.enabled)
+        .map(|c| tls::tonic_tls_config(c).expect("Failed to build Flight TLS config"));
+
+    let tls_enabled = tonic_tls.is_some();
 
     tokio::spawn(async move {
-        info!("Arrow Flight server starting on {} (auth={})", addr, auth_enabled);
-        Server::builder()
+        info!(
+            "Arrow Flight server starting on {} (auth={}, tls={})",
+            addr, auth_enabled, tls_enabled
+        );
+        let mut builder = Server::builder();
+        if let Some(tls) = tonic_tls {
+            builder = builder
+                .tls_config(tls)
+                .expect("Failed to apply Flight TLS config");
+        }
+        builder
             .add_service(flight_service.into_server())
             .serve(addr)
             .await
@@ -461,10 +479,10 @@ pub fn start_mysql_server(
     data_dir: String,
     cache: Arc<cache::DataCache>,
 ) -> tokio::task::JoinHandle<()> {
-    start_mysql_server_with_auth(addr, query_engine, data_dir, cache, None, false)
+    start_mysql_server_with_auth(addr, query_engine, data_dir, cache, None, false, None)
 }
 
-/// Start MySQL server with optional authentication
+/// Start MySQL server with optional authentication and TLS
 pub fn start_mysql_server_with_auth(
     addr: &str,
     query_engine: Arc<query_engine::QueryEngine>,
@@ -472,6 +490,7 @@ pub fn start_mysql_server_with_auth(
     cache: Arc<cache::DataCache>,
     user_store: Option<Arc<dyn crate::auth::UserStore>>,
     auth_enabled: bool,
+    tls_config: Option<&TlsConfig>,
 ) -> tokio::task::JoinHandle<()> {
     let mut mysql_service = mysql_service::MysqlService::new(
         query_engine,
@@ -481,6 +500,10 @@ pub fn start_mysql_server_with_auth(
     );
     if let Some(store) = user_store {
         mysql_service = mysql_service.with_auth(store, auth_enabled);
+    }
+    if let Some(tls) = tls_config.filter(|c| c.enabled) {
+        let mysql_tls = tls::mysql_tls_config(tls).expect("Failed to build MySQL TLS config");
+        mysql_service = mysql_service.with_tls(mysql_tls);
     }
     let addr = addr.to_string();
 
@@ -494,17 +517,44 @@ pub fn start_mysql_server_with_auth(
 
 /// Start HTTP server with Axum router
 pub async fn start_http_server(addr: &str, app: axum::Router) -> tokio::task::JoinHandle<()> {
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("Failed to bind HTTP address");
-    let addr_display = addr.to_string();
+    start_http_server_with_tls(addr, app, None).await
+}
 
-    tokio::spawn(async move {
-        info!("HTTP server starting on {}", addr_display);
-        axum::serve(listener, app)
+/// Start HTTP server with Axum router and optional TLS
+pub async fn start_http_server_with_tls(
+    addr: &str,
+    app: axum::Router,
+    tls_config: Option<&TlsConfig>,
+) -> tokio::task::JoinHandle<()> {
+    let tls_enabled = tls_config.map_or(false, |c| c.enabled);
+
+    if tls_enabled {
+        let tls = tls_config.unwrap();
+        let rustls_config = tls::axum_tls_config(tls)
             .await
-            .expect("HTTP server failed");
-    })
+            .expect("Failed to build HTTP TLS config");
+        let addr: SocketAddr = addr.parse().expect("Failed to parse HTTP address");
+
+        tokio::spawn(async move {
+            info!("HTTPS server starting on {}", addr);
+            axum_server::bind_rustls(addr, rustls_config)
+                .serve(app.into_make_service())
+                .await
+                .expect("HTTPS server failed");
+        })
+    } else {
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .expect("Failed to bind HTTP address");
+        let addr_display = addr.to_string();
+
+        tokio::spawn(async move {
+            info!("HTTP server starting on {}", addr_display);
+            axum::serve(listener, app)
+                .await
+                .expect("HTTP server failed");
+        })
+    }
 }
 
 // ============================================================================
