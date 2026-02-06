@@ -21,6 +21,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+use super::prometheus;
 use super::shared;
 use crate::config;
 use crate::jobs::compactor;
@@ -123,6 +124,9 @@ pub async fn home() -> &'static str {
        POST   /write?db=:db           - Write data (InfluxDB-compatible)\n\
        GET    /query/:db?sql=<query>  - Query data (GET)\n\
        POST   /query/:db              - Query data (POST body)\n\n\
+     Prometheus Remote Storage:\n\
+       POST   /api/v1/write/:db       - Remote write (snappy protobuf)\n\
+       POST   /api/v1/read/:db        - Remote read (protobuf)\n\n\
      Cache Management:\n\
        GET    /stats                  - Cache statistics\n\
        GET    /memory                 - Memory usage breakdown\n\
@@ -1435,6 +1439,40 @@ pub async fn clear_traces_handler(State(state): State<AppState>) -> impl IntoRes
     }
 }
 
+// ===== Prometheus Remote Storage API =====
+
+use axum::body::Bytes;
+
+/// Handle Prometheus remote write requests
+/// POST /api/v1/write/:db
+pub async fn prometheus_write_handler(
+    Path(db): Path<String>,
+    State(state): State<AppState>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let prom_state = Arc::new(prometheus::remote_write::RemoteWriteState {
+        cache: state.cache.clone(),
+        default_schema: state.config.schema.default_name.clone(),
+    });
+
+    prometheus::remote_write_handler(Path(db), State(prom_state), body).await
+}
+
+/// Handle Prometheus remote read requests
+/// POST /api/v1/read/:db
+pub async fn prometheus_read_handler(
+    Path(db): Path<String>,
+    State(state): State<AppState>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let prom_state = Arc::new(prometheus::remote_read::RemoteReadState {
+        query_engine: state.query_engine.clone(),
+        default_schema: state.config.schema.default_name.clone(),
+    });
+
+    prometheus::remote_read_handler(Path(db), State(prom_state), body).await
+}
+
 // ===== Fallback Handler =====
 
 pub async fn log_request(req: Request) -> impl IntoResponse {
@@ -1545,6 +1583,9 @@ pub fn build_router(state: AppState, auth_middleware: Arc<auth::AuthMiddleware>)
         .route("/traces/slow", get(slow_queries_handler))
         .route("/traces/:query_id", get(get_trace_handler))
         .route("/traces/clear", post(clear_traces_handler))
+        // Prometheus Remote Storage API
+        .route("/api/v1/write/:db", post(prometheus_write_handler))
+        .route("/api/v1/read/:db", post(prometheus_read_handler))
         .fallback(log_request)
         .with_state(state)
         .layer(axum::middleware::from_fn(auth::auth_middleware_fn))

@@ -71,6 +71,9 @@ hostname = "0.4"
 # Authentication (RBAC)
 argon2 = "0.5"
 
+# Prometheus Remote Storage
+snap = "1.1"  # Snappy compression for Prometheus remote write
+
 # Admin Console
 futures-util = "0.3"
 axum-extra = { version = "0.9", features = ["typed-header"] }

@@ -53,6 +53,12 @@ impl Policy {
 
             // ===== Write operations =====
             ("POST", p) if p.starts_with("/write") => Some((Permission::Write, true)),
+            // Prometheus remote write
+            ("POST", p) if p.starts_with("/api/v1/write/") => Some((Permission::Write, true)),
+
+            // ===== Read operations (Prometheus) =====
+            // Prometheus remote read
+            ("POST", p) if p.starts_with("/api/v1/read/") => Some((Permission::Read, true)),
 
             // ===== Admin operations =====
             // Database management
@@ -142,6 +148,14 @@ impl Policy {
             "cache" if parts.len() >= 3 => {
                 match parts.get(1).map(|s| *s) {
                     Some("prewarm") | Some("parquet") => parts.get(2).map(|s| s.to_string()),
+                    _ => None,
+                }
+            }
+
+            // Prometheus API: /api/v1/write/:db, /api/v1/read/:db
+            "api" if parts.len() >= 4 && parts[1] == "v1" => {
+                match parts[2] {
+                    "write" | "read" => parts.get(3).map(|s| s.to_string()),
                     _ => None,
                 }
             }
