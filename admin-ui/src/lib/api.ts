@@ -159,6 +159,13 @@ export async function cancelScaleIn(planId: string): Promise<{ success: boolean 
 }
 
 // Events API
+interface EventsResponse {
+  events: AdminEvent[]
+  total: number
+  cache_size: number
+  cache_max: number
+}
+
 export async function fetchEvents(filter?: EventFilter): Promise<AdminEvent[]> {
   const params = new URLSearchParams()
   if (filter?.type) params.set('type', filter.type)
@@ -167,7 +174,8 @@ export async function fetchEvents(filter?: EventFilter): Promise<AdminEvent[]> {
   if (filter?.limit) params.set('limit', filter.limit.toString())
 
   const query = params.toString()
-  return fetchApi<AdminEvent[]>(`/events${query ? `?${query}` : ''}`)
+  const response = await fetchApi<EventsResponse>(`/events${query ? `?${query}` : ''}`)
+  return response.events
 }
 
 // WebSocket for real-time events
@@ -184,11 +192,22 @@ export function createEventWebSocket(
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data)
-      if (data.type !== 'Heartbeat') {
-        onEvent(data as AdminEvent)
+      // Skip heartbeat events
+      if (data.type === 'Heartbeat') {
+        return
       }
-    } catch {
-      console.error('Failed to parse WebSocket message:', event.data)
+      // Ensure the event has all required fields
+      const adminEvent: AdminEvent = {
+        id: data.id || `evt-${Date.now()}`,
+        type: data.type || 'Unknown',
+        timestamp: data.timestamp || new Date().toISOString(),
+        source: data.source,
+        payload: data.payload || {},
+        message: data.message || '',
+      }
+      onEvent(adminEvent)
+    } catch (err) {
+      console.error('Failed to parse WebSocket message:', event.data, err)
     }
   }
 

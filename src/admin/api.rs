@@ -872,21 +872,44 @@ async fn scale_in_execute(
 
 // ============ Events Endpoints ============
 
-#[derive(Serialize)]
-struct ListEventsResponse {
-    events: Vec<serde_json::Value>,
-    total: usize,
-    message: String,
+#[derive(Deserialize)]
+struct ListEventsQuery {
+    #[serde(rename = "type")]
+    event_type: Option<String>,
+    #[serde(default = "default_events_limit")]
+    limit: usize,
 }
 
-async fn list_events(State(_state): State<AdminState>) -> impl IntoResponse {
-    // Events API not yet implemented - use WebSocket at /api/v1/events/ws
+fn default_events_limit() -> usize {
+    100
+}
+
+#[derive(Serialize)]
+struct ListEventsResponse {
+    events: Vec<super::events::AdminEventDetail>,
+    total: usize,
+    cache_size: usize,
+    cache_max: usize,
+}
+
+async fn list_events(
+    State(state): State<AdminState>,
+    Query(query): Query<ListEventsQuery>,
+) -> impl IntoResponse {
+    // Get events from cache
+    let events = state
+        .get_cached_events(query.event_type.as_deref(), query.limit)
+        .await;
+
+    let (cache_size, cache_max) = state.event_cache_stats().await;
+
     (
         StatusCode::OK,
         Json(ApiResponse::ok(ListEventsResponse {
-            events: Vec::new(),
-            total: 0,
-            message: "Use WebSocket at /api/v1/events/ws for real-time events".to_string(),
+            total: events.len(),
+            events,
+            cache_size,
+            cache_max,
         })),
     )
 }

@@ -32,14 +32,16 @@ const eventTypeIcons: Record<string, React.ComponentType<{ className?: string }>
   NodeLeft: Server,
   NodeStateChanged: Server,
   LeaderChanged: Database,
-  TableCreated: Table2,
-  TableDropped: Table2,
   TableReassigned: Table2,
-  PartitionCreated: Table2,
-  PartitionDeleted: Table2,
-  CompactionStarted: Activity,
-  CompactionCompleted: Activity,
-  Error: AlertTriangle,
+  TableOwnerAdded: Table2,
+  TableOwnerRemoved: Table2,
+  TableOwnerExpired: Table2,
+  CacheInvalidate: Database,
+  SchemaChanged: Table2,
+  FlushForRecovery: Activity,
+  DistributionConfigChanged: Database,
+  TablesCacheRefresh: Database,
+  Unknown: AlertTriangle,
 }
 
 export function EventsPage() {
@@ -137,12 +139,14 @@ export function EventsPage() {
                   <SelectItem value="NodeLeft">Node Left</SelectItem>
                   <SelectItem value="NodeStateChanged">Node State Changed</SelectItem>
                   <SelectItem value="LeaderChanged">Leader Changed</SelectItem>
-                  <SelectItem value="TableCreated">Table Created</SelectItem>
-                  <SelectItem value="TableDropped">Table Dropped</SelectItem>
                   <SelectItem value="TableReassigned">Table Reassigned</SelectItem>
-                  <SelectItem value="CompactionStarted">Compaction Started</SelectItem>
-                  <SelectItem value="CompactionCompleted">Compaction Completed</SelectItem>
-                  <SelectItem value="Error">Error</SelectItem>
+                  <SelectItem value="TableOwnerAdded">Table Owner Added</SelectItem>
+                  <SelectItem value="TableOwnerRemoved">Table Owner Removed</SelectItem>
+                  <SelectItem value="TableOwnerExpired">Table Owner Expired</SelectItem>
+                  <SelectItem value="FlushForRecovery">Flush for Recovery</SelectItem>
+                  <SelectItem value="CacheInvalidate">Cache Invalidate</SelectItem>
+                  <SelectItem value="SchemaChanged">Schema Changed</SelectItem>
+                  <SelectItem value="DistributionConfigChanged">Distribution Config Changed</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -317,15 +321,22 @@ function getEventTypeColor(type: EventType): string {
       return 'bg-blue-100 text-blue-600 dark:bg-blue-900 dark:text-blue-400'
     case 'LeaderChanged':
       return 'bg-amber-100 text-amber-600 dark:bg-amber-900 dark:text-amber-400'
-    case 'TableCreated':
-    case 'TableDropped':
     case 'TableReassigned':
+    case 'TableOwnerAdded':
+    case 'TableOwnerRemoved':
       return 'bg-purple-100 text-purple-600 dark:bg-purple-900 dark:text-purple-400'
-    case 'CompactionStarted':
-    case 'CompactionCompleted':
+    case 'TableOwnerExpired':
+      return 'bg-orange-100 text-orange-600 dark:bg-orange-900 dark:text-orange-400'
+    case 'FlushForRecovery':
+      return 'bg-yellow-100 text-yellow-600 dark:bg-yellow-900 dark:text-yellow-400'
+    case 'CacheInvalidate':
+    case 'TablesCacheRefresh':
       return 'bg-cyan-100 text-cyan-600 dark:bg-cyan-900 dark:text-cyan-400'
-    case 'Error':
-      return 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-400'
+    case 'SchemaChanged':
+    case 'DistributionConfigChanged':
+      return 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-400'
+    case 'Unknown':
+      return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
     default:
       return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
   }

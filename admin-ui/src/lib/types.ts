@@ -196,20 +196,23 @@ export interface ScaleInResult {
   errors: string[]
 }
 
-// Event types
+// Event types - must match backend EventType enum
 export type EventType =
   | 'NodeJoined'
   | 'NodeLeft'
   | 'NodeStateChanged'
   | 'LeaderChanged'
-  | 'TableCreated'
-  | 'TableDropped'
   | 'TableReassigned'
-  | 'PartitionCreated'
-  | 'PartitionDeleted'
-  | 'CompactionStarted'
-  | 'CompactionCompleted'
-  | 'Error'
+  | 'TableOwnerAdded'
+  | 'TableOwnerRemoved'
+  | 'TableOwnerExpired'
+  | 'CacheInvalidate'
+  | 'SchemaChanged'
+  | 'FlushForRecovery'
+  | 'DistributionConfigChanged'
+  | 'TablesCacheRefresh'
+  | 'Heartbeat'
+  | 'Unknown'
 
 export interface AdminEvent {
   id: string
