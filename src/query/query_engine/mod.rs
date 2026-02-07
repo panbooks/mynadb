@@ -13,7 +13,10 @@ use crate::query::cache::query_cache::{
 };
 use crate::query::create_custom_session_state;
 use crate::query::functions::{
-    create_first_value_udaf, create_last_value_udaf, create_time_bucket_udf,
+    create_first_value_udaf, create_geo_bearing_udf, create_geo_bounding_box_udf,
+    create_geo_distance_udf, create_geo_hash_decode_lat_udf, create_geo_hash_decode_lon_udf,
+    create_geo_hash_neighbors_udf, create_geo_hash_udf, create_geo_within_udf,
+    create_last_value_udaf, create_time_bucket_udf,
 };
 use crate::storage::cache::DataCache;
 use crate::storage::storage::Storage;
@@ -143,6 +146,17 @@ impl QueryEngine {
         // Register custom UDFs
         ctx.register_udf(create_time_bucket_udf());
         debug!("Registered time_bucket UDF");
+
+        // Register geospatial UDFs
+        ctx.register_udf(create_geo_distance_udf());
+        ctx.register_udf(create_geo_hash_udf());
+        ctx.register_udf(create_geo_hash_decode_lat_udf());
+        ctx.register_udf(create_geo_hash_decode_lon_udf());
+        ctx.register_udf(create_geo_hash_neighbors_udf());
+        ctx.register_udf(create_geo_within_udf());
+        ctx.register_udf(create_geo_bounding_box_udf());
+        ctx.register_udf(create_geo_bearing_udf());
+        debug!("Registered geospatial UDFs");
 
         // Register custom UDAFs for InfluxDB-compatible first/last functions
         ctx.register_udaf(create_first_value_udaf());
