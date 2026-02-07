@@ -166,6 +166,44 @@ impl AdminState {
         }
     }
 
+    /// Get HTTP URLs of all active data nodes
+    pub async fn get_all_data_node_urls(&self) -> Result<Vec<String>, String> {
+        let meta_client = self.get_meta_client().await?;
+        let nodes = meta_client
+            .list_nodes(Some(NodeRole::Data), Some(NodeState::Active))
+            .await
+            .map_err(|e| format!("Failed to list data nodes: {}", e))?;
+
+        let urls: Vec<String> = nodes
+            .iter()
+            .filter_map(|node| {
+                let addr = node.http_addr.as_ref().unwrap_or(&node.advertise_addr);
+                // Derive HTTP URL: if advertise_addr is host:flight_port, HTTP port = flight_port - 1
+                if addr.starts_with("http://") || addr.starts_with("https://") {
+                    Some(addr.clone())
+                } else {
+                    // advertise_addr is host:flight_port; http_port = flight_port - 1
+                    let parts: Vec<&str> = addr.rsplitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        if let Ok(port) = parts[0].parse::<u16>() {
+                            Some(format!("http://{}:{}", parts[1], port.saturating_sub(1)))
+                        } else {
+                            Some(format!("http://{}", addr))
+                        }
+                    } else {
+                        Some(format!("http://{}", addr))
+                    }
+                }
+            })
+            .collect();
+
+        if urls.is_empty() {
+            Err("No active data nodes available".to_string())
+        } else {
+            Ok(urls)
+        }
+    }
+
     /// Broadcast an event to all connected WebSocket clients
     pub fn broadcast_event(&self, event: AdminEvent) {
         let _ = self.event_tx.send(event);

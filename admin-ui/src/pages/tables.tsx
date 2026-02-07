@@ -31,18 +31,21 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Label } from '@/components/ui/label'
 import { useTables, useReassignTable } from '@/hooks/use-tables'
 import { useNodes } from '@/hooks/use-nodes'
+import { useCatalogs, useSchemas } from '@/hooks/use-query'
 import { formatBytes, formatNumber } from '@/lib/utils'
 import type { TableSummary } from '@/lib/types'
 
 export function TablesPage() {
   const [search, setSearch] = useState('')
   const [catalogFilter, setCatalogFilter] = useState<string>('all')
+  const [schemaFilter, setSchemaFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
   const pageSize = 20
 
   const { data: tablesResponse, isLoading, refetch, isFetching } = useTables({
     search: search || undefined,
     catalog: catalogFilter === 'all' ? undefined : catalogFilter,
+    schema: schemaFilter === 'all' ? undefined : schemaFilter,
     page,
     page_size: pageSize,
   })
@@ -50,8 +53,8 @@ export function TablesPage() {
   const tables = tablesResponse?.items ?? []
   const totalPages = tablesResponse?.total_pages ?? 1
 
-  // Get unique catalogs for filter
-  const catalogs = [...new Set(tables.map((t) => t.catalog))]
+  const { data: catalogs } = useCatalogs()
+  const { data: schemas } = useSchemas(catalogFilter === 'all' ? undefined : catalogFilter)
 
   const [selectedTable, setSelectedTable] = useState<TableSummary | null>(null)
   const [showReassignDialog, setShowReassignDialog] = useState(false)
@@ -86,7 +89,7 @@ export function TablesPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-4">
             <div className="md:col-span-2">
               <Input
                 placeholder="Search by table name..."
@@ -102,6 +105,7 @@ export function TablesPage() {
                 value={catalogFilter}
                 onValueChange={(v) => {
                   setCatalogFilter(v)
+                  setSchemaFilter('all')
                   setPage(1)
                 }}
               >
@@ -110,9 +114,31 @@ export function TablesPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Catalogs</SelectItem>
-                  {catalogs.map((catalog) => (
+                  {(catalogs ?? []).map((catalog) => (
                     <SelectItem key={catalog} value={catalog}>
                       {catalog}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Select
+                value={schemaFilter}
+                onValueChange={(v) => {
+                  setSchemaFilter(v)
+                  setPage(1)
+                }}
+                disabled={catalogFilter === 'all'}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Schema" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Schemas</SelectItem>
+                  {(schemas ?? []).map((schema) => (
+                    <SelectItem key={schema} value={schema}>
+                      {schema}
                     </SelectItem>
                   ))}
                 </SelectContent>

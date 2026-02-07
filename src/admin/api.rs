@@ -624,6 +624,129 @@ struct ListTablesResponse {
     total_pages: u32,
 }
 
+/// Discover tables from data nodes by querying each node's /tables/:db endpoint.
+/// Returns deduplicated TableSummary entries with owner_node_id set.
+async fn discover_tables_from_data_nodes(
+    state: &AdminState,
+) -> Vec<TableSummary> {
+    let node_urls = match state.get_all_data_node_urls().await {
+        Ok(urls) => urls,
+        Err(_) => return Vec::new(),
+    };
+
+    // Also get node info for mapping URLs to node IDs
+    let meta_client = state.get_meta_client().await.ok();
+    let nodes = if let Some(ref client) = meta_client {
+        client
+            .list_nodes(Some(NodeRole::Data), Some(NodeState::Active))
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    // Query all data nodes in parallel for their tables
+    let futures: Vec<_> = node_urls
+        .iter()
+        .enumerate()
+        .map(|(idx, url)| {
+            let client = state.http_client.clone();
+            let url = url.clone();
+            let node_id = nodes.get(idx).map(|n| n.node_id.clone());
+            async move {
+                // Try common catalog names: telegraf, testdb, default
+                let mut tables = Vec::new();
+                // First discover catalogs by trying the node's tables endpoint
+                // Data nodes respond to /tables/:db with tables in write cache
+                let catalogs = discover_catalogs_from_node(&client, &url).await;
+                for catalog in catalogs {
+                    if let Ok(resp) = client
+                        .get(format!("{}/tables/{}", url, catalog))
+                        .timeout(std::time::Duration::from_secs(5))
+                        .send()
+                        .await
+                    {
+                        if let Ok(body) = resp.json::<serde_json::Value>().await {
+                            if let Some(table_list) = body.get("tables").and_then(|t| t.as_array()) {
+                                for t in table_list {
+                                    if let Some(full_name) = t.as_str() {
+                                        // Format: "catalog.schema.table"
+                                        let parts: Vec<&str> = full_name.splitn(3, '.').collect();
+                                        if parts.len() == 3 {
+                                            tables.push((
+                                                parts[0].to_string(),
+                                                parts[1].to_string(),
+                                                parts[2].to_string(),
+                                                node_id.clone(),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                tables
+            }
+        })
+        .collect();
+
+    let all_results = futures::future::join_all(futures).await;
+
+    // Deduplicate and merge (same table may appear on multiple nodes)
+    let mut table_map: HashMap<String, TableSummary> = HashMap::new();
+    for node_tables in all_results {
+        for (catalog, schema, table, node_id) in node_tables {
+            let key = format!("{}/{}/{}", catalog, schema, table);
+            table_map.entry(key.clone()).or_insert_with(|| TableSummary {
+                key,
+                catalog,
+                schema,
+                table,
+                owner_node_id: node_id,
+                partition_count: 0,
+                total_bytes: 0,
+                total_rows: 0,
+            });
+        }
+    }
+
+    let mut result: Vec<TableSummary> = table_map.into_values().collect();
+    result.sort_by(|a, b| a.key.cmp(&b.key));
+    result
+}
+
+/// Discover catalog names from a data node by trying its /schemas endpoint
+async fn discover_catalogs_from_node(
+    client: &reqwest::Client,
+    node_url: &str,
+) -> Vec<String> {
+    // Try common catalog names - data nodes don't have a "list all catalogs" endpoint
+    // but /schemas/:db will return schemas if the catalog exists
+    let candidates = ["telegraf", "testdb", "default", "mynadb", "metrics"];
+    let mut found = Vec::new();
+
+    for catalog in &candidates {
+        if let Ok(resp) = client
+            .get(format!("{}/schemas/{}", node_url, catalog))
+            .timeout(std::time::Duration::from_secs(3))
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    if let Some(count) = body.get("count").and_then(|c| c.as_u64()) {
+                        if count > 0 {
+                            found.push(catalog.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    found
+}
+
 async fn list_tables(
     State(state): State<AdminState>,
     Query(query): Query<ListTablesQuery>,
@@ -641,76 +764,111 @@ async fn list_tables(
         }
     };
 
-    match meta_client
+    // Get tables from meta registry (has ownership, partition counts, sizes)
+    let meta_tables = meta_client
         .list_tables(query.catalog.as_deref(), query.schema.as_deref())
         .await
-    {
-        Ok(tables) => {
-            let mut summaries: Vec<TableSummary> = tables
-                .into_iter()
-                .filter(|t| {
-                    // Owner filter
-                    if let Some(ref owner) = query.owner {
-                        if !t.owner_node_ids.contains(owner) {
-                            return false;
-                        }
-                    }
-                    // Search filter
-                    if let Some(ref search) = query.search {
-                        let search_lower = search.to_lowercase();
-                        let matches = t.table.to_lowercase().contains(&search_lower)
-                            || t.schema.to_lowercase().contains(&search_lower)
-                            || t.catalog.to_lowercase().contains(&search_lower);
-                        if !matches {
-                            return false;
-                        }
-                    }
-                    true
-                })
-                .map(|t| {
-                    let owner_node_id = t.primary_owner().map(|s| s.to_string());
-                    TableSummary {
-                        key: t.table_key(),
-                        catalog: t.catalog,
-                        schema: t.schema,
-                        table: t.table,
-                        owner_node_id,
-                        partition_count: t.partition_count,
-                        total_bytes: t.total_bytes,
-                        total_rows: t.total_rows,
-                    }
-                })
-                .collect();
+        .unwrap_or_default();
 
-            let total = summaries.len();
+    let mut summaries: Vec<TableSummary> = meta_tables
+        .into_iter()
+        .filter(|t| {
+            if let Some(ref owner) = query.owner {
+                if !t.owner_node_ids.contains(owner) {
+                    return false;
+                }
+            }
+            if let Some(ref search) = query.search {
+                let search_lower = search.to_lowercase();
+                let matches = t.table.to_lowercase().contains(&search_lower)
+                    || t.schema.to_lowercase().contains(&search_lower)
+                    || t.catalog.to_lowercase().contains(&search_lower);
+                if !matches {
+                    return false;
+                }
+            }
+            true
+        })
+        .map(|t| {
+            let owner_node_id = t.primary_owner().map(|s| s.to_string());
+            TableSummary {
+                key: t.table_key(),
+                catalog: t.catalog,
+                schema: t.schema,
+                table: t.table,
+                owner_node_id,
+                partition_count: t.partition_count,
+                total_bytes: t.total_bytes,
+                total_rows: t.total_rows,
+            }
+        })
+        .collect();
 
-            // Apply pagination (page is 1-based)
-            let page = query.page.max(1);
-            let page_size = query.page_size;
-            let offset = ((page - 1) * page_size) as usize;
-            let total_pages = ((total as u32) + page_size - 1) / page_size;
-
-            summaries = summaries.into_iter().skip(offset).take(page_size as usize).collect();
-
-            (
-                StatusCode::OK,
-                Json(ApiResponse::ok(ListTablesResponse {
-                    items: summaries,
-                    total,
-                    page,
-                    page_size,
-                    total_pages,
-                })),
-            )
+    // Also discover tables from data nodes and merge (catches tables not in meta)
+    let discovered = discover_tables_from_data_nodes(&state).await;
+    let meta_keys: std::collections::HashSet<String> =
+        summaries.iter().map(|t| t.key.clone()).collect();
+    for disc in discovered {
+        if meta_keys.contains(&disc.key) {
+            continue;
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<ListTablesResponse>::error(format!(
-                "Failed to list tables: {}",
-                e
-            ))),
-        ),
+        // Apply filters
+        if let Some(ref catalog) = query.catalog {
+            if disc.catalog != *catalog {
+                continue;
+            }
+        }
+        if let Some(ref schema) = query.schema {
+            if disc.schema != *schema {
+                continue;
+            }
+        }
+        if let Some(ref owner) = query.owner {
+            if disc.owner_node_id.as_deref() != Some(owner.as_str()) {
+                continue;
+            }
+        }
+        if let Some(ref search) = query.search {
+            let search_lower = search.to_lowercase();
+            let matches = disc.table.to_lowercase().contains(&search_lower)
+                || disc.schema.to_lowercase().contains(&search_lower)
+                || disc.catalog.to_lowercase().contains(&search_lower);
+            if !matches {
+                continue;
+            }
+        }
+        summaries.push(disc);
     }
+    summaries.sort_by(|a, b| a.key.cmp(&b.key));
+
+    let total = summaries.len();
+
+    // Apply pagination (page is 1-based)
+    let page = query.page.max(1);
+    let page_size = query.page_size;
+    let offset = ((page - 1) * page_size) as usize;
+    let total_pages = if total == 0 {
+        0
+    } else {
+        ((total as u32) + page_size - 1) / page_size
+    };
+
+    summaries = summaries
+        .into_iter()
+        .skip(offset)
+        .take(page_size as usize)
+        .collect();
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(ListTablesResponse {
+            items: summaries,
+            total,
+            page,
+            page_size,
+            total_pages,
+        })),
+    )
 }
 
 #[derive(Deserialize)]

@@ -539,20 +539,15 @@ impl QueryEngine {
     // ========================================================================
 
     /// Build storage prefix for schema discovery
+    /// Note: node_id is a Hive-style partition key (node_id=xxx) inside each table,
+    /// NOT a top-level directory prefix. The storage path is: catalog/schema/table/date=.../node_id=.../
     pub(crate) fn build_storage_prefix(&self, catalog_name: &str, schema_name: &str) -> String {
-        if let Some(ref cache) = self.write_cache {
-            format!("{}/{}/{}/{}/", STORE_DIR, cache.node_id(), catalog_name, schema_name)
-        } else {
-            format!("{}/{}/{}/", STORE_DIR, catalog_name, schema_name)
-        }
+        format!("{}/{}/{}/", STORE_DIR, catalog_name, schema_name)
     }
 
     /// Build catalog-level prefix
+    /// Note: node_id is a Hive-style partition key inside each table, not a top-level prefix
     pub(crate) fn build_catalog_prefix(&self, catalog_name: &str) -> String {
-        if let Some(ref cache) = self.write_cache {
-            format!("{}/{}/{}/", STORE_DIR, cache.node_id(), catalog_name)
-        } else {
-            format!("{}/{}/", STORE_DIR, catalog_name)
-        }
+        format!("{}/{}/", STORE_DIR, catalog_name)
     }
 }

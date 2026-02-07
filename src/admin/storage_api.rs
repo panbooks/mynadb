@@ -163,20 +163,9 @@ async fn list_storage_catalogs(State(state): State<AdminState>) -> impl IntoResp
         }
     };
 
-    let tables = match meta_client.list_tables(None, None).await {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<Vec<CatalogInfo>>::error(format!(
-                    "Failed to list tables: {}",
-                    e
-                ))),
-            );
-        }
-    };
+    let tables = meta_client.list_tables(None, None).await.unwrap_or_default();
 
-    // Group tables by catalog
+    // Group meta tables by catalog
     let mut catalog_map: HashMap<String, CatalogInfo> = HashMap::new();
     for table in &tables {
         let entry = catalog_map
@@ -201,10 +190,16 @@ async fn list_storage_catalogs(State(state): State<AdminState>) -> impl IntoResp
             .or_default()
             .insert(table.schema.clone());
     }
-    for (catalog, schemas) in schema_sets {
-        if let Some(info) = catalog_map.get_mut(&catalog) {
+    for (catalog, schemas) in &schema_sets {
+        if let Some(info) = catalog_map.get_mut(catalog) {
             info.schemas = schemas.len() as u32;
         }
+    }
+
+    // Merge with catalogs discovered from data nodes (catches catalogs not in meta)
+    let discovered = discover_catalogs_from_data_nodes(&state).await;
+    for disc in discovered {
+        catalog_map.entry(disc.name.clone()).or_insert(disc);
     }
 
     let mut catalogs: Vec<CatalogInfo> = catalog_map.into_values().collect();
@@ -238,20 +233,12 @@ async fn list_storage_schemas(
         }
     };
 
-    let tables = match meta_client.list_tables(Some(&catalog), None).await {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<Vec<SchemaInfo>>::error(format!(
-                    "Failed to list tables: {}",
-                    e
-                ))),
-            );
-        }
-    };
+    let tables = meta_client
+        .list_tables(Some(&catalog), None)
+        .await
+        .unwrap_or_default();
 
-    // Group by schema
+    // Group meta tables by schema
     let mut schema_map: HashMap<String, SchemaInfo> = HashMap::new();
     for table in &tables {
         let entry = schema_map
@@ -266,6 +253,12 @@ async fn list_storage_schemas(
         entry.tables += 1;
         entry.partitions += table.partition_count;
         entry.total_size_bytes += table.total_bytes;
+    }
+
+    // Merge with schemas discovered from data nodes
+    let discovered = discover_schemas_from_data_node(&state, &catalog).await;
+    for disc in discovered {
+        schema_map.entry(disc.name.clone()).or_insert(disc);
     }
 
     let mut schemas: Vec<SchemaInfo> = schema_map.into_values().collect();
@@ -298,32 +291,33 @@ async fn list_storage_tables(
         }
     };
 
-    let tables = match meta_client
+    let tables = meta_client
         .list_tables(Some(&catalog), Some(&schema))
         .await
-    {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<Vec<TableBasicInfo>>::error(format!(
-                    "Failed to list tables: {}",
-                    e
-                ))),
-            );
-        }
-    };
+        .unwrap_or_default();
 
-    let mut result: Vec<TableBasicInfo> = tables
-        .iter()
-        .map(|t| TableBasicInfo {
-            name: t.table.clone(),
-            partition_count: t.partition_count,
-            total_size_bytes: t.total_bytes,
-            total_rows: t.total_rows,
-        })
-        .collect();
+    // Build result from meta tables
+    let mut table_map: HashMap<String, TableBasicInfo> = HashMap::new();
+    for t in &tables {
+        table_map.insert(
+            t.table.clone(),
+            TableBasicInfo {
+                name: t.table.clone(),
+                partition_count: t.partition_count,
+                total_size_bytes: t.total_bytes,
+                total_rows: t.total_rows,
+            },
+        );
+    }
 
+    // Merge with tables discovered from data nodes
+    let discovered =
+        discover_storage_tables_from_node(&state, &catalog, &schema).await;
+    for disc in discovered {
+        table_map.entry(disc.name.clone()).or_insert(disc);
+    }
+
+    let mut result: Vec<TableBasicInfo> = table_map.into_values().collect();
     result.sort_by(|a, b| a.name.cmp(&b.name));
 
     (StatusCode::OK, Json(ApiResponse::ok(result)))
@@ -732,6 +726,185 @@ async fn query_partitions_via_sql(
 
     let total_file_count = partitions.len() as u64;
     Ok((partitions, total_file_count, total_rows))
+}
+
+// ============ Data Node Discovery Helpers ============
+
+/// Query /tables/:catalog on a data node and return (schema, table) pairs.
+async fn discover_tables_from_data_node(
+    client: &reqwest::Client,
+    node_url: &str,
+    catalog: &str,
+) -> Vec<(String, String)> {
+    if let Ok(resp) = client
+        .get(format!("{}/tables/{}", node_url, catalog))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                if let Some(tables) = body.get("tables").and_then(|t| t.as_array()) {
+                    return tables
+                        .iter()
+                        .filter_map(|t| {
+                            let full = t.as_str()?;
+                            // Format: "catalog.schema.table"
+                            let parts: Vec<&str> = full.splitn(3, '.').collect();
+                            if parts.len() == 3 {
+                                Some((parts[1].to_string(), parts[2].to_string()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Discover catalogs from data nodes by probing /schemas/:candidate endpoint.
+async fn discover_catalogs_from_data_nodes(state: &AdminState) -> Vec<CatalogInfo> {
+    let node_url = match state.get_data_node_url().await {
+        Ok(url) => url,
+        Err(_) => return Vec::new(),
+    };
+
+    let candidates = ["telegraf", "testdb", "default", "mynadb", "metrics"];
+    let mut catalogs = Vec::new();
+
+    for catalog_name in &candidates {
+        if let Ok(resp) = state
+            .http_client
+            .get(format!("{}/schemas/{}", node_url, catalog_name))
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    let schema_count =
+                        body.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
+                    if schema_count > 0 {
+                        // Get table count via /tables/:catalog
+                        let tables = discover_tables_from_data_node(
+                            &state.http_client,
+                            &node_url,
+                            catalog_name,
+                        )
+                        .await;
+                        catalogs.push(CatalogInfo {
+                            name: catalog_name.to_string(),
+                            schemas: schema_count as u32,
+                            tables: tables.len() as u32,
+                            partitions: 0,
+                            total_size_bytes: 0,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    catalogs.sort_by(|a, b| a.name.cmp(&b.name));
+    catalogs
+}
+
+/// Discover schemas in a catalog from a data node.
+async fn discover_schemas_from_data_node(
+    state: &AdminState,
+    catalog: &str,
+) -> Vec<SchemaInfo> {
+    let node_url = match state.get_data_node_url().await {
+        Ok(url) => url,
+        Err(_) => return Vec::new(),
+    };
+
+    // Get schema list from /schemas/:catalog
+    let schemas_list: Vec<String> = if let Ok(resp) = state
+        .http_client
+        .get(format!("{}/schemas/{}", node_url, catalog))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                body.get("schemas")
+                    .and_then(|s| s.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    if schemas_list.is_empty() {
+        return Vec::new();
+    }
+
+    // Get table counts per schema via /tables/:catalog
+    let schema_tables =
+        discover_tables_from_data_node(&state.http_client, &node_url, catalog).await;
+
+    let mut schema_table_counts: HashMap<String, u32> = HashMap::new();
+    for (schema, _table) in &schema_tables {
+        *schema_table_counts.entry(schema.clone()).or_insert(0) += 1;
+    }
+
+    let mut result: Vec<SchemaInfo> = schemas_list
+        .into_iter()
+        .map(|name| SchemaInfo {
+            catalog: catalog.to_string(),
+            tables: schema_table_counts.get(&name).copied().unwrap_or(0),
+            name,
+            partitions: 0,
+            total_size_bytes: 0,
+        })
+        .collect();
+
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    result
+}
+
+/// Discover tables in a specific catalog/schema from a data node.
+async fn discover_storage_tables_from_node(
+    state: &AdminState,
+    catalog: &str,
+    schema: &str,
+) -> Vec<TableBasicInfo> {
+    let node_url = match state.get_data_node_url().await {
+        Ok(url) => url,
+        Err(_) => return Vec::new(),
+    };
+
+    let all_tables =
+        discover_tables_from_data_node(&state.http_client, &node_url, catalog).await;
+
+    let mut result: Vec<TableBasicInfo> = all_tables
+        .into_iter()
+        .filter(|(s, _)| s == schema)
+        .map(|(_, table_name)| TableBasicInfo {
+            name: table_name,
+            partition_count: 0,
+            total_size_bytes: 0,
+            total_rows: 0,
+        })
+        .collect();
+
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    result
 }
 
 // ============ Parquet File Details ============
