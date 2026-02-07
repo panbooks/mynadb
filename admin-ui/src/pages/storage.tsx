@@ -579,13 +579,133 @@ function TableNode({
 
       {isExpanded && table.partitions && (
         <div className="ml-4 border-l pl-2 mt-1 space-y-1">
-          {table.partitions.map((partition) => (
-            <PartitionNode
-              key={`${partition.date}/${partition.node_id}`}
+          {(() => {
+            // Group partitions by date so node_id becomes a sub-level
+            const byDate = new Map<string, PartitionInfo[]>()
+            for (const p of table.partitions) {
+              const list = byDate.get(p.date) || []
+              list.push(p)
+              byDate.set(p.date, list)
+            }
+            return Array.from(byDate.entries())
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([date, parts]) => (
+                <DatePartitionNode
+                  key={date}
+                  date={date}
+                  partitions={parts}
+                  catalog={catalog}
+                  schema={schema}
+                  table={table.name}
+                  expandedNodes={expandedNodes}
+                  selectedNode={selectedNode}
+                  onToggle={onToggle}
+                  onClick={onClick}
+                />
+              ))
+          })()}
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface DatePartitionNodeProps {
+  date: string
+  partitions: PartitionInfo[]
+  catalog: string
+  schema: string
+  table: string
+  expandedNodes: Set<string>
+  selectedNode: TreeNode | null
+  onToggle: (key: string) => void
+  onClick: (node: TreeNode) => void
+}
+
+function DatePartitionNode({
+  date,
+  partitions,
+  catalog,
+  schema,
+  table,
+  expandedNodes,
+  selectedNode,
+  onToggle,
+  onClick,
+}: DatePartitionNodeProps) {
+  const nodeKey = `${catalog}/${schema}/${table}/${date}`
+  const isExpanded = expandedNodes.has(nodeKey)
+  const totalFiles = partitions.reduce((sum, p) => sum + p.files.length, 0)
+  const hasNodeIds = partitions.some((p) => p.node_id)
+
+  // If there's only one partition with no node_id, render flat (no sub-level)
+  if (partitions.length === 1 && !partitions[0].node_id) {
+    const partition = partitions[0]
+    const isSelected = selectedNode?.type === 'partition' && selectedNode.partition === date && !selectedNode.node_id
+    return (
+      <div>
+        <div
+          className={`flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-accent ${
+            isSelected ? 'bg-accent' : ''
+          }`}
+          onClick={() => {
+            onClick({ type: 'partition', name: date, catalog, schema, table, partition: date, data: partition })
+            onToggle(nodeKey)
+          }}
+        >
+          {isExpanded ? (
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          )}
+          <Calendar className="h-4 w-4 text-purple-500" />
+          <span className="flex-1 truncate font-mono text-sm">{date}</span>
+          <span className="text-xs text-muted-foreground">{partition.files.length} files</span>
+        </div>
+
+        {isExpanded && (
+          <div className="ml-4 border-l pl-2 mt-1 space-y-1">
+            {partition.files.map((file) => (
+              <FileNode key={file.path} file={file} catalog={catalog} schema={schema} table={table} selectedNode={selectedNode} onClick={onClick} />
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Multiple node_ids: render date as parent, node_ids as children
+  return (
+    <div>
+      <div
+        className={`flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-accent`}
+        onClick={() => {
+          onClick({ type: 'partition', name: date, catalog, schema, table, partition: date, data: partitions[0] })
+          onToggle(nodeKey)
+        }}
+      >
+        {isExpanded ? (
+          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+        )}
+        <Calendar className="h-4 w-4 text-purple-500" />
+        <span className="flex-1 truncate font-mono text-sm">{date}</span>
+        <span className="text-xs text-muted-foreground">
+          {hasNodeIds ? `${partitions.length} nodes` : `${totalFiles} files`}
+        </span>
+      </div>
+
+      {isExpanded && (
+        <div className="ml-4 border-l pl-2 mt-1 space-y-1">
+          {partitions.map((partition) => (
+            <NodePartitionNode
+              key={partition.node_id || '_default'}
               partition={partition}
               catalog={catalog}
               schema={schema}
-              table={table.name}
+              table={table}
+              date={date}
               expandedNodes={expandedNodes}
               selectedNode={selectedNode}
               onToggle={onToggle}
@@ -598,30 +718,32 @@ function TableNode({
   )
 }
 
-interface PartitionNodeProps {
+interface NodePartitionNodeProps {
   partition: PartitionInfo
   catalog: string
   schema: string
   table: string
+  date: string
   expandedNodes: Set<string>
   selectedNode: TreeNode | null
   onToggle: (key: string) => void
   onClick: (node: TreeNode) => void
 }
 
-function PartitionNode({
+function NodePartitionNode({
   partition,
   catalog,
   schema,
   table,
+  date,
   expandedNodes,
   selectedNode,
   onToggle,
   onClick,
-}: PartitionNodeProps) {
-  const nodeKey = `${catalog}/${schema}/${table}/${partition.date}/${partition.node_id}`
+}: NodePartitionNodeProps) {
+  const nodeKey = `${catalog}/${schema}/${table}/${date}/${partition.node_id}`
   const isExpanded = expandedNodes.has(nodeKey)
-  const isSelected = selectedNode?.type === 'partition' && selectedNode.partition === partition.date && selectedNode.node_id === partition.node_id
+  const isSelected = selectedNode?.type === 'partition' && selectedNode.partition === date && selectedNode.node_id === partition.node_id
 
   return (
     <div>
@@ -630,7 +752,7 @@ function PartitionNode({
           isSelected ? 'bg-accent' : ''
         }`}
         onClick={() => {
-          onClick({ type: 'partition', name: partition.date, catalog, schema, table, partition: partition.date, node_id: partition.node_id, data: partition })
+          onClick({ type: 'partition', name: date, catalog, schema, table, partition: date, node_id: partition.node_id, data: partition })
           onToggle(nodeKey)
         }}
       >
@@ -639,35 +761,44 @@ function PartitionNode({
         ) : (
           <ChevronRight className="h-4 w-4 text-muted-foreground" />
         )}
-        <Calendar className="h-4 w-4 text-purple-500" />
-        <span className="flex-1 truncate font-mono text-sm">
-          {partition.date}
-          {partition.node_id && (
-            <Badge variant="outline" className="ml-2 text-xs font-normal">{partition.node_id}</Badge>
-          )}
-        </span>
+        <HardDrive className="h-4 w-4 text-orange-500" />
+        <span className="flex-1 truncate font-mono text-sm">{partition.node_id || 'default'}</span>
         <span className="text-xs text-muted-foreground">{partition.files.length} files</span>
       </div>
 
-      {isExpanded && partition.files && (
+      {isExpanded && (
         <div className="ml-4 border-l pl-2 mt-1 space-y-1">
           {partition.files.map((file) => (
-            <div
-              key={file.path}
-              className={`flex items-center gap-2 px-2 py-1 rounded-lg cursor-pointer hover:bg-accent ${
-                selectedNode?.type === 'file' && (selectedNode.data as FileInfo)?.path === file.path ? 'bg-accent' : ''
-              }`}
-              onClick={() => onClick({ type: 'file', name: file.name, catalog, schema, table, data: file })}
-            >
-              <File className="h-4 w-4 text-gray-500" />
-              <span className="flex-1 truncate font-mono text-xs">{file.name}</span>
-              <Badge variant={file.level === 0 ? 'default' : 'secondary'} className="text-xs">
-                L{file.level}
-              </Badge>
-            </div>
+            <FileNode key={file.path} file={file} catalog={catalog} schema={schema} table={table} selectedNode={selectedNode} onClick={onClick} />
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+interface FileNodeProps {
+  file: FileInfo
+  catalog: string
+  schema: string
+  table: string
+  selectedNode: TreeNode | null
+  onClick: (node: TreeNode) => void
+}
+
+function FileNode({ file, catalog, schema, table, selectedNode, onClick }: FileNodeProps) {
+  return (
+    <div
+      className={`flex items-center gap-2 px-2 py-1 rounded-lg cursor-pointer hover:bg-accent ${
+        selectedNode?.type === 'file' && (selectedNode.data as FileInfo)?.path === file.path ? 'bg-accent' : ''
+      }`}
+      onClick={() => onClick({ type: 'file', name: file.name, catalog, schema, table, data: file })}
+    >
+      <File className="h-4 w-4 text-gray-500" />
+      <span className="flex-1 truncate font-mono text-xs">{file.name}</span>
+      <Badge variant={file.level === 0 ? 'default' : 'secondary'} className="text-xs">
+        L{file.level}
+      </Badge>
     </div>
   )
 }
