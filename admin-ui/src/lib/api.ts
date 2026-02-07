@@ -27,6 +27,7 @@ import type {
   StorageInfo,
   CatalogInfo,
   SchemaInfo,
+  TableBasicInfo,
   TableStorageInfo,
   ParquetFileDetails,
 } from './types'
@@ -332,6 +333,12 @@ export async function fetchStorageCatalogs(): Promise<CatalogInfo[]> {
 
 export async function fetchStorageSchemas(catalog: string): Promise<SchemaInfo[]> {
   return fetchApi<SchemaInfo[]>(`/storage/catalogs/${encodeURIComponent(catalog)}/schemas`)
+}
+
+export async function fetchStorageTables(catalog: string, schema: string): Promise<TableBasicInfo[]> {
+  return fetchApi<TableBasicInfo[]>(
+    `/storage/catalogs/${encodeURIComponent(catalog)}/schemas/${encodeURIComponent(schema)}/tables`
+  )
 }
 
 export async function fetchStorageTable(catalog: string, schema: string, table: string): Promise<TableStorageInfo> {

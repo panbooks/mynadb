@@ -374,6 +374,13 @@ export interface SchemaInfo {
   total_size_bytes: number
 }
 
+export interface TableBasicInfo {
+  name: string
+  partition_count: number
+  total_size_bytes: number
+  total_rows: number
+}
+
 export interface TableStorageInfo {
   catalog: string
   schema: string

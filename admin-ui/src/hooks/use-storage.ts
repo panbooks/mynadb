@@ -3,6 +3,7 @@ import {
   fetchStorageInfo,
   fetchStorageCatalogs,
   fetchStorageSchemas,
+  fetchStorageTables,
   fetchStorageTable,
   fetchParquetDetails,
   deletePartition,
@@ -30,6 +31,15 @@ export function useStorageSchemas(catalog: string | undefined) {
     queryKey: ['storage-schemas', catalog],
     queryFn: () => fetchStorageSchemas(catalog!),
     enabled: !!catalog,
+    staleTime: 30000,
+  })
+}
+
+export function useStorageTables(catalog: string | undefined, schema: string | undefined) {
+  return useQuery({
+    queryKey: ['storage-tables', catalog, schema],
+    queryFn: () => fetchStorageTables(catalog!, schema!),
+    enabled: !!catalog && !!schema,
     staleTime: 30000,
   })
 }

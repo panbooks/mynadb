@@ -48,13 +48,14 @@ import {
   useStorageInfo,
   useStorageCatalogs,
   useStorageSchemas,
+  useStorageTables,
   useStorageTable,
   useParquetDetails,
   useDeletePartition,
   useTriggerCompaction,
 } from '@/hooks/use-storage'
 import { formatBytes, formatNumber } from '@/lib/utils'
-import type { CatalogInfo, SchemaInfo, TableStorageInfo, PartitionInfo, FileInfo, ParquetFileDetails } from '@/lib/types'
+import type { CatalogInfo, SchemaInfo, TableBasicInfo, TableStorageInfo, PartitionInfo, FileInfo, ParquetFileDetails } from '@/lib/types'
 
 interface TreeNode {
   type: 'catalog' | 'schema' | 'table' | 'partition' | 'file'
@@ -76,10 +77,12 @@ export function StoragePage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ catalog: string; schema: string; table: string; date: string } | null>(null)
   const [search, setSearch] = useState('')
+  const [tablesForSchema, setTablesForSchema] = useState<{ catalog: string; schema: string } | undefined>()
 
   const { data: storageInfo, isLoading: storageLoading, refetch: refetchStorage } = useStorageInfo()
   const { data: catalogs, isLoading: catalogsLoading, refetch: refetchCatalogs } = useStorageCatalogs()
   const { data: schemas } = useStorageSchemas(selectedCatalog)
+  const { data: schemaTables, isLoading: schemaTablesLoading } = useStorageTables(tablesForSchema?.catalog, tablesForSchema?.schema)
   const { data: tableInfo } = useStorageTable(selectedCatalog, selectedSchema, selectedTable)
   const { data: fileDetails } = useParquetDetails(selectedFile)
 
@@ -206,6 +209,9 @@ export function StoragePage() {
                   catalog={catalog}
                   schemas={selectedCatalog === catalog.name ? schemas : undefined}
                   tableInfo={tableInfo}
+                  schemaTables={tablesForSchema?.catalog === catalog.name ? schemaTables : undefined}
+                  schemaTablesLoading={tablesForSchema?.catalog === catalog.name ? schemaTablesLoading : false}
+                  schemaTablesFor={tablesForSchema?.catalog === catalog.name ? tablesForSchema?.schema : undefined}
                   expandedNodes={expandedNodes}
                   selectedNode={selectedNode}
                   onToggle={toggleNode}
@@ -214,6 +220,9 @@ export function StoragePage() {
                   onSelectSchema={(schema) => {
                     setSelectedCatalog(catalog.name)
                     setSelectedSchema(schema)
+                  }}
+                  onExpandSchema={(schema) => {
+                    setTablesForSchema({ catalog: catalog.name, schema })
                   }}
                   onSelectTable={(schema, table) => {
                     setSelectedCatalog(catalog.name)
@@ -251,6 +260,13 @@ export function StoragePage() {
           <SchemaDetails
             schema={schemas?.find((s) => s.name === selectedNode.name)}
             catalog={selectedNode.catalog!}
+            tables={tablesForSchema?.catalog === selectedNode.catalog && tablesForSchema?.schema === selectedNode.name ? schemaTables : undefined}
+            onSelectTable={(table) => {
+              setSelectedCatalog(selectedNode.catalog!)
+              setSelectedSchema(selectedNode.name)
+              setSelectedTable(table)
+              setSelectedNode({ type: 'table', name: table, catalog: selectedNode.catalog!, schema: selectedNode.name })
+            }}
             onCompact={() => handleCompact(selectedNode.catalog!, selectedNode.name)}
             isCompacting={triggerCompaction.isPending}
           />
@@ -315,12 +331,16 @@ interface CatalogNodeProps {
   catalog: CatalogInfo
   schemas?: SchemaInfo[]
   tableInfo?: TableStorageInfo
+  schemaTables?: TableBasicInfo[]
+  schemaTablesLoading?: boolean
+  schemaTablesFor?: string
   expandedNodes: Set<string>
   selectedNode: TreeNode | null
   onToggle: (key: string) => void
   onClick: (node: TreeNode) => void
   onSelectCatalog: () => void
   onSelectSchema: (schema: string) => void
+  onExpandSchema: (schema: string) => void
   onSelectTable: (schema: string, table: string) => void
 }
 
@@ -328,12 +348,16 @@ function CatalogNode({
   catalog,
   schemas,
   tableInfo,
+  schemaTables,
+  schemaTablesLoading,
+  schemaTablesFor,
   expandedNodes,
   selectedNode,
   onToggle,
   onClick,
   onSelectCatalog,
   onSelectSchema,
+  onExpandSchema,
   onSelectTable,
 }: CatalogNodeProps) {
   const isExpanded = expandedNodes.has(catalog.name)
@@ -371,11 +395,14 @@ function CatalogNode({
               schema={schema}
               catalog={catalog.name}
               tableInfo={tableInfo}
+              tables={schemaTablesFor === schema.name ? schemaTables : undefined}
+              tablesLoading={schemaTablesFor === schema.name ? schemaTablesLoading : false}
               expandedNodes={expandedNodes}
               selectedNode={selectedNode}
               onToggle={onToggle}
               onClick={onClick}
               onSelectSchema={onSelectSchema}
+              onExpandSchema={onExpandSchema}
               onSelectTable={onSelectTable}
             />
           ))}
@@ -389,11 +416,14 @@ interface SchemaNodeProps {
   schema: SchemaInfo
   catalog: string
   tableInfo?: TableStorageInfo
+  tables?: TableBasicInfo[]
+  tablesLoading?: boolean
   expandedNodes: Set<string>
   selectedNode: TreeNode | null
   onToggle: (key: string) => void
   onClick: (node: TreeNode) => void
   onSelectSchema: (schema: string) => void
+  onExpandSchema: (schema: string) => void
   onSelectTable: (schema: string, table: string) => void
 }
 
@@ -401,11 +431,14 @@ function SchemaNode({
   schema,
   catalog,
   tableInfo,
+  tables,
+  tablesLoading,
   expandedNodes,
   selectedNode,
   onToggle,
   onClick,
   onSelectSchema,
+  onExpandSchema,
   onSelectTable,
 }: SchemaNodeProps) {
   const nodeKey = `${catalog}/${schema.name}`
@@ -421,6 +454,9 @@ function SchemaNode({
         onClick={() => {
           onSelectSchema(schema.name)
           onClick({ type: 'schema', name: schema.name, catalog, data: schema })
+          if (!isExpanded) {
+            onExpandSchema(schema.name)
+          }
           onToggle(nodeKey)
         }}
       >
@@ -438,18 +474,55 @@ function SchemaNode({
         <span className="text-xs text-muted-foreground">{schema.tables} tables</span>
       </div>
 
-      {isExpanded && tableInfo && tableInfo.schema === schema.name && (
+      {isExpanded && (
         <div className="ml-4 border-l pl-2 mt-1 space-y-1">
-          <TableNode
-            table={tableInfo}
-            catalog={catalog}
-            schema={schema.name}
-            expandedNodes={expandedNodes}
-            selectedNode={selectedNode}
-            onToggle={onToggle}
-            onClick={onClick}
-            onSelectTable={onSelectTable}
-          />
+          {tablesLoading ? (
+            <div className="px-2 py-1.5">
+              <Skeleton className="h-6 w-full" />
+            </div>
+          ) : tables && tables.length > 0 ? (
+            tables.map((t) => {
+              // If this table's full info is loaded, render the detailed TableNode
+              if (tableInfo && tableInfo.schema === schema.name && tableInfo.name === t.name) {
+                return (
+                  <TableNode
+                    key={t.name}
+                    table={tableInfo}
+                    catalog={catalog}
+                    schema={schema.name}
+                    expandedNodes={expandedNodes}
+                    selectedNode={selectedNode}
+                    onToggle={onToggle}
+                    onClick={onClick}
+                    onSelectTable={onSelectTable}
+                  />
+                )
+              }
+              // Otherwise render a simple entry from the basic table info
+              const tNodeKey = `${catalog}/${schema.name}/${t.name}`
+              const tIsSelected = selectedNode?.type === 'table' && selectedNode.name === t.name && selectedNode.schema === schema.name
+              return (
+                <div
+                  key={t.name}
+                  className={`flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-accent ${
+                    tIsSelected ? 'bg-accent' : ''
+                  }`}
+                  onClick={() => {
+                    onSelectTable(schema.name, t.name)
+                    onClick({ type: 'table', name: t.name, catalog, schema: schema.name })
+                    onToggle(tNodeKey)
+                  }}
+                >
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  <FileStack className="h-4 w-4 text-green-500" />
+                  <span className="flex-1 truncate">{t.name}</span>
+                  <span className="text-xs text-muted-foreground">{t.partition_count} parts</span>
+                </div>
+              )
+            })
+          ) : !tablesLoading && tables && tables.length === 0 ? (
+            <div className="px-2 py-1.5 text-xs text-muted-foreground">No tables</div>
+          ) : null}
         </div>
       )}
     </div>
@@ -660,11 +733,13 @@ function CatalogDetails({ catalog, onCompact, isCompacting }: CatalogDetailsProp
 interface SchemaDetailsProps {
   schema?: SchemaInfo
   catalog: string
+  tables?: TableBasicInfo[]
+  onSelectTable?: (table: string) => void
   onCompact: () => void
   isCompacting: boolean
 }
 
-function SchemaDetails({ schema, catalog, onCompact, isCompacting }: SchemaDetailsProps) {
+function SchemaDetails({ schema, catalog, tables, onSelectTable, onCompact, isCompacting }: SchemaDetailsProps) {
   if (!schema) return <Skeleton className="h-full w-full" />
 
   return (
@@ -712,6 +787,45 @@ function SchemaDetails({ schema, catalog, onCompact, isCompacting }: SchemaDetai
           </CardContent>
         </Card>
       </div>
+
+      {tables && tables.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Tables</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead className="text-right">Partitions</TableHead>
+                  <TableHead className="text-right">Rows</TableHead>
+                  <TableHead className="text-right">Size</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {tables.map((t) => (
+                  <TableRow
+                    key={t.name}
+                    className="cursor-pointer hover:bg-accent"
+                    onClick={() => onSelectTable?.(t.name)}
+                  >
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-2">
+                        <FileStack className="h-4 w-4 text-green-500" />
+                        {t.name}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right">{formatNumber(t.partition_count)}</TableCell>
+                    <TableCell className="text-right">{formatNumber(t.total_rows)}</TableCell>
+                    <TableCell className="text-right">{formatBytes(t.total_size_bytes)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }

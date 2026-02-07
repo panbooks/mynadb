@@ -27,6 +27,10 @@ pub fn routes() -> Router<AdminState> {
             get(list_storage_schemas),
         )
         .route(
+            "/storage/catalogs/:catalog/schemas/:schema/tables",
+            get(list_storage_tables),
+        )
+        .route(
             "/storage/catalogs/:catalog/schemas/:schema/tables/:table",
             get(get_table_storage),
         )
@@ -268,6 +272,61 @@ async fn list_storage_schemas(
     schemas.sort_by(|a, b| a.name.cmp(&b.name));
 
     (StatusCode::OK, Json(ApiResponse::ok(schemas)))
+}
+
+// ============ Tables in Schema ============
+
+#[derive(Serialize)]
+struct TableBasicInfo {
+    name: String,
+    partition_count: u32,
+    total_size_bytes: u64,
+    total_rows: u64,
+}
+
+async fn list_storage_tables(
+    State(state): State<AdminState>,
+    Path((catalog, schema)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let meta_client = match state.get_meta_client().await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiResponse::<Vec<TableBasicInfo>>::error(e)),
+            );
+        }
+    };
+
+    let tables = match meta_client
+        .list_tables(Some(&catalog), Some(&schema))
+        .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<Vec<TableBasicInfo>>::error(format!(
+                    "Failed to list tables: {}",
+                    e
+                ))),
+            );
+        }
+    };
+
+    let mut result: Vec<TableBasicInfo> = tables
+        .iter()
+        .map(|t| TableBasicInfo {
+            name: t.table.clone(),
+            partition_count: t.partition_count,
+            total_size_bytes: t.total_bytes,
+            total_rows: t.total_rows,
+        })
+        .collect();
+
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+
+    (StatusCode::OK, Json(ApiResponse::ok(result)))
 }
 
 // ============ Table Storage Details ============

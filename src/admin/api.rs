@@ -51,7 +51,7 @@ pub fn routes() -> Router<AdminState> {
         .route("/events/stats", get(get_event_stats))
         .route("/events/ws", get(websocket::handler))
         // Meta operations
-        .route("/distribution", get(distribution))
+        .route("/distribution", get(distribution).post(set_distribution))
         .route("/meta/status", get(meta_status))
         // Query Console
         .merge(query_api::routes())
@@ -314,6 +314,19 @@ async fn list_nodes(
 
     match meta_client.list_nodes(role_filter, state_filter).await {
         Ok(nodes) => {
+            // Build table ownership counts from meta
+            let table_counts: HashMap<String, u32> = if let Ok(tables) = meta_client.list_tables(None, None).await {
+                let mut counts: HashMap<String, u32> = HashMap::new();
+                for table in &tables {
+                    for owner in &table.owners {
+                        *counts.entry(owner.node_id.clone()).or_insert(0) += 1;
+                    }
+                }
+                counts
+            } else {
+                HashMap::new()
+            };
+
             let mut summaries: Vec<NodeSummary> = nodes
                 .into_iter()
                 .filter(|n| {
@@ -333,6 +346,7 @@ async fn list_nodes(
                 .map(|n| {
                     let zone = n.zone().map(|s| s.to_string());
                     let last_heartbeat = timestamp_to_rfc3339(n.last_heartbeat);
+                    let tables_owned = table_counts.get(&n.node_id).copied();
                     NodeSummary {
                         id: n.node_id,
                         role: format!("{:?}", n.role),
@@ -340,7 +354,7 @@ async fn list_nodes(
                         mode: n.mode.map(|m| format!("{:?}", m)),
                         advertise_addr: n.advertise_addr,
                         zone,
-                        tables_owned: None,
+                        tables_owned,
                         last_heartbeat,
                     }
                 })
@@ -1001,55 +1015,128 @@ async fn health() -> impl IntoResponse {
     })))
 }
 
-/// Get data distribution across nodes
+/// Distribution config response matching frontend DistributionConfig type
+#[derive(Serialize)]
+struct DistributionConfigResponse {
+    scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    catalog: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    table: Option<String>,
+    replication_factor: u8,
+    placement_strategy: String,
+}
+
+/// Get distribution configuration
 async fn distribution(State(state): State<AdminState>) -> impl IntoResponse {
     let client = match state.get_meta_client().await {
         Ok(c) => c,
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<HashMap<String, Vec<String>>>::error(format!("Failed to connect to meta: {}", e)))
+                Json(ApiResponse::<Vec<DistributionConfigResponse>>::error(format!("Failed to connect to meta: {}", e)))
             )
         }
     };
 
-    match client.list_tables(None, None).await {
-        Ok(tables) => {
-            // Group tables by owner nodes
-            let mut distribution: HashMap<String, Vec<String>> = HashMap::new();
-
-            for table in tables {
-                let table_key = format!("{}.{}.{}", table.catalog, table.schema, table.table);
-
-                // Get primary owner (first non-expired owner)
-                if let Some(owner) = table.owners.first() {
-                    distribution
-                        .entry(owner.node_id.clone())
-                        .or_insert_with(Vec::new)
-                        .push(table_key);
-                } else {
-                    distribution
-                        .entry("unassigned".to_string())
-                        .or_insert_with(Vec::new)
-                        .push(table_key);
+    match client.list_distribution_configs(None).await {
+        Ok(configs) => {
+            let result: Vec<DistributionConfigResponse> = configs.iter().map(|c| {
+                use crate::meta::types::DistributionScope;
+                let scope = match c.scope {
+                    DistributionScope::Catalog => "Catalog",
+                    DistributionScope::Schema => "Schema",
+                    DistributionScope::Table => "Table",
+                };
+                DistributionConfigResponse {
+                    scope: scope.to_string(),
+                    catalog: if c.catalog.is_empty() { None } else { Some(c.catalog.clone()) },
+                    schema: if c.schema.is_empty() { None } else { Some(c.schema.clone()) },
+                    table: if c.table.is_empty() { None } else { Some(c.table.clone()) },
+                    // Map percent to a replication-like factor:
+                    // percent represents distribution spread; expose as replication_factor
+                    replication_factor: if c.percent == 0 { 1 } else { (c.percent / 25).max(1).min(5) },
+                    placement_strategy: "RoundRobin".to_string(),
                 }
-            }
-
-            (StatusCode::OK, Json(ApiResponse::ok(distribution)))
+            }).collect();
+            (StatusCode::OK, Json(ApiResponse::ok(result)))
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<HashMap<String, Vec<String>>>::error(format!("Failed to get distribution: {}", e)))
+            Json(ApiResponse::<Vec<DistributionConfigResponse>>::error(format!("Failed to get distribution: {}", e)))
+        ),
+    }
+}
+
+/// Set distribution config request from frontend
+#[derive(Deserialize)]
+struct SetDistributionRequest {
+    scope: String,
+    catalog: Option<String>,
+    schema: Option<String>,
+    table: Option<String>,
+    replication_factor: u8,
+    #[allow(dead_code)]
+    placement_strategy: Option<String>,
+}
+
+/// Set distribution configuration
+async fn set_distribution(
+    State(state): State<AdminState>,
+    Json(body): Json<SetDistributionRequest>,
+) -> impl IntoResponse {
+    let client = match state.get_meta_client().await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<serde_json::Value>::error(format!("Failed to connect to meta: {}", e)))
+            )
+        }
+    };
+
+    let catalog = body.catalog.unwrap_or_default();
+    let schema = body.schema.unwrap_or_default();
+    let table = body.table.unwrap_or_default();
+    // Map replication_factor back to percent (1=0%, 2=50%, 3=75%, 4=100%, 5=100%)
+    let percent = match body.replication_factor {
+        0 | 1 => 0,
+        2 => 50,
+        3 => 75,
+        4 | 5 => 100,
+        _ => 100,
+    };
+
+    match client.set_distribution_config(&catalog, &schema, &table, percent).await {
+        Ok(_version) => (
+            StatusCode::OK,
+            Json(ApiResponse::ok(serde_json::json!({"success": true})))
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<serde_json::Value>::error(format!("Failed to set distribution config: {}", e)))
         ),
     }
 }
 
 #[derive(Serialize)]
 struct MetaStatusResponse {
-    leader: Option<String>,
-    term: Option<u64>,
-    state: String,
-    peer_count: usize,
+    leader_id: Option<String>,
+    term: u64,
+    commit_index: u64,
+    is_healthy: bool,
+    peers: Vec<MetaPeerInfo>,
+}
+
+#[derive(Serialize)]
+struct MetaPeerInfo {
+    id: String,
+    address: String,
+    is_leader: bool,
+    is_healthy: bool,
+    last_heartbeat: Option<String>,
 }
 
 /// Get meta node status
@@ -1064,19 +1151,43 @@ async fn meta_status(State(state): State<AdminState>) -> impl IntoResponse {
         }
     };
 
-    match client.get_cluster_status().await {
-        Ok(status) => {
-            let response = MetaStatusResponse {
-                leader: Some(status.meta_leader),
-                term: None,
-                state: "running".to_string(),
-                peer_count: status.meta_nodes as usize,
-            };
-            (StatusCode::OK, Json(ApiResponse::ok(response)))
+    let cluster_status = match client.get_cluster_status().await {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<MetaStatusResponse>::error(format!("Failed to get meta status: {}", e)))
+            )
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<MetaStatusResponse>::error(format!("Failed to get meta status: {}", e)))
-        ),
-    }
+    };
+
+    // Get meta node list for peer details
+    let peers = match client.list_nodes(Some(NodeRole::Meta), None).await {
+        Ok(nodes) => {
+            nodes.iter().map(|n| {
+                let is_leader = n.node_id == cluster_status.meta_leader;
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let heartbeat_age_ms = now_ms - n.last_heartbeat;
+                // Consider healthy if heartbeat is within 30 seconds
+                let is_healthy = n.state == NodeState::Active && heartbeat_age_ms < 30_000;
+                MetaPeerInfo {
+                    id: n.node_id.clone(),
+                    address: n.advertise_addr.clone(),
+                    is_leader,
+                    is_healthy,
+                    last_heartbeat: timestamp_to_rfc3339(n.last_heartbeat),
+                }
+            }).collect()
+        }
+        Err(_) => Vec::new(),
+    };
+
+    let response = MetaStatusResponse {
+        leader_id: Some(cluster_status.meta_leader),
+        term: 0, // Not exposed by ClusterStatus; placeholder
+        commit_index: 0, // Not exposed by ClusterStatus; placeholder
+        is_healthy: cluster_status.healthy,
+        peers,
+    };
+    (StatusCode::OK, Json(ApiResponse::ok(response)))
 }
