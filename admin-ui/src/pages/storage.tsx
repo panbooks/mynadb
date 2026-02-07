@@ -64,6 +64,7 @@ interface TreeNode {
   schema?: string
   table?: string
   partition?: string
+  node_id?: string
   data?: CatalogInfo | SchemaInfo | TableStorageInfo | PartitionInfo | FileInfo
 }
 
@@ -580,7 +581,7 @@ function TableNode({
         <div className="ml-4 border-l pl-2 mt-1 space-y-1">
           {table.partitions.map((partition) => (
             <PartitionNode
-              key={partition.date}
+              key={`${partition.date}/${partition.node_id}`}
               partition={partition}
               catalog={catalog}
               schema={schema}
@@ -618,9 +619,9 @@ function PartitionNode({
   onToggle,
   onClick,
 }: PartitionNodeProps) {
-  const nodeKey = `${catalog}/${schema}/${table}/${partition.date}`
+  const nodeKey = `${catalog}/${schema}/${table}/${partition.date}/${partition.node_id}`
   const isExpanded = expandedNodes.has(nodeKey)
-  const isSelected = selectedNode?.type === 'partition' && selectedNode.partition === partition.date
+  const isSelected = selectedNode?.type === 'partition' && selectedNode.partition === partition.date && selectedNode.node_id === partition.node_id
 
   return (
     <div>
@@ -629,7 +630,7 @@ function PartitionNode({
           isSelected ? 'bg-accent' : ''
         }`}
         onClick={() => {
-          onClick({ type: 'partition', name: partition.date, catalog, schema, table, partition: partition.date, data: partition })
+          onClick({ type: 'partition', name: partition.date, catalog, schema, table, partition: partition.date, node_id: partition.node_id, data: partition })
           onToggle(nodeKey)
         }}
       >
@@ -639,7 +640,12 @@ function PartitionNode({
           <ChevronRight className="h-4 w-4 text-muted-foreground" />
         )}
         <Calendar className="h-4 w-4 text-purple-500" />
-        <span className="flex-1 truncate font-mono text-sm">{partition.date}</span>
+        <span className="flex-1 truncate font-mono text-sm">
+          {partition.date}
+          {partition.node_id && (
+            <Badge variant="outline" className="ml-2 text-xs font-normal">{partition.node_id}</Badge>
+          )}
+        </span>
         <span className="text-xs text-muted-foreground">{partition.files.length} files</span>
       </div>
 
@@ -945,6 +951,7 @@ function TableDetails({ tableInfo, catalog, schema, onCompact, onDeletePartition
             <TableHeader>
               <TableRow>
                 <TableHead>Date</TableHead>
+                <TableHead>Node ID</TableHead>
                 <TableHead className="text-right">Files</TableHead>
                 <TableHead className="text-right">Rows</TableHead>
                 <TableHead className="text-right">Size</TableHead>
@@ -953,8 +960,15 @@ function TableDetails({ tableInfo, catalog, schema, onCompact, onDeletePartition
             </TableHeader>
             <TableBody>
               {tableInfo.partitions.map((partition) => (
-                <TableRow key={partition.date}>
+                <TableRow key={`${partition.date}-${partition.node_id}`}>
                   <TableCell className="font-mono">{partition.date}</TableCell>
+                  <TableCell className="font-mono text-sm">
+                    {partition.node_id ? (
+                      <Badge variant="outline">{partition.node_id}</Badge>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right">{partition.files.length}</TableCell>
                   <TableCell className="text-right">{formatNumber(partition.row_count)}</TableCell>
                   <TableCell className="text-right">{formatBytes(partition.size_bytes)}</TableCell>

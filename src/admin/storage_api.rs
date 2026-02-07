@@ -345,6 +345,7 @@ struct TableStorageInfo {
 #[derive(Serialize)]
 struct PartitionInfo {
     date: String,
+    node_id: String,
     files: Vec<FileInfo>,
     size_bytes: u64,
     row_count: u64,
@@ -509,7 +510,7 @@ async fn get_table_storage(
     };
 
     // Transform the data node's partition response into our format
-    // Data node returns: { partitions: [{partition, date, file_count, size_mb}], count, total_size_mb }
+    // Data node returns: { partitions: [{date, node_id, files: [{path, name, size_bytes}], file_count, size_mb}], count, total_size_mb }
     let mut partitions = Vec::new();
     let mut total_size_bytes: u64 = 0;
     let mut total_rows: u64 = 0;
@@ -522,10 +523,11 @@ async fn get_table_storage(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let file_count = p
-                .get("file_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            let node_id = p
+                .get("node_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let size_mb = p
                 .get("size_mb")
                 .and_then(|v| v.as_f64())
@@ -533,32 +535,52 @@ async fn get_table_storage(
             let size_bytes = (size_mb * 1024.0 * 1024.0) as u64;
 
             total_size_bytes += size_bytes;
-            total_file_count += file_count;
 
-            // Create file entries - we don't have individual file details from the partition list,
-            // so create summary entries per file count
-            let files: Vec<FileInfo> = (0..file_count)
-                .map(|i| FileInfo {
-                    path: format!(
-                        "{}/{}/{}/date={}/file_{}.parquet",
-                        catalog, schema, table, date, i
-                    ),
-                    name: format!("file_{}.parquet", i),
-                    level: 0,
-                    size_bytes: if file_count > 0 {
-                        size_bytes / file_count
-                    } else {
-                        0
-                    },
-                    row_count: 0,
-                    created_at: String::new(),
-                    row_groups: None,
-                    compression: None,
-                })
-                .collect();
+            // Build file entries from detailed response or fall back to synthetic names
+            let files: Vec<FileInfo> = if let Some(files_arr) = p.get("files").and_then(|v| v.as_array()) {
+                total_file_count += files_arr.len() as u64;
+                files_arr
+                    .iter()
+                    .map(|f| {
+                        let path = f.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let file_size = f.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let level = parse_level(&name);
+                        FileInfo {
+                            path,
+                            name,
+                            level,
+                            size_bytes: file_size,
+                            row_count: 0,
+                            created_at: String::new(),
+                            row_groups: None,
+                            compression: None,
+                        }
+                    })
+                    .collect()
+            } else {
+                let file_count = p.get("file_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                total_file_count += file_count;
+                (0..file_count)
+                    .map(|i| FileInfo {
+                        path: format!(
+                            "{}/{}/{}/date={}/file_{}.parquet",
+                            catalog, schema, table, date, i
+                        ),
+                        name: format!("file_{}.parquet", i),
+                        level: 0,
+                        size_bytes: if file_count > 0 { size_bytes / file_count } else { 0 },
+                        row_count: 0,
+                        created_at: String::new(),
+                        row_groups: None,
+                        compression: None,
+                    })
+                    .collect()
+            };
 
             partitions.push(PartitionInfo {
                 date,
+                node_id,
                 files,
                 size_bytes,
                 row_count: 0,
@@ -618,7 +640,7 @@ async fn query_partitions_via_sql(
     table: &str,
 ) -> Result<(Vec<PartitionInfo>, u64, u64), String> {
     let sql = format!(
-        "SELECT date, count(*) as row_count FROM {}.{} GROUP BY date ORDER BY date",
+        "SELECT date, node_id, count(*) as row_count FROM {}.{} GROUP BY date, node_id ORDER BY date, node_id",
         schema, table
     );
     let encoded_sql: String = sql
@@ -672,6 +694,11 @@ async fn query_partitions_via_sql(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let node_id = row
+            .get("node_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let row_count = row
             .get("row_count")
             .and_then(|v| v.as_u64())
@@ -679,10 +706,17 @@ async fn query_partitions_via_sql(
 
         total_rows += row_count;
 
+        let path_suffix = if node_id.is_empty() {
+            format!("{}/{}/{}/date={}", catalog, schema, table, date)
+        } else {
+            format!("{}/{}/{}/date={}/node_id={}", catalog, schema, table, date, node_id)
+        };
+
         partitions.push(PartitionInfo {
             date: date.clone(),
+            node_id: node_id.clone(),
             files: vec![FileInfo {
-                path: format!("{}/{}/{}/date={}", catalog, schema, table, date),
+                path: path_suffix,
                 name: "*.parquet".to_string(),
                 level: 0,
                 size_bytes: 0,

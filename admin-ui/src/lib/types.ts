@@ -393,6 +393,7 @@ export interface TableStorageInfo {
 
 export interface PartitionInfo {
   date: string
+  node_id: string
   files: FileInfo[]
   size_bytes: number
   row_count: number

@@ -603,6 +603,46 @@ pub async fn list_partitions_impl_async(
     }
 }
 
+/// List partitions with detailed (date, node_id) breakdown and individual file names
+pub async fn list_partitions_detailed_impl_async(
+    db_manager: &DatabaseManager,
+    catalog: &str,
+    schema: &str,
+    table: &str,
+) -> Result<serde_json::Value, String> {
+    match db_manager
+        .discover_table_partitions_detailed_async(catalog, schema, table)
+        .await
+    {
+        Ok(partitions) => {
+            let total_size: u64 = partitions.iter().map(|p| p.total_size_bytes).sum();
+            Ok(serde_json::json!({
+                "catalog": catalog,
+                "schema": schema,
+                "table": table,
+                "partitions": partitions.iter().map(|p| {
+                    serde_json::json!({
+                        "date": p.date,
+                        "node_id": p.node_id,
+                        "files": p.files.iter().map(|f| {
+                            serde_json::json!({
+                                "path": f.path,
+                                "name": f.name,
+                                "size_bytes": f.size_bytes
+                            })
+                        }).collect::<Vec<_>>(),
+                        "file_count": p.files.len(),
+                        "size_mb": p.total_size_bytes as f64 / 1024.0 / 1024.0
+                    })
+                }).collect::<Vec<_>>(),
+                "count": partitions.len(),
+                "total_size_mb": total_size as f64 / 1024.0 / 1024.0
+            }))
+        }
+        Err(e) => Err(format!("Error: {}", e)),
+    }
+}
+
 /// Delete a specific partition
 pub fn delete_partition_impl(
     db_manager: &DatabaseManager,

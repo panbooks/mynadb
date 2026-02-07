@@ -333,6 +333,264 @@ impl DatabaseManager {
         self.discover_table_partitions(catalog_name, schema_name, table_name)
     }
 
+    /// Discover detailed partitions with (date, node_id) breakdown and individual file names.
+    ///
+    /// Path structure:
+    ///   {catalog}/{schema}/{table}/date={YYYY-MM-DD}/node_id={node_id}/*.parquet
+    pub async fn discover_table_partitions_detailed_async(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+    ) -> Result<Vec<PartitionDetailInfo>, String> {
+        if let Some(storage) = &self.storage {
+            let table_prefix = format!("{}/{}/{}", catalog_name, schema_name, table_name);
+            let date_dirs = storage.list_prefixes(&table_prefix).await?;
+
+            let mut partitions = Vec::new();
+            for date_dir in date_dirs {
+                if !date_dir.starts_with("date=") {
+                    continue;
+                }
+                let date_str = date_dir
+                    .strip_prefix("date=")
+                    .unwrap_or(&date_dir)
+                    .to_string();
+
+                let date_prefix = format!("{}/{}", table_prefix, date_dir);
+                let node_dirs = storage.list_prefixes(&date_prefix).await.unwrap_or_default();
+
+                if node_dirs.is_empty() {
+                    // Legacy format: parquet files directly under date= dir (no node_id= level)
+                    let files_list = storage.list(&date_prefix).await.unwrap_or_default();
+                    let mut files = Vec::new();
+                    let mut total_size = 0u64;
+                    for file_path in &files_list {
+                        if file_path.ends_with(".parquet") {
+                            let size = storage.size(file_path).await.unwrap_or(0);
+                            total_size += size;
+                            let name = file_path
+                                .rsplit('/')
+                                .next()
+                                .unwrap_or(file_path)
+                                .to_string();
+                            files.push(PartitionFileEntry {
+                                path: file_path.clone(),
+                                name,
+                                size_bytes: size,
+                            });
+                        }
+                    }
+                    if !files.is_empty() {
+                        partitions.push(PartitionDetailInfo {
+                            date: date_str.clone(),
+                            node_id: String::new(),
+                            files,
+                            total_size_bytes: total_size,
+                        });
+                    }
+                } else {
+                    for node_dir in node_dirs {
+                        let node_id_str = if node_dir.starts_with("node_id=") {
+                            node_dir
+                                .strip_prefix("node_id=")
+                                .unwrap_or(&node_dir)
+                                .to_string()
+                        } else {
+                            node_dir.clone()
+                        };
+
+                        let node_prefix = format!("{}/{}", date_prefix, node_dir);
+                        let files_list =
+                            storage.list(&node_prefix).await.unwrap_or_default();
+
+                        let mut files = Vec::new();
+                        let mut total_size = 0u64;
+                        for file_path in &files_list {
+                            if file_path.ends_with(".parquet") {
+                                let size = storage.size(file_path).await.unwrap_or(0);
+                                total_size += size;
+                                let name = file_path
+                                    .rsplit('/')
+                                    .next()
+                                    .unwrap_or(file_path)
+                                    .to_string();
+                                files.push(PartitionFileEntry {
+                                    path: file_path.clone(),
+                                    name,
+                                    size_bytes: size,
+                                });
+                            }
+                        }
+
+                        if !files.is_empty() {
+                            partitions.push(PartitionDetailInfo {
+                                date: date_str.clone(),
+                                node_id: node_id_str,
+                                files,
+                                total_size_bytes: total_size,
+                            });
+                        }
+                    }
+                }
+            }
+
+            partitions.sort_by(|a, b| {
+                b.date.cmp(&a.date).then_with(|| a.node_id.cmp(&b.node_id))
+            });
+            return Ok(partitions);
+        }
+
+        // Fallback to local filesystem
+        self.discover_table_partitions_detailed_local(catalog_name, schema_name, table_name)
+    }
+
+    /// Local filesystem version of detailed partition discovery
+    fn discover_table_partitions_detailed_local(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+    ) -> Result<Vec<PartitionDetailInfo>, String> {
+        let table_path = self
+            .get_database_path(catalog_name)
+            .join(schema_name)
+            .join(table_name);
+
+        if !table_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut partitions = Vec::new();
+
+        let date_entries = std::fs::read_dir(&table_path)
+            .map_err(|e| format!("Failed to read table directory: {}", e))?;
+
+        for date_entry in date_entries {
+            let date_entry = date_entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let date_path = date_entry.path();
+            if !date_path.is_dir() {
+                continue;
+            }
+            let date_dir_name = match date_path.file_name().and_then(|s| s.to_str()) {
+                Some(n) if n.starts_with("date=") => n.to_string(),
+                _ => continue,
+            };
+            let date_str = date_dir_name
+                .strip_prefix("date=")
+                .unwrap_or(&date_dir_name)
+                .to_string();
+
+            let sub_entries = std::fs::read_dir(&date_path)
+                .map_err(|e| format!("Failed to read date directory: {}", e))?;
+
+            let mut has_node_dirs = false;
+            let mut direct_files = Vec::new();
+            let mut direct_size = 0u64;
+
+            for sub_entry in sub_entries {
+                let sub_entry =
+                    sub_entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+                let sub_path = sub_entry.path();
+
+                if sub_path.is_dir() {
+                    if let Some(dir_name) = sub_path.file_name().and_then(|s| s.to_str()) {
+                        if dir_name.starts_with("node_id=") {
+                            has_node_dirs = true;
+                            let node_id_str = dir_name
+                                .strip_prefix("node_id=")
+                                .unwrap_or(dir_name)
+                                .to_string();
+
+                            let mut files = Vec::new();
+                            let mut total_size = 0u64;
+                            if let Ok(file_entries) = std::fs::read_dir(&sub_path) {
+                                for file_entry in file_entries {
+                                    if let Ok(fe) = file_entry {
+                                        let fp = fe.path();
+                                        if fp.is_file()
+                                            && fp.extension().and_then(|s| s.to_str())
+                                                == Some("parquet")
+                                        {
+                                            let size = std::fs::metadata(&fp)
+                                                .map(|m| m.len())
+                                                .unwrap_or(0);
+                                            total_size += size;
+                                            let name = fp
+                                                .file_name()
+                                                .and_then(|s| s.to_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            let rel_path = format!(
+                                                "{}/{}/{}/{}/{}/{}",
+                                                catalog_name,
+                                                schema_name,
+                                                table_name,
+                                                date_dir_name,
+                                                dir_name,
+                                                name
+                                            );
+                                            files.push(PartitionFileEntry {
+                                                path: rel_path,
+                                                name,
+                                                size_bytes: size,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+
+                            if !files.is_empty() {
+                                partitions.push(PartitionDetailInfo {
+                                    date: date_str.clone(),
+                                    node_id: node_id_str,
+                                    files,
+                                    total_size_bytes: total_size,
+                                });
+                            }
+                        }
+                    }
+                } else if sub_path.is_file()
+                    && sub_path.extension().and_then(|s| s.to_str()) == Some("parquet")
+                {
+                    let size = std::fs::metadata(&sub_path)
+                        .map(|m| m.len())
+                        .unwrap_or(0);
+                    direct_size += size;
+                    let name = sub_path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let rel_path = format!(
+                        "{}/{}/{}/{}/{}",
+                        catalog_name, schema_name, table_name, date_dir_name, name
+                    );
+                    direct_files.push(PartitionFileEntry {
+                        path: rel_path,
+                        name,
+                        size_bytes: size,
+                    });
+                }
+            }
+
+            // If no node_id= dirs found, use direct parquet files (legacy format)
+            if !has_node_dirs && !direct_files.is_empty() {
+                partitions.push(PartitionDetailInfo {
+                    date: date_str,
+                    node_id: String::new(),
+                    files: direct_files,
+                    total_size_bytes: direct_size,
+                });
+            }
+        }
+
+        partitions.sort_by(|a, b| {
+            b.date.cmp(&a.date).then_with(|| a.node_id.cmp(&b.node_id))
+        });
+        Ok(partitions)
+    }
+
     /// Count files and calculate total size in a partition directory
     ///
     /// Handles nested node_id= subdirectories (Hive partition structure):
@@ -495,4 +753,19 @@ pub struct PartitionInfo {
     pub date: String,
     pub file_count: usize,
     pub total_size_bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PartitionDetailInfo {
+    pub date: String,
+    pub node_id: String,
+    pub files: Vec<PartitionFileEntry>,
+    pub total_size_bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PartitionFileEntry {
+    pub path: String,
+    pub name: String,
+    pub size_bytes: u64,
 }

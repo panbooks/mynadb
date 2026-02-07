@@ -1113,7 +1113,7 @@ async fn list_partitions_handler(
             )
         }
     };
-    match shared::list_partitions_impl(dm, &catalog, &schema, &table) {
+    match shared::list_partitions_detailed_impl_async(dm, &catalog, &schema, &table).await {
         Ok(json) => (StatusCode::OK, serde_json::to_string_pretty(&json).unwrap()),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
     }
