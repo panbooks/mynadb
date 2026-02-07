@@ -421,19 +421,18 @@ impl Flight for StatsFlightService {
             Status::failed_precondition("No database selected. Use: USE <database>;")
         })?;
 
-        // Check database access
-        if !ctx.can_access_database(&db) {
-            return Err(Status::permission_denied(format!(
-                "Access denied to database: {}",
-                db
-            )));
-        }
-
+        // Check database and table-level access via auth-aware query execution
         let df_batches = self
             .query_engine
-            .execute_query_with_db(&sql, &db)
+            .execute_query_with_db_auth(&sql, &db, &ctx)
             .await
-            .map_err(|e| Status::internal(format!("Query execution error: {}", e)))?;
+            .map_err(|e| {
+                if e.contains("Access denied") {
+                    Status::permission_denied(e)
+                } else {
+                    Status::internal(format!("Query execution error: {}", e))
+                }
+            })?;
 
         if df_batches.is_empty() {
             let output = stream::empty();

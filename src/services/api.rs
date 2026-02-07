@@ -12,7 +12,7 @@ use axum::{
     extract::{Path, Query as AxumQuery, Request, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,14 @@ pub struct AppState {
     pub file_cache: Option<SharedFileCache>,
     /// Query tracer for observability
     pub query_tracer: Option<Arc<crate::observability::QueryTracer>>,
+    /// User store for runtime user management (only set when auth is enabled)
+    pub user_store: Option<Arc<dyn crate::auth::UserStore>>,
+    /// Role store for custom role resolution
+    pub role_store: Option<Arc<crate::auth::RoleStore>>,
+    /// Whether authentication is enabled
+    pub auth_enabled: bool,
+    /// Audit logger for security events
+    pub audit_logger: Option<Arc<crate::auth::AuditLogger>>,
 }
 
 #[derive(Deserialize)]
@@ -907,26 +915,35 @@ pub async fn query_handler(
     Path(db): Path<String>,
     AxumQuery(params): AxumQuery<QueryParams>,
     State(state): State<AppState>,
+    auth_ctx: Option<axum::Extension<crate::auth::AuthContext>>,
 ) -> impl IntoResponse {
     debug!("Query Request (GET): db={}, sql={}", db, params.sql);
-    execute_query(db, params.sql, state).await
+    let ctx = auth_ctx.map(|e| e.0).unwrap_or_default();
+    execute_query(db, params.sql, state, ctx).await
 }
 
 pub async fn query_handler_post(
     Path(db): Path<String>,
     State(state): State<AppState>,
+    auth_ctx: Option<axum::Extension<crate::auth::AuthContext>>,
     body: String,
 ) -> impl IntoResponse {
     debug!("Query Request (POST): db={}, sql={}", db, body);
-    execute_query(db, body, state).await
+    let ctx = auth_ctx.map(|e| e.0).unwrap_or_default();
+    execute_query(db, body, state, ctx).await
 }
 
-async fn execute_query(db: String, sql: String, state: AppState) -> impl IntoResponse {
+async fn execute_query(
+    db: String,
+    sql: String,
+    state: AppState,
+    auth_ctx: crate::auth::AuthContext,
+) -> impl IntoResponse {
     use crate::metrics::METRICS;
 
     let query_handle = METRICS.record_query_start();
 
-    match shared::execute_query_impl(&state.query_engine, &db, &sql).await {
+    match shared::execute_query_impl_auth(&state.query_engine, &db, &sql, &auth_ctx).await {
         Ok(json) => {
             query_handle.finish(true);
             info!("Query executed successfully");
@@ -934,8 +951,13 @@ async fn execute_query(db: String, sql: String, state: AppState) -> impl IntoRes
         }
         Err(e) => {
             query_handle.finish(false);
-            error!("Query error: {}", e);
-            (StatusCode::BAD_REQUEST, e)
+            if e.contains("Access denied") {
+                error!("Query access denied: {}", e);
+                (StatusCode::FORBIDDEN, e)
+            } else {
+                error!("Query error: {}", e);
+                (StatusCode::BAD_REQUEST, e)
+            }
         }
     }
 }
@@ -951,16 +973,19 @@ use crate::query::influxql::{
 pub async fn influxql_query_handler(
     AxumQuery(params): AxumQuery<InfluxQueryParams>,
     State(state): State<AppState>,
+    auth_ctx: Option<axum::Extension<crate::auth::AuthContext>>,
 ) -> impl IntoResponse {
     let db = params.db.unwrap_or_else(|| "default".to_string());
     debug!("InfluxQL Query (GET): db={}, q={}", db, params.q);
-    execute_influxql_query(db, params.q, state).await
+    let ctx = auth_ctx.map(|e| e.0).unwrap_or_default();
+    execute_influxql_query(db, params.q, state, ctx).await
 }
 
 /// InfluxDB-compatible query endpoint (POST /query)
 pub async fn influxql_query_handler_post(
     AxumQuery(params): AxumQuery<InfluxQueryParams>,
     State(state): State<AppState>,
+    auth_ctx: Option<axum::Extension<crate::auth::AuthContext>>,
     body: String,
 ) -> impl IntoResponse {
     // Query can be in body or in q parameter
@@ -977,7 +1002,8 @@ pub async fn influxql_query_handler_post(
 
     let db = params.db.unwrap_or_else(|| "default".to_string());
     debug!("InfluxQL Query (POST): db={}, q={}", db, query);
-    execute_influxql_query(db, query, state).await
+    let ctx = auth_ctx.map(|e| e.0).unwrap_or_default();
+    execute_influxql_query(db, query, state, ctx).await
 }
 
 /// InfluxDB-compatible query endpoint with database in path
@@ -985,19 +1011,29 @@ pub async fn influxql_query_db_handler(
     Path(db): Path<String>,
     AxumQuery(params): AxumQuery<InfluxQueryParams>,
     State(state): State<AppState>,
+    auth_ctx: Option<axum::Extension<crate::auth::AuthContext>>,
 ) -> impl IntoResponse {
     debug!("InfluxQL Query: db={}, q={}", db, params.q);
-    execute_influxql_query(db, params.q, state).await
+    let ctx = auth_ctx.map(|e| e.0).unwrap_or_default();
+    execute_influxql_query(db, params.q, state, ctx).await
 }
 
 async fn execute_influxql_query(
     db: String,
     query: String,
     state: AppState,
+    auth_ctx: crate::auth::AuthContext,
 ) -> impl IntoResponse {
     use crate::metrics::METRICS;
 
     let query_handle = METRICS.record_query_start();
+
+    // Check database access
+    if !auth_ctx.can_read(&db) {
+        query_handle.finish(false);
+        let response = InfluxResponse::error(0, format!("Access denied to database: {}", db));
+        return (StatusCode::FORBIDDEN, Json(response));
+    }
 
     // Parse InfluxQL
     let stmt = match parse(&query) {
@@ -1088,18 +1124,21 @@ pub async fn explain_handler(
     Path(db): Path<String>,
     AxumQuery(params): AxumQuery<ExplainParams>,
     State(state): State<AppState>,
+    auth_ctx: Option<axum::Extension<crate::auth::AuthContext>>,
 ) -> impl IntoResponse {
     debug!(
         "Explain Request: db={}, sql={}, verbose={}, analyze={}",
         db, params.sql, params.verbose, params.analyze
     );
 
-    match shared::explain_query_impl(
+    let ctx = auth_ctx.map(|e| e.0).unwrap_or_default();
+    match shared::explain_query_impl_auth(
         &state.query_engine,
         &db,
         &params.sql,
         params.verbose,
         params.analyze,
+        &ctx,
     )
     .await
     {
@@ -1118,16 +1157,19 @@ pub async fn explain_handler(
 pub async fn explain_handler_post(
     Path(db): Path<String>,
     State(state): State<AppState>,
+    auth_ctx: Option<axum::Extension<crate::auth::AuthContext>>,
     axum::Json(params): axum::Json<ExplainParams>,
 ) -> impl IntoResponse {
     debug!("Explain Request (POST): db={}, sql={}", db, params.sql);
 
-    match shared::explain_query_impl(
+    let ctx = auth_ctx.map(|e| e.0).unwrap_or_default();
+    match shared::explain_query_impl_auth(
         &state.query_engine,
         &db,
         &params.sql,
         params.verbose,
         params.analyze,
+        &ctx,
     )
     .await
     {
@@ -1147,10 +1189,12 @@ pub async fn analyze_handler(
     Path(db): Path<String>,
     AxumQuery(params): AxumQuery<QueryParams>,
     State(state): State<AppState>,
+    auth_ctx: Option<axum::Extension<crate::auth::AuthContext>>,
 ) -> impl IntoResponse {
     debug!("Analyze Request: db={}, sql={}", db, params.sql);
 
-    match shared::analyze_query_impl(&state.query_engine, &db, &params.sql).await {
+    let ctx = auth_ctx.map(|e| e.0).unwrap_or_default();
+    match shared::analyze_query_impl_auth(&state.query_engine, &db, &params.sql, &ctx).await {
         Ok(json) => {
             info!("Analyze executed successfully");
             (StatusCode::OK, json)
@@ -1166,11 +1210,13 @@ pub async fn analyze_handler(
 pub async fn analyze_handler_post(
     Path(db): Path<String>,
     State(state): State<AppState>,
+    auth_ctx: Option<axum::Extension<crate::auth::AuthContext>>,
     body: String,
 ) -> impl IntoResponse {
     debug!("Analyze Request (POST): db={}, sql={}", db, body);
 
-    match shared::analyze_query_impl(&state.query_engine, &db, &body).await {
+    let ctx = auth_ctx.map(|e| e.0).unwrap_or_default();
+    match shared::analyze_query_impl_auth(&state.query_engine, &db, &body, &ctx).await {
         Ok(json) => {
             info!("Analyze executed successfully");
             (StatusCode::OK, json)
@@ -1624,6 +1670,259 @@ pub async fn prometheus_read_handler(
     prometheus::remote_read_handler(Path(db), State(prom_state), body).await
 }
 
+// ===== User Management Handlers =====
+
+#[derive(Deserialize)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub password: String,
+    #[serde(default)]
+    pub roles: Vec<String>,
+    #[serde(default)]
+    pub databases: Option<Vec<String>>,
+    #[serde(default)]
+    pub tables: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateUserRequest {
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub roles: Option<Vec<String>>,
+    #[serde(default)]
+    pub databases: Option<Vec<String>>,
+    #[serde(default)]
+    pub tables: Option<Vec<String>>,
+}
+
+#[derive(Serialize)]
+pub struct UserResponse {
+    pub username: String,
+    pub roles: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub databases: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tables: Option<Vec<String>>,
+}
+
+/// GET /auth/users - List all users
+pub async fn list_users_handler(
+    State(state): State<AppState>,
+    axum::Extension(auth_ctx): axum::Extension<crate::auth::AuthContext>,
+) -> impl IntoResponse {
+    if state.auth_enabled && !auth_ctx.has_permission(crate::auth::Permission::Admin) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin permission required"}))).into_response();
+    }
+
+    let Some(ref user_store) = state.user_store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "Authentication is not enabled"}))).into_response();
+    };
+
+    let usernames = user_store.list_users();
+    let mut users = Vec::new();
+    for username in &usernames {
+        if let Some(user) = user_store.get_user(username) {
+            users.push(UserResponse {
+                username: user.username.clone(),
+                roles: user.roles.clone(),
+                databases: user.databases.clone(),
+                tables: user.tables.clone(),
+            });
+        }
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "users": users,
+        "count": users.len()
+    }))).into_response()
+}
+
+/// GET /auth/users/:username - Get a specific user
+pub async fn get_user_handler(
+    Path(username): Path<String>,
+    State(state): State<AppState>,
+    axum::Extension(auth_ctx): axum::Extension<crate::auth::AuthContext>,
+) -> impl IntoResponse {
+    if state.auth_enabled && !auth_ctx.has_permission(crate::auth::Permission::Admin) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin permission required"}))).into_response();
+    }
+
+    let Some(ref user_store) = state.user_store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "Authentication is not enabled"}))).into_response();
+    };
+
+    match user_store.get_user(&username) {
+        Some(user) => {
+            let response = UserResponse {
+                username: user.username.clone(),
+                roles: user.roles.clone(),
+                databases: user.databases.clone(),
+                tables: user.tables.clone(),
+            };
+            (StatusCode::OK, Json(serde_json::json!(response))).into_response()
+        }
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": format!("User not found: {}", username)}))).into_response(),
+    }
+}
+
+/// POST /auth/users - Create a new user
+pub async fn create_user_handler(
+    State(state): State<AppState>,
+    axum::Extension(auth_ctx): axum::Extension<crate::auth::AuthContext>,
+    Json(req): Json<CreateUserRequest>,
+) -> impl IntoResponse {
+    if state.auth_enabled && !auth_ctx.has_permission(crate::auth::Permission::Admin) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin permission required"}))).into_response();
+    }
+
+    let Some(ref user_store) = state.user_store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "Authentication is not enabled"}))).into_response();
+    };
+
+    // Check if user already exists
+    if user_store.get_user(&req.username).is_some() {
+        return (StatusCode::CONFLICT, Json(serde_json::json!({"error": format!("User already exists: {}", req.username)}))).into_response();
+    }
+
+    // Hash the password
+    let password_hash = match crate::auth::hash_password(&req.password) {
+        Ok(h) => h,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to hash password: {}", e)}))).into_response();
+        }
+    };
+
+    let mut user = crate::auth::User::new(&req.username, &password_hash, req.roles, req.databases);
+    user.tables = req.tables;
+
+    if let Err(e) = user_store.upsert_user(user) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response();
+    }
+
+    // Log audit event
+    if let Some(ref audit) = state.audit_logger {
+        audit.log_user_management(
+            auth_ctx.username().unwrap_or("unknown"),
+            "user_created",
+            &req.username,
+        );
+    }
+
+    info!("User created: {}", req.username);
+    (StatusCode::CREATED, Json(serde_json::json!({"message": format!("User created: {}", req.username)}))).into_response()
+}
+
+/// PUT /auth/users/:username - Update an existing user
+pub async fn update_user_handler(
+    Path(username): Path<String>,
+    State(state): State<AppState>,
+    axum::Extension(auth_ctx): axum::Extension<crate::auth::AuthContext>,
+    Json(req): Json<UpdateUserRequest>,
+) -> impl IntoResponse {
+    if state.auth_enabled && !auth_ctx.has_permission(crate::auth::Permission::Admin) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin permission required"}))).into_response();
+    }
+
+    let Some(ref user_store) = state.user_store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "Authentication is not enabled"}))).into_response();
+    };
+
+    let Some(mut user) = user_store.get_user(&username) else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": format!("User not found: {}", username)}))).into_response();
+    };
+
+    // Update password if provided
+    if let Some(ref password) = req.password {
+        match crate::auth::hash_password(password) {
+            Ok(h) => user.password_hash = h,
+            Err(e) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to hash password: {}", e)}))).into_response();
+            }
+        }
+    }
+
+    // Update roles if provided
+    if let Some(roles) = req.roles {
+        user.roles = roles;
+    }
+
+    // Update databases if provided
+    if let Some(databases) = req.databases {
+        user.databases = Some(databases);
+    }
+
+    // Update tables if provided
+    if let Some(tables) = req.tables {
+        user.tables = Some(tables);
+    }
+
+    if let Err(e) = user_store.upsert_user(user) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response();
+    }
+
+    // Log audit event
+    if let Some(ref audit) = state.audit_logger {
+        audit.log_user_management(
+            auth_ctx.username().unwrap_or("unknown"),
+            "user_updated",
+            &username,
+        );
+    }
+
+    info!("User updated: {}", username);
+    (StatusCode::OK, Json(serde_json::json!({"message": format!("User updated: {}", username)}))).into_response()
+}
+
+/// DELETE /auth/users/:username - Delete a user
+pub async fn delete_user_handler(
+    Path(username): Path<String>,
+    State(state): State<AppState>,
+    axum::Extension(auth_ctx): axum::Extension<crate::auth::AuthContext>,
+) -> impl IntoResponse {
+    if state.auth_enabled && !auth_ctx.has_permission(crate::auth::Permission::Admin) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin permission required"}))).into_response();
+    }
+
+    let Some(ref user_store) = state.user_store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "Authentication is not enabled"}))).into_response();
+    };
+
+    // Prevent deleting the last admin user
+    if let Some(user) = user_store.get_user(&username) {
+        if user.roles.contains(&"admin".to_string()) {
+            let admin_count = user_store.list_users().iter().filter(|u| {
+                user_store.get_user(u).map_or(false, |user| user.roles.contains(&"admin".to_string()))
+            }).count();
+            if admin_count <= 1 {
+                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Cannot delete the last admin user"}))).into_response();
+            }
+        }
+    }
+
+    match user_store.remove_user(&username) {
+        Ok(true) => {
+            // Log audit event
+            if let Some(ref audit) = state.audit_logger {
+                audit.log_user_management(
+                    auth_ctx.username().unwrap_or("unknown"),
+                    "user_deleted",
+                    &username,
+                );
+            }
+
+            info!("User deleted: {}", username);
+            (StatusCode::OK, Json(serde_json::json!({"message": format!("User deleted: {}", username)}))).into_response()
+        }
+        Ok(false) => {
+            (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": format!("User not found: {}", username)}))).into_response()
+        }
+        Err(e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response()
+        }
+    }
+}
+
 // ===== Fallback Handler =====
 
 pub async fn log_request(req: Request) -> impl IntoResponse {
@@ -1741,6 +2040,12 @@ pub fn build_router(state: AppState, auth_middleware: Arc<auth::AuthMiddleware>)
         // Prometheus Remote Storage API
         .route("/api/v1/write/:db", post(prometheus_write_handler))
         .route("/api/v1/read/:db", post(prometheus_read_handler))
+        // User management endpoints (RBAC)
+        .route("/auth/users", get(list_users_handler))
+        .route("/auth/users", post(create_user_handler))
+        .route("/auth/users/:username", get(get_user_handler))
+        .route("/auth/users/:username", put(update_user_handler))
+        .route("/auth/users/:username", delete(delete_user_handler))
         .fallback(log_request)
         .with_state(state)
         .layer(axum::middleware::from_fn(auth::auth_middleware_fn))

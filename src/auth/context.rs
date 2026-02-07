@@ -1,6 +1,8 @@
 //! Authentication context for request handling
 
+use super::role_store::RoleStore;
 use super::{Permission, User};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Authentication context passed through request handlers
@@ -14,6 +16,9 @@ pub struct AuthContext {
 
     /// Whether authentication is enabled
     auth_enabled: bool,
+
+    /// Pre-resolved permissions from all roles (including custom roles)
+    resolved_permissions: Option<HashSet<Permission>>,
 }
 
 impl AuthContext {
@@ -22,6 +27,17 @@ impl AuthContext {
         Self {
             user: Some(Arc::new(user)),
             auth_enabled: true,
+            resolved_permissions: None,
+        }
+    }
+
+    /// Create an auth context with pre-resolved permissions from a role store
+    pub fn authenticated_with_roles(user: User, role_store: &RoleStore) -> Self {
+        let resolved = user.permissions_with_store(role_store);
+        Self {
+            user: Some(Arc::new(user)),
+            auth_enabled: true,
+            resolved_permissions: Some(resolved),
         }
     }
 
@@ -30,6 +46,7 @@ impl AuthContext {
         Self {
             user: None,
             auth_enabled: false,
+            resolved_permissions: None,
         }
     }
 
@@ -57,6 +74,11 @@ impl AuthContext {
         if !self.auth_enabled {
             return true;
         }
+        // Use pre-resolved permissions if available (supports custom roles)
+        if let Some(ref resolved) = self.resolved_permissions {
+            return resolved.contains(&permission);
+        }
+        // Fall back to built-in role lookup
         self.user
             .as_ref()
             .map(|u| u.has_permission(permission))

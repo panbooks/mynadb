@@ -29,6 +29,16 @@ pub trait UserStore: Send + Sync {
     fn has_users(&self) -> bool {
         !self.list_users().is_empty()
     }
+
+    /// Add or update a user (for runtime management)
+    fn upsert_user(&self, _user: User) -> Result<(), String> {
+        Err("User management not supported by this store".to_string())
+    }
+
+    /// Remove a user by username
+    fn remove_user(&self, _username: &str) -> Result<bool, String> {
+        Err("User management not supported by this store".to_string())
+    }
 }
 
 /// File-based user store (users defined in config)
@@ -97,6 +107,15 @@ impl UserStore for FileUserStore {
     fn list_users(&self) -> Vec<String> {
         let users = self.users.read().unwrap();
         users.keys().cloned().collect()
+    }
+
+    fn upsert_user(&self, user: User) -> Result<(), String> {
+        self.upsert_user(user);
+        Ok(())
+    }
+
+    fn remove_user(&self, username: &str) -> Result<bool, String> {
+        Ok(self.remove_user(username))
     }
 }
 

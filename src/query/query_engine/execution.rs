@@ -15,6 +15,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug;
 
+use crate::auth::AuthContext;
+
 use super::QueryEngine;
 
 impl QueryEngine {
@@ -334,5 +336,111 @@ impl QueryEngine {
 
         serde_json::to_string_pretty(&results)
             .map_err(|e| format!("JSON serialization error: {}", e))
+    }
+
+    // ========================================================================
+    // Auth-aware Query Methods
+    // ========================================================================
+
+    /// Execute a SQL query with auth context validation
+    pub async fn execute_query_with_db_auth(
+        &self,
+        sql: &str,
+        db_name: &str,
+        auth_ctx: &AuthContext,
+    ) -> Result<Vec<RecordBatch>, String> {
+        // Check database access
+        if !auth_ctx.can_read(db_name) {
+            return Err(format!("Access denied to database: {}", db_name));
+        }
+
+        // Check table-level access for all referenced tables
+        let table_refs = extract_table_references(sql, db_name);
+        for (catalog, schema, table) in &table_refs {
+            if !auth_ctx.can_access_table(catalog, schema, table) {
+                return Err(format!(
+                    "Access denied to table: {}.{}.{}",
+                    catalog, schema, table
+                ));
+            }
+        }
+
+        self.execute_query_with_db(sql, db_name).await
+    }
+
+    /// Execute query and return as JSON with auth context validation
+    pub async fn execute_query_json_with_db_auth(
+        &self,
+        sql: &str,
+        db_name: &str,
+        auth_ctx: &AuthContext,
+    ) -> Result<String, String> {
+        // Check database access
+        if !auth_ctx.can_read(db_name) {
+            return Err(format!("Access denied to database: {}", db_name));
+        }
+
+        // Check table-level access
+        let table_refs = extract_table_references(sql, db_name);
+        for (catalog, schema, table) in &table_refs {
+            if !auth_ctx.can_access_table(catalog, schema, table) {
+                return Err(format!(
+                    "Access denied to table: {}.{}.{}",
+                    catalog, schema, table
+                ));
+            }
+        }
+
+        self.execute_query_json_with_db(sql, db_name).await
+    }
+
+    /// Explain query with auth context validation
+    pub async fn explain_query_auth(
+        &self,
+        sql: &str,
+        db_name: &str,
+        verbose: bool,
+        analyze: bool,
+        auth_ctx: &AuthContext,
+    ) -> Result<QueryExplainResult, String> {
+        if !auth_ctx.can_read(db_name) {
+            return Err(format!("Access denied to database: {}", db_name));
+        }
+
+        let table_refs = extract_table_references(sql, db_name);
+        for (catalog, schema, table) in &table_refs {
+            if !auth_ctx.can_access_table(catalog, schema, table) {
+                return Err(format!(
+                    "Access denied to table: {}.{}.{}",
+                    catalog, schema, table
+                ));
+            }
+        }
+
+        self.explain_query(sql, db_name, verbose, analyze).await
+    }
+
+    /// Analyze query with auth context validation
+    pub async fn analyze_query_auth(
+        &self,
+        sql: &str,
+        db_name: &str,
+        auth_ctx: &AuthContext,
+    ) -> Result<QueryAnalysis, String> {
+        if !auth_ctx.can_read(db_name) {
+            return Err(format!("Access denied to database: {}", db_name));
+        }
+
+        let table_refs = extract_table_references(sql, db_name);
+        for (catalog, schema, table) in &table_refs {
+            if !auth_ctx.can_access_table(catalog, schema, table) {
+                return Err(format!(
+                    "Access denied to table: {}.{}.{}",
+                    catalog, schema, table
+                ));
+            }
+        }
+
+        self.analyze_query(sql, db_name).await
     }
 }

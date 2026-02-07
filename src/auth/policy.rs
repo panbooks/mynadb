@@ -27,6 +27,9 @@ impl Policy {
 
         // Parse the path to determine the required permission
         match (method.as_str(), path) {
+            // ===== User management (admin only) =====
+            (_, p) if p.starts_with("/auth/users") => Some((Permission::Admin, false)),
+
             // ===== Read operations =====
             // Query endpoints (SQL)
             (_, p) if p.starts_with("/query/") => Some((Permission::Read, true)),

@@ -33,6 +33,12 @@ pub struct Config {
     pub wal: WalConfig,
     #[serde(default)]
     pub auth: AuthConfig,
+    /// Custom role definitions for RBAC
+    #[serde(default)]
+    pub roles: RolesConfig,
+    /// Audit logging configuration
+    #[serde(default)]
+    pub audit: AuditConfig,
     /// Continuous aggregates configuration (materialized views with auto-refresh)
     #[serde(default)]
     pub continuous_aggregates: crate::aggregates::ContinuousAggregateConfig,
@@ -590,6 +596,88 @@ pub struct AuthUserConfig {
     /// Optional: restrict access to specific tables (format: "database.schema.table")
     #[serde(default)]
     pub tables: Option<Vec<String>>,
+}
+
+/// Custom role definitions for RBAC
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RolesConfig {
+    /// Custom role definitions
+    #[serde(default)]
+    pub custom_roles: Vec<CustomRoleConfig>,
+}
+
+impl Default for RolesConfig {
+    fn default() -> Self {
+        Self {
+            custom_roles: Vec::new(),
+        }
+    }
+}
+
+/// A custom role mapping a name to a set of permissions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomRoleConfig {
+    /// Role name (unique identifier)
+    pub name: String,
+    /// Permissions granted by this role: "read", "write", "admin"
+    #[serde(default)]
+    pub permissions: Vec<String>,
+}
+
+/// Audit logging configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditConfig {
+    /// Enable audit logging (default: false)
+    #[serde(default = "default_audit_enabled")]
+    pub enabled: bool,
+
+    /// Directory for audit log files
+    #[serde(default = "default_audit_log_dir")]
+    pub log_dir: String,
+
+    /// Audit log file name prefix
+    #[serde(default = "default_audit_file_prefix")]
+    pub file_prefix: String,
+
+    /// Log file rotation: "daily", "hourly", "never"
+    #[serde(default = "default_audit_rotation")]
+    pub rotation: String,
+
+    /// Maximum number of audit log files to keep
+    #[serde(default = "default_audit_max_files")]
+    pub max_files: usize,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_audit_enabled(),
+            log_dir: default_audit_log_dir(),
+            file_prefix: default_audit_file_prefix(),
+            rotation: default_audit_rotation(),
+            max_files: default_audit_max_files(),
+        }
+    }
+}
+
+fn default_audit_enabled() -> bool {
+    false
+}
+
+fn default_audit_log_dir() -> String {
+    "./logs".to_string()
+}
+
+fn default_audit_file_prefix() -> String {
+    "audit".to_string()
+}
+
+fn default_audit_rotation() -> String {
+    "daily".to_string()
+}
+
+fn default_audit_max_files() -> usize {
+    90
 }
 
 /// TLS/SSL encryption configuration

@@ -6,7 +6,7 @@
 //! - Role-based permission checking
 //! - Database and table-level access control
 
-use crate::auth::{AuthContext, FileUserStore, Permission, Policy, UserStore};
+use crate::auth::{AuditLogger, AuthContext, FileUserStore, Permission, Policy, RoleStore, UserStore};
 use crate::config::AuthConfig;
 use axum::{
     extract::Request,
@@ -24,11 +24,29 @@ pub struct AuthMiddleware {
     user_store: Arc<dyn UserStore>,
     /// Whether auth is enabled
     enabled: bool,
+    /// Role store for custom role resolution
+    role_store: Arc<RoleStore>,
+    /// Audit logger for security events
+    audit_logger: Arc<AuditLogger>,
 }
 
 impl AuthMiddleware {
     /// Create new auth middleware from config
     pub fn new(config: &AuthConfig) -> Self {
+        Self::with_role_store(config, Arc::new(RoleStore::empty()))
+    }
+
+    /// Create new auth middleware with a custom role store
+    pub fn with_role_store(config: &AuthConfig, role_store: Arc<RoleStore>) -> Self {
+        Self::with_role_store_and_audit(config, role_store, Arc::new(AuditLogger::disabled()))
+    }
+
+    /// Create new auth middleware with role store and audit logger
+    pub fn with_role_store_and_audit(
+        config: &AuthConfig,
+        role_store: Arc<RoleStore>,
+        audit_logger: Arc<AuditLogger>,
+    ) -> Self {
         let user_store: Arc<dyn UserStore> = if config.enabled {
             // Load users from config or file
             let users = if let Some(ref path) = config.users_file {
@@ -36,6 +54,8 @@ impl AuthMiddleware {
                     Ok(store) => return Self {
                         user_store: Arc::new(store),
                         enabled: true,
+                        role_store,
+                        audit_logger,
                     },
                     Err(e) => {
                         warn!("Failed to load users file '{}': {}, falling back to config", path, e);
@@ -66,7 +86,14 @@ impl AuthMiddleware {
         Self {
             user_store,
             enabled: config.enabled,
+            role_store,
+            audit_logger,
         }
+    }
+
+    /// Get the audit logger
+    pub fn audit_logger(&self) -> Arc<AuditLogger> {
+        self.audit_logger.clone()
     }
 
     /// Check if auth is enabled
@@ -122,6 +149,11 @@ impl AuthMiddleware {
         Some((parts[0].to_string(), parts[1].to_string()))
     }
 
+    /// Get the role store
+    pub fn role_store(&self) -> Arc<RoleStore> {
+        self.role_store.clone()
+    }
+
     /// Authenticate request and return auth context
     pub fn authenticate(&self, headers: &HeaderMap, query: Option<&str>) -> AuthContext {
         if !self.enabled {
@@ -132,7 +164,7 @@ impl AuthMiddleware {
         if let Some((username, password)) = Self::extract_query_credentials(query) {
             if let Some(user) = self.user_store.authenticate(&username, &password) {
                 debug!("Authenticated user via query params: {}", username);
-                return AuthContext::authenticated(user);
+                return AuthContext::authenticated_with_roles(user, &self.role_store);
             }
         }
 
@@ -140,7 +172,7 @@ impl AuthMiddleware {
         if let Some((username, password)) = Self::extract_basic_auth(headers) {
             if let Some(user) = self.user_store.authenticate(&username, &password) {
                 debug!("Authenticated user via Basic Auth: {}", username);
-                return AuthContext::authenticated(user);
+                return AuthContext::authenticated_with_roles(user, &self.role_store);
             }
         }
 
@@ -240,18 +272,39 @@ pub async fn auth_middleware_fn(
     let path = req.uri().path().to_string();
     let query = req.uri().query().map(|s| s.to_string());
 
+    // Extract source IP for audit logging
+    let source_ip = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
     // Authenticate
     let ctx = auth.authenticate(req.headers(), query.as_deref());
+
+    // Audit log authentication result
+    let audit = auth.audit_logger();
+    if auth.is_enabled() {
+        if let Some(username) = ctx.username() {
+            audit.log_auth_success(username, &source_ip, "http");
+        } else if query.as_deref().map_or(false, |q| q.contains("u="))
+            || req.headers().contains_key("authorization")
+        {
+            // Credentials were provided but authentication failed
+            audit.log_auth_failure("unknown", &source_ip, "http");
+        }
+    }
 
     // Authorize
     if let Err(e) = auth.authorize(&ctx, &method, &path) {
         warn!(
             "Authorization failed for {} {}: {:?} (user: {:?})",
-            method,
-            path,
-            e,
-            ctx.username()
+            method, path, e, ctx.username()
         );
+        let username = ctx.username().unwrap_or("unknown");
+        let resource = format!("{} {}", method, path);
+        audit.log_access_denied(username, &source_ip, &resource, &format!("{:?}", e));
         return e.into_response();
     }
 

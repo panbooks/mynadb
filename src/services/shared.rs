@@ -18,6 +18,8 @@ use crate::storage::cache::DataCache;
 use crate::storage::line_protocol::parse_multiple_lines;
 use crate::storage::wal::Wal;
 
+use crate::auth::AuthContext;
+
 // ============================================================================
 // Query Operations
 // ============================================================================
@@ -30,6 +32,19 @@ pub async fn execute_query_impl(
 ) -> Result<String, String> {
     query_engine
         .execute_query_json_with_db(sql, db)
+        .await
+        .map_err(|e| format!("Query error: {}", e))
+}
+
+/// Execute a SQL query with auth context validation
+pub async fn execute_query_impl_auth(
+    query_engine: &QueryEngine,
+    db: &str,
+    sql: &str,
+    auth_ctx: &AuthContext,
+) -> Result<String, String> {
+    query_engine
+        .execute_query_json_with_db_auth(sql, db, auth_ctx)
         .await
         .map_err(|e| format!("Query error: {}", e))
 }
@@ -50,6 +65,26 @@ pub async fn explain_query_impl(
     }
 }
 
+/// Execute EXPLAIN query with auth context validation
+pub async fn explain_query_impl_auth(
+    query_engine: &QueryEngine,
+    db: &str,
+    sql: &str,
+    verbose: bool,
+    analyze: bool,
+    auth_ctx: &AuthContext,
+) -> Result<String, String> {
+    match query_engine
+        .explain_query_auth(sql, db, verbose, analyze, auth_ctx)
+        .await
+    {
+        Ok(result) => {
+            serde_json::to_string_pretty(&result).map_err(|e| format!("JSON error: {}", e))
+        }
+        Err(e) => Err(format!("Explain error: {}", e)),
+    }
+}
+
 /// Execute ANALYZE query
 pub async fn analyze_query_impl(
     query_engine: &QueryEngine,
@@ -57,6 +92,21 @@ pub async fn analyze_query_impl(
     sql: &str,
 ) -> Result<String, String> {
     match query_engine.analyze_query(sql, db).await {
+        Ok(result) => {
+            serde_json::to_string_pretty(&result).map_err(|e| format!("JSON error: {}", e))
+        }
+        Err(e) => Err(format!("Analyze error: {}", e)),
+    }
+}
+
+/// Execute ANALYZE query with auth context validation
+pub async fn analyze_query_impl_auth(
+    query_engine: &QueryEngine,
+    db: &str,
+    sql: &str,
+    auth_ctx: &AuthContext,
+) -> Result<String, String> {
+    match query_engine.analyze_query_auth(sql, db, auth_ctx).await {
         Ok(result) => {
             serde_json::to_string_pretty(&result).map_err(|e| format!("JSON error: {}", e))
         }

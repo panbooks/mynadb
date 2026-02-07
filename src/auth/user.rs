@@ -1,6 +1,7 @@
 //! User definitions for RBAC
 
 use super::{Permission, Role};
+use super::role_store::RoleStore;
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -58,11 +59,22 @@ impl User {
             .is_ok()
     }
 
-    /// Get effective permissions from all assigned roles
+    /// Get effective permissions from all assigned roles (built-in only)
     pub fn permissions(&self) -> HashSet<Permission> {
         let mut perms = HashSet::new();
         for role_name in &self.roles {
             if let Some(role) = Role::builtin(role_name) {
+                perms.extend(role.permissions);
+            }
+        }
+        perms
+    }
+
+    /// Get effective permissions using a role store (supports custom roles)
+    pub fn permissions_with_store(&self, role_store: &RoleStore) -> HashSet<Permission> {
+        let mut perms = HashSet::new();
+        for role_name in &self.roles {
+            if let Some(role) = role_store.get_role(role_name) {
                 perms.extend(role.permissions);
             }
         }

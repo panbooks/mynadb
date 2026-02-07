@@ -180,7 +180,47 @@ pub async fn run(config_path: &str) {
         None
     };
 
+    // Initialize authentication (RBAC) and audit logging
+    let role_configs: Vec<crate::auth::role_store::CustomRoleConfig> = config
+        .roles
+        .custom_roles
+        .iter()
+        .map(|r| crate::auth::role_store::CustomRoleConfig {
+            name: r.name.clone(),
+            permissions: r.permissions.clone(),
+        })
+        .collect();
+    let role_store = Arc::new(crate::auth::RoleStore::new(role_configs));
+    let audit_logger = Arc::new(crate::auth::AuditLogger::new(&config.audit));
+    let auth_middleware = Arc::new(auth::AuthMiddleware::with_role_store_and_audit(
+        &config.auth,
+        role_store,
+        audit_logger.clone(),
+    ));
+    info!(
+        "Authentication: {} ({} users configured)",
+        if config.auth.enabled {
+            "ENABLED"
+        } else {
+            "DISABLED"
+        },
+        config.auth.users.len()
+    );
+    if audit_logger.is_enabled() {
+        info!("Audit logging: ENABLED");
+    }
+
     // Build application state
+    let user_store_for_state = if config.auth.enabled {
+        Some(auth_middleware.user_store())
+    } else {
+        None
+    };
+    let role_store_for_state = if config.auth.enabled {
+        Some(auth_middleware.role_store())
+    } else {
+        None
+    };
     let state = api::AppState {
         cache,
         query_engine: query_engine.clone(),
@@ -191,19 +231,11 @@ pub async fn run(config_path: &str) {
         metadata_manager: Some(metadata_manager),
         file_cache,
         query_tracer,
+        user_store: user_store_for_state,
+        role_store: role_store_for_state,
+        auth_enabled: config.auth.enabled,
+        audit_logger: Some(audit_logger),
     };
-
-    // Initialize authentication (RBAC)
-    let auth_middleware = Arc::new(auth::AuthMiddleware::new(&config.auth));
-    info!(
-        "Authentication: {} ({} users configured)",
-        if config.auth.enabled {
-            "ENABLED"
-        } else {
-            "DISABLED"
-        },
-        config.auth.users.len()
-    );
 
     // Build router (standalone mode)
     let app = api::build_router(state.clone(), auth_middleware.clone());

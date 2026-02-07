@@ -224,12 +224,15 @@ impl MysqlSession {
             );
         }
 
-        // Run async query using stored runtime handle
+        // Run async query using stored runtime handle (with table-level auth checks)
+        let auth_ctx = self.auth_context.clone();
         let query_result = self.runtime_handle.block_on(async {
             // Ensure database is registered
             self.query_engine.ensure_database_registered(&db).await?;
-            // Execute query
-            self.query_engine.execute_query_with_db(sql, &db).await
+            // Execute query with auth context for table-level checks
+            self.query_engine
+                .execute_query_with_db_auth(sql, &db, &auth_ctx)
+                .await
         });
 
         match query_result {

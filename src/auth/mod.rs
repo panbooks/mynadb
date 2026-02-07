@@ -30,17 +30,21 @@
 //! databases = ["analytics"]  # Optional: restrict to specific databases
 //! ```
 
+pub mod audit;
 mod context;
 mod permission;
 mod policy;
 mod role;
+pub mod role_store;
 mod store;
 mod user;
 
+pub use audit::AuditLogger;
 pub use context::AuthContext;
 pub use permission::Permission;
 pub use policy::Policy;
 pub use role::Role;
+pub use role_store::RoleStore;
 pub use store::{FileUserStore, UserConfig, UserStore};
 pub use user::User;
 
