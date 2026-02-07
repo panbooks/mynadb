@@ -11,10 +11,12 @@ use crate::data::config::DataNodeConfig;
 use crate::data::replication::ReplicationManager;
 use crate::data::server::api::{start_http_server, DataNodeState};
 use crate::data::server::flight::{start_flight_server, DataNodeFlightService};
+use crate::jobs::compactor;
 use crate::meta::client::MetaClient;
 use crate::meta::types::{current_timestamp_ms, Event, EventType, NodeInfo, NodeRole, NodeState};
 use crate::query::query_engine::QueryEngine;
 use crate::storage::cache;
+use crate::storage::compression::CompressionStrategy;
 use crate::storage::storage as storage_mod;
 use crate::storage::wal;
 use std::collections::HashMap;
@@ -70,6 +72,46 @@ pub async fn start(config_path: &str) {
     );
     perform_wal_recovery(&wal, &data_cache, &query_engine, &config).await;
 
+    // Initialize compactor for background compaction
+    let metadata_manager =
+        common::init_metadata_manager_for_node(&config, &data_config.node_id).await;
+    let compression_strategy = CompressionStrategy::from_config(&config.storage.compression);
+    let compaction_config = compactor::CompactionConfig::from(&config.compaction);
+    let compactor = {
+        let mut c = compactor::Compactor::with_metadata_and_compression(
+            storage.clone(),
+            &compaction_config,
+            Some(metadata_manager),
+            compression_strategy,
+        );
+        // Set meta_client for distributed locking (prevents multiple nodes compacting same partition)
+        if let Some(ref mc) = meta_client {
+            c = c.with_meta_client(Arc::clone(mc));
+        }
+        Arc::new(c)
+    };
+
+    if config.compaction.interval_secs > 0 {
+        info!("Starting background LSM compaction (interval: {}s)", config.compaction.interval_secs);
+        Arc::clone(&compactor).start_background_lsm_compaction(
+            config.compaction.interval_secs,
+            compaction_config.clone(),
+        );
+    }
+
+    if config.compaction.full_compaction_enabled
+        && config.compaction.full_compaction_interval_secs > 0
+    {
+        info!(
+            "Starting background full compaction (interval: {}s)",
+            config.compaction.full_compaction_interval_secs
+        );
+        Arc::clone(&compactor).start_background_full_compaction(
+            config.compaction.full_compaction_interval_secs,
+            compaction_config,
+        );
+    }
+
     // Initialize replication and background flush
     let replication_manager = init_replication(&data_config);
     setup_background_flush(
@@ -117,6 +159,7 @@ pub async fn start(config_path: &str) {
         meta_client,
         wal,
         flight_service,
+        compactor,
     )
     .await;
 }
@@ -689,6 +732,7 @@ async fn start_servers(
     meta_client: Option<Arc<MetaClient>>,
     wal: Option<Arc<wal::Wal>>,
     flight_service: DataNodeFlightService,
+    compactor: Arc<compactor::Compactor>,
 ) {
     let addr = data_config.advertise_addr.parse().expect("Invalid address");
 
@@ -704,6 +748,7 @@ async fn start_servers(
             query_engine,
             meta_client,
             wal,
+            compactor,
         );
         let http_port = data_config.http_port;
         tokio::spawn(async move {
@@ -731,6 +776,7 @@ fn create_http_state(
     query_engine: Arc<QueryEngine>,
     meta_client: Option<Arc<MetaClient>>,
     wal: Option<Arc<wal::Wal>>,
+    compactor: Arc<compactor::Compactor>,
 ) -> DataNodeState {
     let db_manager = Arc::new(
         crate::jobs::database_manager::DatabaseManager::with_storage_and_node_id(
@@ -750,7 +796,7 @@ fn create_http_state(
         query_engine: Some(query_engine),
         config: Some(Arc::new(config.clone())),
         wal,
-        compactor: None,
+        compactor: Some(compactor),
         db_manager: Some(db_manager),
         in_flight_queries: Some(Arc::new(AtomicU64::new(0))),
     }
