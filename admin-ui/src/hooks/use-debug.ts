@@ -1,5 +1,6 @@
 import { useMutation } from '@tanstack/react-query'
-import { prewarmCache, clearCache } from '@/lib/api'
+import { prewarmCache, clearCache, generateTestData } from '@/lib/api'
+import type { GenerateDataRequest } from '@/lib/api'
 
 export function usePrewarmCache() {
   return useMutation({
@@ -10,5 +11,11 @@ export function usePrewarmCache() {
 export function useClearCache() {
   return useMutation({
     mutationFn: clearCache,
+  })
+}
+
+export function useGenerateTestData() {
+  return useMutation({
+    mutationFn: (request: GenerateDataRequest) => generateTestData(request),
   })
 }

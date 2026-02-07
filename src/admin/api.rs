@@ -57,6 +57,7 @@ pub fn routes() -> Router<AdminState> {
         // Debug Tools
         .route("/debug/heap", get(debug_heap_profile))
         .route("/debug/cpu", get(debug_cpu_profile))
+        .route("/debug/generate-data", post(generate_test_data))
         .route("/cache/prewarm/:catalog", post(cache_prewarm))
         .route("/cache/clear", post(cache_clear))
         // Elections
@@ -1806,4 +1807,378 @@ async fn get_config(State(state): State<AdminState>) -> impl IntoResponse {
             node_counts,
         })),
     )
+}
+
+// ============ Test Data Generator ============
+
+#[derive(Deserialize)]
+struct GenerateDataRequest {
+    #[serde(default = "default_data_types")]
+    types: Vec<String>,
+    #[serde(default = "default_points")]
+    points_per_source: u32,
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(default = "default_database")]
+    database: String,
+}
+
+fn default_data_types() -> Vec<String> {
+    vec!["cpu".into()]
+}
+
+fn default_points() -> u32 {
+    100
+}
+
+fn default_database() -> String {
+    "testdb".into()
+}
+
+#[derive(Serialize)]
+struct GenerateDataResponse {
+    database: String,
+    date: String,
+    results: Vec<GenerateTypeResult>,
+    total_points: u32,
+}
+
+#[derive(Serialize)]
+struct GenerateTypeResult {
+    #[serde(rename = "type")]
+    data_type: String,
+    sources: u32,
+    points_written: u32,
+}
+
+/// Generate and write test data to a data node
+async fn generate_test_data(
+    State(state): State<AdminState>,
+    Json(request): Json<GenerateDataRequest>,
+) -> impl IntoResponse {
+    // Resolve date
+    let date = request.date.unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+
+    // Parse date to get timestamp range
+    let day_start = match chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d") {
+        Ok(d) => d
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<GenerateDataResponse>::error(format!(
+                    "Invalid date format: {}. Use YYYY-MM-DD",
+                    date
+                ))),
+            );
+        }
+    };
+
+    let points = request.points_per_source.min(10000).max(1);
+    let interval_sec = if points > 1 { 86399 / (points as i64 - 1) } else { 0 };
+
+    // Get data node URL to write to
+    let node_url = match state.get_data_node_url().await {
+        Ok(url) => url,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiResponse::<GenerateDataResponse>::error(format!(
+                    "No data node available: {}",
+                    e
+                ))),
+            );
+        }
+    };
+
+    let write_url = format!("{}/write/{}", node_url, request.database);
+    let mut results = Vec::new();
+    let mut total_points = 0u32;
+
+    for data_type in &request.types {
+        let (lines, sources) = match data_type.as_str() {
+            "cpu" => (generate_cpu_data(day_start, interval_sec, points), 5u32),
+            "memory" => (generate_memory_data(day_start, interval_sec, points), 5),
+            "disk" => (generate_disk_data(day_start, interval_sec, points), 10),
+            "http" => (generate_http_data(day_start, interval_sec, points), 3),
+            "iot" => (generate_iot_data(day_start, interval_sec, points), 8),
+            "app" => (generate_app_data(day_start, interval_sec, points), 3),
+            other => {
+                results.push(GenerateTypeResult {
+                    data_type: other.to_string(),
+                    sources: 0,
+                    points_written: 0,
+                });
+                continue;
+            }
+        };
+
+        let line_count = lines.len() as u32;
+
+        // Write in batches
+        let mut written = 0u32;
+        for chunk in lines.chunks(500) {
+            let body = chunk.join("\n");
+            match state
+                .http_client
+                .post(&write_url)
+                .body(body)
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    written += chunk.len() as u32;
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    let msg = resp.text().await.unwrap_or_default();
+                    tracing::warn!(
+                        "Write batch failed for {}: HTTP {} - {}",
+                        data_type,
+                        status,
+                        msg
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Write batch failed for {}: {}", data_type, e);
+                }
+            }
+        }
+
+        total_points += written;
+        results.push(GenerateTypeResult {
+            data_type: data_type.clone(),
+            sources,
+            points_written: written,
+        });
+
+        tracing::info!(
+            "Generated {} data: {}/{} points written to {}",
+            data_type,
+            written,
+            line_count,
+            request.database
+        );
+    }
+
+    let response = GenerateDataResponse {
+        database: request.database,
+        date,
+        results,
+        total_points,
+    };
+
+    (StatusCode::OK, Json(ApiResponse::ok(response)))
+}
+
+// --- Data generators ---
+// Each returns a Vec<String> of InfluxDB line protocol lines.
+
+use rand::Rng;
+
+fn generate_cpu_data(day_start: i64, interval_sec: i64, points: u32) -> Vec<String> {
+    let mut rng = rand::thread_rng();
+    let hosts = [
+        ("web-1", "us-east"),
+        ("web-2", "us-west"),
+        ("web-3", "eu-west"),
+        ("api-1", "us-east"),
+        ("db-1", "us-west"),
+    ];
+    let mut lines = Vec::with_capacity(hosts.len() * points as usize);
+
+    for (i, (host, region)) in hosts.iter().enumerate() {
+        let base_user = 10 + i * 8;
+        let base_sys = 3 + i * 2;
+        for p in 0..points {
+            let ts = (day_start + p as i64 * interval_sec) * 1_000_000_000;
+            let usage_user = (base_user as i32 + rng.gen_range(-5..=15)).clamp(1, 95) as u32;
+            let usage_system = (base_sys as i32 + rng.gen_range(-3..=5)).clamp(0, 20) as u32;
+            let usage_idle = 100u32.saturating_sub(usage_user + usage_system);
+            let load_1m: f32 = rng.gen_range(0.1..8.0);
+            let load_5m: f32 = rng.gen_range(0.1..6.0);
+            lines.push(format!(
+                "cpu,host={},region={},service=monitoring usage_user={:.1},usage_system={:.1},usage_idle={:.1},load_1m={:.2},load_5m={:.2},cores=8i {}",
+                host, region, usage_user as f64, usage_system as f64, usage_idle as f64, load_1m, load_5m, ts
+            ));
+        }
+    }
+    lines
+}
+
+fn generate_memory_data(day_start: i64, interval_sec: i64, points: u32) -> Vec<String> {
+    let mut rng = rand::thread_rng();
+    let hosts = [
+        ("web-1", "us-east", 16384u64),
+        ("web-2", "us-west", 16384),
+        ("web-3", "eu-west", 16384),
+        ("api-1", "us-east", 32768),
+        ("db-1", "us-west", 65536),
+    ];
+    let mut lines = Vec::with_capacity(hosts.len() * points as usize);
+
+    for (i, (host, region, total_mb)) in hosts.iter().enumerate() {
+        let base_pct = 50 + i * 8;
+        for p in 0..points {
+            let ts = (day_start + p as i64 * interval_sec) * 1_000_000_000;
+            let pct = (base_pct as i32 + rng.gen_range(-10..=10)).clamp(10, 95) as u64;
+            let used_mb = total_mb * pct / 100;
+            let available_mb = total_mb - used_mb;
+            let swap_used: u64 = rng.gen_range(0..512);
+            lines.push(format!(
+                "memory,host={},region={},service=monitoring total_mb={}i,used_mb={}i,available_mb={}i,usage_percent={:.1},swap_used_mb={}i {}",
+                host, region, total_mb, used_mb, available_mb, pct as f64, swap_used, ts
+            ));
+        }
+    }
+    lines
+}
+
+fn generate_disk_data(day_start: i64, interval_sec: i64, points: u32) -> Vec<String> {
+    let mut rng = rand::thread_rng();
+    let hosts = [
+        ("web-1", "us-east"),
+        ("web-2", "us-west"),
+        ("web-3", "eu-west"),
+        ("api-1", "us-east"),
+        ("db-1", "us-west"),
+    ];
+    let devices = ["sda", "sdb"];
+    let mut lines = Vec::with_capacity(hosts.len() * devices.len() * points as usize);
+
+    for (host, region) in &hosts {
+        for device in &devices {
+            for p in 0..points {
+                let ts = (day_start + p as i64 * interval_sec) * 1_000_000_000;
+                let read_bytes: u64 = rng.gen_range(1024..33_554_432);
+                let write_bytes: u64 = rng.gen_range(512..16_777_216);
+                let read_ops: u32 = rng.gen_range(10..500);
+                let write_ops: u32 = rng.gen_range(5..300);
+                let io_util: f32 = rng.gen_range(0.0..95.0);
+                lines.push(format!(
+                    "disk_io,host={},region={},device={},service=monitoring read_bytes={}i,write_bytes={}i,read_ops={}i,write_ops={}i,io_util={:.1} {}",
+                    host, region, device, read_bytes, write_bytes, read_ops, write_ops, io_util, ts
+                ));
+            }
+        }
+    }
+    lines
+}
+
+fn generate_http_data(day_start: i64, interval_sec: i64, points: u32) -> Vec<String> {
+    let mut rng = rand::thread_rng();
+    let services = [
+        ("frontend", &["/index.html", "/dashboard", "/login", "/settings", "/search", "/profile"][..]),
+        ("api-gateway", &["/v1/users", "/v1/orders", "/v1/products", "/v1/search", "/v1/health"][..]),
+        ("auth-service", &["/auth/login", "/auth/token", "/auth/refresh", "/auth/logout"][..]),
+    ];
+    let methods = ["GET", "GET", "GET", "POST", "POST", "PUT", "DELETE"];
+    let statuses = ["200", "200", "200", "200", "200", "201", "204", "301", "400", "401", "404", "500"];
+    let mut lines = Vec::with_capacity(services.len() * points as usize);
+
+    for (service, endpoints) in &services {
+        for p in 0..points {
+            let ts = (day_start + p as i64 * interval_sec) * 1_000_000_000;
+            let method = methods[rng.gen_range(0..methods.len())];
+            let endpoint = endpoints[rng.gen_range(0..endpoints.len())];
+            let status = statuses[rng.gen_range(0..statuses.len())];
+            // 90% fast, 5% moderate, 5% slow
+            let latency: f32 = match rng.gen_range(0..100) {
+                0..=89 => rng.gen_range(1.0..50.0),
+                90..=94 => rng.gen_range(50.0..200.0),
+                _ => rng.gen_range(200.0..2000.0),
+            };
+            let req_bytes: u32 = rng.gen_range(64..4096);
+            let resp_bytes: u32 = rng.gen_range(128..65536);
+            lines.push(format!(
+                "http_requests,service={},method={},endpoint={},status={} latency_ms={:.1},request_bytes={}i,response_bytes={}i {}",
+                service, method, endpoint, status, latency, req_bytes, resp_bytes, ts
+            ));
+        }
+    }
+    lines
+}
+
+fn generate_iot_data(day_start: i64, interval_sec: i64, points: u32) -> Vec<String> {
+    let mut rng = rand::thread_rng();
+    let sensors = [
+        ("sensor-01", "warehouse-a", "environmental", 22.0f32),
+        ("sensor-02", "warehouse-a", "environmental", 22.0),
+        ("sensor-03", "warehouse-b", "environmental", 21.0),
+        ("sensor-04", "warehouse-b", "environmental", 21.0),
+        ("sensor-05", "office-1", "environmental", 24.0),
+        ("sensor-06", "office-1", "environmental", 24.0),
+        ("sensor-07", "outdoor", "weather", 18.0),
+        ("sensor-08", "outdoor", "weather", 18.0),
+    ];
+    let mut lines = Vec::with_capacity(sensors.len() * points as usize);
+
+    for (sid, location, stype, base_temp) in &sensors {
+        for p in 0..points {
+            let ts = (day_start + p as i64 * interval_sec) * 1_000_000_000;
+            // Daily temperature cycle
+            let hour = (p as f32 / points as f32) * 24.0;
+            let temp_offset = if hour >= 6.0 && hour <= 14.0 {
+                (hour - 6.0) * 0.8
+            } else if hour > 14.0 && hour <= 22.0 {
+                (22.0 - hour) * 0.8
+            } else {
+                -2.0
+            };
+            let temperature = base_temp + temp_offset + rng.gen_range(-1.0..1.0);
+            let humidity: f32 = rng.gen_range(30.0..80.0);
+            let pressure: f32 = rng.gen_range(1010.0..1025.0);
+            let battery = (100.0 - (p as f32 / points as f32) * 15.0 + rng.gen_range(-1.0..1.0))
+                .clamp(5.0, 100.0);
+            lines.push(format!(
+                "sensor_data,sensor_id={},location={},type={},service=iot_gateway temperature={:.1},humidity={:.1},pressure={:.1},battery_pct={:.0} {}",
+                sid, location, stype, temperature, humidity, pressure, battery, ts
+            ));
+        }
+    }
+    lines
+}
+
+fn generate_app_data(day_start: i64, interval_sec: i64, points: u32) -> Vec<String> {
+    let mut rng = rand::thread_rng();
+    let services = [
+        ("order-service", "app-order-1"),
+        ("payment-service", "app-payment-1"),
+        ("notification-service", "app-notify-1"),
+    ];
+    let levels = ["info", "info", "info", "info", "info", "warn", "error"];
+    let mut lines = Vec::with_capacity(services.len() * points as usize);
+
+    for (service, host) in &services {
+        for p in 0..points {
+            let ts = (day_start + p as i64 * interval_sec) * 1_000_000_000;
+            let level = levels[rng.gen_range(0..levels.len())];
+            let response_time: f32 = if level == "error" {
+                rng.gen_range(500.0..5000.0)
+            } else {
+                rng.gen_range(5.0..200.0)
+            };
+            let queue_depth: u32 = rng.gen_range(0..50);
+            let error_count: u32 = match level {
+                "error" => rng.gen_range(1..=5),
+                "warn" => rng.gen_range(0..=1),
+                _ => 0,
+            };
+            // Active users: higher during business hours
+            let hour = (p as f32 / points as f32) * 24.0;
+            let active_users: u32 = if hour >= 9.0 && hour <= 17.0 {
+                rng.gen_range(200..700)
+            } else {
+                rng.gen_range(10..100)
+            };
+            lines.push(format!(
+                "app_events,service={},host={},level={} response_time_ms={:.1},queue_depth={}i,error_count={}i,active_users={}i {}",
+                service, host, level, response_time, queue_depth, error_count, active_users, ts
+            ));
+        }
+    }
+    lines
 }

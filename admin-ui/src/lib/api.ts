@@ -400,6 +400,34 @@ export async function clearCache(): Promise<CacheActionResult> {
   })
 }
 
+// Generate Test Data API
+export interface GenerateDataRequest {
+  types: string[]
+  points_per_source: number
+  date?: string
+  database: string
+}
+
+export interface GenerateTypeResult {
+  type: string
+  sources: number
+  points_written: number
+}
+
+export interface GenerateDataResult {
+  database: string
+  date: string
+  results: GenerateTypeResult[]
+  total_points: number
+}
+
+export async function generateTestData(request: GenerateDataRequest): Promise<GenerateDataResult> {
+  return fetchApi<GenerateDataResult>('/debug/generate-data', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  })
+}
+
 // Elections API
 export async function fetchElections(): Promise<ElectionInfo[]> {
   return fetchApi<ElectionInfo[]>('/elections')
