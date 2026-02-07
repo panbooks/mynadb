@@ -566,14 +566,31 @@ async fn get_table_storage(
         }
     }
 
-    // Try to get total_rows from meta
+    // Fallback: if /partitions returned empty (common with object store backends),
+    // query partition info via SQL
+    if partitions.is_empty() {
+        if let Ok(sql_partitions) =
+            query_partitions_via_sql(&state, &node_url, &catalog, &schema, &table).await
+        {
+            partitions = sql_partitions.0;
+            total_file_count = sql_partitions.1;
+            total_rows = sql_partitions.2;
+        }
+    }
+
+    // Try to get total_rows and total_size from meta
     if let Ok(meta_client) = state.get_meta_client().await {
         if let Ok(tables) = meta_client
             .list_tables(Some(&catalog), Some(&schema))
             .await
         {
             if let Some(t) = tables.iter().find(|t| t.table == table) {
-                total_rows = t.total_rows;
+                if total_rows == 0 {
+                    total_rows = t.total_rows;
+                }
+                if total_size_bytes == 0 {
+                    total_size_bytes = t.total_bytes;
+                }
             }
         }
     }
@@ -589,6 +606,98 @@ async fn get_table_storage(
     };
 
     (StatusCode::OK, Json(ApiResponse::ok(result)))
+}
+
+/// Query partition info via SQL when /partitions endpoint returns empty.
+/// Returns (partitions, total_file_count, total_rows).
+async fn query_partitions_via_sql(
+    state: &AdminState,
+    node_url: &str,
+    catalog: &str,
+    schema: &str,
+    table: &str,
+) -> Result<(Vec<PartitionInfo>, u64, u64), String> {
+    let sql = format!(
+        "SELECT date, count(*) as row_count FROM {}.{} GROUP BY date ORDER BY date",
+        schema, table
+    );
+    let encoded_sql: String = sql
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            b' ' => "+".to_string(),
+            _ => format!("%{:02X}", b),
+        })
+        .collect();
+    let url = format!("{}/query/{}?sql={}", node_url, catalog, encoded_sql);
+
+    let response = state
+        .http_client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("SQL query failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err("SQL query returned error".to_string());
+    }
+
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read SQL response: {}", e))?;
+
+    // Data node query returns an array of row objects: [{date, row_count}, ...]
+    // or a wrapper: {success, data: [...]}
+    let rows: Vec<serde_json::Value> = if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&body) {
+        arr
+    } else if let Ok(wrapper) = serde_json::from_str::<serde_json::Value>(&body) {
+        wrapper
+            .get("data")
+            .and_then(|d| d.as_array())
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        return Err("Failed to parse SQL response".to_string());
+    };
+
+    let mut partitions = Vec::new();
+    let mut total_rows: u64 = 0;
+
+    for row in &rows {
+        let date = row
+            .get("date")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let row_count = row
+            .get("row_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        total_rows += row_count;
+
+        partitions.push(PartitionInfo {
+            date: date.clone(),
+            files: vec![FileInfo {
+                path: format!("{}/{}/{}/date={}", catalog, schema, table, date),
+                name: "*.parquet".to_string(),
+                level: 0,
+                size_bytes: 0,
+                row_count,
+                created_at: String::new(),
+                row_groups: None,
+                compression: None,
+            }],
+            size_bytes: 0,
+            row_count,
+        });
+    }
+
+    let total_file_count = partitions.len() as u64;
+    Ok((partitions, total_file_count, total_rows))
 }
 
 // ============ Parquet File Details ============
