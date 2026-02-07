@@ -30,7 +30,7 @@ const NODE_TYPE: &str = "data";
 pub async fn start(config_path: &str) {
     let config = Arc::new(Config::load_or_default(config_path));
     common::init_logging(&config);
-    print_welcome_banner();
+    print_welcome_banner(&config);
 
     let data_config = config.data.clone().unwrap_or_default();
     info!(
@@ -131,10 +131,43 @@ pub fn stop(config_path: &str) {
 // Helper Functions
 // =============================================================================
 
-fn print_welcome_banner() {
+fn print_welcome_banner(config: &Config) {
+    let data_config = config.data.clone().unwrap_or_default();
     println!("===============================================");
     println!("  MynaDB Data Node");
     println!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
+    println!("===============================================");
+    println!("  Node ID: {}", data_config.node_id);
+    println!("  Advertise: {}", data_config.advertise_addr);
+    println!("  HTTP port: {}", data_config.http_port);
+    let backend = config.storage.backend.as_str();
+    match backend {
+        "s3" | "minio" | "oss" => {
+            let label = match backend {
+                "s3" => "Amazon S3",
+                "minio" => "MinIO (S3-compatible)",
+                "oss" => "Aliyun OSS",
+                _ => backend,
+            };
+            println!("  Storage: {}", label);
+            println!("    Bucket: {}", config.storage.bucket);
+            if let Some(ref endpoint) = config.storage.endpoint {
+                println!("    Endpoint: {}", endpoint);
+            }
+            println!("    Region: {}", config.storage.region);
+            if let Some(ref prefix) = config.storage.prefix {
+                println!("    Prefix: {}", prefix);
+            }
+            println!("    Local cache: {}", config.storage.data_dir);
+            if let Some(cache_gb) = config.storage.file_cache_size_gb {
+                println!("    File cache: {} GB", cache_gb);
+            }
+        }
+        _ => {
+            println!("  Storage: Local filesystem");
+            println!("    Data dir: {}", config.storage.data_dir);
+        }
+    }
     println!("===============================================");
 }
 
@@ -579,6 +612,7 @@ fn spawn_shutdown_handler(
 ) {
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
+        println!("\nShutting down Data node...");
         info!("Received shutdown signal, cleaning up...");
 
         shutdown_flag.store(true, Ordering::SeqCst);
@@ -587,9 +621,11 @@ fn spawn_shutdown_handler(
         flush_on_shutdown(&data_cache).await;
 
         // Deregister from Meta
+        println!("  Deregistering from Meta service...");
         deregister_on_shutdown(&meta_client, &lease_id).await;
 
         common::remove_pid_file(&data_dir, NODE_TYPE);
+        println!("Goodbye!");
         std::process::exit(0);
     });
 }
@@ -598,10 +634,12 @@ fn spawn_shutdown_handler(
 async fn flush_on_shutdown(data_cache: &Arc<cache::DataCache>) {
     let cache_stats = data_cache.stats().await;
     if cache_stats.total_rows == 0 {
+        println!("  No cached data to flush");
         info!("Shutdown: memtable empty, no flush needed");
         return;
     }
 
+    println!("  Flushing {} cached rows to disk...", cache_stats.total_rows);
     info!(
         "Shutdown: flushing {} rows from memtable to disk...",
         cache_stats.total_rows
@@ -610,6 +648,7 @@ async fn flush_on_shutdown(data_cache: &Arc<cache::DataCache>) {
     let flush_start = Instant::now();
     match data_cache.flush().await {
         Ok(files_written) => {
+            println!("  Flushed {} file(s) in {:.1?}", files_written.len(), flush_start.elapsed());
             info!(
                 "Shutdown: flushed {} files in {:?}",
                 files_written.len(),
@@ -617,6 +656,7 @@ async fn flush_on_shutdown(data_cache: &Arc<cache::DataCache>) {
             );
         }
         Err(e) => {
+            println!("  Flush failed: {}", e);
             error!("Shutdown: failed to flush memtable: {}", e);
         }
     }

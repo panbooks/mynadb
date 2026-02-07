@@ -385,12 +385,14 @@ pub async fn run(config_path: &str) {
             error!("MySQL server stopped unexpectedly");
         },
         _ = tokio::signal::ctrl_c() => {
+            println!("\nShutting down MynaDB...");
             info!("Received shutdown signal, cleaning up...");
 
             // Flush memtable data to disk before shutdown
             // This ensures no data loss on graceful shutdown
             let cache_stats = cache_for_shutdown.stats().await;
             if cache_stats.total_rows > 0 {
+                println!("  Flushing {} cached rows to disk...", cache_stats.total_rows);
                 info!(
                     "Shutdown: flushing {} rows from memtable to disk...",
                     cache_stats.total_rows
@@ -398,6 +400,7 @@ pub async fn run(config_path: &str) {
                 let flush_start = Instant::now();
                 match cache_for_shutdown.flush().await {
                     Ok(files_written) => {
+                        println!("  Flushed {} file(s) in {:.1?}", files_written.len(), flush_start.elapsed());
                         info!(
                             "Shutdown: flushed {} files in {:?}",
                             files_written.len(),
@@ -405,16 +408,19 @@ pub async fn run(config_path: &str) {
                         );
                     }
                     Err(e) => {
+                        println!("  Flush failed: {}", e);
                         error!("Shutdown: failed to flush memtable: {}", e);
                     }
                 }
             } else {
+                println!("  No cached data to flush");
                 info!("Shutdown: memtable empty, no flush needed");
             }
 
             // Remove PID file
             common::remove_pid_file(&data_dir_for_shutdown, NODE_TYPE);
 
+            println!("Goodbye!");
             info!("Shutdown complete");
         },
     }
@@ -435,10 +441,43 @@ fn print_welcome_banner(config: &Config) {
     if config.server.mysql_enabled {
         welcome!("   MySQL API: {}", config.mysql_addr());
     }
-    welcome!("   Data Directory: {}", config.storage.data_dir);
+    welcome!("");
+    print_storage_info(config);
     welcome!("   Log Directory: {}", config.logging.log_dir);
     welcome!("   Log Level: {}", config.logging.level);
     welcome!("");
+}
+
+/// Print storage configuration details
+fn print_storage_info(config: &Config) {
+    let backend = config.storage.backend.as_str();
+    match backend {
+        "s3" | "minio" | "oss" => {
+            let label = match backend {
+                "s3" => "Amazon S3",
+                "minio" => "MinIO (S3-compatible)",
+                "oss" => "Aliyun OSS",
+                _ => backend,
+            };
+            welcome!("   Storage: {}", label);
+            welcome!("     Bucket: {}", config.storage.bucket);
+            if let Some(ref endpoint) = config.storage.endpoint {
+                welcome!("     Endpoint: {}", endpoint);
+            }
+            welcome!("     Region: {}", config.storage.region);
+            if let Some(ref prefix) = config.storage.prefix {
+                welcome!("     Prefix: {}", prefix);
+            }
+            welcome!("     Local cache: {}", config.storage.data_dir);
+            if let Some(cache_gb) = config.storage.file_cache_size_gb {
+                welcome!("     File cache: {} GB", cache_gb);
+            }
+        }
+        _ => {
+            welcome!("   Storage: Local filesystem");
+            welcome!("     Data dir: {}", config.storage.data_dir);
+        }
+    }
 }
 
 /// Print server configuration info

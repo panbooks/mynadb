@@ -187,8 +187,10 @@ pub async fn start(config_path: &str) {
     let data_dir = config.storage.data_dir.clone();
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
+        println!("\nShutting down Router node...");
         info!("Received shutdown signal, cleaning up...");
         common::remove_pid_file(&data_dir, NODE_TYPE);
+        println!("Goodbye!");
         std::process::exit(0);
     });
 
