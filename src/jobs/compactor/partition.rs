@@ -3,6 +3,7 @@
 //! Handles partition-level and level-based compaction.
 //! Uses Object Store abstraction for both local and S3/MinIO storage.
 
+use crate::storage::layout::STORE_DIR;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
@@ -20,7 +21,7 @@ impl Compactor {
         table: &str,
         config: &CompactionConfig,
     ) -> Result<Option<CompactionResult>, String> {
-        let table_prefix = format!("{}/{}/{}", catalog, schema, table);
+        let table_prefix = format!("{}/{}/{}/{}", STORE_DIR, catalog, schema, table);
         self.compact_prefix_internal(
             catalog,
             schema,
@@ -45,7 +46,7 @@ impl Compactor {
         date_partition: &str,
         config: &CompactionConfig,
     ) -> Result<Option<CompactionResult>, String> {
-        let partition_prefix = format!("{}/{}/{}/{}", catalog, schema, table, date_partition);
+        let partition_prefix = format!("{}/{}/{}/{}/{}", STORE_DIR, catalog, schema, table, date_partition);
         self.compact_prefix_internal(
             catalog,
             schema,

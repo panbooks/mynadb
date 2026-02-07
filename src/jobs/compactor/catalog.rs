@@ -3,6 +3,7 @@
 //! Handles catalog-level and table-level compaction.
 //! Uses Object Store abstraction for both local and S3/MinIO storage.
 
+use crate::storage::layout::STORE_DIR;
 use futures::stream::{FuturesUnordered, StreamExt};
 use tracing::{debug, warn};
 
@@ -22,7 +23,7 @@ impl Compactor {
         let mut tables_to_compact: Vec<(String, String)> = Vec::new();
 
         // List all schemas using Object Store
-        let schemas = self.storage.list_prefixes(catalog).await?;
+        let schemas = self.storage.list_prefixes(&format!("{}/{}", STORE_DIR, catalog)).await?;
 
         for schema_name in schemas {
             // Skip hidden directories and config files
@@ -31,7 +32,7 @@ impl Compactor {
             }
 
             // List all tables in this schema using Object Store
-            let schema_prefix = format!("{}/{}", catalog, schema_name);
+            let schema_prefix = format!("{}/{}/{}", STORE_DIR, catalog, schema_name);
             let tables = match self.storage.list_prefixes(&schema_prefix).await {
                 Ok(t) => t,
                 Err(e) => {
@@ -108,7 +109,7 @@ impl Compactor {
         table: &str,
         config: &CompactionConfig,
     ) -> Result<Vec<CompactionResult>, String> {
-        let table_prefix = format!("{}/{}/{}", catalog, schema, table);
+        let table_prefix = format!("{}/{}/{}/{}", STORE_DIR, catalog, schema, table);
 
         let mut results = Vec::new();
 

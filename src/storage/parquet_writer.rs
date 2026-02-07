@@ -1,4 +1,5 @@
 use super::compression::CompressionStrategy;
+use super::layout::STORE_DIR;
 use super::line_protocol::format_date32_as_partition;
 use super::storage::Storage;
 use arrow::array::{ArrayRef, RecordBatch};
@@ -85,10 +86,10 @@ impl ParquetWriter {
         })
     }
 
-    /// Get table path: catalog/schema/table/
+    /// Get table path: store/catalog/schema/table/
     ///
     /// Path structure (Hive-style partitioning):
-    ///   {catalog}/{schema}/{table}/date={YYYY-MM-DD}/node_id={node_id}/{file}.parquet
+    ///   store/{catalog}/{schema}/{table}/date={YYYY-MM-DD}/node_id={node_id}/{file}.parquet
     ///
     /// This enables:
     /// - DataFusion automatic partition pruning on both date and node_id
@@ -96,7 +97,7 @@ impl ParquetWriter {
     /// - Cross-node compaction (all node data under same date prefix)
     /// - Query routing via partition discovery (LIST date=X/ → [node_id=A/, node_id=B/])
     fn get_table_path(catalog: &str, schema: &str, table: &str) -> String {
-        format!("{}/{}/{}", catalog, schema, table)
+        format!("{}/{}/{}/{}", STORE_DIR, catalog, schema, table)
     }
 
     /// Get partition path: catalog/schema/table/date=YYYY-MM-DD/node_id={node_id}/

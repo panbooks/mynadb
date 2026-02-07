@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tracing::{debug, info};
 
 use crate::config::StorageConfig;
+use crate::storage::layout::STORE_DIR;
 
 /// Storage backend types
 #[derive(Debug, Clone)]
@@ -336,7 +337,7 @@ impl Storage {
                     .next()
                     .map(|s| s.to_string())
             })
-            .filter(|s| !s.is_empty() && !s.starts_with('.') && s != "_system" && s != "_wal")
+            .filter(|s| !s.is_empty() && !s.starts_with('.'))
             .collect();
 
         Ok(prefixes)
@@ -362,11 +363,11 @@ impl Storage {
 
     /// Build table URL for DataFusion registration
     pub fn table_url(&self, catalog: &str, schema: &str, table: &str) -> String {
-        format!("{}/{}/{}/{}/", self.url_prefix, catalog, schema, table)
+        format!("{}/{}/{}/{}/{}/", self.url_prefix, STORE_DIR, catalog, schema, table)
     }
 
     /// Build table URL for DataFusion registration with node_id prefix
-    /// Used in cluster mode where files are stored under {node_id}/{catalog}/{schema}/{table}/
+    /// Used in cluster mode where files are stored under store/{node_id}/{catalog}/{schema}/{table}/
     pub fn table_url_with_node(
         &self,
         node_id: &str,
@@ -375,8 +376,8 @@ impl Storage {
         table: &str,
     ) -> String {
         format!(
-            "{}/{}/{}/{}/{}/",
-            self.url_prefix, node_id, catalog, schema, table
+            "{}/{}/{}/{}/{}/{}/",
+            self.url_prefix, STORE_DIR, node_id, catalog, schema, table
         )
     }
 }

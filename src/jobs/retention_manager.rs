@@ -1,6 +1,7 @@
 use super::database_manager::DatabaseManager;
 use crate::config::RetentionConfig;
 use crate::meta::client::MetaClient;
+use crate::storage::layout::STORE_DIR;
 use crate::storage::storage::Storage;
 use std::sync::Arc;
 use std::time::Duration;
@@ -317,7 +318,7 @@ impl RetentionManager {
             format!("date={}", partition)
         };
 
-        let partition_prefix = format!("{}/{}/{}/{}", catalog, schema, table, partition_dir);
+        let partition_prefix = format!("{}/{}/{}/{}/{}", STORE_DIR, catalog, schema, table, partition_dir);
 
         // Delete all files under the partition prefix (includes node_id= subdirectories)
         let result = self.storage.delete_prefix(&partition_prefix).await?;
@@ -334,14 +335,14 @@ impl RetentionManager {
 
     /// Discover all catalogs (top-level directories) using Object Store
     async fn discover_catalogs(&self) -> Result<Vec<String>, String> {
-        // Use Object Store list_prefixes to get top-level directories
-        self.storage.list_prefixes("").await
+        // Use Object Store list_prefixes to get catalogs under store/
+        self.storage.list_prefixes(STORE_DIR).await
     }
 
     /// Discover all schemas in a catalog using Object Store
     async fn discover_schemas(&self, catalog: &str) -> Result<Vec<String>, String> {
         // Use Object Store list_prefixes to get schema directories
-        let schemas = self.storage.list_prefixes(catalog).await?;
+        let schemas = self.storage.list_prefixes(&format!("{}/{}", STORE_DIR, catalog)).await?;
 
         // Filter out config files and hidden directories
         Ok(schemas
@@ -352,7 +353,7 @@ impl RetentionManager {
 
     /// Discover all tables in a schema using Object Store
     async fn discover_tables(&self, catalog: &str, schema: &str) -> Result<Vec<String>, String> {
-        let prefix = format!("{}/{}", catalog, schema);
+        let prefix = format!("{}/{}/{}", STORE_DIR, catalog, schema);
         self.storage.list_prefixes(&prefix).await
     }
 }

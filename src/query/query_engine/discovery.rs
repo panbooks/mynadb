@@ -2,6 +2,7 @@
 //!
 //! Handles partition discovery, cache pre-warming, and auto-discovery of tables.
 
+use crate::storage::layout::STORE_DIR;
 use parquet::file::metadata::ParquetMetaData;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -540,18 +541,18 @@ impl QueryEngine {
     /// Build storage prefix for schema discovery
     pub(crate) fn build_storage_prefix(&self, catalog_name: &str, schema_name: &str) -> String {
         if let Some(ref cache) = self.write_cache {
-            format!("{}/{}/{}/", cache.node_id(), catalog_name, schema_name)
+            format!("{}/{}/{}/{}/", STORE_DIR, cache.node_id(), catalog_name, schema_name)
         } else {
-            format!("{}/{}/", catalog_name, schema_name)
+            format!("{}/{}/{}/", STORE_DIR, catalog_name, schema_name)
         }
     }
 
     /// Build catalog-level prefix
     pub(crate) fn build_catalog_prefix(&self, catalog_name: &str) -> String {
         if let Some(ref cache) = self.write_cache {
-            format!("{}/{}/", cache.node_id(), catalog_name)
+            format!("{}/{}/{}/", STORE_DIR, cache.node_id(), catalog_name)
         } else {
-            format!("{}/", catalog_name)
+            format!("{}/{}/", STORE_DIR, catalog_name)
         }
     }
 }

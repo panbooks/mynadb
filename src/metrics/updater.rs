@@ -61,7 +61,7 @@ pub async fn start_metrics_updater(
 
 /// Get total WAL size in bytes
 async fn get_wal_size(data_dir: &str) -> Result<u64, String> {
-    let wal_dir = PathBuf::from(data_dir).join("wal");
+    let wal_dir = crate::storage::layout::DataLayout::new(data_dir).wal_dir();
 
     if !wal_dir.exists() {
         return Ok(0);

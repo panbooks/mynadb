@@ -654,8 +654,9 @@ impl MysqlSession {
         let databases = self.runtime_handle.block_on(async {
             let mut databases = Vec::new();
 
-            // Get databases from filesystem
-            if let Ok(entries) = std::fs::read_dir(&data_dir) {
+            // Get databases from store/ directory
+            let store_dir = std::path::Path::new(&data_dir).join(crate::storage::layout::STORE_DIR);
+            if let Ok(entries) = std::fs::read_dir(&store_dir) {
                 for entry in entries.flatten() {
                     if entry.path().is_dir() {
                         if let Some(name) = entry.file_name().to_str() {

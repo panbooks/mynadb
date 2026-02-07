@@ -308,7 +308,7 @@ fn init_parquet_cache(
         cache_size_mb, data_config.node_id
     );
 
-    let cache_dir = PathBuf::from(&config.storage.data_dir).join("_parquet_cache");
+    let cache_dir = crate::storage::layout::DataLayout::new(&config.storage.data_dir).parquet_cache_dir();
     let cache = ParquetLocalCache::new(cache_dir, cache_size_mb, data_config.node_id.clone())
         .with_storage(storage);
 

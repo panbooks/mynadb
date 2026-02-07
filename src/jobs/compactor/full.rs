@@ -3,6 +3,7 @@
 //! Handles full compaction for yesterday's partitions (date-based).
 //! Uses Object Store abstraction for both local and S3/MinIO storage.
 
+use crate::storage::layout::STORE_DIR;
 use chrono::Timelike;
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::time::Instant;
@@ -50,8 +51,8 @@ impl Compactor {
         // Phase 1: Collect all partitions that need compaction using Object Store
         let mut partitions_to_compact: Vec<(String, String, String, String)> = Vec::new();
 
-        // Discover catalogs using Object Store
-        let catalogs = match self.storage.list_prefixes("").await {
+        // Discover catalogs using Object Store (under store/ prefix)
+        let catalogs = match self.storage.list_prefixes(STORE_DIR).await {
             Ok(c) => c,
             Err(e) => {
                 warn!("Failed to list catalogs: {}", e);
@@ -65,7 +66,7 @@ impl Compactor {
             }
 
             // Discover schemas
-            let schemas = match self.storage.list_prefixes(&catalog).await {
+            let schemas = match self.storage.list_prefixes(&format!("{}/{}", STORE_DIR, catalog)).await {
                 Ok(s) => s,
                 Err(_) => continue,
             };
@@ -76,7 +77,7 @@ impl Compactor {
                 }
 
                 // Discover tables
-                let schema_prefix = format!("{}/{}", catalog, schema);
+                let schema_prefix = format!("{}/{}/{}", STORE_DIR, catalog, schema);
                 let tables = match self.storage.list_prefixes(&schema_prefix).await {
                     Ok(t) => t,
                     Err(_) => continue,
@@ -85,7 +86,7 @@ impl Compactor {
                 for table in tables {
                     // Check if yesterday's partition exists
                     let partition_prefix =
-                        format!("{}/{}/{}/{}", catalog, schema, table, yesterday_partition);
+                        format!("{}/{}/{}/{}/{}", STORE_DIR, catalog, schema, table, yesterday_partition);
 
                     // Check for any files in this partition (including node_id= subdirs)
                     let files = match self.storage.list(&partition_prefix).await {

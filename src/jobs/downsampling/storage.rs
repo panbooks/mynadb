@@ -31,7 +31,8 @@ pub struct DownsamplingStorage {
 impl DownsamplingStorage {
     /// Create a new storage backend
     pub fn new(data_dir: &str) -> Self {
-        let base_dir = Path::new(data_dir).join("_downsampling");
+        let layout = crate::storage::layout::DataLayout::new(data_dir);
+        let base_dir = layout.downsampling_dir();
         Self {
             base_dir,
             cache: Arc::new(RwLock::new(HashMap::new())),

@@ -35,7 +35,8 @@ pub struct AggregateStorage {
 impl AggregateStorage {
     /// Create a new storage backend
     pub fn new(data_dir: &str) -> Self {
-        let base_dir = Path::new(data_dir).join("_aggregates");
+        let layout = crate::storage::layout::DataLayout::new(data_dir);
+        let base_dir = layout.aggregates_dir();
         Self {
             base_dir,
             cache: Arc::new(RwLock::new(HashMap::new())),

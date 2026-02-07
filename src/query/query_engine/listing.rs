@@ -150,8 +150,6 @@ impl QueryEngine {
                         let schema_name = parts[0];
                         if !schema_name.is_empty()
                             && !schema_name.starts_with('.')
-                            && schema_name != "_system"
-                            && schema_name != "_wal"
                         {
                             schemas_set.insert(schema_name.to_string());
                         }
@@ -168,7 +166,7 @@ impl QueryEngine {
                         let path = entry.path();
                         if path.is_dir() {
                             if let Some(schema_name) = path.file_name().and_then(|s| s.to_str()) {
-                                if !schema_name.starts_with('.') && schema_name != "_system" {
+                                if !schema_name.starts_with('.') {
                                     schemas_set.insert(schema_name.to_string());
                                 }
                             }

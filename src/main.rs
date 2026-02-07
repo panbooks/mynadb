@@ -121,6 +121,13 @@ enum Commands {
         /// Password to hash (if not provided, prompts for input)
         password: Option<String>,
     },
+
+    /// Migrate old data directory layout to the new standardized layout
+    MigrateLayout {
+        /// Path to the data directory to migrate
+        #[arg(long)]
+        data_dir: String,
+    },
 }
 
 /// Standalone mode actions
@@ -211,6 +218,20 @@ async fn main() {
                 }
                 Err(e) => {
                     eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        // Migrate layout
+        Some(Commands::MigrateLayout { data_dir }) => {
+            println!("Migrating data directory layout: {}", data_dir);
+            match storage::layout::migrate_layout(&data_dir) {
+                Ok(()) => {
+                    println!("Migration complete.");
+                }
+                Err(e) => {
+                    eprintln!("Migration failed: {}", e);
                     std::process::exit(1);
                 }
             }

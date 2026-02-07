@@ -107,7 +107,7 @@ fn default_min_bucket_ratio() -> u32 {
 }
 
 fn default_definitions_dir() -> String {
-    "_aggregates".to_string()
+    crate::storage::layout::AGGREGATES_SUBDIR.to_string()
 }
 
 fn default_realtime_union() -> bool {

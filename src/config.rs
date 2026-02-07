@@ -735,7 +735,7 @@ pub struct WalConfig {
     #[serde(default = "default_wal_enabled")]
     pub enabled: bool,
 
-    /// WAL directory path (relative to storage root, default: "_wal")
+    /// WAL directory path (relative to storage root, default: "wal")
     #[serde(default = "default_wal_dir")]
     pub wal_dir: String,
 
@@ -1112,7 +1112,7 @@ fn default_wal_enabled() -> bool {
 }
 
 fn default_wal_dir() -> String {
-    "_wal".to_string()
+    "wal".to_string()
 }
 
 fn default_wal_sync_on_write() -> bool {

@@ -5,6 +5,7 @@ use crate::jobs::logger;
 use crate::query::cache::{hot_partition_cache, query_cache};
 use crate::query::{catalog, query_engine};
 use crate::services::{api, flight_service, mysql_service, tls};
+use crate::storage::layout::DataLayout;
 use crate::storage::{cache, file_cache, parquet_writer, storage as storage_mod, wal};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -89,7 +90,8 @@ pub async fn init_metadata_manager_for_node(
     node_id: &str,
 ) -> catalog::SharedMetadataManager {
     info!("Initializing metadata manager for node: {}", node_id);
-    let metadata_dir = format!("{}/_metadata", config.storage.data_dir);
+    let layout = DataLayout::new(&config.storage.data_dir);
+    let metadata_dir = layout.meta_dir();
     let metadata_manager: catalog::SharedMetadataManager =
         Arc::new(catalog::MemoryMetadataManager::new(&metadata_dir));
 
@@ -97,9 +99,9 @@ pub async fn init_metadata_manager_for_node(
     if let Err(e) = metadata_manager.load().await {
         warn!("Failed to load metadata (starting fresh): {}", e);
     }
-    // Rescan the data directory for this node's files
+    // Rescan the store directory for this node's files
     if let Err(e) = metadata_manager
-        .rescan_node(&config.storage.data_dir, node_id)
+        .rescan_node(&layout.store_dir_string(), node_id)
         .await
     {
         warn!("Failed to rescan metadata for node {}: {}", node_id, e);
@@ -129,12 +131,13 @@ pub fn init_query_engine_with_parquet_cache(
     parquet_cache: Option<Arc<crate::data::cache::ParquetLocalCache>>,
 ) -> Arc<query_engine::QueryEngine> {
     info!("Initializing query engine with memtable support");
+    let layout = DataLayout::new(&config.storage.data_dir);
     let query_cache_config = query_cache::QueryCacheConfig::from(&config.query_cache);
     let hot_partition_cache_config =
         hot_partition_cache::HotPartitionCacheConfig::from(&config.hot_partition_cache);
 
     let mut engine = query_engine::QueryEngine::new_with_memtable(
-        &config.storage.data_dir,
+        &layout.store_dir_string(),
         Some(storage),
         query_cache_config,
         hot_partition_cache_config,
@@ -158,13 +161,15 @@ pub async fn init_file_cache(
 ) -> Option<file_cache::SharedFileCache> {
     if !storage.is_local() {
         info!("Initializing file cache for object storage");
-        let cache_dir = format!("{}/_cache/parquet", config.storage.data_dir);
+        let layout = DataLayout::new(&config.storage.data_dir);
+        let cache_dir = layout.parquet_cache_dir();
+        let cache_dir_str = cache_dir.to_string_lossy().to_string();
         let max_size = config.storage.file_cache_size_gb.unwrap_or(100) * 1024 * 1024 * 1024;
-        match file_cache::DiskFileCache::new_at(&cache_dir, max_size).await {
+        match file_cache::DiskFileCache::new_at(&cache_dir_str, max_size).await {
             Ok(cache) => {
                 info!(
                     "File cache initialized: dir={}, max_size={}GB",
-                    cache_dir,
+                    cache_dir_str,
                     max_size / 1024 / 1024 / 1024
                 );
                 Some(Arc::new(cache))
@@ -563,7 +568,7 @@ pub async fn start_http_server_with_tls(
 
 /// Get PID file path for a node type
 pub fn pid_file_path(data_dir: &str, node_type: &str) -> std::path::PathBuf {
-    Path::new(data_dir).join(format!("{}.pid", node_type))
+    DataLayout::new(data_dir).pid_file(node_type)
 }
 
 /// Write PID file for the current process

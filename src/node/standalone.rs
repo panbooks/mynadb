@@ -38,8 +38,9 @@ pub async fn run(config_path: &str) {
     print_welcome_banner(&config);
     info!("MynaDB starting with config: {:?}", *config);
 
-    // Create data directory
-    std::fs::create_dir_all(&config.storage.data_dir).expect("Failed to create data directory");
+    // Create data directory with standardized layout
+    let layout = crate::storage::layout::DataLayout::new(&config.storage.data_dir);
+    layout.ensure_dirs().expect("Failed to create data directory layout");
 
     // Write PID file for stop command
     if let Err(e) = common::write_pid_file(&config.storage.data_dir, NODE_TYPE) {

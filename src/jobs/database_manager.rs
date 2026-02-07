@@ -1,3 +1,4 @@
+use crate::storage::layout::STORE_DIR;
 use crate::storage::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::fs::{create_dir_all, read_to_string, write};
@@ -52,9 +53,9 @@ impl DatabaseManager {
         }
     }
 
-    /// Get the database directory path
+    /// Get the database directory path (under store/)
     fn get_database_path(&self, db_name: &str) -> PathBuf {
-        Path::new(&self.data_dir).join(db_name)
+        Path::new(&self.data_dir).join(STORE_DIR).join(db_name)
     }
 
     /// Get the config file path for a database
@@ -139,8 +140,9 @@ impl DatabaseManager {
 
     /// List all databases
     pub fn list_databases(&self) -> Result<Vec<String>, String> {
-        let entries = std::fs::read_dir(&self.data_dir)
-            .map_err(|e| format!("Failed to read data directory: {}", e))?;
+        let store_dir = Path::new(&self.data_dir).join(STORE_DIR);
+        let entries = std::fs::read_dir(&store_dir)
+            .map_err(|e| format!("Failed to read store directory: {}", e))?;
 
         let mut databases = Vec::new();
         for entry in entries {
@@ -284,8 +286,8 @@ impl DatabaseManager {
     ) -> Result<Vec<PartitionInfo>, String> {
         // If storage is available, use it
         if let Some(storage) = &self.storage {
-            // New path structure: catalog/schema/table (node_id is now a subdirectory under date)
-            let table_prefix = format!("{}/{}/{}", catalog_name, schema_name, table_name);
+            // Path structure: store/catalog/schema/table (node_id is a subdirectory under date)
+            let table_prefix = format!("{}/{}/{}/{}", STORE_DIR, catalog_name, schema_name, table_name);
             let partition_dirs = storage.list_prefixes(&table_prefix).await?;
 
             let mut partitions = Vec::new();
@@ -295,10 +297,10 @@ impl DatabaseManager {
                     let date_str = dir_name.strip_prefix("date=").unwrap_or(&dir_name);
 
                     // List files in partition (includes all node_id= subdirectories)
-                    // Path: catalog/schema/table/date=YYYY-MM-DD/node_id=*/*.parquet
+                    // Path: store/catalog/schema/table/date=YYYY-MM-DD/node_id=*/*.parquet
                     let partition_prefix = format!(
-                        "{}/{}/{}/{}",
-                        catalog_name, schema_name, table_name, dir_name
+                        "{}/{}/{}/{}/{}",
+                        STORE_DIR, catalog_name, schema_name, table_name, dir_name
                     );
                     let files = storage.list(&partition_prefix).await.unwrap_or_default();
 
@@ -344,7 +346,7 @@ impl DatabaseManager {
         table_name: &str,
     ) -> Result<Vec<PartitionDetailInfo>, String> {
         if let Some(storage) = &self.storage {
-            let table_prefix = format!("{}/{}/{}", catalog_name, schema_name, table_name);
+            let table_prefix = format!("{}/{}/{}/{}", STORE_DIR, catalog_name, schema_name, table_name);
             let date_dirs = storage.list_prefixes(&table_prefix).await?;
 
             let mut partitions = Vec::new();
