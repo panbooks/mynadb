@@ -64,6 +64,8 @@ pub struct AppState {
     pub audit_logger: Option<Arc<crate::auth::AuditLogger>>,
     /// Streaming query manager for WebSocket/SSE subscriptions
     pub streaming_manager: Option<Arc<crate::query::streaming::StreamingQueryManager>>,
+    /// Downsampling policy storage for automated downsampling
+    pub downsampling_storage: Option<Arc<crate::jobs::downsampling::DownsamplingStorage>>,
 }
 
 #[derive(Deserialize)]
@@ -2199,6 +2201,261 @@ pub async fn list_subscriptions_handler(
     }))
 }
 
+// ===== Downsampling Policy Management =====
+
+/// GET /downsampling/policies - List all downsampling policies
+pub async fn list_downsampling_policies_handler(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let Some(ref ds_storage) = state.downsampling_storage else {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "enabled": false,
+                "policies": []
+            })),
+        );
+    };
+
+    match ds_storage.list_policies().await {
+        Ok(policies) => {
+            let mut policy_infos = Vec::new();
+            for p in &policies {
+                let status = ds_storage.get_status(&p.name).await.unwrap_or(None);
+                policy_infos.push(serde_json::json!({
+                    "name": p.name,
+                    "source_table": p.source_table,
+                    "enabled": p.enabled,
+                    "tiers": p.tiers.iter().map(|t| serde_json::json!({
+                        "name": t.name,
+                        "after_days": t.after_days,
+                        "interval": t.interval,
+                        "aggregates": t.aggregates.iter().map(|a| {
+                            if a.function == crate::jobs::downsampling::AggregateFn::Count {
+                                "count(*)".to_string()
+                            } else {
+                                format!("{}({})", a.function.sql_name(), a.column)
+                            }
+                        }).collect::<Vec<_>>(),
+                        "retention_days": t.retention_days,
+                    })).collect::<Vec<_>>(),
+                    "status": status,
+                }));
+            }
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "enabled": true,
+                    "policies": policy_infos
+                })),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
+/// POST /downsampling/policies - Create a new downsampling policy
+pub async fn create_downsampling_policy_handler(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let Some(ref ds_storage) = state.downsampling_storage else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Downsampling is not enabled"})),
+        );
+    };
+
+    // Parse request
+    let name = match body.get("name").and_then(|v| v.as_str()) {
+        Some(n) => n.to_string(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Missing 'name' field"})),
+            )
+        }
+    };
+
+    let source_table = match body.get("source_table").and_then(|v| v.as_str()) {
+        Some(t) => t.to_string(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Missing 'source_table' field"})),
+            )
+        }
+    };
+
+    // Validate source_table format
+    if source_table.split('.').count() != 3 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "source_table must be in catalog.schema.table format"})),
+        );
+    }
+
+    let tiers_arr = match body.get("tiers").and_then(|v| v.as_array()) {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Missing 'tiers' array"})),
+            )
+        }
+    };
+
+    let mut tiers = Vec::new();
+    for tier_val in tiers_arr {
+        let tier_name = tier_val
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unnamed")
+            .to_string();
+        let after_days = tier_val
+            .get("after_days")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(7) as u32;
+        let interval = tier_val
+            .get("interval")
+            .and_then(|v| v.as_str())
+            .unwrap_or("1 minute")
+            .to_string();
+        let retention_days = tier_val
+            .get("retention_days")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+
+        let mut aggregates = Vec::new();
+        if let Some(agg_arr) = tier_val.get("aggregates").and_then(|v| v.as_array()) {
+            for agg_val in agg_arr {
+                if let Some(agg_str) = agg_val.as_str() {
+                    match crate::jobs::downsampling::types::parse_aggregate_str(agg_str) {
+                        Ok(spec) => aggregates.push(spec),
+                        Err(e) => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(serde_json::json!({"error": format!("Invalid aggregate: {}", e)})),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        tiers.push(crate::jobs::downsampling::DownsamplingTier {
+            name: tier_name,
+            after_days,
+            interval,
+            aggregates,
+            retention_days,
+        });
+    }
+
+    if tiers.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "At least one tier is required"})),
+        );
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(0);
+
+    let policy = crate::jobs::downsampling::DownsamplingPolicy {
+        name: name.clone(),
+        source_table,
+        tiers,
+        enabled: body.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+        created_at: now,
+        modified_at: now,
+    };
+
+    match ds_storage.save_policy(&policy).await {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({"status": "created", "name": name})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
+/// GET /downsampling/policies/:name - Get a specific policy
+pub async fn get_downsampling_policy_handler(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let Some(ref ds_storage) = state.downsampling_storage else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Downsampling is not enabled"})),
+        );
+    };
+
+    match ds_storage.get_policy(&name).await {
+        Ok(Some(policy)) => {
+            let status = ds_storage.get_status(&name).await.unwrap_or(None);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "policy": policy,
+                    "status": status,
+                })),
+            )
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("Policy not found: {}", name)})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
+/// DELETE /downsampling/policies/:name - Delete a policy
+pub async fn delete_downsampling_policy_handler(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let Some(ref ds_storage) = state.downsampling_storage else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Downsampling is not enabled"})),
+        );
+    };
+
+    match ds_storage.get_policy(&name).await {
+        Ok(Some(_)) => match ds_storage.delete_policy(&name).await {
+            Ok(()) => (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "deleted", "name": name})),
+            ),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e})),
+            ),
+        },
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("Policy not found: {}", name)})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
 // ===== Fallback Handler =====
 
 pub async fn log_request(req: Request) -> impl IntoResponse {
@@ -2326,6 +2583,11 @@ pub fn build_router(state: AppState, auth_middleware: Arc<auth::AuthMiddleware>)
         .route("/stream/query", get(ws_stream_query_handler))
         .route("/stream/query/:db", get(sse_stream_query_handler))
         .route("/stream/subscriptions", get(list_subscriptions_handler))
+        // Downsampling policy management endpoints
+        .route("/downsampling/policies", get(list_downsampling_policies_handler))
+        .route("/downsampling/policies", post(create_downsampling_policy_handler))
+        .route("/downsampling/policies/:name", get(get_downsampling_policy_handler))
+        .route("/downsampling/policies/:name", delete(delete_downsampling_policy_handler))
         .fallback(log_request)
         .with_state(state)
         .layer(axum::middleware::from_fn(auth::auth_middleware_fn))

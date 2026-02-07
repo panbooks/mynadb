@@ -222,6 +222,36 @@ pub async fn run(config_path: &str) {
         None
     };
 
+    // Initialize downsampling
+    let downsampling_storage = if config.downsampling.enabled {
+        let ds_storage = Arc::new(crate::jobs::downsampling::DownsamplingStorage::new(
+            &config.storage.data_dir,
+        ));
+        if let Err(e) = ds_storage.initialize().await {
+            error!("Failed to initialize downsampling storage: {}", e);
+        }
+
+        // Start background downsampling job
+        let ds_job = Arc::new(crate::jobs::downsampling::DownsamplingJob::new(
+            ds_storage.clone(),
+            query_engine.clone(),
+            db_manager.clone(),
+            storage.clone(),
+            config.downsampling.clone(),
+        ));
+        ds_job.start_background();
+
+        info!(
+            "Downsampling: ENABLED (interval: {}s, max_concurrent: {})",
+            config.downsampling.check_interval_secs,
+            config.downsampling.max_concurrent_jobs
+        );
+        Some(ds_storage)
+    } else {
+        debug!("Downsampling: DISABLED");
+        None
+    };
+
     // Build application state
     let user_store_for_state = if config.auth.enabled {
         Some(auth_middleware.user_store())
@@ -248,6 +278,7 @@ pub async fn run(config_path: &str) {
         auth_enabled: config.auth.enabled,
         audit_logger: Some(audit_logger),
         streaming_manager,
+        downsampling_storage,
     };
 
     // Build router (standalone mode)

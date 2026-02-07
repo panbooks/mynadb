@@ -60,6 +60,9 @@ pub struct Config {
     /// Query tracing and profiling configuration
     #[serde(default)]
     pub tracing: crate::observability::TracingConfig,
+    /// Automated downsampling configuration
+    #[serde(default)]
+    pub downsampling: DownsamplingConfig,
     /// TLS/SSL encryption configuration
     #[serde(default)]
     pub tls: TlsConfig,
@@ -468,6 +471,47 @@ fn default_streaming_backpressure() -> usize {
 }
 fn default_streaming_heartbeat_secs() -> u64 {
     30
+}
+
+/// Automated downsampling configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownsamplingConfig {
+    /// Enable automated downsampling
+    #[serde(default = "default_downsampling_enabled")]
+    pub enabled: bool,
+    /// Interval in seconds between downsampling checks
+    #[serde(default = "default_downsampling_check_interval")]
+    pub check_interval_secs: u64,
+    /// Maximum concurrent downsampling jobs
+    #[serde(default = "default_downsampling_max_concurrent")]
+    pub max_concurrent_jobs: usize,
+    /// Enable transparent query rewriting to use downsampled data
+    #[serde(default = "default_downsampling_query_rewriting")]
+    pub query_rewriting_enabled: bool,
+}
+
+impl Default for DownsamplingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_downsampling_enabled(),
+            check_interval_secs: default_downsampling_check_interval(),
+            max_concurrent_jobs: default_downsampling_max_concurrent(),
+            query_rewriting_enabled: default_downsampling_query_rewriting(),
+        }
+    }
+}
+
+fn default_downsampling_enabled() -> bool {
+    false
+}
+fn default_downsampling_check_interval() -> u64 {
+    3600
+}
+fn default_downsampling_max_concurrent() -> usize {
+    4
+}
+fn default_downsampling_query_rewriting() -> bool {
+    true
 }
 
 /// Compaction configuration
