@@ -30,6 +30,11 @@ import type {
   TableBasicInfo,
   TableStorageInfo,
   ParquetFileDetails,
+  CacheActionResult,
+  ElectionInfo,
+  CampaignResult,
+  ResignResult,
+  ClusterConfig,
 } from './types'
 
 const API_BASE = '/admin/api/v1'
@@ -364,4 +369,56 @@ export async function triggerCompaction(catalog: string, schema?: string, table?
   if (schema) endpoint += `/${encodeURIComponent(schema)}`
   if (table) endpoint += `/${encodeURIComponent(table)}`
   return fetchApi<{ success: boolean; message: string }>(endpoint, { method: 'POST' })
+}
+
+// Debug Tools API
+export function getHeapProfileUrl(duration?: number, format?: string): string {
+  const params = new URLSearchParams()
+  if (duration) params.set('duration', duration.toString())
+  if (format) params.set('format', format)
+  const query = params.toString()
+  return `${API_BASE}/debug/heap${query ? `?${query}` : ''}`
+}
+
+export function getCpuProfileUrl(duration?: number, format?: string): string {
+  const params = new URLSearchParams()
+  if (duration) params.set('duration', duration.toString())
+  if (format) params.set('format', format)
+  const query = params.toString()
+  return `${API_BASE}/debug/cpu${query ? `?${query}` : ''}`
+}
+
+export async function prewarmCache(catalog: string): Promise<CacheActionResult> {
+  return fetchApi<CacheActionResult>(`/cache/prewarm/${encodeURIComponent(catalog)}`, {
+    method: 'POST',
+  })
+}
+
+export async function clearCache(): Promise<CacheActionResult> {
+  return fetchApi<CacheActionResult>('/cache/clear', {
+    method: 'POST',
+  })
+}
+
+// Elections API
+export async function fetchElections(): Promise<ElectionInfo[]> {
+  return fetchApi<ElectionInfo[]>('/elections')
+}
+
+export async function campaignElection(election: string, ttlMs?: number): Promise<CampaignResult> {
+  return fetchApi<CampaignResult>(`/elections/${encodeURIComponent(election)}/campaign`, {
+    method: 'POST',
+    body: JSON.stringify({ ttl_ms: ttlMs || 30000 }),
+  })
+}
+
+export async function resignElection(election: string): Promise<ResignResult> {
+  return fetchApi<ResignResult>(`/elections/${encodeURIComponent(election)}/resign`, {
+    method: 'POST',
+  })
+}
+
+// Configuration API
+export async function fetchConfig(): Promise<ClusterConfig> {
+  return fetchApi<ClusterConfig>('/config')
 }

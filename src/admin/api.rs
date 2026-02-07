@@ -3,9 +3,10 @@
 //! All REST and WebSocket API routes for the admin console.
 
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -53,6 +54,17 @@ pub fn routes() -> Router<AdminState> {
         // Meta operations
         .route("/distribution", get(distribution).post(set_distribution))
         .route("/meta/status", get(meta_status))
+        // Debug Tools
+        .route("/debug/heap", get(debug_heap_profile))
+        .route("/debug/cpu", get(debug_cpu_profile))
+        .route("/cache/prewarm/:catalog", post(cache_prewarm))
+        .route("/cache/clear", post(cache_clear))
+        // Elections
+        .route("/elections", get(list_elections))
+        .route("/elections/:election/campaign", post(force_campaign))
+        .route("/elections/:election/resign", post(force_resign))
+        // Configuration
+        .route("/config", get(get_config))
         // Query Console
         .merge(query_api::routes())
         // Storage Browser
@@ -1190,4 +1202,492 @@ async fn meta_status(State(state): State<AdminState>) -> impl IntoResponse {
         peers,
     };
     (StatusCode::OK, Json(ApiResponse::ok(response)))
+}
+
+// ============ Debug Tools Endpoints ============
+
+#[derive(Deserialize)]
+struct DebugProfileQuery {
+    duration: Option<u64>,
+    format: Option<String>,
+}
+
+/// Forward heap profile request to data node and stream the response
+async fn debug_heap_profile(
+    State(state): State<AdminState>,
+    Query(query): Query<DebugProfileQuery>,
+) -> Response<Body> {
+    let node_url = match state.get_data_node_url().await {
+        Ok(url) => url,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&ApiResponse::<()>::error(e)).unwrap(),
+                ))
+                .unwrap();
+        }
+    };
+
+    let mut params = Vec::new();
+    if let Some(duration) = query.duration {
+        params.push(format!("duration={}", duration));
+    }
+    if let Some(ref format) = query.format {
+        params.push(format!("format={}", format));
+    }
+    let query_string = if params.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", params.join("&"))
+    };
+
+    let url = format!("{}/debug/heap{}", node_url, query_string);
+    forward_debug_profile(&state, &url).await
+}
+
+/// Forward CPU profile request to data node and stream the response
+async fn debug_cpu_profile(
+    State(state): State<AdminState>,
+    Query(query): Query<DebugProfileQuery>,
+) -> Response<Body> {
+    let node_url = match state.get_data_node_url().await {
+        Ok(url) => url,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&ApiResponse::<()>::error(e)).unwrap(),
+                ))
+                .unwrap();
+        }
+    };
+
+    let mut params = Vec::new();
+    if let Some(duration) = query.duration {
+        params.push(format!("duration={}", duration));
+    }
+    if let Some(ref format) = query.format {
+        params.push(format!("format={}", format));
+    }
+    let query_string = if params.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", params.join("&"))
+    };
+
+    let url = format!("{}/debug/cpu{}", node_url, query_string);
+    forward_debug_profile(&state, &url).await
+}
+
+/// Forward a debug profile request and stream the raw response back
+async fn forward_debug_profile(state: &AdminState, url: &str) -> Response<Body> {
+    let response = match state.http_client.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&ApiResponse::<()>::error(format!(
+                        "Failed to reach data node: {}",
+                        e
+                    )))
+                    .unwrap(),
+                ))
+                .unwrap();
+        }
+    };
+
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let content_disposition = response
+        .headers()
+        .get(header::CONTENT_DISPOSITION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let bytes = match response.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&ApiResponse::<()>::error(format!(
+                        "Failed to read response: {}",
+                        e
+                    )))
+                    .unwrap(),
+                ))
+                .unwrap();
+        }
+    };
+
+    let mut builder = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, content_type);
+
+    if let Some(disposition) = content_disposition {
+        builder = builder.header(header::CONTENT_DISPOSITION, disposition);
+    }
+
+    builder.body(Body::from(bytes)).unwrap()
+}
+
+#[derive(Serialize)]
+struct CacheActionResponse {
+    success: bool,
+    message: String,
+}
+
+/// Prewarm cache for a catalog by forwarding to data node
+async fn cache_prewarm(
+    State(state): State<AdminState>,
+    Path(catalog): Path<String>,
+) -> impl IntoResponse {
+    let node_url = match state.get_data_node_url().await {
+        Ok(url) => url,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiResponse::<CacheActionResponse>::error(e)),
+            );
+        }
+    };
+
+    let url = format!("{}/cache/prewarm/{}", node_url, catalog);
+    let response = match state.http_client.post(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(ApiResponse::<CacheActionResponse>::error(format!(
+                    "Failed to reach data node: {}",
+                    e
+                ))),
+            );
+        }
+    };
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<CacheActionResponse>::error(body)),
+        );
+    }
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(CacheActionResponse {
+            success: true,
+            message: format!("Cache prewarm triggered for catalog '{}'", catalog),
+        })),
+    )
+}
+
+/// Clear all caches by forwarding to data node
+async fn cache_clear(State(state): State<AdminState>) -> impl IntoResponse {
+    let node_url = match state.get_data_node_url().await {
+        Ok(url) => url,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiResponse::<CacheActionResponse>::error(e)),
+            );
+        }
+    };
+
+    let url = format!("{}/cache/clear", node_url);
+    let response = match state.http_client.post(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(ApiResponse::<CacheActionResponse>::error(format!(
+                    "Failed to reach data node: {}",
+                    e
+                ))),
+            );
+        }
+    };
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<CacheActionResponse>::error(body)),
+        );
+    }
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(CacheActionResponse {
+            success: true,
+            message: "All caches cleared".to_string(),
+        })),
+    )
+}
+
+// ============ Election Endpoints ============
+
+#[derive(Serialize)]
+struct ElectionInfo {
+    name: String,
+    leader: Option<String>,
+    term: u64,
+    has_leader: bool,
+}
+
+/// Known election names in the cluster
+const KNOWN_ELECTIONS: &[&str] = &["compactor", "retention"];
+
+/// List all known elections and their current leaders
+async fn list_elections(State(state): State<AdminState>) -> impl IntoResponse {
+    let meta_client = match state.get_meta_client().await {
+        Ok(client) => client,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiResponse::<Vec<ElectionInfo>>::error(format!(
+                    "Failed to connect to Meta: {}",
+                    e
+                ))),
+            );
+        }
+    };
+
+    let mut elections = Vec::new();
+    for &election in KNOWN_ELECTIONS {
+        let (leader, term, has_leader) = match meta_client.get_leader(election).await {
+            Ok(Some((leader_id, leader_term))) => (Some(leader_id), leader_term, true),
+            Ok(None) => (None, 0, false),
+            Err(_) => (None, 0, false),
+        };
+
+        elections.push(ElectionInfo {
+            name: election.to_string(),
+            leader,
+            term,
+            has_leader,
+        });
+    }
+
+    (StatusCode::OK, Json(ApiResponse::ok(elections)))
+}
+
+#[derive(Deserialize)]
+struct CampaignRequest {
+    #[serde(default = "default_campaign_ttl")]
+    ttl_ms: u64,
+}
+
+fn default_campaign_ttl() -> u64 {
+    30_000
+}
+
+#[derive(Serialize)]
+struct CampaignResponse {
+    elected: bool,
+    term: u64,
+    election: String,
+}
+
+/// Force campaign: make the admin node the leader for an election
+async fn force_campaign(
+    State(state): State<AdminState>,
+    Path(election): Path<String>,
+    Json(request): Json<CampaignRequest>,
+) -> impl IntoResponse {
+    let meta_client = match state.get_meta_client().await {
+        Ok(client) => client,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiResponse::<CampaignResponse>::error(format!(
+                    "Failed to connect to Meta: {}",
+                    e
+                ))),
+            );
+        }
+    };
+
+    match meta_client.campaign(&election, request.ttl_ms).await {
+        Ok(Some(term)) => (
+            StatusCode::OK,
+            Json(ApiResponse::ok(CampaignResponse {
+                elected: true,
+                term,
+                election,
+            })),
+        ),
+        Ok(None) => (
+            StatusCode::OK,
+            Json(ApiResponse::ok(CampaignResponse {
+                elected: false,
+                term: 0,
+                election,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<CampaignResponse>::error(format!(
+                "Campaign failed: {}",
+                e
+            ))),
+        ),
+    }
+}
+
+#[derive(Serialize)]
+struct ResignResponse {
+    success: bool,
+    election: String,
+}
+
+/// Force resign: resign the current leader for an election
+async fn force_resign(
+    State(state): State<AdminState>,
+    Path(election): Path<String>,
+) -> impl IntoResponse {
+    let meta_client = match state.get_meta_client().await {
+        Ok(client) => client,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiResponse::<ResignResponse>::error(format!(
+                    "Failed to connect to Meta: {}",
+                    e
+                ))),
+            );
+        }
+    };
+
+    // Get current leader and term
+    let term = match meta_client.get_leader(&election).await {
+        Ok(Some((_, t))) => t,
+        Ok(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<ResignResponse>::error(format!(
+                    "No leader for election '{}'",
+                    election
+                ))),
+            );
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<ResignResponse>::error(format!(
+                    "Failed to get leader: {}",
+                    e
+                ))),
+            );
+        }
+    };
+
+    match meta_client.resign(&election, term).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(ApiResponse::ok(ResignResponse {
+                success: true,
+                election,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<ResignResponse>::error(format!(
+                "Resign failed: {}",
+                e
+            ))),
+        ),
+    }
+}
+
+// ============ Configuration Endpoint ============
+
+#[derive(Serialize)]
+struct ClusterConfigResponse {
+    admin: AdminConfigInfo,
+    node_counts: NodeCountInfo,
+}
+
+#[derive(Serialize)]
+struct AdminConfigInfo {
+    http_host: String,
+    http_port: u16,
+    meta_endpoints: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct NodeCountInfo {
+    meta: u32,
+    router: u32,
+    data: u32,
+    compactor: u32,
+}
+
+/// Get cluster configuration
+async fn get_config(State(state): State<AdminState>) -> impl IntoResponse {
+    let admin_info = AdminConfigInfo {
+        http_host: state.config.http_host.clone(),
+        http_port: state.config.http_port,
+        meta_endpoints: state.meta_endpoints.clone(),
+    };
+
+    // Get node counts from meta
+    let node_counts = if let Ok(meta_client) = state.get_meta_client().await {
+        if let Ok(nodes) = meta_client.list_nodes(None, None).await {
+            let mut counts = NodeCountInfo {
+                meta: 0,
+                router: 0,
+                data: 0,
+                compactor: 0,
+            };
+            for node in &nodes {
+                match node.role {
+                    NodeRole::Meta => counts.meta += 1,
+                    NodeRole::Router => counts.router += 1,
+                    NodeRole::Data => counts.data += 1,
+                    NodeRole::Compactor => counts.compactor += 1,
+                    NodeRole::Unknown => {}
+                }
+            }
+            counts
+        } else {
+            NodeCountInfo {
+                meta: 0,
+                router: 0,
+                data: 0,
+                compactor: 0,
+            }
+        }
+    } else {
+        NodeCountInfo {
+            meta: 0,
+            router: 0,
+            data: 0,
+            compactor: 0,
+        }
+    };
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(ClusterConfigResponse {
+            admin: admin_info,
+            node_counts,
+        })),
+    )
 }

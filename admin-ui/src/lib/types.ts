@@ -425,3 +425,47 @@ export interface ParquetStatistics {
   max_values: Record<string, unknown>
   null_counts: Record<string, number>
 }
+
+// Debug / Cache types
+export interface CacheActionResult {
+  success: boolean
+  message: string
+}
+
+// Election types
+export interface ElectionInfo {
+  name: string
+  leader: string | null
+  term: number
+  has_leader: boolean
+}
+
+export interface CampaignResult {
+  elected: boolean
+  term: number
+  election: string
+}
+
+export interface ResignResult {
+  success: boolean
+  election: string
+}
+
+// Configuration types
+export interface ClusterConfig {
+  admin: AdminConfigInfo
+  node_counts: ConfigNodeCounts
+}
+
+export interface AdminConfigInfo {
+  http_host: string
+  http_port: number
+  meta_endpoints: string[]
+}
+
+export interface ConfigNodeCounts {
+  meta: number
+  router: number
+  data: number
+  compactor: number
+}

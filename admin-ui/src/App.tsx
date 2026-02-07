@@ -11,6 +11,8 @@ import { DataOperationsPage } from '@/pages/data-operations'
 import { RouterOperationsPage } from '@/pages/router-operations'
 import { QueryPage } from '@/pages/query'
 import { StoragePage } from '@/pages/storage'
+import { DebugPage } from '@/pages/debug'
+import { SettingsPage } from '@/pages/settings'
 
 function App() {
   return (
@@ -28,6 +30,8 @@ function App() {
           <Route path="meta-operations" element={<MetaOperationsPage />} />
           <Route path="data-operations" element={<DataOperationsPage />} />
           <Route path="router-operations" element={<RouterOperationsPage />} />
+          <Route path="debug" element={<DebugPage />} />
+          <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>

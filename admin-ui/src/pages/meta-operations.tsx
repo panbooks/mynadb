@@ -7,6 +7,9 @@ import {
   Plus,
   CheckCircle2,
   XCircle,
+  Vote,
+  Play,
+  LogOut,
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -39,6 +42,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useMetaStatus } from '@/hooks/use-cluster'
+import { useElections, useCampaign, useResign } from '@/hooks/use-elections'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { fetchDistributionConfigs, setDistributionConfig } from '@/lib/api'
 import { formatRelativeTime } from '@/lib/utils'
@@ -205,9 +209,163 @@ export function MetaOperationsPage() {
         </Card>
       )}
 
+      {/* Elections */}
+      <ElectionsSection />
+
       {/* Distribution Config */}
       <DistributionConfigSection />
     </div>
+  )
+}
+
+function ElectionsSection() {
+  const { data: elections, isLoading } = useElections()
+  const campaignMutation = useCampaign()
+  const resignMutation = useResign()
+  const [confirmAction, setConfirmAction] = useState<{ type: 'campaign' | 'resign'; election: string } | null>(null)
+
+  const handleConfirm = () => {
+    if (!confirmAction) return
+    if (confirmAction.type === 'campaign') {
+      campaignMutation.mutate(
+        { election: confirmAction.election },
+        { onSettled: () => setConfirmAction(null) }
+      )
+    } else {
+      resignMutation.mutate(
+        confirmAction.election,
+        { onSettled: () => setConfirmAction(null) }
+      )
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          <Vote className="h-4 w-4" />
+          Leader Elections
+        </CardTitle>
+        <CardDescription>
+          Background task leader elections (compactor, retention)
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="space-y-2">
+            {[...Array(2)].map((_, i) => (
+              <Skeleton key={i} className="h-12 w-full" />
+            ))}
+          </div>
+        ) : elections && elections.length > 0 ? (
+          <>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Election</TableHead>
+                  <TableHead>Leader</TableHead>
+                  <TableHead>Term</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {elections.map((election) => (
+                  <TableRow key={election.name}>
+                    <TableCell className="font-medium capitalize">
+                      {election.name}
+                    </TableCell>
+                    <TableCell>
+                      {election.leader ? (
+                        <code className="text-sm bg-muted px-1 rounded">
+                          {election.leader}
+                        </code>
+                      ) : (
+                        <span className="text-muted-foreground">None</span>
+                      )}
+                    </TableCell>
+                    <TableCell>{election.term}</TableCell>
+                    <TableCell>
+                      {election.has_leader ? (
+                        <Badge variant="success">
+                          <CheckCircle2 className="mr-1 h-3 w-3" />
+                          Active
+                        </Badge>
+                      ) : (
+                        <Badge variant="secondary">
+                          <XCircle className="mr-1 h-3 w-3" />
+                          No Leader
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setConfirmAction({ type: 'campaign', election: election.name })}
+                        >
+                          <Play className="mr-1 h-3 w-3" />
+                          Campaign
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setConfirmAction({ type: 'resign', election: election.name })}
+                          disabled={!election.has_leader}
+                        >
+                          <LogOut className="mr-1 h-3 w-3" />
+                          Resign
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+
+            {/* Confirmation Dialog */}
+            <Dialog open={!!confirmAction} onOpenChange={(open) => !open && setConfirmAction(null)}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>
+                    {confirmAction?.type === 'campaign'
+                      ? 'Campaign for Leadership'
+                      : 'Resign Leadership'}
+                  </DialogTitle>
+                  <DialogDescription>
+                    {confirmAction?.type === 'campaign'
+                      ? `This will make the admin node campaign to become the leader for the "${confirmAction.election}" election. This is primarily useful for testing.`
+                      : `This will force the current leader to resign from the "${confirmAction?.election}" election. A new leader will be elected automatically.`}
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setConfirmAction(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleConfirm}
+                    disabled={campaignMutation.isPending || resignMutation.isPending}
+                  >
+                    {(campaignMutation.isPending || resignMutation.isPending) ? 'Processing...' : 'Confirm'}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {(campaignMutation.isError || resignMutation.isError) && (
+              <p className="mt-2 text-sm text-red-600">
+                {((campaignMutation.error || resignMutation.error) as Error)?.message}
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="text-muted-foreground text-center py-8">
+            No elections found
+          </p>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 

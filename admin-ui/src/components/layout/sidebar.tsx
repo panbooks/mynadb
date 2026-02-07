@@ -11,6 +11,7 @@ import {
   HardDrive,
   Terminal,
   FolderTree,
+  Bug,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -22,6 +23,7 @@ const navigation = [
   { name: 'Tables', href: '/tables', icon: Table2 },
   { name: 'Scale-In', href: '/scale-in', icon: ArrowDownToLine },
   { name: 'Events', href: '/events', icon: Activity },
+  { name: 'Debug Tools', href: '/debug', icon: Bug },
 ]
 
 const operations = [
