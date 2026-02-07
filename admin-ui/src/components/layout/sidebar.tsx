@@ -7,7 +7,6 @@ import {
   ArrowDownToLine,
   Activity,
   Settings,
-  Network,
   HardDrive,
   Terminal,
   FolderTree,
@@ -29,7 +28,6 @@ const navigation = [
 const operations = [
   { name: 'Meta Operations', href: '/meta-operations', icon: Database },
   { name: 'Data Operations', href: '/data-operations', icon: HardDrive },
-  { name: 'Router Operations', href: '/router-operations', icon: Network },
 ]
 
 export function Sidebar() {

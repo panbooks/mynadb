@@ -8,7 +8,6 @@ import { ScaleInPage } from '@/pages/scale-in'
 import { EventsPage } from '@/pages/events'
 import { MetaOperationsPage } from '@/pages/meta-operations'
 import { DataOperationsPage } from '@/pages/data-operations'
-import { RouterOperationsPage } from '@/pages/router-operations'
 import { QueryPage } from '@/pages/query'
 import { StoragePage } from '@/pages/storage'
 import { DebugPage } from '@/pages/debug'
@@ -29,7 +28,6 @@ function App() {
           <Route path="events" element={<EventsPage />} />
           <Route path="meta-operations" element={<MetaOperationsPage />} />
           <Route path="data-operations" element={<DataOperationsPage />} />
-          <Route path="router-operations" element={<RouterOperationsPage />} />
           <Route path="debug" element={<DebugPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<NotFound />} />

@@ -174,15 +174,29 @@ async fn cluster_status(State(state): State<AdminState>) -> impl IntoResponse {
     };
 
     let mut node_counts = NodeCounts::default();
+
+    // Probe meta nodes directly (they don't self-register)
+    {
+        let futures: Vec<_> = state
+            .meta_endpoints
+            .iter()
+            .map(|ep| probe_meta_health(&state.http_client, ep))
+            .collect();
+        let results = futures::future::join_all(futures).await;
+        for peer in results.into_iter().flatten() {
+            node_counts.meta.total += 1;
+            if peer.is_healthy {
+                node_counts.meta.active += 1;
+            } else {
+                node_counts.meta.inactive += 1;
+            }
+        }
+    }
+
     for node in &nodes {
         match node.role {
             NodeRole::Meta => {
-                node_counts.meta.total += 1;
-                if node.state == NodeState::Active {
-                    node_counts.meta.active += 1;
-                } else {
-                    node_counts.meta.inactive += 1;
-                }
+                // Skip — already counted via HTTP probing above
             }
             NodeRole::Router => {
                 node_counts.router.total += 1;
@@ -324,66 +338,106 @@ async fn list_nodes(
         _ => None,
     });
 
-    match meta_client.list_nodes(role_filter, state_filter).await {
-        Ok(nodes) => {
-            // Build table ownership counts from meta
-            let table_counts: HashMap<String, u32> = if let Ok(tables) = meta_client.list_tables(None, None).await {
-                let mut counts: HashMap<String, u32> = HashMap::new();
-                for table in &tables {
-                    for owner in &table.owners {
-                        *counts.entry(owner.node_id.clone()).or_insert(0) += 1;
-                    }
-                }
-                counts
-            } else {
-                HashMap::new()
-            };
-
-            let mut summaries: Vec<NodeSummary> = nodes
-                .into_iter()
-                .filter(|n| {
-                    // Additional mode filter
-                    if let Some(ref mode_str) = query.mode {
-                        let mode_match = match mode_str.to_lowercase().as_str() {
-                            "primary" => n.mode == Some(DataNodeMode::Primary),
-                            "standby" => n.mode == Some(DataNodeMode::Standby),
-                            _ => true,
-                        };
-                        if !mode_match {
-                            return false;
-                        }
-                    }
-                    true
-                })
-                .map(|n| {
-                    let zone = n.zone().map(|s| s.to_string());
-                    let last_heartbeat = timestamp_to_rfc3339(n.last_heartbeat);
-                    let tables_owned = table_counts.get(&n.node_id).copied();
-                    NodeSummary {
-                        id: n.node_id,
-                        role: format!("{:?}", n.role),
-                        state: format!("{:?}", n.state),
-                        mode: n.mode.map(|m| format!("{:?}", m)),
-                        advertise_addr: n.advertise_addr,
-                        zone,
-                        tables_owned,
-                        last_heartbeat,
-                    }
-                })
-                .collect();
-
-            summaries.sort_by(|a, b| a.id.cmp(&b.id));
-
-            (StatusCode::OK, Json(ApiResponse::ok(summaries)))
+    // Fetch registered nodes (data nodes primarily) from meta registry
+    let registered_nodes = match meta_client.list_nodes(role_filter, state_filter).await {
+        Ok(nodes) => nodes,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<Vec<NodeSummary>>::error(format!(
+                    "Failed to list nodes: {}",
+                    e
+                ))),
+            );
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<Vec<NodeSummary>>::error(format!(
-                "Failed to list nodes: {}",
-                e
-            ))),
-        ),
+    };
+
+    // Build table ownership counts from meta
+    let table_counts: HashMap<String, u32> = if let Ok(tables) = meta_client.list_tables(None, None).await {
+        let mut counts: HashMap<String, u32> = HashMap::new();
+        for table in &tables {
+            for owner in &table.owners {
+                *counts.entry(owner.node_id.clone()).or_insert(0) += 1;
+            }
+        }
+        counts
+    } else {
+        HashMap::new()
+    };
+
+    let mut summaries: Vec<NodeSummary> = registered_nodes
+        .into_iter()
+        .filter(|n| {
+            // Additional mode filter
+            if let Some(ref mode_str) = query.mode {
+                let mode_match = match mode_str.to_lowercase().as_str() {
+                    "primary" => n.mode == Some(DataNodeMode::Primary),
+                    "standby" => n.mode == Some(DataNodeMode::Standby),
+                    _ => true,
+                };
+                if !mode_match {
+                    return false;
+                }
+            }
+            true
+        })
+        .map(|n| {
+            let zone = n.zone().map(|s| s.to_string());
+            let last_heartbeat = timestamp_to_rfc3339(n.last_heartbeat);
+            let tables_owned = table_counts.get(&n.node_id).copied();
+            NodeSummary {
+                id: n.node_id,
+                role: format!("{:?}", n.role),
+                state: format!("{:?}", n.state),
+                mode: n.mode.map(|m| format!("{:?}", m)),
+                advertise_addr: n.advertise_addr,
+                zone,
+                tables_owned,
+                last_heartbeat,
+            }
+        })
+        .collect();
+
+    // Include synthetic meta nodes by probing HTTP endpoints
+    // (meta nodes never self-register in the node registry)
+    let include_meta = role_filter.is_none() || role_filter == Some(NodeRole::Meta);
+    if include_meta {
+        let futures: Vec<_> = state
+            .meta_endpoints
+            .iter()
+            .map(|ep| probe_meta_health(&state.http_client, ep))
+            .collect();
+        let results = futures::future::join_all(futures).await;
+
+        for peer in results.into_iter().flatten() {
+            summaries.push(NodeSummary {
+                id: if peer.id.is_empty() {
+                    format!("meta-{}", peer.address)
+                } else {
+                    format!("meta-{}", peer.id)
+                },
+                role: "Meta".to_string(),
+                state: if peer.is_healthy {
+                    "Active".to_string()
+                } else {
+                    "Inactive".to_string()
+                },
+                mode: if peer.is_leader {
+                    Some("Leader".to_string())
+                } else {
+                    Some("Follower".to_string())
+                },
+                advertise_addr: peer.address,
+                zone: None,
+                tables_owned: None,
+                last_heartbeat: peer.last_heartbeat,
+            });
+        }
     }
+
+    summaries.sort_by(|a, b| a.id.cmp(&b.id));
+
+    (StatusCode::OK, Json(ApiResponse::ok(summaries)))
 }
 
 /// Node detail response - matches frontend NodeDetail type
@@ -1151,54 +1205,116 @@ struct MetaPeerInfo {
     last_heartbeat: Option<String>,
 }
 
-/// Get meta node status
+/// Derive HTTP URL from a meta gRPC endpoint address.
+/// Convention: meta HTTP port = gRPC port - 1 (e.g., gRPC 6001 → HTTP 6000).
+fn derive_meta_http_url(grpc_endpoint: &str) -> Option<String> {
+    // endpoint is "host:port" (gRPC)
+    let parts: Vec<&str> = grpc_endpoint.rsplitn(2, ':').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let port: u16 = parts[0].parse().ok()?;
+    let host = parts[1];
+    let http_port = port.checked_sub(1)?;
+    Some(format!("http://{}:{}", host, http_port))
+}
+
+/// Probe a single meta node's /health endpoint and return peer info.
+async fn probe_meta_health(
+    http_client: &reqwest::Client,
+    grpc_endpoint: &str,
+) -> Option<MetaPeerInfo> {
+    let http_url = derive_meta_http_url(grpc_endpoint)?;
+    let url = format!("{}/health", http_url);
+
+    let resp = http_client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+        .ok()?;
+
+    if !resp.status().is_success() {
+        return Some(MetaPeerInfo {
+            id: String::new(),
+            address: grpc_endpoint.to_string(),
+            is_leader: false,
+            is_healthy: false,
+            last_heartbeat: None,
+        });
+    }
+
+    let body: serde_json::Value = resp.json().await.ok()?;
+
+    let node_id = body
+        .get("node_id")
+        .and_then(|v| v.as_u64())
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+    let is_leader = body.get("is_leader").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_healthy = body
+        .get("status")
+        .and_then(|v| v.as_str())
+        .map(|s| s == "healthy")
+        .unwrap_or(true); // If no status field, assume healthy since endpoint responded
+
+    Some(MetaPeerInfo {
+        id: node_id,
+        address: grpc_endpoint.to_string(),
+        is_leader,
+        is_healthy,
+        last_heartbeat: Some(chrono::Utc::now().to_rfc3339()),
+    })
+}
+
+/// Get meta node status by probing each meta endpoint's HTTP /health
 async fn meta_status(State(state): State<AdminState>) -> impl IntoResponse {
-    let client = match state.get_meta_client().await {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<MetaStatusResponse>::error(format!("Failed to connect to meta: {}", e)))
-            )
-        }
+    // Get cluster status from gRPC for leader/health info
+    let cluster_status = match state.get_meta_client().await {
+        Ok(client) => client.get_cluster_status().await.ok(),
+        Err(_) => None,
     };
 
-    let cluster_status = match client.get_cluster_status().await {
-        Ok(s) => s,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<MetaStatusResponse>::error(format!("Failed to get meta status: {}", e)))
-            )
-        }
-    };
+    // Probe each meta endpoint's HTTP health in parallel
+    let futures: Vec<_> = state
+        .meta_endpoints
+        .iter()
+        .map(|ep| probe_meta_health(&state.http_client, ep))
+        .collect();
+    let results = futures::future::join_all(futures).await;
 
-    // Get meta node list for peer details
-    let peers = match client.list_nodes(Some(NodeRole::Meta), None).await {
-        Ok(nodes) => {
-            nodes.iter().map(|n| {
-                let is_leader = n.node_id == cluster_status.meta_leader;
-                let now_ms = chrono::Utc::now().timestamp_millis();
-                let heartbeat_age_ms = now_ms - n.last_heartbeat;
-                // Consider healthy if heartbeat is within 30 seconds
-                let is_healthy = n.state == NodeState::Active && heartbeat_age_ms < 30_000;
-                MetaPeerInfo {
-                    id: n.node_id.clone(),
-                    address: n.advertise_addr.clone(),
-                    is_leader,
-                    is_healthy,
-                    last_heartbeat: timestamp_to_rfc3339(n.last_heartbeat),
-                }
-            }).collect()
+    let mut peers: Vec<MetaPeerInfo> = results.into_iter().flatten().collect();
+
+    // If we couldn't reach any meta node via HTTP, add entries showing them as unhealthy
+    if peers.is_empty() {
+        for ep in &state.meta_endpoints {
+            peers.push(MetaPeerInfo {
+                id: String::new(),
+                address: ep.clone(),
+                is_leader: false,
+                is_healthy: false,
+                last_heartbeat: None,
+            });
         }
-        Err(_) => Vec::new(),
+    }
+
+    let (leader_id, is_healthy) = match &cluster_status {
+        Some(cs) => (
+            if cs.meta_leader.is_empty() {
+                None
+            } else {
+                Some(cs.meta_leader.clone())
+            },
+            cs.healthy,
+        ),
+        None => (None, false),
     };
 
     let response = MetaStatusResponse {
-        leader_id: Some(cluster_status.meta_leader),
-        term: 0, // Not exposed by ClusterStatus; placeholder
-        commit_index: 0, // Not exposed by ClusterStatus; placeholder
-        is_healthy: cluster_status.healthy,
+        leader_id,
+        term: 0,
+        commit_index: 0,
+        is_healthy,
         peers,
     };
     (StatusCode::OK, Json(ApiResponse::ok(response)))
