@@ -801,7 +801,7 @@ async fn write_handler(
     };
 
     match shared::process_write_impl(&state.cache, config, state.wal.as_ref(), &db, &data).await {
-        Ok(_) => (StatusCode::NO_CONTENT, "".to_string()),
+        Ok(_result) => (StatusCode::NO_CONTENT, "".to_string()),
         Err(e) => (StatusCode::BAD_REQUEST, e),
     }
 }
@@ -840,7 +840,7 @@ async fn write_handler_query_param(
     match shared::process_write_impl(&state.cache, config, state.wal.as_ref(), &params.db, &data)
         .await
     {
-        Ok(_) => (StatusCode::NO_CONTENT, "".to_string()),
+        Ok(_result) => (StatusCode::NO_CONTENT, "".to_string()),
         Err(e) => (StatusCode::BAD_REQUEST, e),
     }
 }

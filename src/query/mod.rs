@@ -44,6 +44,7 @@ pub mod physical_optimizers;
 pub mod providers;
 pub mod query_engine;
 pub mod sql_utils;
+pub mod streaming;
 pub mod timeseries;
 pub mod types;
 

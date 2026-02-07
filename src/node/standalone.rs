@@ -210,6 +210,18 @@ pub async fn run(config_path: &str) {
         info!("Audit logging: ENABLED");
     }
 
+    // Initialize streaming query manager
+    let streaming_manager = if config.streaming.enabled {
+        info!("Streaming queries: ENABLED (max {} subscriptions)", config.streaming.max_subscriptions);
+        Some(Arc::new(crate::query::streaming::StreamingQueryManager::new(
+            query_engine.clone(),
+            config.streaming.clone(),
+        )))
+    } else {
+        debug!("Streaming queries: DISABLED");
+        None
+    };
+
     // Build application state
     let user_store_for_state = if config.auth.enabled {
         Some(auth_middleware.user_store())
@@ -235,6 +247,7 @@ pub async fn run(config_path: &str) {
         role_store: role_store_for_state,
         auth_enabled: config.auth.enabled,
         audit_logger: Some(audit_logger),
+        streaming_manager,
     };
 
     // Build router (standalone mode)

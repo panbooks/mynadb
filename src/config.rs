@@ -23,6 +23,9 @@ pub struct Config {
     pub partition_files_cache: PartitionFilesCacheConfig,
     #[serde(default)]
     pub query: QueryConfig,
+    /// Streaming query configuration (WebSocket/SSE subscriptions)
+    #[serde(default)]
+    pub streaming: StreamingConfig,
     #[serde(default)]
     pub compaction: CompactionConfig,
     #[serde(default)]
@@ -410,6 +413,61 @@ impl Default for QueryConfig {
 
 fn default_use_custom_table_provider() -> bool {
     false // Default to original ListingTable approach
+}
+
+/// Streaming query configuration (WebSocket & SSE subscriptions)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamingConfig {
+    /// Enable streaming query endpoints
+    #[serde(default = "default_streaming_enabled")]
+    pub enabled: bool,
+    /// Maximum concurrent subscriptions across all connections
+    #[serde(default = "default_streaming_max_subscriptions")]
+    pub max_subscriptions: usize,
+    /// Maximum subscriptions per individual connection
+    #[serde(default = "default_streaming_max_per_connection")]
+    pub max_subscriptions_per_connection: usize,
+    /// Debounce interval for batching update notifications (milliseconds)
+    #[serde(default = "default_streaming_debounce_ms")]
+    pub update_debounce_ms: u64,
+    /// Maximum buffered messages before applying backpressure (drop oldest)
+    #[serde(default = "default_streaming_backpressure")]
+    pub backpressure_threshold: usize,
+    /// WebSocket heartbeat interval (seconds)
+    #[serde(default = "default_streaming_heartbeat_secs")]
+    pub heartbeat_interval_secs: u64,
+}
+
+impl Default for StreamingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_streaming_enabled(),
+            max_subscriptions: default_streaming_max_subscriptions(),
+            max_subscriptions_per_connection: default_streaming_max_per_connection(),
+            update_debounce_ms: default_streaming_debounce_ms(),
+            backpressure_threshold: default_streaming_backpressure(),
+            heartbeat_interval_secs: default_streaming_heartbeat_secs(),
+        }
+    }
+}
+
+fn default_streaming_enabled() -> bool {
+    false
+}
+fn default_streaming_max_subscriptions() -> usize {
+    10000
+}
+fn default_streaming_max_per_connection() -> usize {
+    10
+}
+fn default_streaming_debounce_ms() -> u64 {
+    100
+}
+fn default_streaming_backpressure() -> usize {
+    1000
+}
+fn default_streaming_heartbeat_secs() -> u64 {
+    30
 }
 
 /// Compaction configuration

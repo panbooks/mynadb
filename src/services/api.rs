@@ -9,9 +9,15 @@
 /// - Compaction
 /// - Partition management
 use axum::{
-    extract::{Path, Query as AxumQuery, Request, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Path, Query as AxumQuery, Request, State,
+    },
     http::StatusCode,
-    response::IntoResponse,
+    response::{
+        sse::{Event as SseEvent, KeepAlive, Sse},
+        IntoResponse,
+    },
     routing::{delete, get, post, put},
     Json, Router,
 };
@@ -56,6 +62,8 @@ pub struct AppState {
     pub auth_enabled: bool,
     /// Audit logger for security events
     pub audit_logger: Option<Arc<crate::auth::AuditLogger>>,
+    /// Streaming query manager for WebSocket/SSE subscriptions
+    pub streaming_manager: Option<Arc<crate::query::streaming::StreamingQueryManager>>,
 }
 
 #[derive(Deserialize)]
@@ -1301,10 +1309,32 @@ async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCod
     match shared::process_write_impl(&state.cache, &state.config, state.wal.as_ref(), db, data)
         .await
     {
-        Ok(point_count) => {
+        Ok(result) => {
             let latency_ms = start.elapsed().as_micros() as f64 / 1000.0;
-            METRICS.record_write(point_count as u64, data_len, latency_ms);
-            debug!("Added {} points to cache", point_count);
+            METRICS.record_write(result.point_count as u64, data_len, latency_ms);
+            debug!("Added {} points to cache", result.point_count);
+
+            // Notify streaming subscriptions of the write
+            if let Some(ref streaming_mgr) = state.streaming_manager {
+                let db_owned = db.to_string();
+                let mgr = streaming_mgr.clone();
+                let debounce_ms = state.config.streaming.update_debounce_ms;
+                tokio::spawn(async move {
+                    // Debounce: wait briefly to batch rapid writes
+                    if debounce_ms > 0 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(debounce_ms)).await;
+                    }
+                    for (schema, table) in result.tables {
+                        mgr.on_data_written(crate::query::streaming::WriteEvent {
+                            catalog: db_owned.clone(),
+                            schema,
+                            table,
+                        })
+                        .await;
+                    }
+                });
+            }
+
             (StatusCode::NO_CONTENT, "".to_string())
         }
         Err(e) => {
@@ -1923,6 +1953,252 @@ pub async fn delete_user_handler(
     }
 }
 
+// ===== Streaming Query Handlers =====
+
+/// WebSocket streaming query endpoint
+/// WS /stream/query - Client sends StreamQueryRequest JSON, server pushes results
+pub async fn ws_stream_query_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    auth_ctx: Option<axum::Extension<crate::auth::AuthContext>>,
+) -> impl IntoResponse {
+    let ctx = auth_ctx
+        .map(|ext| ext.0)
+        .unwrap_or_else(crate::auth::AuthContext::anonymous);
+
+    ws.on_upgrade(move |socket| handle_query_websocket(socket, state, ctx))
+}
+
+async fn handle_query_websocket(
+    socket: WebSocket,
+    state: AppState,
+    auth_ctx: crate::auth::AuthContext,
+) {
+    use crate::query::streaming::{StreamMessage, StreamQueryRequest};
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::time::{interval, Duration};
+
+    let Some(ref streaming_mgr) = state.streaming_manager else {
+        return;
+    };
+
+    let (mut sender, mut receiver) = socket.split();
+    let heartbeat_secs = state.config.streaming.heartbeat_interval_secs;
+    let max_per_conn = state.config.streaming.max_subscriptions_per_connection;
+
+    // Track subscriptions for this connection
+    let active_subs: Arc<tokio::sync::Mutex<Vec<uuid::Uuid>>> =
+        Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let active_subs_cleanup = active_subs.clone();
+    let mgr = streaming_mgr.clone();
+    let mgr_cleanup = streaming_mgr.clone();
+
+    // Sender channel — multiple tasks forward messages here, one task sends to WS
+    let (ws_tx, mut ws_rx) = tokio::sync::mpsc::channel::<String>(256);
+
+    // Task: forward messages from ws_tx to the WebSocket
+    let send_task = tokio::spawn(async move {
+        while let Some(msg) = ws_rx.recv().await {
+            if sender.send(Message::Text(msg)).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Task: heartbeat
+    let ws_tx_hb = ws_tx.clone();
+    let heartbeat_task = tokio::spawn(async move {
+        let mut ticker = interval(Duration::from_secs(heartbeat_secs));
+        loop {
+            ticker.tick().await;
+            let hb = StreamMessage::Heartbeat {
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            };
+            let json = serde_json::to_string(&hb).unwrap_or_default();
+            if ws_tx_hb.send(json).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Task: receive messages from client and create subscriptions
+    while let Some(Ok(msg)) = receiver.next().await {
+        match msg {
+            Message::Text(text) => {
+                let req: StreamQueryRequest = match serde_json::from_str(&text) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let err = serde_json::json!({"type": "error", "data": format!("Invalid request: {}", e)});
+                        let _ = ws_tx.send(err.to_string()).await;
+                        continue;
+                    }
+                };
+
+                // Check per-connection limit
+                let sub_count = active_subs.lock().await.len();
+                if sub_count >= max_per_conn {
+                    let err = serde_json::json!({
+                        "type": "error",
+                        "data": format!("Max subscriptions per connection reached ({})", max_per_conn)
+                    });
+                    let _ = ws_tx.send(err.to_string()).await;
+                    continue;
+                }
+
+                // Subscribe
+                match mgr.subscribe(&req.database, &req.query, &auth_ctx).await {
+                    Ok(handle) => {
+                        let sub_id = handle.id;
+                        active_subs.lock().await.push(sub_id);
+
+                        // Spawn a task to forward subscription messages to the WS sender
+                        let ws_tx_sub = ws_tx.clone();
+                        tokio::spawn(async move {
+                            let mut rx = handle.receiver;
+                            while let Some(msg) = rx.recv().await {
+                                let json = serde_json::to_string(&msg).unwrap_or_default();
+                                if ws_tx_sub.send(json).await.is_err() {
+                                    break;
+                                }
+                            }
+                        });
+
+                        let ack = serde_json::json!({
+                            "type": "subscribed",
+                            "subscription_id": sub_id.to_string(),
+                            "database": req.database,
+                            "query": req.query,
+                        });
+                        let _ = ws_tx.send(ack.to_string()).await;
+                    }
+                    Err(e) => {
+                        let err = serde_json::json!({"type": "error", "data": e});
+                        let _ = ws_tx.send(err.to_string()).await;
+                    }
+                }
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+
+    // Cleanup: cancel heartbeat, send task, and remove all subscriptions
+    heartbeat_task.abort();
+    send_task.abort();
+    let subs = active_subs_cleanup.lock().await;
+    for id in subs.iter() {
+        mgr_cleanup.unsubscribe(id);
+    }
+}
+
+/// SSE streaming query parameters
+#[derive(Deserialize)]
+pub struct SseStreamParams {
+    pub sql: String,
+}
+
+/// SSE streaming query endpoint
+/// GET /stream/query/:db?sql=SELECT+*+FROM+cpu
+pub async fn sse_stream_query_handler(
+    Path(db): Path<String>,
+    AxumQuery(params): AxumQuery<SseStreamParams>,
+    State(state): State<AppState>,
+    auth_ctx: Option<axum::Extension<crate::auth::AuthContext>>,
+) -> impl IntoResponse {
+    use futures_util::StreamExt;
+
+    let ctx = auth_ctx
+        .map(|ext| ext.0)
+        .unwrap_or_else(crate::auth::AuthContext::anonymous);
+
+    let Some(ref streaming_mgr) = state.streaming_manager else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Streaming queries not enabled",
+        )
+            .into_response();
+    };
+
+    let handle = match streaming_mgr.subscribe(&db, &params.sql, &ctx).await {
+        Ok(h) => h,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, e).into_response();
+        }
+    };
+
+    let sub_id = handle.id;
+    let mgr = streaming_mgr.clone();
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(handle.receiver).map(
+        move |msg| -> Result<SseEvent, std::convert::Infallible> {
+            let json = serde_json::to_string(&msg).unwrap_or_default();
+            Ok(SseEvent::default().data(json))
+        },
+    );
+
+    // Wrap in a stream that cleans up subscription on drop
+    let cleanup_stream = StreamWithCleanup {
+        inner: Box::pin(stream),
+        mgr: Some(mgr),
+        sub_id,
+    };
+
+    Sse::new(cleanup_stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+/// A stream wrapper that cleans up the subscription when dropped
+struct StreamWithCleanup {
+    inner: std::pin::Pin<
+        Box<
+            dyn futures_util::Stream<Item = Result<SseEvent, std::convert::Infallible>>
+                + Send,
+        >,
+    >,
+    mgr: Option<Arc<crate::query::streaming::StreamingQueryManager>>,
+    sub_id: uuid::Uuid,
+}
+
+impl futures_util::Stream for StreamWithCleanup {
+    type Item = Result<SseEvent, std::convert::Infallible>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+impl Drop for StreamWithCleanup {
+    fn drop(&mut self) {
+        if let Some(ref mgr) = self.mgr {
+            mgr.unsubscribe(&self.sub_id);
+        }
+    }
+}
+
+/// GET /stream/subscriptions - List active streaming subscriptions
+pub async fn list_subscriptions_handler(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let Some(ref streaming_mgr) = state.streaming_manager else {
+        return Json(serde_json::json!({
+            "enabled": false,
+            "subscriptions": [],
+            "total": 0
+        }));
+    };
+
+    let subs = streaming_mgr.list_subscriptions();
+    Json(serde_json::json!({
+        "enabled": true,
+        "subscriptions": subs,
+        "total": streaming_mgr.subscription_count()
+    }))
+}
+
 // ===== Fallback Handler =====
 
 pub async fn log_request(req: Request) -> impl IntoResponse {
@@ -2046,6 +2322,10 @@ pub fn build_router(state: AppState, auth_middleware: Arc<auth::AuthMiddleware>)
         .route("/auth/users/:username", get(get_user_handler))
         .route("/auth/users/:username", put(update_user_handler))
         .route("/auth/users/:username", delete(delete_user_handler))
+        // Streaming query endpoints (WebSocket & SSE)
+        .route("/stream/query", get(ws_stream_query_handler))
+        .route("/stream/query/:db", get(sse_stream_query_handler))
+        .route("/stream/subscriptions", get(list_subscriptions_handler))
         .fallback(log_request)
         .with_state(state)
         .layer(axum::middleware::from_fn(auth::auth_middleware_fn))

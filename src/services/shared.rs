@@ -119,13 +119,21 @@ pub async fn analyze_query_impl_auth(
 // ============================================================================
 
 /// Process write data (line protocol)
+/// Result of a successful write operation
+pub struct WriteResult {
+    /// Number of points written
+    pub point_count: usize,
+    /// Tables that were written to: (schema, table)
+    pub tables: Vec<(String, String)>,
+}
+
 pub async fn process_write_impl(
     cache: &DataCache,
     config: &config::Config,
     wal: Option<&Arc<Wal>>,
     db: &str,
     data: &str,
-) -> Result<usize, String> {
+) -> Result<WriteResult, String> {
     // WAL write (if enabled)
     if let Some(wal) = wal {
         let sync_on_write = wal.is_sync_on_write();
@@ -171,15 +179,20 @@ pub async fn process_write_impl(
     }
 
     // Add to cache
+    let mut written_tables = Vec::with_capacity(grouped.len());
     for ((schema, table), points) in grouped {
         cache
             .add_points(db, &schema, &table, points)
             .await
             .map_err(|e| format!("Cache full, try again later: {}", e))?;
+        written_tables.push((schema, table));
     }
 
     debug!("Added {} points to cache", point_count);
-    Ok(point_count)
+    Ok(WriteResult {
+        point_count,
+        tables: written_tables,
+    })
 }
 
 // ============================================================================
