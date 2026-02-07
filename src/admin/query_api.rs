@@ -25,6 +25,10 @@ pub fn routes() -> Router<AdminState> {
         .route("/query/catalogs", get(list_catalogs))
         .route("/query/schemas/:catalog", get(list_schemas))
         .route(
+            "/query/tables/:catalog/:schema",
+            get(list_tables_for_schema),
+        )
+        .route(
             "/query/columns/:catalog/:schema/:table",
             get(get_columns),
         )
@@ -582,55 +586,55 @@ async fn analyze_query(
 // ============ Catalog/Schema/Column Listing ============
 
 async fn list_catalogs(State(state): State<AdminState>) -> impl IntoResponse {
-    // Get unique catalogs from MetaClient's table list
-    let meta_client = match state.get_meta_client().await {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ApiResponse::<Vec<String>>::error(e)),
-            );
-        }
-    };
+    let mut all_catalogs = std::collections::HashSet::new();
 
-    match meta_client.list_tables(None, None).await {
-        Ok(tables) => {
-            let mut catalogs: Vec<String> = tables
-                .iter()
-                .map(|t| t.catalog.clone())
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter()
-                .collect();
-            catalogs.sort();
-            (StatusCode::OK, Json(ApiResponse::ok(catalogs)))
+    // Get catalogs from MetaClient's table list
+    if let Ok(meta_client) = state.get_meta_client().await {
+        if let Ok(tables) = meta_client.list_tables(None, None).await {
+            for t in &tables {
+                all_catalogs.insert(t.catalog.clone());
+            }
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<Vec<String>>::error(format!(
-                "Failed to list catalogs: {}",
-                e
-            ))),
-        ),
     }
+
+    // Also discover catalogs from data nodes (covers write-cache-only data)
+    if let Ok(node_urls) = state.get_all_data_node_urls().await {
+        for node_url in &node_urls {
+            let found = super::api::discover_catalogs_from_node(&state.http_client, node_url).await;
+            for c in found {
+                all_catalogs.insert(c);
+            }
+        }
+    }
+
+    let mut catalogs: Vec<String> = all_catalogs.into_iter().collect();
+    catalogs.sort();
+    (StatusCode::OK, Json(ApiResponse::ok(catalogs)))
 }
 
 async fn list_schemas(
     State(state): State<AdminState>,
     Path(catalog): Path<String>,
 ) -> impl IntoResponse {
-    // Try forwarding to data node first for accurate schema list
-    if let Ok(node_url) = state.get_data_node_url().await {
-        let url = format!("{}/schemas/{}", node_url, catalog);
-        if let Ok(response) = state.http_client.get(&url).send().await {
-            if response.status().is_success() {
-                if let Ok(body) = response.text().await {
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
-                        if let Some(schemas) = value.get("schemas").and_then(|v| v.as_array()) {
-                            let schema_list: Vec<String> = schemas
-                                .iter()
-                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                .collect();
-                            return (StatusCode::OK, Json(ApiResponse::ok(schema_list)));
+    let mut all_schemas = std::collections::HashSet::new();
+
+    // Query all data nodes for schemas
+    if let Ok(node_urls) = state.get_all_data_node_urls().await {
+        for node_url in &node_urls {
+            let url = format!("{}/schemas/{}", node_url, catalog);
+            if let Ok(response) = state.http_client.get(&url).send().await {
+                if response.status().is_success() {
+                    if let Ok(body) = response.text().await {
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
+                            if let Some(schemas) =
+                                value.get("schemas").and_then(|v| v.as_array())
+                            {
+                                for s in schemas {
+                                    if let Some(name) = s.as_str() {
+                                        all_schemas.insert(name.to_string());
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -638,36 +642,68 @@ async fn list_schemas(
         }
     }
 
-    // Fallback: derive from MetaClient tables
-    let meta_client = match state.get_meta_client().await {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ApiResponse::<Vec<String>>::error(e)),
-            );
+    // Also merge schemas from MetaClient tables
+    if let Ok(meta_client) = state.get_meta_client().await {
+        if let Ok(tables) = meta_client.list_tables(Some(&catalog), None).await {
+            for t in &tables {
+                all_schemas.insert(t.schema.clone());
+            }
         }
-    };
-
-    match meta_client.list_tables(Some(&catalog), None).await {
-        Ok(tables) => {
-            let mut schemas: Vec<String> = tables
-                .iter()
-                .map(|t| t.schema.clone())
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter()
-                .collect();
-            schemas.sort();
-            (StatusCode::OK, Json(ApiResponse::ok(schemas)))
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<Vec<String>>::error(format!(
-                "Failed to list schemas: {}",
-                e
-            ))),
-        ),
     }
+
+    let mut schemas: Vec<String> = all_schemas.into_iter().collect();
+    schemas.sort();
+    (StatusCode::OK, Json(ApiResponse::ok(schemas)))
+}
+
+/// List table names for a given catalog and schema.
+/// Merges results from data nodes and meta registry.
+async fn list_tables_for_schema(
+    State(state): State<AdminState>,
+    Path((catalog, schema)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let mut all_tables = std::collections::HashSet::new();
+
+    // Query data nodes for tables in this catalog, filter by schema
+    if let Ok(node_urls) = state.get_all_data_node_urls().await {
+        for node_url in &node_urls {
+            let url = format!("{}/tables/{}", node_url, catalog);
+            if let Ok(resp) = state
+                .http_client
+                .get(&url)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+            {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    if let Some(table_list) = body.get("tables").and_then(|t| t.as_array()) {
+                        for t in table_list {
+                            if let Some(full_name) = t.as_str() {
+                                // Format: "catalog.schema.table"
+                                let parts: Vec<&str> = full_name.splitn(3, '.').collect();
+                                if parts.len() == 3 && parts[1] == schema {
+                                    all_tables.insert(parts[2].to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Also get from meta registry
+    if let Ok(meta_client) = state.get_meta_client().await {
+        if let Ok(tables) = meta_client.list_tables(Some(&catalog), Some(&schema)).await {
+            for t in &tables {
+                all_tables.insert(t.table.clone());
+            }
+        }
+    }
+
+    let mut tables: Vec<String> = all_tables.into_iter().collect();
+    tables.sort();
+    (StatusCode::OK, Json(ApiResponse::ok(tables)))
 }
 
 #[derive(Serialize)]

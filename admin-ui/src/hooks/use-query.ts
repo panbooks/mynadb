@@ -5,6 +5,7 @@ import {
   analyzeQuery,
   fetchCatalogs,
   fetchSchemas,
+  fetchTableNames,
   fetchTableColumns,
   fetchSavedQueries,
   saveQuery,
@@ -27,6 +28,15 @@ export function useSchemas(catalog: string | undefined) {
     queryKey: ['schemas', catalog],
     queryFn: () => fetchSchemas(catalog!),
     enabled: !!catalog,
+    staleTime: 30000,
+  })
+}
+
+export function useTableNames(catalog: string | undefined, schema: string | undefined) {
+  return useQuery({
+    queryKey: ['table-names', catalog, schema],
+    queryFn: () => fetchTableNames(catalog!, schema!),
+    enabled: !!catalog && !!schema,
     staleTime: 30000,
   })
 }

@@ -717,7 +717,7 @@ async fn discover_tables_from_data_nodes(
 }
 
 /// Discover catalog names from a data node by trying its /schemas endpoint
-async fn discover_catalogs_from_node(
+pub(crate) async fn discover_catalogs_from_node(
     client: &reqwest::Client,
     node_url: &str,
 ) -> Vec<String> {

@@ -50,6 +50,8 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   useCatalogs,
+  useSchemas,
+  useTableNames,
   useExecuteQuery,
   useExplainQuery,
   useAnalyzeQuery,
@@ -101,6 +103,8 @@ LIMIT 100` },
 export function QueryPage() {
   const [sql, setSql] = useState(DEFAULT_SQL)
   const [selectedCatalog, setSelectedCatalog] = useState<string>('')
+  const [selectedSchema, setSelectedSchema] = useState<string>('')
+  const [selectedTable, setSelectedTable] = useState<string>('')
   const [result, setResult] = useState<QueryResult | null>(null)
   const [explain, setExplain] = useState<QueryExplain | null>(null)
   const [analysis, setAnalysis] = useState<QueryAnalysis | null>(null)
@@ -115,6 +119,8 @@ export function QueryPage() {
 
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null)
   const { data: catalogs, isLoading: catalogsLoading } = useCatalogs()
+  const { data: schemas } = useSchemas(selectedCatalog || undefined)
+  const { data: tableNames } = useTableNames(selectedCatalog || undefined, selectedSchema || undefined)
   const executeQuery = useExecuteQuery()
   const explainQuery = useExplainQuery()
   const analyzeQuery = useAnalyzeQuery()
@@ -125,6 +131,34 @@ export function QueryPage() {
       setSelectedCatalog(catalogs[0])
     }
   }, [catalogs, selectedCatalog])
+
+  const handleCatalogChange = (catalog: string) => {
+    setSelectedCatalog(catalog)
+    setSelectedSchema('')
+    setSelectedTable('')
+  }
+
+  const handleSchemaChange = (schema: string) => {
+    setSelectedSchema(schema)
+    setSelectedTable('')
+  }
+
+  const handleTableSelect = (table: string) => {
+    setSelectedTable(table)
+    // Insert fully-qualified table name into editor at cursor
+    const fqn = `${selectedCatalog}.${selectedSchema}.${table}`
+    const editor = editorRef.current
+    if (editor) {
+      const selection = editor.getSelection()
+      if (selection) {
+        editor.executeEdits('table-insert', [{
+          range: selection,
+          text: fqn,
+        }])
+      }
+      editor.focus()
+    }
+  }
 
   const handleEditorMount: OnMount = (editor) => {
     editorRef.current = editor
@@ -305,13 +339,13 @@ export function QueryPage() {
       {/* Main Query Area */}
       <div className="flex flex-1 flex-col space-y-4 min-w-0">
         {/* Toolbar */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 flex-wrap">
           <div className="flex items-center gap-2">
             <Label htmlFor="catalog" className="text-sm font-medium">
               Catalog:
             </Label>
-            <Select value={selectedCatalog} onValueChange={setSelectedCatalog}>
-              <SelectTrigger id="catalog" className="w-[180px]">
+            <Select value={selectedCatalog} onValueChange={handleCatalogChange}>
+              <SelectTrigger id="catalog" className="w-[160px]">
                 <SelectValue placeholder="Select catalog" />
               </SelectTrigger>
               <SelectContent>
@@ -328,6 +362,54 @@ export function QueryPage() {
                 ) : (
                   <SelectItem value="none" disabled>
                     No catalogs found
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Label htmlFor="schema" className="text-sm font-medium">
+              Schema:
+            </Label>
+            <Select value={selectedSchema} onValueChange={handleSchemaChange} disabled={!selectedCatalog}>
+              <SelectTrigger id="schema" className="w-[160px]">
+                <SelectValue placeholder="Select schema" />
+              </SelectTrigger>
+              <SelectContent>
+                {schemas && schemas.length > 0 ? (
+                  schemas.map((schema) => (
+                    <SelectItem key={schema} value={schema}>
+                      {schema}
+                    </SelectItem>
+                  ))
+                ) : (
+                  <SelectItem value="none" disabled>
+                    {selectedCatalog ? 'No schemas found' : 'Select a catalog'}
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Label htmlFor="table" className="text-sm font-medium">
+              Table:
+            </Label>
+            <Select value={selectedTable} onValueChange={handleTableSelect} disabled={!selectedSchema}>
+              <SelectTrigger id="table" className="w-[180px]">
+                <SelectValue placeholder="Insert table..." />
+              </SelectTrigger>
+              <SelectContent>
+                {tableNames && tableNames.length > 0 ? (
+                  tableNames.map((table) => (
+                    <SelectItem key={table} value={table}>
+                      {table}
+                    </SelectItem>
+                  ))
+                ) : (
+                  <SelectItem value="none" disabled>
+                    {selectedSchema ? 'No tables found' : 'Select a schema'}
                   </SelectItem>
                 )}
               </SelectContent>

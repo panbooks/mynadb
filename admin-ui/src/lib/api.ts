@@ -293,6 +293,10 @@ export async function fetchSchemas(catalog: string): Promise<string[]> {
   return fetchApi<string[]>(`/query/schemas/${encodeURIComponent(catalog)}`)
 }
 
+export async function fetchTableNames(catalog: string, schema: string): Promise<string[]> {
+  return fetchApi<string[]>(`/query/tables/${encodeURIComponent(catalog)}/${encodeURIComponent(schema)}`)
+}
+
 export async function fetchTableColumns(catalog: string, schema: string, table: string): Promise<{ name: string; data_type: string }[]> {
   return fetchApi<{ name: string; data_type: string }[]>(
     `/query/columns/${encodeURIComponent(catalog)}/${encodeURIComponent(schema)}/${encodeURIComponent(table)}`
