@@ -316,6 +316,7 @@ function getStateVariant(state: NodeState): 'success' | 'destructive' | 'warning
     case 'Active':
       return 'success'
     case 'Inactive':
+    case 'Drained':
       return 'destructive'
     case 'Draining':
     case 'Retiring':
