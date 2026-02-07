@@ -112,11 +112,6 @@ pub struct TableMeta {
     /// Additional elements are nodes with rerouted data or distributed partitions.
     pub owners: Vec<TableOwnerEntry>,
 
-    // Legacy field for backward compatibility during migration
-    // Will be removed in a future version
-    #[serde(default)]
-    pub owner_node_ids: Vec<String>,
-
     // Cached statistics (updated periodically, not per-flush)
     /// Number of date partitions (e.g., 30 for a month of data)
     pub partition_count: u32,
@@ -160,7 +155,6 @@ impl TableMeta {
             schema,
             table,
             owners: vec![TableOwnerEntry::new(owner_node_id, ttl_ms)],
-            owner_node_ids: Vec::new(), // Legacy field, empty for new tables
             partition_count: 0,
             total_bytes: 0,
             total_rows: 0,
@@ -171,15 +165,6 @@ impl TableMeta {
             created_at: now,
             last_modified: now,
             version: 1,
-        }
-    }
-
-    /// Migrate legacy owner_node_ids to owners entries (for backward compatibility)
-    pub fn migrate_legacy_owners(&mut self) {
-        if !self.owner_node_ids.is_empty() && self.owners.is_empty() {
-            for node_id in std::mem::take(&mut self.owner_node_ids) {
-                self.owners.push(TableOwnerEntry::with_default_ttl(node_id));
-            }
         }
     }
 
@@ -665,33 +650,4 @@ mod tests {
         assert_eq!(decoded.owners[0].node_id, meta.owners[0].node_id);
     }
 
-    #[test]
-    fn test_migrate_legacy_owners() {
-        // Simulate legacy data by creating meta with empty owners but populated owner_node_ids
-        let now = current_timestamp_ms();
-        let mut meta = TableMeta {
-            catalog: "mydb".to_string(),
-            schema: "default".to_string(),
-            table: "cpu".to_string(),
-            owners: Vec::new(),
-            owner_node_ids: vec!["data-1".to_string(), "data-2".to_string()],
-            partition_count: 0,
-            total_bytes: 0,
-            total_rows: 0,
-            oldest_partition: None,
-            newest_partition: None,
-            min_time: i64::MAX,
-            max_time: i64::MIN,
-            created_at: now,
-            last_modified: now,
-            version: 1,
-        };
-
-        meta.migrate_legacy_owners();
-
-        assert_eq!(meta.owners.len(), 2);
-        assert!(meta.owner_node_ids.is_empty());
-        assert_eq!(meta.owners[0].node_id, "data-1");
-        assert_eq!(meta.owners[1].node_id, "data-2");
-    }
 }

@@ -146,9 +146,4 @@ impl MetaStateMachine {
             }
         }
     }
-
-    // select_standby_to_promote() removed - using No-Promotion architecture
-    // promote_data_node() removed - using No-Promotion architecture
-    // update_data_node_mode() removed - No-Promotion architecture (mode set at registration)
-    // Standby nodes never promote to Primary; K8s handles node replacement
 }

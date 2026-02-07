@@ -29,7 +29,7 @@ fn table_meta_to_proto(meta: &TableMeta) -> proto::TableMeta {
         catalog: meta.catalog.clone(),
         schema: meta.schema.clone(),
         table: meta.table.clone(),
-        owner_node_ids: meta.all_owners(), // For backward compatibility
+        owner_node_ids: Vec::new(),
         owners: meta
             .all_owner_entries()
             .iter()

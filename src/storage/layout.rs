@@ -208,108 +208,10 @@ impl DataLayout {
     }
 }
 
-// ============================================================================
-// Migration support
-// ============================================================================
-
-/// Check if a directory name looks like a user catalog (database).
-fn looks_like_catalog(name: &str) -> bool {
-    if name.starts_with('_') || name.starts_with('.') {
-        return false;
-    }
-    !matches!(
-        name,
-        "store" | "wal" | "meta" | "cache" | "system" | "run" | "index"
-    )
-}
-
-/// Move all contents of `src_dir` into `dst_dir`, creating `dst_dir` if needed.
-fn move_dir_contents(src_dir: &Path, dst_dir: &Path) -> std::io::Result<()> {
-    if !src_dir.exists() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(dst_dir)?;
-    for entry in std::fs::read_dir(src_dir)? {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dst_dir.join(entry.file_name());
-        std::fs::rename(&src_path, &dst_path)?;
-    }
-    std::fs::remove_dir(src_dir)?;
-    Ok(())
-}
-
-/// Migrate an old-style data directory to the new standardized layout.
-pub fn migrate_layout(data_dir: &str) -> std::io::Result<()> {
-    let root = Path::new(data_dir);
-    if !root.exists() {
-        eprintln!("Data directory does not exist: {}", data_dir);
-        return Ok(());
-    }
-
-    let layout = DataLayout::new(data_dir);
-    layout.ensure_dirs()?;
-
-    let migrations: &[(&str, PathBuf)] = &[
-        ("_wal", layout.wal_dir()),
-        ("_metadata", layout.meta_dir()),
-        ("_cache", layout.cache_dir()),
-        ("_parquet_cache", layout.parquet_cache_dir()),
-        ("_system", layout.system_dir()),
-        ("_aggregates", layout.aggregates_dir()),
-        ("_downsampling", layout.downsampling_dir()),
-    ];
-
-    for (old_name, new_path) in migrations {
-        let old_path = root.join(old_name);
-        if old_path.exists() {
-            println!("  Moving {} -> {}", old_name, new_path.display());
-            move_dir_contents(&old_path, new_path)?;
-        }
-    }
-
-    for entry in std::fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_file() {
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.ends_with(".pid") {
-                    let dst = layout.run_dir().join(name);
-                    println!("  Moving {} -> {}", name, dst.display());
-                    std::fs::rename(&path, &dst)?;
-                }
-            }
-        }
-    }
-
-    let mut catalogs_to_move = Vec::new();
-    for entry in std::fs::read_dir(root)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        if entry.path().is_dir() && looks_like_catalog(&name) {
-            catalogs_to_move.push(name);
-        }
-    }
-
-    for catalog in &catalogs_to_move {
-        let src = root.join(catalog);
-        let dst = layout.store_dir().join(catalog);
-        println!("  Moving catalog {} -> {}", catalog, dst.display());
-        std::fs::rename(&src, &dst)?;
-    }
-
-    println!(
-        "  Migration complete: {} catalog(s) moved.",
-        catalogs_to_move.len()
-    );
-
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
     fn test_layout_paths() {

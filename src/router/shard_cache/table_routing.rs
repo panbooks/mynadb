@@ -314,7 +314,7 @@ impl ShardCache {
             self.table_owners.insert(
                 path,
                 CachedTableMeta {
-                    owner_node_ids: table.owner_node_ids.clone(),
+                    owner_node_ids: table.all_owners(),
                     version: table.version,
                     cached_at: now,
                 },

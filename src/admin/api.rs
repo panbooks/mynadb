@@ -774,7 +774,7 @@ async fn list_tables(
         .into_iter()
         .filter(|t| {
             if let Some(ref owner) = query.owner {
-                if !t.owner_node_ids.contains(owner) {
+                if !t.all_owners().contains(&owner.to_string()) {
                     return false;
                 }
             }

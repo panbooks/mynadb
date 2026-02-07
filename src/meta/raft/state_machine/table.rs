@@ -54,9 +54,7 @@ impl MetaStateMachine {
 
         // Check if table already exists
         if let Ok(Some(existing)) = self.db.get(key.as_bytes()) {
-            if let Ok(mut meta) = bincode::deserialize::<TableMeta>(&existing) {
-                // Migrate legacy owners if needed
-                meta.migrate_legacy_owners();
+            if let Ok(meta) = bincode::deserialize::<TableMeta>(&existing) {
 
                 let primary = meta.primary_owner().unwrap_or("").to_string();
                 debug!(
@@ -156,8 +154,7 @@ impl MetaStateMachine {
         // Load existing table
         let existing = match self.db.get(key.as_bytes()) {
             Ok(Some(data)) => match bincode::deserialize::<TableMeta>(&data) {
-                Ok(mut meta) => {
-                    meta.migrate_legacy_owners();
+                Ok(meta) => {
                     meta
                 }
                 Err(e) => {
@@ -289,8 +286,7 @@ impl MetaStateMachine {
         // Load existing table
         let existing = match self.db.get(key.as_bytes()) {
             Ok(Some(data)) => match bincode::deserialize::<TableMeta>(&data) {
-                Ok(mut meta) => {
-                    meta.migrate_legacy_owners();
+                Ok(meta) => {
                     meta
                 }
                 Err(e) => {
@@ -402,8 +398,7 @@ impl MetaStateMachine {
         // Load existing table
         let existing = match self.db.get(key.as_bytes()) {
             Ok(Some(data)) => match bincode::deserialize::<TableMeta>(&data) {
-                Ok(mut meta) => {
-                    meta.migrate_legacy_owners();
+                Ok(meta) => {
                     meta
                 }
                 Err(e) => {
@@ -483,7 +478,6 @@ impl MetaStateMachine {
         // First pass: find tables with expired owners
         for (key, value) in self.db.scan_prefix(prefix).flatten() {
             if let Ok(mut meta) = bincode::deserialize::<TableMeta>(&value) {
-                meta.migrate_legacy_owners();
 
                 let expired: Vec<_> = meta.expired_owners().iter().map(|o| o.node_id.clone()).collect();
                 if expired.is_empty() {
@@ -642,8 +636,7 @@ impl MetaStateMachine {
         // Load existing table
         let existing = match self.db.get(key.as_bytes()) {
             Ok(Some(data)) => match bincode::deserialize::<TableMeta>(&data) {
-                Ok(mut meta) => {
-                    meta.migrate_legacy_owners();
+                Ok(meta) => {
                     meta
                 }
                 Err(e) => {
@@ -794,15 +787,12 @@ impl MetaStateMachine {
     pub fn get_table_owner(&self, catalog: &str, schema: &str, table: &str) -> Option<String> {
         let key = TableMeta::key_for(catalog, schema, table);
 
-        let mut meta = self
+        let meta = self
             .db
             .get(key.as_bytes())
             .ok()
             .flatten()
             .and_then(|data| bincode::deserialize::<TableMeta>(&data).ok())?;
-
-        // Migrate legacy owners if needed
-        meta.migrate_legacy_owners();
 
         // Return first non-expired, non-Drained owner
         // - If owner is expired → skip
@@ -831,7 +821,7 @@ impl MetaStateMachine {
     pub fn get_table_all_owners(&self, catalog: &str, schema: &str, table: &str) -> Vec<String> {
         let key = TableMeta::key_for(catalog, schema, table);
 
-        let mut meta = match self
+        let meta = match self
             .db
             .get(key.as_bytes())
             .ok()
@@ -841,9 +831,6 @@ impl MetaStateMachine {
             Some(m) => m,
             None => return Vec::new(),
         };
-
-        // Migrate legacy owners if needed
-        meta.migrate_legacy_owners();
 
         // Filter out expired and Drained owners, keep Active and unknown (legacy/external)
         meta.owners
@@ -982,8 +969,7 @@ impl MetaStateMachine {
         let mut counts = std::collections::HashMap::new();
 
         for (_, v) in self.db.scan_prefix(prefix).flatten() {
-            if let Ok(mut meta) = bincode::deserialize::<TableMeta>(&v) {
-                meta.migrate_legacy_owners();
+            if let Ok(meta) = bincode::deserialize::<TableMeta>(&v) {
                 for owner in meta.active_owners() {
                     *counts.entry(owner.node_id.clone()).or_insert(0) += 1;
                 }

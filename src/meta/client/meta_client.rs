@@ -30,31 +30,23 @@ fn mode_to_proto(mode: Option<DataNodeMode>) -> i32 {
 /// Convert proto TableMeta to internal TableMeta
 fn convert_proto_table_meta(meta: proto::TableMeta) -> TableMeta {
     // Convert proto TableOwnerEntry to internal TableOwnerEntry
-    let owners: Vec<TableOwnerEntry> = if meta.owners.is_empty() {
-        // Legacy: convert owner_node_ids to owners with default TTL
-        meta.owner_node_ids
-            .into_iter()
-            .map(TableOwnerEntry::with_default_ttl)
-            .collect()
-    } else {
-        meta.owners
-            .into_iter()
-            .map(|o| TableOwnerEntry {
-                node_id: o.node_id,
-                ttl_ms: o.ttl_ms,
-                acquired_at: o.acquired_at,
-                last_write_at: o.last_write_at,
-                expires_at: o.expires_at,
-            })
-            .collect()
-    };
+    let owners: Vec<TableOwnerEntry> = meta
+        .owners
+        .into_iter()
+        .map(|o| TableOwnerEntry {
+            node_id: o.node_id,
+            ttl_ms: o.ttl_ms,
+            acquired_at: o.acquired_at,
+            last_write_at: o.last_write_at,
+            expires_at: o.expires_at,
+        })
+        .collect();
 
     TableMeta {
         catalog: meta.catalog,
         schema: meta.schema,
         table: meta.table,
         owners,
-        owner_node_ids: Vec::new(), // Legacy field, empty
         partition_count: meta.partition_count,
         total_bytes: meta.total_bytes,
         total_rows: meta.total_rows,
