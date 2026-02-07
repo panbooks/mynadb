@@ -256,8 +256,10 @@ impl QueryEngine {
 
         // Use ObjectStore-based async constructor
         let mut provider = if let Some(ref storage) = self.storage {
-            // Extract the path from the URL (remove scheme like file://, s3://)
-            let base_path = Self::extract_path_from_url(table_path);
+            // Use relative path (catalog/schema/table) since the object store is already
+            // rooted at data_dir. Using extract_path_from_url() would give an absolute path
+            // that gets doubled when appended to the object store root.
+            let base_path = format!("{}/{}/{}", catalog_name, schema_name, table_name);
 
             ParquetTableProvider::try_new(storage.object_store(), base_path, catalog_name, schema_name, config)
                 .await
@@ -488,7 +490,9 @@ impl QueryEngine {
             let config = ParquetTableConfig::new(full_name.clone()).with_batch_size(8192);
 
             let mut provider = if let Some(ref storage) = self.storage {
-                let base_path = Self::extract_path_from_url(table_path);
+                // Use relative path (catalog/schema/table) since the object store is already
+                // rooted at data_dir.
+                let base_path = format!("{}/{}/{}", catalog_name, schema_name, table_name);
                 ParquetTableProvider::try_new(storage.object_store(), base_path, catalog_name, schema_name, config)
                     .await
                     .map_err(|e| format!("Failed to create table provider: {}", e))?
