@@ -13,8 +13,10 @@ use crate::query::cache::query_cache::{
 };
 use crate::query::create_custom_session_state;
 use crate::query::functions::{
-    create_first_value_udaf, create_geo_bearing_udf, create_geo_bounding_box_udf,
-    create_geo_distance_udf, create_geo_hash_decode_lat_udf, create_geo_hash_decode_lon_udf,
+    create_first_value_udaf, create_forecast_arima_udaf, create_forecast_auto_udaf,
+    create_forecast_ema_udaf, create_forecast_linear_udaf, create_forecast_series_udaf,
+    create_geo_bearing_udf, create_geo_bounding_box_udf, create_geo_distance_udf,
+    create_geo_hash_decode_lat_udf, create_geo_hash_decode_lon_udf,
     create_geo_hash_neighbors_udf, create_geo_hash_udf, create_geo_within_udf,
     create_last_value_udaf, create_time_bucket_udf,
 };
@@ -162,6 +164,14 @@ impl QueryEngine {
         ctx.register_udaf(create_first_value_udaf());
         ctx.register_udaf(create_last_value_udaf());
         debug!("Registered first_value and last_value UDAFs");
+
+        // Register forecasting UDAFs
+        ctx.register_udaf(create_forecast_linear_udaf());
+        ctx.register_udaf(create_forecast_ema_udaf());
+        ctx.register_udaf(create_forecast_arima_udaf());
+        ctx.register_udaf(create_forecast_auto_udaf());
+        ctx.register_udaf(create_forecast_series_udaf());
+        debug!("Registered forecasting UDAFs");
 
         ctx
     }

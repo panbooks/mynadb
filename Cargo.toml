@@ -80,6 +80,9 @@ rustls = "0.20"
 geo = "0.28"
 geohash = "0.13"
 
+# Time-series forecasting
+arima = "0.2"
+
 # Prometheus Remote Storage
 snap = "1.1"  # Snappy compression for Prometheus remote write
 
