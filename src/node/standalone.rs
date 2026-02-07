@@ -10,9 +10,10 @@
 
 use super::common;
 use crate::config::Config;
-use crate::jobs::{compactor, database_manager, retention_manager};
+use crate::jobs::{compactor, database_manager, recompression, retention_manager};
 use crate::services::{api, auth};
 use crate::storage::cache;
+use crate::storage::compression::CompressionStrategy;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
@@ -52,13 +53,22 @@ pub async fn run(config_path: &str) {
     // Initialize WAL
     let wal = common::init_wal(&config, storage.clone()).await;
 
+    // Initialize compression strategy from config
+    let compression_strategy = CompressionStrategy::from_config(&config.storage.compression);
+    if compression_strategy.is_adaptive() {
+        info!("Compression strategy: ADAPTIVE (per-column, age-based)");
+    } else {
+        info!("Compression strategy: FIXED");
+    }
+
     // Initialize cache with "standalone" node_id for single-node deployments
-    let cache = common::init_data_cache(
+    let mut cache = common::init_data_cache(
         storage.clone(),
         &config,
         wal.as_ref().map(Arc::clone),
         "standalone",
     );
+    cache.set_compression_strategy(compression_strategy.clone());
 
     // Initialize metadata manager
     let metadata_manager = common::init_metadata_manager(&config).await;
@@ -84,13 +94,14 @@ pub async fn run(config_path: &str) {
         storage.clone(),
     ));
 
-    // Initialize compactor
+    // Initialize compactor (with compression strategy)
     info!("Initializing compactor");
     let compaction_config = compactor::CompactionConfig::from(&config.compaction);
-    let compactor = Arc::new(compactor::Compactor::with_metadata(
+    let compactor = Arc::new(compactor::Compactor::with_metadata_and_compression(
         storage.clone(),
         &compaction_config,
         Some(metadata_manager.clone()),
+        compression_strategy.clone(),
     ));
 
     // Start background compaction if enabled
@@ -131,6 +142,23 @@ pub async fn run(config_path: &str) {
 
     if config.retention.enabled && config.retention.interval_secs > 0 {
         Arc::clone(&retention_manager).start_background_retention(config.retention.clone());
+    }
+
+    // Start background recompression job (only for adaptive compression)
+    if config.storage.compression.recompression_enabled && compression_strategy.is_adaptive() {
+        let recompression_job = Arc::new(recompression::RecompressionJob::new(
+            storage.clone(),
+            db_manager.clone(),
+            compression_strategy.clone(),
+            config.storage.compression.recompression_interval_secs,
+        ));
+        recompression_job.start_background();
+        info!(
+            "Recompression: ENABLED (interval: {}s)",
+            config.storage.compression.recompression_interval_secs
+        );
+    } else {
+        debug!("Recompression: DISABLED");
     }
 
     // Start background metrics updater
@@ -231,13 +259,14 @@ pub async fn run(config_path: &str) {
             error!("Failed to initialize downsampling storage: {}", e);
         }
 
-        // Start background downsampling job
-        let ds_job = Arc::new(crate::jobs::downsampling::DownsamplingJob::new(
+        // Start background downsampling job (with compression strategy)
+        let ds_job = Arc::new(crate::jobs::downsampling::DownsamplingJob::with_compression(
             ds_storage.clone(),
             query_engine.clone(),
             db_manager.clone(),
             storage.clone(),
             config.downsampling.clone(),
+            compression_strategy.clone(),
         ));
         ds_job.start_background();
 

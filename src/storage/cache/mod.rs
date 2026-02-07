@@ -100,6 +100,14 @@ impl DataCache {
         }
     }
 
+    /// Set the compression strategy on the underlying ParquetWriter
+    pub fn set_compression_strategy(&mut self, strategy: super::compression::CompressionStrategy) {
+        self.writer = Arc::new(ParquetWriter::with_compression(
+            self.writer.storage().clone(),
+            strategy,
+        ));
+    }
+
     /// Create with local storage (backward compatibility for standalone mode)
     /// Uses "standalone" as the default node_id
     pub fn with_max_size_and_wal(data_dir: &str, max_size_mb: u64, wal: Option<Arc<Wal>>) -> Self {

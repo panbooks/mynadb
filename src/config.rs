@@ -145,6 +145,10 @@ pub struct StorageConfig {
     #[serde(default = "default_data_dir")]
     pub data_dir: String,
 
+    /// Compression strategy configuration
+    #[serde(default)]
+    pub compression: CompressionConfig,
+
     /// S3 bucket name
     #[serde(default)]
     pub bucket: String,
@@ -183,6 +187,7 @@ impl Default for StorageConfig {
         Self {
             backend: default_storage_backend(),
             data_dir: default_data_dir(),
+            compression: CompressionConfig::default(),
             bucket: String::new(),
             region: default_s3_region(),
             access_key: None,
@@ -512,6 +517,100 @@ fn default_downsampling_max_concurrent() -> usize {
 }
 fn default_downsampling_query_rewriting() -> bool {
     true
+}
+
+/// Compression strategy configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionConfig {
+    /// Compression strategy: "fixed" or "adaptive"
+    #[serde(default = "default_compression_strategy")]
+    pub strategy: String,
+    /// Default compression codec: "zstd", "snappy", "lz4", "uncompressed"
+    #[serde(default = "default_compression_codec")]
+    pub default_codec: String,
+    /// ZSTD compression level (1-22, only used when codec is "zstd")
+    #[serde(default = "default_zstd_level")]
+    pub zstd_level: i32,
+    /// Number of days before data is considered "hot" (uses fast codec)
+    #[serde(default = "default_hot_days")]
+    pub hot_days: u32,
+    /// Number of days before data is considered "cold" (uses max compression)
+    #[serde(default = "default_cold_days")]
+    pub cold_days: u32,
+    /// Codec for hot/recent data (default: "snappy")
+    #[serde(default = "default_hot_codec")]
+    pub hot_codec: String,
+    /// Codec for cold/old data (default: "zstd")
+    #[serde(default = "default_cold_codec")]
+    pub cold_codec: String,
+    /// ZSTD level for cold data (default: 9)
+    #[serde(default = "default_cold_zstd_level")]
+    pub cold_zstd_level: i32,
+    /// Codec for integer/float columns (default: "lz4")
+    #[serde(default = "default_numeric_codec")]
+    pub numeric_codec: String,
+    /// Codec for string columns with high cardinality (default: "zstd")
+    #[serde(default = "default_string_codec")]
+    pub string_codec: String,
+    /// Enable background recompression job
+    #[serde(default)]
+    pub recompression_enabled: bool,
+    /// Recompression check interval in seconds
+    #[serde(default = "default_recompression_interval")]
+    pub recompression_interval_secs: u64,
+}
+
+impl Default for CompressionConfig {
+    fn default() -> Self {
+        Self {
+            strategy: default_compression_strategy(),
+            default_codec: default_compression_codec(),
+            zstd_level: default_zstd_level(),
+            hot_days: default_hot_days(),
+            cold_days: default_cold_days(),
+            hot_codec: default_hot_codec(),
+            cold_codec: default_cold_codec(),
+            cold_zstd_level: default_cold_zstd_level(),
+            numeric_codec: default_numeric_codec(),
+            string_codec: default_string_codec(),
+            recompression_enabled: false,
+            recompression_interval_secs: default_recompression_interval(),
+        }
+    }
+}
+
+fn default_compression_strategy() -> String {
+    "fixed".to_string()
+}
+fn default_compression_codec() -> String {
+    "zstd".to_string()
+}
+fn default_zstd_level() -> i32 {
+    3
+}
+fn default_hot_days() -> u32 {
+    7
+}
+fn default_cold_days() -> u32 {
+    30
+}
+fn default_hot_codec() -> String {
+    "snappy".to_string()
+}
+fn default_cold_codec() -> String {
+    "zstd".to_string()
+}
+fn default_cold_zstd_level() -> i32 {
+    9
+}
+fn default_numeric_codec() -> String {
+    "lz4".to_string()
+}
+fn default_string_codec() -> String {
+    "zstd".to_string()
+}
+fn default_recompression_interval() -> u64 {
+    86400 // Daily
 }
 
 /// Compaction configuration

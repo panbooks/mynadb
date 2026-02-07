@@ -4,8 +4,7 @@
 //! compaction strategy (similar to LSM-tree).
 
 use arrow::datatypes::Schema;
-use parquet::basic::{Compression, ZstdLevel};
-use parquet::file::properties::{EnabledStatistics, WriterProperties};
+use parquet::file::properties::WriterProperties;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, Semaphore};
@@ -14,6 +13,7 @@ use tracing::debug;
 use crate::meta::client::MetaClient;
 use crate::query::catalog::SharedMetadataManager;
 use crate::services::rate_limiter::RateLimiter;
+use crate::storage::compression::CompressionStrategy;
 use crate::storage::storage::Storage;
 
 // Sub-modules containing impl blocks for Compactor
@@ -120,6 +120,8 @@ pub struct Compactor {
     /// When set, compaction acquires a distributed lock to prevent multiple nodes
     /// from compacting the same partition simultaneously.
     pub(crate) meta_client: Option<Arc<MetaClient>>,
+    /// Compression strategy for compacted files
+    pub(crate) compression_strategy: CompressionStrategy,
 }
 
 #[derive(Debug, Clone)]
@@ -287,6 +289,21 @@ impl Compactor {
         config: &CompactionConfig,
         metadata_manager: Option<SharedMetadataManager>,
     ) -> Self {
+        Self::with_metadata_and_compression(
+            storage,
+            config,
+            metadata_manager,
+            CompressionStrategy::default(),
+        )
+    }
+
+    /// Create a new Compactor with storage, config, metadata manager, and compression strategy
+    pub fn with_metadata_and_compression(
+        storage: Arc<Storage>,
+        config: &CompactionConfig,
+        metadata_manager: Option<SharedMetadataManager>,
+        compression_strategy: CompressionStrategy,
+    ) -> Self {
         // Create semaphore if max_concurrent_compactions > 0
         let compaction_semaphore = if config.max_concurrent_compactions > 0 {
             Some(Arc::new(Semaphore::new(config.max_concurrent_compactions)))
@@ -329,6 +346,7 @@ impl Compactor {
             write_rate_limiter,
             metadata_manager,
             meta_client: None,
+            compression_strategy,
         }
     }
 
@@ -363,32 +381,18 @@ impl Compactor {
             .clone()
     }
 
-    /// Create optimized WriterProperties with Bloom filters and compression
-    pub(crate) fn create_optimized_writer_props(schema: &Schema) -> WriterProperties {
-        use arrow::datatypes::DataType;
-
-        let mut builder = WriterProperties::builder()
-            // Row group size for good statistics granularity
-            .set_max_row_group_size(ROW_GROUP_SIZE)
-            // ZSTD compression (good balance of speed and ratio)
-            .set_compression(Compression::ZSTD(ZstdLevel::try_new(3).unwrap_or_default()))
-            // Enable dictionary encoding for better compression of repeated values
-            .set_dictionary_enabled(true)
-            // Enable statistics for all columns
-            .set_statistics_enabled(EnabledStatistics::Page);
-
-        // Enable Bloom filters for string columns (tags)
-        for field in schema.fields() {
-            if field.data_type() == &DataType::Utf8 {
-                let col_path: parquet::schema::types::ColumnPath = field.name().clone().into();
-                builder = builder
-                    .set_column_bloom_filter_enabled(col_path.clone(), true)
-                    .set_column_bloom_filter_fpp(col_path.clone(), BLOOM_FILTER_FPP)
-                    .set_column_bloom_filter_ndv(col_path, BLOOM_FILTER_NDV);
-            }
-        }
-
-        builder.build()
+    /// Create optimized WriterProperties with per-column compression and Bloom filters
+    ///
+    /// Delegates to the configured CompressionStrategy which handles:
+    /// - Fixed: single codec for all columns
+    /// - Adaptive: per-column compression based on data type and partition age
+    pub(crate) fn create_optimized_writer_props(
+        &self,
+        schema: &Schema,
+        partition_age_days: Option<u32>,
+    ) -> WriterProperties {
+        self.compression_strategy
+            .build_writer_properties(schema, partition_age_days, ROW_GROUP_SIZE)
     }
 }
 

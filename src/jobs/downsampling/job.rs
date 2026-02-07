@@ -10,6 +10,7 @@ use arrow::array::Array;
 use crate::config::DownsamplingConfig;
 use crate::jobs::database_manager::DatabaseManager;
 use crate::query::query_engine::QueryEngine;
+use crate::storage::compression::CompressionStrategy;
 use crate::storage::parquet_writer::ParquetWriter;
 use crate::storage::storage::Storage;
 use std::sync::Arc;
@@ -43,11 +44,30 @@ impl DownsamplingJob {
         object_storage: Arc<Storage>,
         config: DownsamplingConfig,
     ) -> Self {
+        Self::with_compression(
+            storage,
+            query_engine,
+            db_manager,
+            object_storage,
+            config,
+            CompressionStrategy::default(),
+        )
+    }
+
+    /// Create a new downsampling job with a specific compression strategy
+    pub fn with_compression(
+        storage: Arc<DownsamplingStorage>,
+        query_engine: Arc<QueryEngine>,
+        db_manager: Arc<DatabaseManager>,
+        object_storage: Arc<Storage>,
+        config: DownsamplingConfig,
+        compression_strategy: CompressionStrategy,
+    ) -> Self {
         Self {
             storage,
             query_engine,
             db_manager,
-            parquet_writer: ParquetWriter::new(object_storage),
+            parquet_writer: ParquetWriter::with_compression(object_storage, compression_strategy),
             config: config.clone(),
             semaphore: Arc::new(Semaphore::new(config.max_concurrent_jobs)),
         }

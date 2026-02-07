@@ -1,3 +1,4 @@
+use super::compression::CompressionStrategy;
 use super::line_protocol::format_date32_as_partition;
 use super::storage::Storage;
 use arrow::array::{ArrayRef, RecordBatch};
@@ -56,11 +57,23 @@ const BLOOM_FILTER_NDV: u64 = 10_000;
 
 pub struct ParquetWriter {
     storage: Arc<Storage>,
+    compression_strategy: CompressionStrategy,
 }
 
 impl ParquetWriter {
     pub fn new(storage: Arc<Storage>) -> Self {
-        ParquetWriter { storage }
+        ParquetWriter {
+            storage,
+            compression_strategy: CompressionStrategy::default(),
+        }
+    }
+
+    /// Create with a specific compression strategy
+    pub fn with_compression(storage: Arc<Storage>, strategy: CompressionStrategy) -> Self {
+        ParquetWriter {
+            storage,
+            compression_strategy: strategy,
+        }
     }
 
     /// Create from data directory (local storage only, for backward compatibility)
@@ -68,6 +81,7 @@ impl ParquetWriter {
         let storage = Storage::new_local(data_dir)?;
         Ok(ParquetWriter {
             storage: Arc::new(storage),
+            compression_strategy: CompressionStrategy::default(),
         })
     }
 
@@ -190,43 +204,14 @@ impl ParquetWriter {
         sort_order
     }
 
-    /// Create optimized WriterProperties with Bloom filters, compression, and tuned row groups
-    fn create_optimized_writer_props(schema: &Schema) -> WriterProperties {
-        let mut builder = WriterProperties::builder()
-            // ===== Row Group Tuning =====
-            // 500K rows per row group - optimal for parallel reads and statistics granularity
-            .set_max_row_group_size(ROW_GROUP_SIZE)
-            // ===== Page Size Tuning =====
-            // 1MB data pages for good predicate pushdown performance
-            .set_data_page_size_limit(DATA_PAGE_SIZE)
-            // Dictionary page size limit
-            .set_dictionary_page_size_limit(DICTIONARY_PAGE_SIZE)
-            // ===== Compression =====
-            // ZSTD level 3 - good balance of speed and compression ratio
-            .set_compression(Compression::ZSTD(ZstdLevel::try_new(3).unwrap_or_default()))
-            // ===== Dictionary Encoding =====
-            // Enable dictionary encoding for better compression of repeated values (tags)
-            .set_dictionary_enabled(true)
-            // ===== Statistics =====
-            // Enable page-level statistics for fine-grained predicate pruning
-            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
-            // ===== Write Batch Size =====
-            // Larger write batch for better I/O efficiency
-            .set_write_batch_size(10000);
-
-        // ===== Bloom Filters for String Columns =====
-        // Enable Bloom filters for string columns (tags) to speed up equality predicates
-        for field in schema.fields() {
-            if field.data_type() == &arrow::datatypes::DataType::Utf8 {
-                let col_path: parquet::schema::types::ColumnPath = field.name().clone().into();
-                builder = builder
-                    .set_column_bloom_filter_enabled(col_path.clone(), true)
-                    .set_column_bloom_filter_fpp(col_path.clone(), BLOOM_FILTER_FPP)
-                    .set_column_bloom_filter_ndv(col_path, BLOOM_FILTER_NDV);
-            }
-        }
-
-        builder.build()
+    /// Create optimized WriterProperties with adaptive compression, Bloom filters, and tuned row groups
+    fn create_optimized_writer_props(
+        &self,
+        schema: &Schema,
+        partition_age_days: Option<u32>,
+    ) -> WriterProperties {
+        self.compression_strategy
+            .build_writer_properties(schema, partition_age_days, ROW_GROUP_SIZE)
     }
 
     /// Write batches to a partitioned directory structure
@@ -325,7 +310,7 @@ impl ParquetWriter {
 
         // Write to Parquet with optimized settings
         let mut buffer = Vec::new();
-        let props = Self::create_optimized_writer_props(&schema_ref);
+        let props = self.create_optimized_writer_props(&schema_ref, None);
         let mut writer = ArrowWriter::try_new(&mut buffer, schema_ref.clone(), Some(props))
             .map_err(|e| format!("Failed to create writer: {}", e))?;
 

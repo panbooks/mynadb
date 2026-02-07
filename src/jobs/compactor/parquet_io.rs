@@ -189,7 +189,7 @@ impl Compactor {
         let cursor = Cursor::new(&mut buffer);
 
         // Use optimized writer properties
-        let props = Self::create_optimized_writer_props(&schema);
+        let props = self.create_optimized_writer_props(&schema, None);
 
         let mut writer = ArrowWriter::try_new(cursor, schema.clone(), Some(props))
             .map_err(|e| format!("Failed to create writer: {}", e))?;
