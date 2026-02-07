@@ -102,9 +102,10 @@ pub fn parse_field_value(value: &str) -> Result<FieldValue, String> {
         _ => {}
     }
 
-    // String: "..." or '...'
-    if (value.starts_with('"') && value.ends_with('"'))
-        || (value.starts_with('\'') && value.ends_with('\''))
+    // String: "..." or '...' (at least 2 chars for open+close quotes)
+    if value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
     {
         let s = &value[1..value.len() - 1];
         return Ok(FieldValue::String(s.to_string()));

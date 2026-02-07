@@ -165,17 +165,16 @@ pub async fn write_handler(
 ) -> impl IntoResponse {
     let result = state.write_router.route_write(&db, &body).await;
 
-    let response = WriteResponse {
-        success: result.success,
-        points_written: result.points_written,
-        elapsed_ms: result.elapsed_ms,
-        error: result.error,
-    };
-
     if result.success {
-        (StatusCode::NO_CONTENT, Json(response))
+        (StatusCode::NO_CONTENT, String::new())
     } else {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(response))
+        let response = WriteResponse {
+            success: result.success,
+            points_written: result.points_written,
+            elapsed_ms: result.elapsed_ms,
+            error: result.error,
+        };
+        (StatusCode::INTERNAL_SERVER_ERROR, serde_json::to_string(&response).unwrap_or_default())
     }
 }
 
@@ -191,17 +190,16 @@ pub async fn write_handler_query_param(
         .unwrap_or_else(|| "default".to_string());
     let result = state.write_router.route_write(&db, &body).await;
 
-    let response = WriteResponse {
-        success: result.success,
-        points_written: result.points_written,
-        elapsed_ms: result.elapsed_ms,
-        error: result.error,
-    };
-
     if result.success {
-        (StatusCode::NO_CONTENT, Json(response))
+        (StatusCode::NO_CONTENT, String::new())
     } else {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(response))
+        let response = WriteResponse {
+            success: result.success,
+            points_written: result.points_written,
+            elapsed_ms: result.elapsed_ms,
+            error: result.error,
+        };
+        (StatusCode::INTERNAL_SERVER_ERROR, serde_json::to_string(&response).unwrap_or_default())
     }
 }
 
