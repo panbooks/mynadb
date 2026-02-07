@@ -22,7 +22,7 @@
 //! - Supports filter pushdown for early filtering
 
 use async_trait::async_trait;
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{RecordBatch, StringArray};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{project_schema, DataFusionError, Result};
@@ -56,8 +56,10 @@ pub struct MemtableProvider {
     schema_name: String,
     /// Table (measurement) name
     table_name: String,
-    /// Table schema (inferred from cached data)
+    /// Table schema (inferred from cached data, includes virtual node_id column)
     schema: SchemaRef,
+    /// Node ID value to inject as virtual partition column
+    node_id: String,
 }
 
 impl fmt::Debug for MemtableProvider {
@@ -67,6 +69,7 @@ impl fmt::Debug for MemtableProvider {
             .field("schema_name", &self.schema_name)
             .field("table_name", &self.table_name)
             .field("schema", &self.schema)
+            .field("node_id", &self.node_id)
             .finish()
     }
 }
@@ -74,14 +77,17 @@ impl fmt::Debug for MemtableProvider {
 impl MemtableProvider {
     /// Create a new MemtableProvider
     ///
-    /// Returns None if there is no cached data or no schema available
+    /// Returns None if there is no cached data or no schema available.
+    /// The `node_id` parameter is added as a virtual partition column to match the
+    /// Hive partition structure used by the Parquet reader (date=.../node_id=.../file.parquet).
     pub fn try_new(
         cache: Arc<DataCache>,
         catalog: &str,
         schema_name: &str,
         table_name: &str,
+        node_id: &str,
     ) -> Option<Self> {
-        // Get schema from cached data (includes date column added at write time)
+        // Get schema from cached data (includes date column + node_id added by DataCache)
         let schema = cache.get_table_schema(catalog, schema_name, table_name)?;
 
         Some(Self {
@@ -90,6 +96,7 @@ impl MemtableProvider {
             schema_name: schema_name.to_string(),
             table_name: table_name.to_string(),
             schema,
+            node_id: node_id.to_string(),
         })
     }
 
@@ -102,6 +109,7 @@ impl MemtableProvider {
         schema_name: &str,
         table_name: &str,
         schema: SchemaRef,
+        node_id: &str,
     ) -> Self {
         Self {
             cache,
@@ -109,6 +117,7 @@ impl MemtableProvider {
             schema_name: schema_name.to_string(),
             table_name: table_name.to_string(),
             schema,
+            node_id: node_id.to_string(),
         }
     }
 
@@ -180,6 +189,8 @@ impl TableProvider for MemtableProvider {
             self.table_name.clone(),
             projected_schema,
             projection.cloned(),
+            self.node_id.clone(),
+            self.schema.clone(),
         );
 
         Ok(Arc::new(exec))
@@ -198,12 +209,16 @@ pub struct MemtableExec {
     table_name: String,
     /// Output schema (after projection)
     schema: SchemaRef,
-    /// Column projection indices
+    /// Column projection indices (referencing full_schema which includes node_id)
     projection: Option<Vec<usize>>,
     /// Metrics for this execution
     metrics: ExecutionPlanMetricsSet,
     /// Plan properties
     properties: PlanProperties,
+    /// Node ID value to inject as virtual partition column
+    node_id: String,
+    /// Full schema including node_id (before projection)
+    full_schema: SchemaRef,
 }
 
 impl std::fmt::Debug for MemtableExec {
@@ -226,6 +241,8 @@ impl MemtableExec {
         table_name: String,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
+        node_id: String,
+        full_schema: SchemaRef,
     ) -> Self {
         // Single partition for memtable reads
         let properties = PlanProperties::new(
@@ -243,6 +260,8 @@ impl MemtableExec {
             projection,
             metrics: ExecutionPlanMetricsSet::new(),
             properties,
+            node_id,
+            full_schema,
         }
     }
 
@@ -296,24 +315,49 @@ impl ExecutionPlan for MemtableExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // Get batches from cache with projection applied
+        // Get batches from cache WITHOUT projection — we need to add node_id first
         let batches = self.cache.get_table_batches(
             &self.catalog,
             &self.schema_name,
             &self.table_name,
             None,
-            self.projection.as_deref(),
+            None, // No projection here; we apply it after adding node_id
         );
 
         debug!(
-            "MemtableExec execute: table={}, batches={}, projection={:?}",
+            "MemtableExec execute: table={}, batches={}, projection={:?}, node_id={}",
             self.full_name(),
             batches.len(),
-            self.projection
+            self.projection,
+            self.node_id,
         );
 
-        // Batches already have projection applied by DataCache
-        let batch_results: Vec<Result<RecordBatch>> = batches.into_iter().map(Ok).collect();
+        // Add node_id column to each batch, then apply projection
+        let node_id = self.node_id.clone();
+        let projection = self.projection.clone();
+        let full_schema = self.full_schema.clone();
+
+        let batch_results: Vec<Result<RecordBatch>> = batches
+            .into_iter()
+            .map(|batch| {
+                // Add node_id column (StringArray filled with node_id for all rows)
+                let num_rows = batch.num_rows();
+                let node_id_array = Arc::new(StringArray::from(vec![node_id.as_str(); num_rows]));
+
+                let mut columns: Vec<Arc<dyn datafusion::arrow::array::Array>> =
+                    batch.columns().to_vec();
+                columns.push(node_id_array);
+
+                let full_batch = RecordBatch::try_new(full_schema.clone(), columns)?;
+
+                // Apply projection if specified
+                if let Some(ref proj) = projection {
+                    full_batch.project(proj).map_err(|e| DataFusionError::from(e))
+                } else {
+                    Ok(full_batch)
+                }
+            })
+            .collect();
 
         // Create stream from batches
         let stream = stream::iter(batch_results);

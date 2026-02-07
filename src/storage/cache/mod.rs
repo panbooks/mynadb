@@ -22,7 +22,7 @@ use super::storage::Storage;
 use super::wal::Wal;
 use crate::utils::hash::compute_hash;
 use arrow::array::RecordBatch;
-use arrow::datatypes::Schema;
+use arrow::datatypes::{DataType, Field, Schema};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -815,7 +815,9 @@ impl DataCache {
     }
 
     /// Get the schema for cached data of a specific table
-    /// Returns the schema from the first available batch, or None if no data cached
+    /// Returns the schema from the first available batch, or None if no data cached.
+    /// Appends a `node_id` field (Utf8) if not already present, mirroring the Hive
+    /// partition column that the Parquet reader adds for on-disk data.
     pub fn get_table_schema(
         &self,
         catalog: &str,
@@ -827,7 +829,14 @@ impl DataCache {
             for (key, batches) in data.iter() {
                 if key.0 == catalog && key.1 == schema && key.2 == table {
                     if let Some((_, batch)) = batches.first() {
-                        return Some(batch.schema());
+                        let batch_schema = batch.schema();
+                        // Add node_id field if not already present (mirrors Parquet Hive partition column)
+                        if batch_schema.field_with_name("node_id").is_err() {
+                            let mut fields: Vec<Field> = batch_schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+                            fields.push(Field::new("node_id", DataType::Utf8, true));
+                            return Some(Arc::new(Schema::new(fields)));
+                        }
+                        return Some(batch_schema);
                     }
                 }
             }

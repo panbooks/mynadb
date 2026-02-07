@@ -389,8 +389,9 @@ impl QueryEngine {
             return Ok(parquet_provider);
         }
 
+        let node_id = cache.node_id();
         let memtable_provider =
-            match MemtableProvider::try_new(cache.clone(), catalog_name, schema_name, table_name) {
+            match MemtableProvider::try_new(cache.clone(), catalog_name, schema_name, table_name, node_id) {
                 Some(p) => Arc::new(p),
                 None => return Ok(parquet_provider),
             };
@@ -559,8 +560,9 @@ impl QueryEngine {
             .as_ref()
             .ok_or_else(|| "Write cache not available".to_string())?;
 
+        let node_id = cache.node_id();
         let memtable_provider =
-            MemtableProvider::try_new(cache.clone(), catalog_name, schema_name, table_name)
+            MemtableProvider::try_new(cache.clone(), catalog_name, schema_name, table_name, node_id)
                 .ok_or_else(|| {
                     format!(
                         "No cached data available for {}.{}.{}",
