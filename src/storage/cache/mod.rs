@@ -67,6 +67,10 @@ pub struct DataCache {
     flush_lock: Arc<tokio::sync::Mutex<()>>,
     /// Hot partition cache (for invalidation on flush)
     hot_partition_cache: Option<Arc<crate::query::cache::hot_partition_cache::HotPartitionCache>>,
+    /// Cached merged schema per table (updated incrementally on add_points/add_batch)
+    /// This ensures get_table_schema() returns all columns across all batches,
+    /// not just the columns from the first batch seen.
+    table_schemas: Arc<RwLock<HashMap<TableKey, Arc<Schema>>>>,
 }
 
 impl DataCache {
@@ -97,6 +101,7 @@ impl DataCache {
             node_id,
             flush_lock: Arc::new(tokio::sync::Mutex::new(())),
             hot_partition_cache: None,
+            table_schemas: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -134,6 +139,71 @@ impl DataCache {
     #[inline]
     fn shard_index(&self, key: &CacheKey) -> usize {
         (compute_hash(key) as usize) % NUM_SHARDS
+    }
+
+    /// Merge a new batch's schema into the cached schema for a table.
+    ///
+    /// Returns Some(merged) if the cached schema was updated (new fields found),
+    /// or None if no update was needed (all fields already present).
+    /// Field ordering: time first, then measurement, date, then remaining sorted alphabetically.
+    fn merge_into_cached_schema(
+        cached: Option<&Arc<Schema>>,
+        new_batch_schema: &Schema,
+    ) -> Option<Arc<Schema>> {
+        let cached = match cached {
+            Some(c) => c,
+            None => return Some(Arc::new(new_batch_schema.clone())),
+        };
+
+        // Check if cached schema already contains all fields from new batch
+        let has_new_fields = new_batch_schema
+            .fields()
+            .iter()
+            .any(|f| cached.field_with_name(f.name()).is_err());
+
+        if !has_new_fields {
+            return None; // No update needed
+        }
+
+        // Merge: collect all unique fields by name (cached fields take precedence)
+        let mut field_map: std::collections::BTreeMap<String, Field> = std::collections::BTreeMap::new();
+        for f in cached.fields().iter() {
+            field_map.insert(f.name().clone(), f.as_ref().clone());
+        }
+        for f in new_batch_schema.fields().iter() {
+            field_map
+                .entry(f.name().clone())
+                .or_insert_with(|| f.as_ref().clone());
+        }
+
+        // Order: time, measurement, date first, then rest sorted alphabetically
+        let priority = |name: &str| -> u8 {
+            match name {
+                "time" => 0,
+                "measurement" => 1,
+                "date" => 2,
+                _ => 3,
+            }
+        };
+
+        let mut fields: Vec<Field> = field_map.into_values().collect();
+        fields.sort_by(|a, b| {
+            let pa = priority(a.name());
+            let pb = priority(b.name());
+            pa.cmp(&pb).then_with(|| a.name().cmp(b.name()))
+        });
+
+        Some(Arc::new(Schema::new(fields)))
+    }
+
+    /// Update the cached merged schema for a table after adding a batch.
+    fn update_table_schema(&self, catalog: &str, schema: &str, table: &str, batch_schema: &Schema) {
+        let table_key = (catalog.to_string(), schema.to_string(), table.to_string());
+        let mut schemas = self.table_schemas.write();
+        let existing = schemas.get(&table_key);
+        if let Some(merged) = Self::merge_into_cached_schema(existing, batch_schema) {
+            schemas.insert(table_key, merged);
+        }
     }
 
     /// Add points to the in-memory cache as RecordBatch
@@ -200,6 +270,9 @@ impl DataCache {
                 batch_bytes: batch_size,
             });
         }
+
+        // Update cached merged schema for this table
+        self.update_table_schema(catalog, schema, table, &batch.schema());
 
         // Add to appropriate shard (minimal lock contention)
         // seq=0 for Primary/local writes (non-replicated data)
@@ -281,6 +354,9 @@ impl DataCache {
                 batch_bytes: batch_size,
             });
         }
+
+        // Update cached merged schema for this table
+        self.update_table_schema(catalog, schema, table, &batch.schema());
 
         // Add to appropriate shard (minimal lock contention)
         // seq=0 for Primary/local writes (non-replicated data)
@@ -814,8 +890,8 @@ impl DataCache {
         result
     }
 
-    /// Get the schema for cached data of a specific table
-    /// Returns the schema from the first available batch, or None if no data cached.
+    /// Get the merged schema for cached data of a specific table.
+    /// Returns the schema that includes all columns across all batches seen for this table.
     /// Appends a `node_id` field (Utf8) if not already present, mirroring the Hive
     /// partition column that the Parquet reader adds for on-disk data.
     pub fn get_table_schema(
@@ -824,24 +900,20 @@ impl DataCache {
         schema: &str,
         table: &str,
     ) -> Option<Arc<Schema>> {
-        for shard in self.shards.iter() {
-            let data = shard.data.lock();
-            for (key, batches) in data.iter() {
-                if key.0 == catalog && key.1 == schema && key.2 == table {
-                    if let Some((_, batch)) = batches.first() {
-                        let batch_schema = batch.schema();
-                        // Add node_id field if not already present (mirrors Parquet Hive partition column)
-                        if batch_schema.field_with_name("node_id").is_err() {
-                            let mut fields: Vec<Field> = batch_schema.fields().iter().map(|f| f.as_ref().clone()).collect();
-                            fields.push(Field::new("node_id", DataType::Utf8, true));
-                            return Some(Arc::new(Schema::new(fields)));
-                        }
-                        return Some(batch_schema);
-                    }
-                }
-            }
+        let key = (catalog.to_string(), schema.to_string(), table.to_string());
+        let schemas = self.table_schemas.read();
+        let cached_schema = schemas.get(&key)?.clone();
+        // Add node_id field if not already present (mirrors Parquet Hive partition column)
+        if cached_schema.field_with_name("node_id").is_err() {
+            let mut fields: Vec<Field> = cached_schema
+                .fields()
+                .iter()
+                .map(|f| f.as_ref().clone())
+                .collect();
+            fields.push(Field::new("node_id", DataType::Utf8, true));
+            return Some(Arc::new(Schema::new(fields)));
         }
-        None
+        Some(cached_schema)
     }
 
     /// Get list of date partitions that have cached data for a table

@@ -22,7 +22,7 @@
 //! - Supports filter pushdown for early filtering
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{RecordBatch, StringArray};
+use datafusion::arrow::array::{new_null_array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{project_schema, DataFusionError, Result};
@@ -37,6 +37,7 @@ use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Pla
 use datafusion::prelude::Expr;
 use futures::stream;
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use tracing::debug;
@@ -315,13 +316,13 @@ impl ExecutionPlan for MemtableExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // Get batches from cache WITHOUT projection — we need to add node_id first
+        // Get batches from cache WITHOUT projection — we need to align to full_schema first
         let batches = self.cache.get_table_batches(
             &self.catalog,
             &self.schema_name,
             &self.table_name,
             None,
-            None, // No projection here; we apply it after adding node_id
+            None, // No projection here; we apply it after alignment
         );
 
         debug!(
@@ -332,27 +333,71 @@ impl ExecutionPlan for MemtableExec {
             self.node_id,
         );
 
-        // Add node_id column to each batch, then apply projection
+        // Pre-compute column mappings per unique batch schema.
+        // Each batch may have a different schema (e.g., Telegraf sends different field sets
+        // for the same measurement). We align columns by name to full_schema.
+        #[derive(Clone)]
+        enum ColumnSource {
+            /// Fill with node_id string value
+            NodeId,
+            /// Take column at this index from the batch
+            BatchColumn(usize),
+            /// Fill with nulls (column not present in this batch)
+            Null,
+        }
+
         let node_id = self.node_id.clone();
         let projection = self.projection.clone();
         let full_schema = self.full_schema.clone();
 
+        let mut schema_mappings: HashMap<SchemaRef, Vec<ColumnSource>> = HashMap::new();
+
         let batch_results: Vec<Result<RecordBatch>> = batches
             .into_iter()
             .map(|batch| {
-                // Add node_id column (StringArray filled with node_id for all rows)
-                let num_rows = batch.num_rows();
-                let node_id_array = Arc::new(StringArray::from(vec![node_id.as_str(); num_rows]));
+                let batch_schema = batch.schema();
+                let mapping = schema_mappings
+                    .entry(batch_schema.clone())
+                    .or_insert_with(|| {
+                        full_schema
+                            .fields()
+                            .iter()
+                            .map(|field| {
+                                if field.name() == "node_id" {
+                                    ColumnSource::NodeId
+                                } else {
+                                    match batch_schema.index_of(field.name()) {
+                                        Ok(idx) => ColumnSource::BatchColumn(idx),
+                                        Err(_) => ColumnSource::Null,
+                                    }
+                                }
+                            })
+                            .collect()
+                    })
+                    .clone();
 
-                let mut columns: Vec<Arc<dyn datafusion::arrow::array::Array>> =
-                    batch.columns().to_vec();
-                columns.push(node_id_array);
+                let num_rows = batch.num_rows();
+                let node_id_array: Arc<dyn datafusion::arrow::array::Array> =
+                    Arc::new(StringArray::from(vec![node_id.as_str(); num_rows]));
+
+                let columns: Vec<Arc<dyn datafusion::arrow::array::Array>> = mapping
+                    .iter()
+                    .enumerate()
+                    .map(|(field_idx, src)| match src {
+                        ColumnSource::NodeId => node_id_array.clone(),
+                        ColumnSource::BatchColumn(idx) => batch.column(*idx).clone(),
+                        ColumnSource::Null => {
+                            let data_type = full_schema.field(field_idx).data_type();
+                            new_null_array(data_type, num_rows)
+                        }
+                    })
+                    .collect();
 
                 let full_batch = RecordBatch::try_new(full_schema.clone(), columns)?;
 
                 // Apply projection if specified
                 if let Some(ref proj) = projection {
-                    full_batch.project(proj).map_err(|e| DataFusionError::from(e))
+                    full_batch.project(proj).map_err(DataFusionError::from)
                 } else {
                     Ok(full_batch)
                 }
