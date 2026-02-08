@@ -75,6 +75,17 @@ pub fn batches_to_response(
     measurement: &str,
     statement_id: u32,
 ) -> InfluxResponse {
+    batches_to_response_with_epoch(batches, measurement, statement_id, None)
+}
+
+/// Convert Arrow RecordBatches to InfluxDB response with optional epoch timestamp format
+/// epoch: None = RFC3339, Some("ns") = nanoseconds, Some("ms") = milliseconds, etc.
+pub fn batches_to_response_with_epoch(
+    batches: &[RecordBatch],
+    measurement: &str,
+    statement_id: u32,
+    epoch: Option<&str>,
+) -> InfluxResponse {
     if batches.is_empty() {
         return InfluxResponse::with_result(StatementResult {
             statement_id,
@@ -96,7 +107,7 @@ pub fn batches_to_response(
 
             for col_idx in 0..batch.num_columns() {
                 let col = batch.column(col_idx);
-                let value = extract_value(col, row_idx);
+                let value = extract_value_with_epoch(col, row_idx, epoch);
                 row.push(value);
             }
 
@@ -124,6 +135,17 @@ pub fn batches_to_grouped_response(
     measurement: &str,
     tag_columns: &[&str],
     statement_id: u32,
+) -> InfluxResponse {
+    batches_to_grouped_response_with_epoch(batches, measurement, tag_columns, statement_id, None)
+}
+
+/// Convert Arrow RecordBatches to InfluxDB response, grouping by tag columns, with epoch support
+pub fn batches_to_grouped_response_with_epoch(
+    batches: &[RecordBatch],
+    measurement: &str,
+    tag_columns: &[&str],
+    statement_id: u32,
+    epoch: Option<&str>,
 ) -> InfluxResponse {
     if batches.is_empty() {
         return InfluxResponse::with_result(StatementResult {
@@ -169,7 +191,7 @@ pub fn batches_to_grouped_response(
             // Extract value columns
             let row: Vec<serde_json::Value> = value_columns
                 .iter()
-                .map(|(idx, _)| extract_value(batch.column(*idx), row_idx))
+                .map(|(idx, _)| extract_value_with_epoch(batch.column(*idx), row_idx, epoch))
                 .collect();
 
             groups.entry(group_key).or_default().push(row);
@@ -203,6 +225,17 @@ pub fn batches_to_grouped_response(
 }
 
 fn extract_value(array: &dyn Array, row_idx: usize) -> serde_json::Value {
+    extract_value_with_epoch(array, row_idx, None)
+}
+
+/// Extract a value from an Arrow array, with optional epoch timestamp formatting.
+/// epoch: None = RFC3339, "ns" = nanoseconds, "us"/"u" = microseconds,
+///        "ms" = milliseconds, "s" = seconds
+fn extract_value_with_epoch(
+    array: &dyn Array,
+    row_idx: usize,
+    epoch: Option<&str>,
+) -> serde_json::Value {
     if array.is_null(row_idx) {
         return serde_json::Value::Null;
     }
@@ -251,14 +284,24 @@ fn extract_value(array: &dyn Array, row_idx: usize) -> serde_json::Value {
                 .as_any()
                 .downcast_ref::<TimestampNanosecondArray>();
             if let Some(arr) = arr {
-                // Return as RFC3339 string for compatibility
                 let nanos = arr.value(row_idx);
-                let secs = nanos / 1_000_000_000;
-                let nsecs = (nanos % 1_000_000_000) as u32;
-                if let Some(dt) = chrono::DateTime::from_timestamp(secs, nsecs) {
-                    serde_json::Value::String(dt.format("%Y-%m-%dT%H:%M:%S%.9fZ").to_string())
-                } else {
-                    serde_json::json!(nanos)
+                match epoch {
+                    Some("ns" | "n") => serde_json::json!(nanos),
+                    Some("us" | "u") => serde_json::json!(nanos / 1_000),
+                    Some("ms") => serde_json::json!(nanos / 1_000_000),
+                    Some("s") => serde_json::json!(nanos / 1_000_000_000),
+                    _ => {
+                        // Default: RFC3339 string
+                        let secs = nanos / 1_000_000_000;
+                        let nsecs = (nanos % 1_000_000_000) as u32;
+                        if let Some(dt) = chrono::DateTime::from_timestamp(secs, nsecs) {
+                            serde_json::Value::String(
+                                dt.format("%Y-%m-%dT%H:%M:%S%.9fZ").to_string(),
+                            )
+                        } else {
+                            serde_json::json!(nanos)
+                        }
+                    }
                 }
             } else {
                 serde_json::Value::Null

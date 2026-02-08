@@ -69,8 +69,8 @@ pub use ast::*;
 pub use lexer::LexerError;
 pub use parser::{parse, ParseError};
 pub use response::{
-    batches_to_grouped_response, batches_to_response, ErrorResponse, InfluxResponse, Series,
-    StatementResult,
+    batches_to_grouped_response, batches_to_grouped_response_with_epoch, batches_to_response,
+    batches_to_response_with_epoch, ErrorResponse, InfluxResponse, Series, StatementResult,
 };
 pub use transpiler::{transpile, TranspileContext, TranspileError};
 
@@ -119,6 +119,81 @@ pub fn influxql_to_sql(query: &str, ctx: &TranspileContext) -> Result<String, In
     let stmt = parse(query)?;
     let sql = transpile(&stmt, ctx)?;
     Ok(sql)
+}
+
+// ============================================================================
+// Shared execution helpers (used by standalone API and router API)
+// ============================================================================
+
+use arrow::record_batch::RecordBatch;
+
+/// Result of preparing an InfluxQL query for execution
+pub struct PreparedInfluxQL {
+    /// The transpiled SQL query
+    pub sql: String,
+    /// Measurement name for the response
+    pub measurement: String,
+    /// Tag columns for GROUP BY grouping (None = no tag grouping)
+    pub tag_columns: Option<Vec<String>>,
+}
+
+/// Parse and transpile an InfluxQL query, returning the SQL and response metadata.
+/// On error, returns a ready-to-send InfluxResponse.
+pub fn prepare_query(
+    query: &str,
+    db: &str,
+    schema_default: &str,
+) -> Result<PreparedInfluxQL, InfluxResponse> {
+    let stmt = match parse(query) {
+        Ok(s) => s,
+        Err(e) => return Err(InfluxResponse::error(0, format!("Parse error: {}", e))),
+    };
+
+    let measurement = get_measurement_name(&stmt).unwrap_or_else(|| "result".to_string());
+    let tag_columns = has_tag_grouping(&stmt);
+
+    let ctx = TranspileContext {
+        database: db.to_string(),
+        schema: schema_default.to_string(),
+    };
+
+    let sql = match influxql_to_sql(query, &ctx) {
+        Ok(s) => s,
+        Err(e) => return Err(InfluxResponse::error(0, format!("Transpile error: {}", e))),
+    };
+
+    Ok(PreparedInfluxQL {
+        sql,
+        measurement,
+        tag_columns,
+    })
+}
+
+/// Format Arrow RecordBatches into an InfluxDB-compatible response.
+pub fn format_result(
+    batches: &[RecordBatch],
+    prepared: &PreparedInfluxQL,
+    epoch: Option<&str>,
+) -> InfluxResponse {
+    if let Some(ref tags) = prepared.tag_columns {
+        let tag_refs: Vec<&str> = tags.iter().map(|s| s.as_str()).collect();
+        batches_to_grouped_response_with_epoch(batches, &prepared.measurement, &tag_refs, 0, epoch)
+    } else {
+        batches_to_response_with_epoch(batches, &prepared.measurement, 0, epoch)
+    }
+}
+
+/// Extract the InfluxQL query string from a POST body.
+/// Handles url-encoded form (q=...) and plain text bodies.
+pub fn extract_query_from_body(body: &str, fallback_q: Option<&str>) -> Option<String> {
+    if body.starts_with("q=") {
+        body.strip_prefix("q=")
+            .map(|s| urlencoding::decode(s).unwrap_or_default().into_owned())
+    } else if !body.is_empty() {
+        Some(body.to_string())
+    } else {
+        fallback_q.map(|s| s.to_string())
+    }
 }
 
 /// Extract measurement name from a parsed statement

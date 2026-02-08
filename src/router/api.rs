@@ -4,6 +4,7 @@
 //! through WriteRouter and QueryCoordinator to Data nodes.
 
 use super::state::RouterAppState;
+use crate::query::influxql::{self, InfluxResponse};
 use crate::utils::json::batches_to_json;
 use axum::{
     extract::{Path, Query, State},
@@ -14,6 +15,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing::debug;
 
 // ============================================================================
 // Request/Response Types
@@ -49,6 +51,20 @@ pub struct QueryResponse {
     pub error: Option<String>,
 }
 
+/// InfluxDB-compatible query parameters (used by Grafana InfluxDB datasource)
+#[derive(Debug, Deserialize)]
+pub struct InfluxQueryParams {
+    /// The InfluxQL query
+    #[serde(default)]
+    pub q: Option<String>,
+    /// Database name
+    #[serde(default)]
+    pub db: Option<String>,
+    /// Epoch precision for timestamps (ns, us, ms, s)
+    #[serde(default)]
+    pub epoch: Option<String>,
+}
+
 /// Write response
 #[derive(Debug, Serialize)]
 pub struct WriteResponse {
@@ -81,11 +97,15 @@ pub fn build_router(state: RouterAppState) -> Router {
         // Basic endpoints
         .route("/", get(home))
         .route("/health", get(health))
+        .route("/ping", get(influxdb_ping))
         .route("/version", get(version_handler))
         // Write endpoint - routes to Data nodes
         .route("/write/:db", post(write_handler))
         .route("/write", post(write_handler_query_param))
-        // Query endpoint - distributed query via Data nodes
+        // InfluxDB-compatible query endpoint (Grafana InfluxDB datasource)
+        .route("/query", get(influxql_query_handler))
+        .route("/query", post(influxql_query_handler_post))
+        // SQL query endpoint - distributed query via Data nodes
         .route("/query/:db", get(query_handler))
         .route("/query/:db", post(query_handler_post))
         // Schema/Table endpoints (forwarded to Data nodes)
@@ -120,7 +140,9 @@ pub async fn home() -> &'static str {
        GET  /version             - Version info\n\n\
      Write/Query Endpoints:\n\
        POST /write/:db           - Write data (InfluxDB line protocol)\n\
-       GET/POST /query/:db       - Execute SQL query\n\n\
+       GET/POST /query/:db       - Execute SQL query\n\
+       GET/POST /query?db=X&q=Y  - InfluxQL query (Grafana InfluxDB datasource)\n\
+       GET  /ping                - InfluxDB connection test\n\n\
      Schema/Table Endpoints:\n\
        GET  /schemas/:db         - List schemas\n\
        GET  /tables/:db          - List all tables\n\
@@ -151,6 +173,80 @@ pub async fn version_handler() -> impl IntoResponse {
         "node_type": "router"
     });
     (StatusCode::OK, Json(version_info))
+}
+
+// ============================================================================
+// InfluxDB-Compatible Handlers (Grafana InfluxDB datasource)
+// ============================================================================
+
+/// InfluxDB-compatible /ping endpoint — returns 204 with version header
+pub async fn influxdb_ping() -> impl IntoResponse {
+    (
+        StatusCode::NO_CONTENT,
+        [("X-Influxdb-Version", env!("GIT_VERSION"))],
+    )
+}
+
+/// InfluxDB-compatible query handler (GET /query?db=X&q=Y&epoch=ms)
+pub async fn influxql_query_handler(
+    Query(params): Query<InfluxQueryParams>,
+    State(state): State<RouterAppState>,
+) -> impl IntoResponse {
+    let q = match params.q {
+        Some(q) if !q.is_empty() => q,
+        _ => {
+            let response = InfluxResponse::error(0, "missing required parameter \"q\"".to_string());
+            return (StatusCode::BAD_REQUEST, Json(response));
+        }
+    };
+    let db = params.db.unwrap_or_else(|| "default".to_string());
+    debug!("InfluxQL Query (GET): db={}, q={}", db, q);
+    execute_influxql_query(&state, db, q, params.epoch.as_deref()).await
+}
+
+/// InfluxDB-compatible query handler (POST /query?db=X)
+pub async fn influxql_query_handler_post(
+    Query(params): Query<InfluxQueryParams>,
+    State(state): State<RouterAppState>,
+    body: String,
+) -> impl IntoResponse {
+    let query = match influxql::extract_query_from_body(&body, params.q.as_deref()) {
+        Some(q) => q,
+        None => {
+            let response = InfluxResponse::error(0, "missing required parameter \"q\"".to_string());
+            return (StatusCode::BAD_REQUEST, Json(response));
+        }
+    };
+    let db = params.db.unwrap_or_else(|| "default".to_string());
+    debug!("InfluxQL Query (POST): db={}, q={}", db, query);
+    execute_influxql_query(&state, db, query, params.epoch.as_deref()).await
+}
+
+/// Execute an InfluxQL query via the router's query coordinator
+async fn execute_influxql_query(
+    state: &RouterAppState,
+    db: String,
+    query: String,
+    epoch: Option<&str>,
+) -> (StatusCode, Json<InfluxResponse>) {
+    // Parse and transpile InfluxQL to SQL
+    let prepared = match influxql::prepare_query(&query, &db, &state.config.schema.default_name) {
+        Ok(p) => p,
+        Err(response) => return (StatusCode::BAD_REQUEST, Json(response)),
+    };
+
+    debug!("InfluxQL transpiled to SQL: {}", prepared.sql);
+
+    // Execute via query coordinator (distributes to data nodes)
+    let result = state.query_coordinator.execute_query(&db, &prepared.sql).await;
+
+    if let Some(ref error) = result.error {
+        let response = InfluxResponse::error(0, format!("Query error: {}", error));
+        return (StatusCode::BAD_REQUEST, Json(response));
+    }
+
+    let response = influxql::format_result(&result.batches, &prepared, epoch);
+    (StatusCode::OK, Json(response))
 }
 
 // ============================================================================
