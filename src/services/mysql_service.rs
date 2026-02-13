@@ -321,6 +321,7 @@ fn arrow_type_to_mysql(dt: &datafusion::arrow::datatypes::DataType) -> ColumnTyp
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
             ColumnType::MYSQL_TYPE_VAR_STRING
         }
+        DataType::Dictionary(_, value_type) => arrow_type_to_mysql(value_type),
         DataType::Timestamp(_, _) => ColumnType::MYSQL_TYPE_DATETIME,
         DataType::Date32 | DataType::Date64 => ColumnType::MYSQL_TYPE_DATE,
         DataType::Binary | DataType::LargeBinary => ColumnType::MYSQL_TYPE_BLOB,
@@ -410,6 +411,21 @@ fn arrow_value_to_mysql(
                 MysqlValue::String(dt.format("%Y-%m-%d %H:%M:%S%.6f").to_string())
             } else {
                 MysqlValue::String(ts.to_string())
+            }
+        }
+        DataType::Dictionary(_, _) => {
+            // Unwrap Dictionary-encoded arrays (common from Parquet reads)
+            // Cast to the value type and recurse
+            let value_type = match array.data_type() {
+                DataType::Dictionary(_, v) => v.as_ref().clone(),
+                _ => unreachable!(),
+            };
+            match datafusion::arrow::compute::cast(array.as_ref(), &value_type) {
+                Ok(casted) => {
+                    let casted_ref: Arc<dyn datafusion::arrow::array::Array> = Arc::from(casted);
+                    arrow_value_to_mysql(&casted_ref, index)
+                }
+                Err(_) => MysqlValue::String(format!("{:?}", array.data_type())),
             }
         }
         _ => {

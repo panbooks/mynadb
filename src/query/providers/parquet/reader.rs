@@ -2,7 +2,7 @@
 
 use super::config::ParquetFileInfo;
 use super::filters::{create_row_filter_from_predicates, extract_equality_predicates};
-use datafusion::arrow::array::{Array, RecordBatch, RecordBatchOptions, StringArray};
+use datafusion::arrow::array::{new_null_array, Array, RecordBatch, RecordBatchOptions, StringArray};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
@@ -186,6 +186,8 @@ fn add_partition_columns(
             .map_err(|e| DataFusionError::External(Box::new(e)));
     }
 
+    let num_rows = batch.num_rows();
+
     // Check if any partition columns are in target schema
     let has_date_col = target_schema
         .fields()
@@ -198,36 +200,31 @@ fn add_partition_columns(
 
     if !has_date_col && !has_node_id_col {
         // No partition columns requested in projection
-        // Reproject batch to match target schema, casting types as needed
+        // Reproject batch to match target schema, casting types and null-filling as needed
         let columns: Vec<Arc<dyn Array>> = target_schema
             .fields()
             .iter()
-            .filter_map(|field| {
-                batch
-                    .schema()
-                    .index_of(field.name())
-                    .ok()
-                    .map(|idx| {
+            .map(|field| {
+                match batch.schema().index_of(field.name()) {
+                    Ok(idx) => {
                         let col = batch.column(idx);
                         if col.data_type() != field.data_type() {
                             cast(col.as_ref(), field.data_type()).unwrap_or_else(|_| col.clone())
                         } else {
                             col.clone()
                         }
-                    })
+                    }
+                    Err(_) => new_null_array(field.data_type(), num_rows),
+                }
             })
             .collect();
 
-        if columns.len() == target_schema.fields().len() {
-            return RecordBatch::try_new(target_schema.clone(), columns)
-                .map_err(|e| DataFusionError::External(Box::new(e)));
-        }
-        return Ok(batch.clone());
+        return RecordBatch::try_new(target_schema.clone(), columns)
+            .map_err(|e| DataFusionError::External(Box::new(e)));
     }
 
     // Build new columns array with partition columns in correct positions
     let mut columns: Vec<Arc<dyn Array>> = Vec::new();
-    let num_rows = batch.num_rows();
 
     for field in target_schema.fields() {
         if field.name() == partition_column {
@@ -261,12 +258,10 @@ fn add_partition_columns(
                     }
                 }
                 Err(_) => {
-                    // Field not found in batch - this shouldn't happen for valid projections
-                    // but we need to handle it gracefully
-                    return Err(DataFusionError::Internal(format!(
-                        "Field '{}' not found in batch schema",
-                        field.name()
-                    )));
+                    // Field not in this Parquet file — fill with nulls.
+                    // Different files for the same table can have different columns
+                    // (e.g., Telegraf's procstat has varying fields across intervals).
+                    columns.push(new_null_array(field.data_type(), num_rows));
                 }
             }
         }
