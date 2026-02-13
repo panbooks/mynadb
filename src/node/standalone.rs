@@ -389,7 +389,7 @@ pub async fn run(config_path: &str) {
             println!("\nShutting down MynaDB...");
             info!("Received shutdown signal, cleaning up...");
 
-            // Flush memtable data to disk before shutdown
+            // Flush memtable data to disk before shutdown (with timeout)
             // This ensures no data loss on graceful shutdown
             let cache_stats = cache_for_shutdown.stats().await;
             if cache_stats.total_rows > 0 {
@@ -399,8 +399,11 @@ pub async fn run(config_path: &str) {
                     cache_stats.total_rows
                 );
                 let flush_start = Instant::now();
-                match cache_for_shutdown.flush().await {
-                    Ok(files_written) => {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    cache_for_shutdown.flush(),
+                ).await {
+                    Ok(Ok(files_written)) => {
                         println!("  Flushed {} file(s) in {:.1?}", files_written.len(), flush_start.elapsed());
                         info!(
                             "Shutdown: flushed {} files in {:?}",
@@ -408,9 +411,13 @@ pub async fn run(config_path: &str) {
                             flush_start.elapsed()
                         );
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         println!("  Flush failed: {}", e);
                         error!("Shutdown: failed to flush memtable: {}", e);
+                    }
+                    Err(_) => {
+                        println!("  Flush timed out after 10s, exiting anyway");
+                        warn!("Shutdown: memtable flush timed out after 10s");
                     }
                 }
             } else {
@@ -423,6 +430,7 @@ pub async fn run(config_path: &str) {
 
             println!("Goodbye!");
             info!("Shutdown complete");
+            std::process::exit(0);
         },
     }
 }
