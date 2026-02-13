@@ -34,25 +34,29 @@ pub fn parse_line_protocol(line: &str, schema_config: &SchemaConfig) -> Result<P
         return Err("Empty or comment line".to_string());
     }
 
-    // Split by space: measurement+tags fields timestamp
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 2 {
+    // Measurement+tags never contain unescaped spaces, so the first space
+    // always separates them from the field set.
+    let first_space = line
+        .find(' ')
+        .ok_or("Invalid line protocol format")?;
+    let measurement_part = &line[..first_space];
+    let rest = line[first_space..].trim_start();
+    if rest.is_empty() {
         return Err("Invalid line protocol format".to_string());
     }
 
+    // Split fields from optional timestamp, respecting quoted strings.
+    // String field values (e.g., uptime_format=" 6:03") may contain spaces.
+    let (field_str, timestamp_str) = split_fields_and_timestamp(rest);
+
     // Parse measurement and tags
-    let measurement_part = parts[0];
     let (measurement, tags) = parse_measurement_and_tags(measurement_part)?;
 
     // Parse fields
-    let fields = parse_fields(parts[1])?;
+    let fields = parse_fields(field_str)?;
 
     // Parse timestamp (optional)
-    let timestamp = if parts.len() > 2 {
-        parts[2].parse::<i64>().ok()
-    } else {
-        None
-    };
+    let timestamp = timestamp_str.and_then(|ts| ts.parse::<i64>().ok());
 
     // Compute date from timestamp (Date32: days since Unix epoch)
     let date = compute_date_from_timestamp(timestamp);
@@ -70,18 +74,65 @@ pub fn parse_line_protocol(line: &str, schema_config: &SchemaConfig) -> Result<P
     })
 }
 
+/// Split the fields+timestamp portion of a line protocol string.
+/// Respects double-quoted string values that may contain spaces.
+/// Returns (field_str, optional_timestamp_str).
+fn split_fields_and_timestamp(s: &str) -> (&str, Option<&str>) {
+    let bytes = s.as_bytes();
+    let mut in_quotes = false;
+    let mut last_unquoted_space = None;
+
+    for i in 0..bytes.len() {
+        if bytes[i] == b'"' && (i == 0 || bytes[i - 1] != b'\\') {
+            in_quotes = !in_quotes;
+        } else if bytes[i] == b' ' && !in_quotes {
+            last_unquoted_space = Some(i);
+        }
+    }
+
+    if let Some(pos) = last_unquoted_space {
+        let after = s[pos + 1..].trim();
+        // Timestamp is all digits, optionally with a leading minus
+        let digits = if after.starts_with('-') {
+            &after[1..]
+        } else {
+            after
+        };
+        if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+            return (&s[..pos], Some(after));
+        }
+    }
+
+    // No timestamp — everything is fields
+    (s, None)
+}
+
 /// Parse field set from line protocol
 /// Format: field=value[,field=value...]
 /// Values can be: float (1.5), integer (1i), string ("hello"), boolean (true/false)
+/// Splits on commas outside double-quoted strings to handle values like msg="a,b".
 pub fn parse_fields(field_str: &str) -> Result<HashMap<String, FieldValue>, String> {
-    let parts: Vec<&str> = field_str.split(',').collect();
-    let mut fields = HashMap::with_capacity(parts.len());
+    let mut fields = HashMap::new();
+    let bytes = field_str.as_bytes();
+    let mut in_quotes = false;
+    let mut start = 0;
 
-    for part in parts {
-        if let Some((key, value)) = part.split_once('=') {
-            let field_value = parse_field_value(value)?;
-            fields.insert(key.to_string(), field_value);
+    for i in 0..bytes.len() {
+        if bytes[i] == b'"' && (i == 0 || bytes[i - 1] != b'\\') {
+            in_quotes = !in_quotes;
+        } else if bytes[i] == b',' && !in_quotes {
+            let part = &field_str[start..i];
+            if let Some((key, value)) = part.split_once('=') {
+                fields.insert(key.trim().to_string(), parse_field_value(value)?);
+            }
+            start = i + 1;
         }
+    }
+
+    // Last field (after final comma, or the only field)
+    let part = &field_str[start..];
+    if let Some((key, value)) = part.split_once('=') {
+        fields.insert(key.trim().to_string(), parse_field_value(value)?);
     }
 
     if fields.is_empty() {
@@ -331,12 +382,59 @@ mod tests {
 
     #[test]
     fn test_parse_field_string() {
-        // Note: strings with spaces would break whitespace-based parsing
-        // Using string without spaces for this test
         let line = "log message=\"hello\" 1672531200000000000";
         let config = get_test_schema_config();
         let point = parse_line_protocol(line, &config).unwrap();
         assert!(matches!(point.fields.get("message"), Some(FieldValue::String(s)) if s == "hello"));
+    }
+
+    #[test]
+    fn test_parse_string_with_space() {
+        // Telegraf system plugin sends: uptime_format=" 6:03"
+        let line =
+            "system,host=h1 uptime=100i,uptime_format=\" 6:03\" 1672531200000000000";
+        let config = get_test_schema_config();
+        let point = parse_line_protocol(line, &config).unwrap();
+        assert_eq!(point.measurement, "system");
+        assert!(
+            matches!(point.fields.get("uptime_format"), Some(FieldValue::String(s)) if s == " 6:03"),
+            "uptime_format should be ' 6:03', got: {:?}",
+            point.fields.get("uptime_format")
+        );
+        assert!(matches!(
+            point.fields.get("uptime"),
+            Some(FieldValue::Integer(100))
+        ));
+        assert_eq!(point.timestamp, Some(1672531200000000000));
+    }
+
+    #[test]
+    fn test_parse_string_with_comma() {
+        // String value containing a comma
+        let line = "log msg=\"hello, world\",level=\"info\" 1672531200000000000";
+        let config = get_test_schema_config();
+        let point = parse_line_protocol(line, &config).unwrap();
+        assert!(
+            matches!(point.fields.get("msg"), Some(FieldValue::String(s)) if s == "hello, world"),
+            "msg should be 'hello, world', got: {:?}",
+            point.fields.get("msg")
+        );
+        assert!(
+            matches!(point.fields.get("level"), Some(FieldValue::String(s)) if s == "info")
+        );
+        assert_eq!(point.timestamp, Some(1672531200000000000));
+    }
+
+    #[test]
+    fn test_parse_string_with_space_no_timestamp() {
+        // String with space and no timestamp
+        let line = "system,host=h1 uptime_format=\" 6:03\"";
+        let config = get_test_schema_config();
+        let point = parse_line_protocol(line, &config).unwrap();
+        assert!(
+            matches!(point.fields.get("uptime_format"), Some(FieldValue::String(s)) if s == " 6:03")
+        );
+        assert_eq!(point.timestamp, None);
     }
 
     #[test]
