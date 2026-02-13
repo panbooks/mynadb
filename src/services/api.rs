@@ -1052,36 +1052,44 @@ async fn execute_influxql_query(
         return (StatusCode::FORBIDDEN, Json(response));
     }
 
+    // Parse once — used for metadata checks and transpilation
+    let stmt = match influxql::parse(&query) {
+        Ok(s) => s,
+        Err(e) => {
+            query_handle.finish(false);
+            let response = InfluxResponse::error(0, format!("Parse error: {}", e));
+            return (StatusCode::BAD_REQUEST, Json(response));
+        }
+    };
+
     // Handle metadata queries directly (without going through DataFusion SQL)
     // DataFusion's information_schema only knows about lazily-registered tables,
     // so we scan the filesystem/cache directly for accurate results.
-    if let Ok(stmt) = influxql::parse(&query) {
-        match stmt {
-            Statement::ShowDatabases => {
-                query_handle.finish(true);
-                let databases = state.query_engine.list_databases().await;
-                let response = influxql::build_show_databases_response(databases);
-                return (StatusCode::OK, Json(response));
-            }
-            Statement::ShowMeasurements(ref s) => {
-                query_handle.finish(true);
-                let target_db = s.database.as_deref().unwrap_or(&db);
-                let schema = &state.config.schema.default_name;
-                let tables = state.query_engine.list_tables_in_schema(target_db, schema).await.unwrap_or_default();
-                let response = influxql::build_show_measurements_response(tables);
-                return (StatusCode::OK, Json(response));
-            }
-            Statement::ShowRetentionPolicies(_) => {
-                query_handle.finish(true);
-                let response = influxql::build_show_retention_policies_response();
-                return (StatusCode::OK, Json(response));
-            }
-            _ => {}
+    match stmt {
+        Statement::ShowDatabases => {
+            query_handle.finish(true);
+            let databases = state.query_engine.list_databases().await;
+            let response = influxql::build_show_databases_response(databases);
+            return (StatusCode::OK, Json(response));
         }
+        Statement::ShowMeasurements(ref s) => {
+            query_handle.finish(true);
+            let target_db = s.database.as_deref().unwrap_or(&db);
+            let schema = &state.config.schema.default_name;
+            let tables = state.query_engine.list_tables_in_schema(target_db, schema).await.unwrap_or_default();
+            let response = influxql::build_show_measurements_response(tables);
+            return (StatusCode::OK, Json(response));
+        }
+        Statement::ShowRetentionPolicies(_) => {
+            query_handle.finish(true);
+            let response = influxql::build_show_retention_policies_response();
+            return (StatusCode::OK, Json(response));
+        }
+        _ => {}
     }
 
-    // Parse and transpile InfluxQL to SQL
-    let prepared = match influxql::prepare_query(&query, &db, &state.config.schema.default_name) {
+    // Transpile the pre-parsed statement to SQL (no re-parse)
+    let prepared = match influxql::prepare_query_from_stmt(&stmt, &db, &state.config.schema.default_name) {
         Ok(p) => p,
         Err(response) => {
             query_handle.finish(false);

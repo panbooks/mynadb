@@ -52,6 +52,12 @@ pub fn transpile(stmt: &Statement, ctx: &TranspileContext) -> Result<String, Tra
 }
 
 fn transpile_select(stmt: &SelectStatement, ctx: &TranspileContext) -> Result<String, TranspileError> {
+    // Check for lastpoint pattern: GROUP BY tags (no time bucket), no aggregates,
+    // ORDER BY time DESC, with LIMIT — uses ROW_NUMBER() window function
+    if is_lastpoint_query(stmt) {
+        return transpile_lastpoint(stmt, ctx);
+    }
+
     // Check if any field uses derivative(aggregate(...)) which needs a CTE
     if needs_cte(stmt) {
         return transpile_select_with_cte(stmt, ctx);
@@ -86,7 +92,7 @@ fn transpile_select(stmt: &SelectStatement, ctx: &TranspileContext) -> Result<St
         .iter()
         .map(|f| transpile_field(f, has_time_group))
         .collect::<Result<Vec<_>, _>>()?;
-    select_parts.extend(fields);
+    select_parts.extend(deduplicate_aliases(fields));
 
     // 3. GROUP BY tag columns (so their values appear in the result for grouping)
     if let Some(ref gb) = stmt.group_by {
@@ -215,6 +221,141 @@ fn is_aggregate_function(name: &str) -> bool {
         "mean" | "sum" | "count" | "min" | "max" | "first" | "last" | "median"
             | "mode" | "stddev" | "spread" | "percentile"
     )
+}
+
+/// Check if any field expression contains aggregate function calls
+fn fields_have_aggregates(fields: &[Field]) -> bool {
+    fields.iter().any(|f| expr_has_aggregate(&f.expr))
+}
+
+/// Recursively check if an expression contains an aggregate function call
+fn expr_has_aggregate(expr: &Expr) -> bool {
+    match expr {
+        Expr::Function(func) => {
+            if is_aggregate_function(&func.name) {
+                return true;
+            }
+            func.args.iter().any(expr_has_aggregate)
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            expr_has_aggregate(left) || expr_has_aggregate(right)
+        }
+        Expr::UnaryOp { expr, .. } => expr_has_aggregate(expr),
+        _ => false,
+    }
+}
+
+/// Detect the "lastpoint" query pattern:
+/// - GROUP BY has tags but NO time bucket
+/// - Fields have NO aggregate functions (or is SELECT *)
+/// - ORDER BY time DESC
+/// - LIMIT is present
+pub fn is_lastpoint_query(stmt: &SelectStatement) -> bool {
+    // Must have GROUP BY with tags but no time bucket
+    let has_tags_no_time = stmt.group_by.as_ref().map(|gb| {
+        gb.time.is_none() && !gb.tags.is_empty()
+    }).unwrap_or(false);
+
+    if !has_tags_no_time {
+        return false;
+    }
+
+    // Fields must not have aggregates
+    if fields_have_aggregates(&stmt.fields) {
+        return false;
+    }
+
+    // Must have ORDER BY time DESC
+    let has_time_desc = stmt.order_by.as_ref().map(|ob| ob.time_desc).unwrap_or(false);
+    if !has_time_desc {
+        return false;
+    }
+
+    // Must have LIMIT
+    stmt.limit.is_some()
+}
+
+/// Transpile a lastpoint query using ROW_NUMBER() window function.
+///
+/// Generates:
+/// ```sql
+/// SELECT <cols_except_rn> FROM (
+///   SELECT *, ROW_NUMBER() OVER (PARTITION BY <tags> ORDER BY "time" DESC) AS _rn
+///   FROM <table>
+///   WHERE <conditions>
+/// ) WHERE _rn <= <limit>
+/// ORDER BY <tags>, "time" DESC
+/// ```
+fn transpile_lastpoint(stmt: &SelectStatement, ctx: &TranspileContext) -> Result<String, TranspileError> {
+    let gb = stmt.group_by.as_ref().unwrap(); // safe: is_lastpoint_query checked
+    let limit = stmt.limit.unwrap(); // safe: is_lastpoint_query checked
+
+    // Collect partition (tag) columns
+    let mut partition_cols: Vec<String> = Vec::new();
+    for tag in &gb.tags {
+        if tag == "*" {
+            if let Some(ref cond) = stmt.condition {
+                for col in extract_filter_columns(cond) {
+                    let quoted = quote_ident(&col);
+                    if !partition_cols.contains(&quoted) {
+                        partition_cols.push(quoted);
+                    }
+                }
+            }
+        } else {
+            let quoted = quote_ident(tag);
+            if !partition_cols.contains(&quoted) {
+                partition_cols.push(quoted);
+            }
+        }
+    }
+
+    let partition_clause = partition_cols.join(", ");
+
+    // Build the inner SELECT
+    let inner_fields = transpile_fields_for_lastpoint(&stmt.fields)?;
+    let table = transpile_measurement(&stmt.from, ctx);
+
+    let mut inner = format!(
+        "SELECT {}, ROW_NUMBER() OVER (PARTITION BY {} ORDER BY \"time\" DESC) AS _rn FROM {}",
+        inner_fields, partition_clause, table
+    );
+
+    if let Some(ref cond) = stmt.condition {
+        inner.push_str(" WHERE ");
+        inner.push_str(&transpile_expr(cond)?);
+    }
+
+    // Build the outer query — filter by _rn and exclude _rn column
+    let sql = format!(
+        "SELECT * FROM ({}) WHERE _rn <= {} ORDER BY {}, \"time\" DESC",
+        inner, limit, partition_clause
+    );
+
+    Ok(sql)
+}
+
+/// Transpile field expressions for the inner SELECT of a lastpoint query.
+/// Returns "*" for wildcard, or comma-separated field expressions.
+fn transpile_fields_for_lastpoint(fields: &[Field]) -> Result<String, TranspileError> {
+    // If the only field is a wildcard, just use *
+    if fields.len() == 1 && fields[0].expr == Expr::Wildcard {
+        return Ok("*".to_string());
+    }
+
+    let parts: Vec<String> = fields
+        .iter()
+        .map(|f| {
+            let expr_sql = transpile_expr(&f.expr)?;
+            if let Some(ref alias) = f.alias {
+                Ok(format!("{} AS \"{}\"", expr_sql, alias.replace('"', "\"\"")))
+            } else {
+                Ok(expr_sql)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(parts.join(", "))
 }
 
 /// Information about a derivative field extracted for CTE generation
@@ -516,7 +657,7 @@ fn transpile_select_simple(stmt: &SelectStatement, ctx: &TranspileContext) -> Re
     let fields: Vec<String> = stmt.fields.iter()
         .map(|f| transpile_field(f, has_time_group))
         .collect::<Result<Vec<_>, _>>()?;
-    select_parts.extend(fields);
+    select_parts.extend(deduplicate_aliases(fields));
 
     // 3. GROUP BY tag columns (so their values appear in the result for InfluxDB tags)
     if let Some(ref gb) = stmt.group_by {
@@ -605,6 +746,59 @@ fn influxql_auto_alias(expr: &Expr) -> Option<String> {
         Expr::Function(func) => Some(func.name.to_lowercase()),
         _ => None,
     }
+}
+
+/// Deduplicate SQL column aliases to avoid DataFusion "duplicate expression name" errors.
+///
+/// InfluxDB convention: `SELECT max(a), max(b)` → columns `max`, `max_1`.
+/// This function detects `... AS "alias"` patterns and appends `_1`, `_2`, etc.
+/// for duplicate aliases while leaving the first occurrence unchanged.
+fn deduplicate_aliases(fields: Vec<String>) -> Vec<String> {
+    use std::collections::HashMap;
+    // Extract alias from pattern like: `expr AS "alias"`
+    fn extract_alias(s: &str) -> Option<&str> {
+        let idx = s.rfind(" AS \"")?;
+        let rest = &s[idx + 5..];
+        rest.strip_suffix('"')
+    }
+
+    // Count occurrences of each alias
+    let mut alias_counts: HashMap<String, usize> = HashMap::new();
+    for f in &fields {
+        if let Some(alias) = extract_alias(f) {
+            *alias_counts.entry(alias.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    // Only deduplicate if there are actual duplicates
+    let has_dupes = alias_counts.values().any(|&c| c > 1);
+    if !has_dupes {
+        return fields;
+    }
+
+    // Assign unique suffixes to duplicates
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    fields.into_iter().map(|f| {
+        if let Some(alias) = extract_alias(&f) {
+            let count = alias_counts.get(alias).copied().unwrap_or(1);
+            if count > 1 {
+                let idx = seen.entry(alias.to_string()).or_insert(0);
+                let result = if *idx == 0 {
+                    f // first occurrence keeps original alias
+                } else {
+                    // Replace trailing `AS "alias"` with `AS "alias_N"`
+                    let prefix_end = f.rfind(" AS \"").unwrap();
+                    format!("{} AS \"{}_{idx}\"", &f[..prefix_end], alias)
+                };
+                *idx += 1;
+                result
+            } else {
+                f
+            }
+        } else {
+            f
+        }
+    }).collect()
 }
 
 fn transpile_expr(expr: &Expr) -> Result<String, TranspileError> {
@@ -1324,5 +1518,91 @@ mod tests {
         // Expanded * tag columns should appear in SELECT
         assert!(select_part.contains(r#""host""#), "host from WHERE should be in SELECT. SQL was: {}", sql);
         assert!(select_part.contains(r#""cpu""#), "cpu from WHERE should be in SELECT. SQL was: {}", sql);
+    }
+
+    // ===== Lastpoint query tests =====
+
+    #[test]
+    fn test_lastpoint_basic() {
+        // SELECT * FROM cpu GROUP BY "hostname" ORDER BY time DESC LIMIT 1
+        let stmt = parse(r#"SELECT * FROM cpu GROUP BY "hostname" ORDER BY time DESC LIMIT 1"#).unwrap();
+        let sql = transpile(&stmt, &ctx()).unwrap();
+        // Should use ROW_NUMBER window function
+        assert!(sql.contains("ROW_NUMBER()"), "Should use ROW_NUMBER. SQL was: {}", sql);
+        assert!(sql.contains(r#"PARTITION BY "hostname""#), "Should PARTITION BY hostname. SQL was: {}", sql);
+        assert!(sql.contains("ORDER BY \"time\" DESC"), "Inner should ORDER BY time DESC. SQL was: {}", sql);
+        assert!(sql.contains("_rn <= 1"), "Should filter by _rn <= 1. SQL was: {}", sql);
+        // Should NOT have GROUP BY (it's a window function, not aggregation)
+        assert!(!sql.contains("GROUP BY"), "Should NOT have GROUP BY. SQL was: {}", sql);
+    }
+
+    #[test]
+    fn test_lastpoint_with_where() {
+        let stmt = parse(
+            r#"SELECT * FROM cpu WHERE "region" = 'us-east' GROUP BY "hostname" ORDER BY time DESC LIMIT 1"#
+        ).unwrap();
+        let sql = transpile(&stmt, &ctx()).unwrap();
+        assert!(sql.contains("ROW_NUMBER()"), "Should use ROW_NUMBER. SQL was: {}", sql);
+        assert!(sql.contains("WHERE"), "Should have WHERE clause. SQL was: {}", sql);
+        assert!(sql.contains("'us-east'"), "Should contain filter value. SQL was: {}", sql);
+        assert!(sql.contains("_rn <= 1"), "Should filter _rn. SQL was: {}", sql);
+    }
+
+    #[test]
+    fn test_lastpoint_limit_5() {
+        // Top 5 most recent per group
+        let stmt = parse(
+            r#"SELECT * FROM cpu GROUP BY "hostname" ORDER BY time DESC LIMIT 5"#
+        ).unwrap();
+        let sql = transpile(&stmt, &ctx()).unwrap();
+        assert!(sql.contains("ROW_NUMBER()"), "Should use ROW_NUMBER. SQL was: {}", sql);
+        assert!(sql.contains("_rn <= 5"), "Should filter _rn <= 5. SQL was: {}", sql);
+    }
+
+    #[test]
+    fn test_not_lastpoint_with_aggregates() {
+        // Aggregated queries with GROUP BY tags should NOT trigger lastpoint path
+        let stmt = parse(
+            r#"SELECT mean("usage_user") FROM cpu GROUP BY "hostname" ORDER BY time DESC LIMIT 1"#
+        ).unwrap();
+        let sql = transpile(&stmt, &ctx()).unwrap();
+        // Should NOT use ROW_NUMBER — it has an aggregate (mean)
+        assert!(!sql.contains("ROW_NUMBER"), "Aggregated query should NOT use ROW_NUMBER. SQL was: {}", sql);
+    }
+
+    #[test]
+    fn test_lastpoint_detection() {
+        // Verify is_lastpoint_query detection logic
+        let parse_select = |q: &str| -> SelectStatement {
+            match parse(q).unwrap() {
+                Statement::Select(s) => s,
+                _ => panic!("Expected SELECT"),
+            }
+        };
+
+        // True: GROUP BY tag, no agg, ORDER BY time DESC, LIMIT
+        assert!(is_lastpoint_query(&parse_select(
+            r#"SELECT * FROM cpu GROUP BY "hostname" ORDER BY time DESC LIMIT 1"#
+        )));
+
+        // False: has aggregate
+        assert!(!is_lastpoint_query(&parse_select(
+            r#"SELECT mean("value") FROM cpu GROUP BY "hostname" ORDER BY time DESC LIMIT 1"#
+        )));
+
+        // False: no LIMIT
+        assert!(!is_lastpoint_query(&parse_select(
+            r#"SELECT * FROM cpu GROUP BY "hostname" ORDER BY time DESC"#
+        )));
+
+        // False: ORDER BY time ASC (not DESC)
+        assert!(!is_lastpoint_query(&parse_select(
+            r#"SELECT * FROM cpu GROUP BY "hostname" ORDER BY time ASC LIMIT 1"#
+        )));
+
+        // False: GROUP BY time (has time bucket)
+        assert!(!is_lastpoint_query(&parse_select(
+            r#"SELECT * FROM cpu GROUP BY time(5m), "hostname" ORDER BY time DESC LIMIT 1"#
+        )));
     }
 }

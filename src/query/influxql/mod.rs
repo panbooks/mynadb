@@ -72,7 +72,7 @@ pub use response::{
     batches_to_grouped_response, batches_to_grouped_response_with_epoch, batches_to_response,
     batches_to_response_with_epoch, ErrorResponse, InfluxResponse, Series, StatementResult,
 };
-pub use transpiler::{extract_filter_columns, transpile, TranspileContext, TranspileError};
+pub use transpiler::{extract_filter_columns, is_lastpoint_query, transpile, TranspileContext, TranspileError};
 
 /// Combined error type for InfluxQL processing
 #[derive(Debug)]
@@ -135,6 +135,8 @@ pub struct PreparedInfluxQL {
     pub measurement: String,
     /// Tag columns for GROUP BY grouping (None = no tag grouping)
     pub tag_columns: Option<Vec<String>>,
+    /// Columns to exclude from the response (e.g., _rn from lastpoint queries)
+    pub exclude_columns: Vec<String>,
 }
 
 /// Parse and transpile an InfluxQL query, returning the SQL and response metadata.
@@ -149,24 +151,51 @@ pub fn prepare_query(
         Err(e) => return Err(InfluxResponse::error(0, format!("Parse error: {}", e))),
     };
 
-    let measurement = get_measurement_name(&stmt).unwrap_or_else(|| "result".to_string());
-    let tag_columns = has_tag_grouping(&stmt);
+    prepare_query_from_stmt(&stmt, db, schema_default)
+}
+
+/// Transpile a pre-parsed InfluxQL statement, returning the SQL and response metadata.
+/// Use this to avoid parsing twice when the caller already has the parsed AST.
+pub fn prepare_query_from_stmt(
+    stmt: &Statement,
+    db: &str,
+    schema_default: &str,
+) -> Result<PreparedInfluxQL, InfluxResponse> {
+    let measurement = get_measurement_name(stmt).unwrap_or_else(|| "result".to_string());
+    let tag_columns = has_tag_grouping(stmt);
 
     let ctx = TranspileContext {
         database: db.to_string(),
         schema: schema_default.to_string(),
     };
 
-    let sql = match influxql_to_sql(query, &ctx) {
+    let sql = match transpile(stmt, &ctx) {
         Ok(s) => s,
         Err(e) => return Err(InfluxResponse::error(0, format!("Transpile error: {}", e))),
+    };
+
+    // Detect lastpoint queries that produce an _rn column to exclude
+    let exclude_columns = if is_lastpoint_stmt(stmt) {
+        vec!["_rn".to_string()]
+    } else {
+        Vec::new()
     };
 
     Ok(PreparedInfluxQL {
         sql,
         measurement,
         tag_columns,
+        exclude_columns,
     })
+}
+
+/// Check if a statement is a lastpoint query (produces _rn column)
+fn is_lastpoint_stmt(stmt: &Statement) -> bool {
+    if let Statement::Select(s) = stmt {
+        use transpiler::is_lastpoint_query;
+        return is_lastpoint_query(s);
+    }
+    false
 }
 
 /// Format Arrow RecordBatches into an InfluxDB-compatible response.
@@ -175,12 +204,43 @@ pub fn format_result(
     prepared: &PreparedInfluxQL,
     epoch: Option<&str>,
 ) -> InfluxResponse {
-    if let Some(ref tags) = prepared.tag_columns {
+    let mut response = if let Some(ref tags) = prepared.tag_columns {
         let tag_refs: Vec<&str> = tags.iter().map(|s| s.as_str()).collect();
         batches_to_grouped_response_with_epoch(batches, &prepared.measurement, &tag_refs, 0, epoch)
     } else {
         batches_to_response_with_epoch(batches, &prepared.measurement, 0, epoch)
+    };
+
+    // Strip excluded columns (e.g., _rn from lastpoint queries)
+    if !prepared.exclude_columns.is_empty() {
+        for result in &mut response.results {
+            if let Some(ref mut series_list) = result.series {
+                for series in series_list.iter_mut() {
+                    let exclude_indices: Vec<usize> = series
+                        .columns
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, name)| prepared.exclude_columns.contains(name))
+                        .map(|(i, _)| i)
+                        .collect();
+
+                    if !exclude_indices.is_empty() {
+                        // Remove columns in reverse order to preserve indices
+                        for &idx in exclude_indices.iter().rev() {
+                            series.columns.remove(idx);
+                            for row in &mut series.values {
+                                if idx < row.len() {
+                                    row.remove(idx);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
+
+    response
 }
 
 /// Extract the InfluxQL query string from a POST body.

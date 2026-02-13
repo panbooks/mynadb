@@ -235,55 +235,62 @@ async fn execute_influxql_query(
 ) -> (StatusCode, Json<InfluxResponse>) {
     use crate::query::influxql::Statement;
 
+    // Parse once — used for metadata checks and transpilation
+    let stmt = match influxql::parse(&query) {
+        Ok(s) => s,
+        Err(e) => {
+            let response = InfluxResponse::error(0, format!("Parse error: {}", e));
+            return (StatusCode::BAD_REQUEST, Json(response));
+        }
+    };
+
     // Handle metadata queries directly (without going through query coordinator)
-    if let Ok(stmt) = influxql::parse(&query) {
-        match stmt {
-            Statement::ShowDatabases => {
-                // Router doesn't have local filesystem; return the requested db
-                let response = influxql::build_show_databases_response(vec![db]);
-                return (StatusCode::OK, Json(response));
-            }
-            Statement::ShowMeasurements(ref s) => {
-                // Collect tables from data nodes in parallel
-                let target_db = s.database.as_deref().unwrap_or(&db);
-                let nodes = state.shard_cache.get_active_primary_nodes();
+    match stmt {
+        Statement::ShowDatabases => {
+            // Router doesn't have local filesystem; return the requested db
+            let response = influxql::build_show_databases_response(vec![db]);
+            return (StatusCode::OK, Json(response));
+        }
+        Statement::ShowMeasurements(ref s) => {
+            // Collect tables from data nodes in parallel
+            let target_db = s.database.as_deref().unwrap_or(&db);
+            let nodes = state.shard_cache.get_active_primary_nodes();
 
-                let futures: Vec<_> = nodes.iter().map(|node| {
-                    let pool = Arc::clone(&state.data_node_pool);
-                    let node_id = node.node_id.clone();
-                    let target_db = target_db.to_string();
-                    (node_id.clone(), Box::pin(async move {
-                        pool.list_tables(&node_id, &target_db).await
-                    }) as BoxFuture<'_, _>)
-                }).collect();
+            let futures: Vec<_> = nodes.iter().map(|node| {
+                let pool = Arc::clone(&state.data_node_pool);
+                let node_id = node.node_id.clone();
+                let target_db = target_db.to_string();
+                (node_id.clone(), Box::pin(async move {
+                    pool.list_tables(&node_id, &target_db).await
+                }) as BoxFuture<'_, _>)
+            }).collect();
 
-                let (results, _errors) = fan_out::<serde_json::Value>(futures).await;
+            let (results, _errors) = fan_out::<serde_json::Value>(futures).await;
 
-                let mut all_tables = std::collections::HashSet::new();
-                for (_node_id, result) in &results {
-                    if let Some(tables) = result["tables"].as_array() {
-                        for table in tables {
-                            if let Some(t) = table.as_str() {
-                                all_tables.insert(t.to_string());
-                            }
+            let mut all_tables = std::collections::HashSet::new();
+            for (_node_id, result) in &results {
+                if let Some(tables) = result["tables"].as_array() {
+                    for table in tables {
+                        if let Some(t) = table.as_str() {
+                            all_tables.insert(t.to_string());
                         }
                     }
                 }
-                let mut tables: Vec<String> = all_tables.into_iter().collect();
-                tables.sort();
-                let response = influxql::build_show_measurements_response(tables);
-                return (StatusCode::OK, Json(response));
             }
-            Statement::ShowRetentionPolicies(_) => {
-                let response = influxql::build_show_retention_policies_response();
-                return (StatusCode::OK, Json(response));
-            }
-            _ => {}
+            let mut tables: Vec<String> = all_tables.into_iter().collect();
+            tables.sort();
+            let response = influxql::build_show_measurements_response(tables);
+            return (StatusCode::OK, Json(response));
         }
+        Statement::ShowRetentionPolicies(_) => {
+            let response = influxql::build_show_retention_policies_response();
+            return (StatusCode::OK, Json(response));
+        }
+        _ => {}
     }
 
-    // Parse and transpile InfluxQL to SQL
-    let prepared = match influxql::prepare_query(&query, &db, &state.config.schema.default_name) {
+    // Transpile the pre-parsed statement to SQL (no re-parse)
+    let prepared = match influxql::prepare_query_from_stmt(&stmt, &db, &state.config.schema.default_name) {
         Ok(p) => p,
         Err(response) => return (StatusCode::BAD_REQUEST, Json(response)),
     };
