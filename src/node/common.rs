@@ -141,7 +141,6 @@ pub fn init_query_engine_with_parquet_cache(
         Some(storage),
         query_cache_config,
         hot_partition_cache_config,
-        config.query.use_custom_table_provider,
         cache,
     );
 

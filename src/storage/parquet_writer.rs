@@ -3,8 +3,8 @@ use super::layout::STORE_DIR;
 use super::line_protocol::format_date32_as_partition;
 use super::storage::Storage;
 use arrow::array::{ArrayRef, RecordBatch};
-use arrow::compute::{concat_batches, lexsort_to_indices, take, SortColumn};
-use arrow::datatypes::{Field, Schema};
+use arrow::compute::{cast, concat_batches, lexsort_to_indices, take, SortColumn};
+use arrow::datatypes::{DataType, Field, Schema};
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, ZstdLevel};
@@ -408,17 +408,27 @@ impl ParquetWriter {
                 if exclude_set.contains(name.as_str()) {
                     continue;
                 }
+                // Unwrap Dictionary types to their value type for consistency.
+                // Parquet/Arrow may produce Dictionary(Int32, Utf8) for string columns
+                // while line protocol parsing produces plain Utf8.
+                let normalized_field = match field.data_type() {
+                    DataType::Dictionary(_, value_type) => {
+                        Field::new(field.name(), value_type.as_ref().clone(), field.is_nullable())
+                    }
+                    _ => field.as_ref().clone(),
+                };
                 if let Some(existing) = field_map.get(&name) {
-                    if existing.data_type() != field.data_type() {
+                    // Compare normalized types
+                    if existing.data_type() != normalized_field.data_type() {
                         return Err(format!(
                             "Incompatible types for field '{}': {:?} vs {:?}",
                             name,
                             existing.data_type(),
-                            field.data_type()
+                            normalized_field.data_type()
                         ));
                     }
                 } else {
-                    field_map.insert(name, field.as_ref().clone());
+                    field_map.insert(name, normalized_field);
                 }
             }
         }
@@ -463,7 +473,14 @@ impl ParquetWriter {
             let field_name = target_field.name();
 
             if let Some(column) = batch.column_by_name(field_name) {
-                arrays.push(column.clone());
+                // Cast if types don't match (e.g., Dictionary(Int32, Utf8) → Utf8)
+                if column.data_type() != target_field.data_type() {
+                    let casted = cast(column.as_ref(), target_field.data_type())
+                        .map_err(|e| format!("Failed to cast field '{}': {}", field_name, e))?;
+                    arrays.push(casted);
+                } else {
+                    arrays.push(column.clone());
+                }
             } else {
                 let null_array = new_null_array(target_field.data_type(), batch.num_rows());
                 arrays.push(null_array);

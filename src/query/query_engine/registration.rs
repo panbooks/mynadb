@@ -9,10 +9,6 @@ use crate::query::providers::{
 use datafusion::catalog::TableProvider;
 use datafusion::catalog_common::MemoryCatalogProvider;
 use datafusion::catalog_common::MemorySchemaProvider;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::{
-    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
-};
 use datafusion::prelude::*;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -216,34 +212,12 @@ impl QueryEngine {
         Ok(())
     }
 
-    /// Register a table using custom ParquetTableProvider or ListingTable
+    /// Register a table using ParquetTableProvider
     ///
-    /// All tables are partitioned by date (Hive-style: date=YYYY-MM-DD).
+    /// All tables are partitioned by date (Hive-style: date=YYYY-MM-DD/node_id=X/).
     /// When Storage is available, uses ObjectStore for unified file discovery.
     /// Falls back to local filesystem operations when Storage is not configured.
     async fn register_parquet_table(
-        &self,
-        catalog_name: &str,
-        schema_name: &str,
-        table_name: &str,
-        table_path: &str,
-    ) -> Result<(), String> {
-        if self.use_custom_table_provider {
-            self.register_table_custom(catalog_name, schema_name, table_name, table_path)
-                .await
-        } else {
-            self.register_partitioned_table_listing(
-                catalog_name,
-                schema_name,
-                table_name,
-                table_path,
-            )
-            .await
-        }
-    }
-
-    /// Register a table using custom ParquetTableProvider
-    async fn register_table_custom(
         &self,
         catalog_name: &str,
         schema_name: &str,
@@ -257,8 +231,7 @@ impl QueryEngine {
         // Use ObjectStore-based async constructor
         let mut provider = if let Some(ref storage) = self.storage {
             // Use relative path (catalog/schema/table) since the object store is already
-            // rooted at data_dir. Using extract_path_from_url() would give an absolute path
-            // that gets doubled when appended to the object store root.
+            // rooted at data_dir.
             let base_path = format!("{}/{}/{}", catalog_name, schema_name, table_name);
 
             ParquetTableProvider::try_new(storage.object_store(), base_path, catalog_name, schema_name, config)
@@ -289,57 +262,6 @@ impl QueryEngine {
         provider = provider.with_hot_partition_cache(self.hot_partition_cache.clone());
 
         self.register_provider(catalog_name, schema_name, table_name, Arc::new(provider))
-    }
-
-    /// Extract the path from a URL (removes scheme like file://, s3://)
-    fn extract_path_from_url(url: &str) -> String {
-        if let Some(rest) = url.strip_prefix("file://") {
-            rest.to_string()
-        } else if let Some(rest) = url.strip_prefix("s3://") {
-            // For S3, remove bucket name - path starts after first /
-            if let Some(pos) = rest.find('/') {
-                rest[pos..].to_string()
-            } else {
-                String::new()
-            }
-        } else {
-            url.to_string()
-        }
-    }
-
-    /// Register a partitioned table using DataFusion's ListingTable
-    async fn register_partitioned_table_listing(
-        &self,
-        catalog_name: &str,
-        schema_name: &str,
-        table_name: &str,
-        table_path: &str,
-    ) -> Result<(), String> {
-        let table_url = ListingTableUrl::parse(table_path)
-            .map_err(|e| format!("Failed to parse table URL: {}", e))?;
-
-        let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-            .with_file_extension(".parquet")
-            .with_table_partition_cols(vec![
-                ("date".to_string(), datafusion::arrow::datatypes::DataType::Utf8),
-                ("node_id".to_string(), datafusion::arrow::datatypes::DataType::Utf8),
-            ]);
-
-        let config = ListingTableConfig::new(table_url)
-            .with_listing_options(listing_options)
-            .infer_schema(&self.ctx.state())
-            .await
-            .map_err(|e| format!("Failed to infer schema: {}", e))?;
-
-        let listing_table = ListingTable::try_new(config)
-            .map_err(|e| format!("Failed to create listing table: {}", e))?;
-
-        self.register_provider(
-            catalog_name,
-            schema_name,
-            table_name,
-            Arc::new(listing_table),
-        )
     }
 
     /// Helper to register a TableProvider in the catalog
@@ -484,56 +406,27 @@ impl QueryEngine {
         table_path: &str,
     ) -> Result<(), String> {
         let full_name = format!("{}.{}.{}", catalog_name, schema_name, table_name);
+        let config = ParquetTableConfig::new(full_name.clone()).with_batch_size(8192);
 
-        // Use listing table or custom provider based on configuration
-        let provider: Arc<dyn TableProvider> = if self.use_custom_table_provider {
-            let config = ParquetTableConfig::new(full_name.clone()).with_batch_size(8192);
-
-            let mut provider = if let Some(ref storage) = self.storage {
-                // Use relative path (catalog/schema/table) since the object store is already
-                // rooted at data_dir.
-                let base_path = format!("{}/{}/{}", catalog_name, schema_name, table_name);
-                ParquetTableProvider::try_new(storage.object_store(), base_path, catalog_name, schema_name, config)
-                    .await
-                    .map_err(|e| format!("Failed to create table provider: {}", e))?
-            } else {
-                let local_path = table_path.strip_prefix("file://").unwrap_or(table_path);
-                let local_store: Arc<dyn object_store::ObjectStore> =
-                    Arc::new(object_store::local::LocalFileSystem::new_with_prefix(local_path)
-                        .map_err(|e| format!("Failed to create local store: {}", e))?);
-                ParquetTableProvider::try_new(local_store, "", catalog_name, schema_name, config)
-                    .await
-                    .map_err(|e| format!("Failed to create table provider: {}", e))?
-            };
-
-            if let Some(ref cache) = self.parquet_cache {
-                provider = provider.with_parquet_cache(cache.clone());
-            }
-
-            provider = provider.with_hot_partition_cache(self.hot_partition_cache.clone());
-
-            Arc::new(provider)
-        } else {
-            // Use DataFusion's ListingTable
-            let table_url = ListingTableUrl::parse(table_path)
-                .map_err(|e| format!("Failed to parse table URL: {}", e))?;
-
-            let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-                .with_file_extension(".parquet")
-                .with_table_partition_cols(vec![
-                    ("date".to_string(), datafusion::arrow::datatypes::DataType::Utf8),
-                    ("node_id".to_string(), datafusion::arrow::datatypes::DataType::Utf8),
-                ]);
-
-            let config = ListingTableConfig::new(table_url)
-                .with_listing_options(listing_options)
-                .infer_schema(&self.ctx.state())
+        let mut provider = if let Some(ref storage) = self.storage {
+            let base_path = format!("{}/{}/{}", catalog_name, schema_name, table_name);
+            ParquetTableProvider::try_new(storage.object_store(), base_path, catalog_name, schema_name, config)
                 .await
-                .map_err(|e| format!("Failed to infer schema: {}", e))?;
-
-            Arc::new(ListingTable::try_new(config)
-                .map_err(|e| format!("Failed to create listing table: {}", e))?)
+                .map_err(|e| format!("Failed to create table provider: {}", e))?
+        } else {
+            let local_path = table_path.strip_prefix("file://").unwrap_or(table_path);
+            let local_store: Arc<dyn object_store::ObjectStore> =
+                Arc::new(object_store::local::LocalFileSystem::new_with_prefix(local_path)
+                    .map_err(|e| format!("Failed to create local store: {}", e))?);
+            ParquetTableProvider::try_new(local_store, "", catalog_name, schema_name, config)
+                .await
+                .map_err(|e| format!("Failed to create table provider: {}", e))?
         };
+
+        if let Some(ref cache) = self.parquet_cache {
+            provider = provider.with_parquet_cache(cache.clone());
+        }
+        provider = provider.with_hot_partition_cache(self.hot_partition_cache.clone());
 
         // Register directly WITHOUT memtable wrapping
         let catalog = self
@@ -546,7 +439,7 @@ impl QueryEngine {
             .ok_or_else(|| format!("Schema '{}.{}' not found", catalog_name, schema_name))?;
 
         schema
-            .register_table(table_name.to_string(), provider)
+            .register_table(table_name.to_string(), Arc::new(provider))
             .map_err(|e| format!("Failed to register table: {}", e))?;
 
         Ok(())

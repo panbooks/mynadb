@@ -208,7 +208,21 @@ pub async fn infer_schema_from_path(
     let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    Ok(reader.schema().as_ref().clone())
+    // Unwrap Dictionary-encoded types to their value types.
+    // Parquet files may use dictionary encoding for string columns, but DataFusion's
+    // aggregation operators (GROUP BY, avg, etc.) expect plain Utf8/LargeUtf8.
+    let raw_schema = reader.schema();
+    let fields: Vec<Field> = raw_schema
+        .fields()
+        .iter()
+        .map(|f| match f.data_type() {
+            DataType::Dictionary(_, value_type) => {
+                Field::new(f.name(), value_type.as_ref().clone(), f.is_nullable())
+            }
+            _ => f.as_ref().clone(),
+        })
+        .collect();
+    Ok(Schema::new(fields))
 }
 
 /// Discover files without filters (for initial schema inference)

@@ -130,6 +130,7 @@ impl MultiUnionTableProvider {
 ///
 /// Fields with the same name must have compatible types.
 /// The result schema contains all unique fields from all providers.
+/// Dictionary-encoded types are unwrapped to their value type.
 fn merge_schemas_from_providers(providers: &[Arc<dyn TableProvider>]) -> Result<Schema> {
     if providers.is_empty() {
         return Err(DataFusionError::Plan(
@@ -144,8 +145,10 @@ fn merge_schemas_from_providers(providers: &[Arc<dyn TableProvider>]) -> Result<
         let schema = provider.schema();
         for field in schema.fields() {
             if !seen_names.contains(field.name()) {
-                // New field, add it (make nullable since it might not exist in all sources)
-                let mut new_field = field.as_ref().clone();
+                // Unwrap Dictionary types → value type for compatibility
+                let mut new_field =
+                    super::union_provider::unwrap_dictionary_field(field.as_ref());
+                // Make nullable since it might not exist in all sources
                 if !new_field.is_nullable() {
                     new_field = Field::new(new_field.name(), new_field.data_type().clone(), true);
                 }
@@ -349,7 +352,17 @@ impl ExecutionPlan for MultiUnionExec {
         // Use select_all to interleave all streams (order doesn't matter for union)
         let combined = futures::stream::select_all(streams);
 
-        let stream = RecordBatchStreamAdapter::new(schema, combined);
+        // Normalize each batch so column types match the declared output schema.
+        // Parquet readers may return Dictionary(Int32, Utf8) for string columns while
+        // memtable uses plain Utf8 — without casting, downstream operators panic.
+        let normalize_schema = schema.clone();
+        let normalized = futures::StreamExt::map(combined, move |batch_result| {
+            batch_result.and_then(|batch| {
+                super::union_provider::normalize_batch(&batch, &normalize_schema)
+            })
+        });
+
+        let stream = RecordBatchStreamAdapter::new(schema, normalized);
 
         Ok(Box::pin(stream))
     }

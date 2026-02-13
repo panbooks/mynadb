@@ -3,6 +3,7 @@
 use super::config::ParquetFileInfo;
 use super::filters::{create_row_filter_from_predicates, extract_equality_predicates};
 use datafusion::arrow::array::{Array, RecordBatch, StringArray};
+use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -189,11 +190,7 @@ fn add_partition_columns(
 
     if !has_date_col && !has_node_id_col {
         // No partition columns requested in projection
-        // Just return the batch with the target schema if they match
-        if batch.schema().fields().len() == target_schema.fields().len() {
-            return Ok(batch.clone());
-        }
-        // Reproject batch to match target schema
+        // Reproject batch to match target schema, casting types as needed
         let columns: Vec<Arc<dyn Array>> = target_schema
             .fields()
             .iter()
@@ -202,7 +199,14 @@ fn add_partition_columns(
                     .schema()
                     .index_of(field.name())
                     .ok()
-                    .map(|idx| batch.column(idx).clone())
+                    .map(|idx| {
+                        let col = batch.column(idx);
+                        if col.data_type() != field.data_type() {
+                            cast(col.as_ref(), field.data_type()).unwrap_or_else(|_| col.clone())
+                        } else {
+                            col.clone()
+                        }
+                    })
             })
             .collect();
 
@@ -238,7 +242,15 @@ fn add_partition_columns(
             // Find and add column from batch
             match batch.schema().index_of(field.name()) {
                 Ok(col_idx) => {
-                    columns.push(batch.column(col_idx).clone());
+                    let col = batch.column(col_idx);
+                    // Cast if types don't match (e.g., Dictionary(Int32, Utf8) → Utf8)
+                    if col.data_type() != field.data_type() {
+                        let casted = cast(col.as_ref(), field.data_type())
+                            .map_err(|e| DataFusionError::ArrowError(e, None))?;
+                        columns.push(casted);
+                    } else {
+                        columns.push(col.clone());
+                    }
                 }
                 Err(_) => {
                     // Field not found in batch - this shouldn't happen for valid projections

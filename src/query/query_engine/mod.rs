@@ -58,7 +58,6 @@ pub struct QueryEngine {
     pub(crate) metadata_cache: Arc<TableMetadataCache>,
     pub(crate) query_cache: SharedQueryResultCache,
     pub(crate) hot_partition_cache: SharedHotPartitionCache,
-    pub(crate) use_custom_table_provider: bool,
     pub(crate) write_cache: Option<Arc<DataCache>>,
     /// Local parquet file cache for cluster mode (object storage)
     pub(crate) parquet_cache: Option<Arc<crate::data::cache::ParquetLocalCache>>,
@@ -183,22 +182,6 @@ impl QueryEngine {
             None,
             QueryCacheConfig::default(),
             HotPartitionCacheConfig::default(),
-            false,
-            None,
-        )
-    }
-
-    pub fn new_with_query_cache(
-        data_dir: &str,
-        storage: Option<Arc<Storage>>,
-        query_cache_config: QueryCacheConfig,
-    ) -> Self {
-        Self::new_with_options(
-            data_dir,
-            storage,
-            query_cache_config,
-            HotPartitionCacheConfig::default(),
-            false,
             None,
         )
     }
@@ -208,7 +191,6 @@ impl QueryEngine {
         storage: Option<Arc<Storage>>,
         query_cache_config: QueryCacheConfig,
         hot_partition_cache_config: HotPartitionCacheConfig,
-        use_custom_table_provider: bool,
         write_cache: Arc<DataCache>,
     ) -> Self {
         Self::new_with_options(
@@ -216,7 +198,6 @@ impl QueryEngine {
             storage,
             query_cache_config,
             hot_partition_cache_config,
-            use_custom_table_provider,
             Some(write_cache),
         )
     }
@@ -226,7 +207,6 @@ impl QueryEngine {
         storage: Option<Arc<Storage>>,
         query_cache_config: QueryCacheConfig,
         hot_partition_cache_config: HotPartitionCacheConfig,
-        use_custom_table_provider: bool,
         write_cache: Option<Arc<DataCache>>,
     ) -> Self {
         let ctx = Self::create_optimized_context();
@@ -254,20 +234,14 @@ impl QueryEngine {
             None => "local",
         };
 
-        let table_provider_type = if use_custom_table_provider {
-            "custom"
-        } else {
-            "listing"
-        };
         let memtable_status = if write_cache.is_some() {
             "enabled"
         } else {
             "disabled"
         };
         info!(
-            "QueryEngine initialized: storage={}, table_provider={}, metadata_cache=enabled, query_cache={}, hot_partition_cache={}, memtable={}",
+            "QueryEngine initialized: storage={}, metadata_cache=enabled, query_cache={}, hot_partition_cache={}, memtable={}",
             storage_type,
-            table_provider_type,
             if query_cache.is_enabled() { "enabled" } else { "disabled" },
             if hot_partition_cache.is_enabled() { "enabled" } else { "disabled" },
             memtable_status
@@ -281,7 +255,6 @@ impl QueryEngine {
             metadata_cache,
             query_cache,
             hot_partition_cache,
-            use_custom_table_provider,
             parquet_cache: None,
             write_cache,
         }

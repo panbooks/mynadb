@@ -402,26 +402,8 @@ fn default_partition_files_cache_max_entries() -> usize {
 }
 
 /// Query engine configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueryConfig {
-    /// Use custom ParquetTableProvider instead of DataFusion's ListingTable
-    /// When false (default): Uses DataFusion's built-in ListingTable and register_parquet
-    /// When true: Uses custom ParquetTableProvider with manual Parquet reading
-    #[serde(default = "default_use_custom_table_provider")]
-    pub use_custom_table_provider: bool,
-}
-
-impl Default for QueryConfig {
-    fn default() -> Self {
-        Self {
-            use_custom_table_provider: default_use_custom_table_provider(),
-        }
-    }
-}
-
-fn default_use_custom_table_provider() -> bool {
-    false // Default to original ListingTable approach
-}
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct QueryConfig {}
 
 /// Streaming query configuration (WebSocket & SSE subscriptions)
 #[derive(Debug, Clone, Serialize, Deserialize)]
