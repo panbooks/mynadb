@@ -21,15 +21,17 @@ use std::any::Any;
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Custom execution plan for reading Parquet files via ObjectStore
 pub struct ParquetExecPlan {
-    /// Schema after projection
+    /// Schema after projection (what the consumer expects)
     schema: SchemaRef,
+    /// Full table schema before projection (used for caching full batches)
+    full_schema: SchemaRef,
     /// Files to read
     files: Vec<ParquetFileInfo>,
-    /// Column projection (indices into original schema)
+    /// Column projection (indices into full_schema)
     projection: Option<Vec<usize>>,
     /// Pushed-down filters
     filters: Vec<Expr>,
@@ -74,6 +76,7 @@ impl ParquetExecPlan {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         schema: SchemaRef,
+        full_schema: SchemaRef,
         files: Vec<ParquetFileInfo>,
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
@@ -86,17 +89,20 @@ impl ParquetExecPlan {
         schema_name: String,
         table_name: String,
     ) -> Self {
-        // Determine partitioning based on number of files
-        let num_partitions = files.len().max(1);
-
+        // Use a single partition: all files are read in one execute() call.
+        // I/O parallelism is provided by buffered(4) within the stream.
+        // This is critical for hot partition cache correctness — with multiple
+        // partitions, each would overwrite the same cache key (keyed by date),
+        // causing data loss on subsequent cache HITs.
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
-            datafusion::physical_expr::Partitioning::UnknownPartitioning(num_partitions),
+            datafusion::physical_expr::Partitioning::UnknownPartitioning(1),
             ExecutionMode::Bounded,
         );
 
         Self {
             schema,
+            full_schema,
             files,
             projection,
             filters,
@@ -135,7 +141,8 @@ impl ParquetExecPlan {
         ))
     }
 
-    /// Check hot partition cache for a given partition key
+    /// Check hot partition cache for a given partition key.
+    /// The cache stores FULL (non-projected) batches; projection is applied here.
     fn check_hot_cache(&self, partition_key: &PartitionKey) -> Option<Vec<RecordBatch>> {
         let cache = self.hot_partition_cache.as_ref()?;
 
@@ -143,23 +150,8 @@ impl ParquetExecPlan {
             return None;
         }
 
-        // Pass projection to avoid transferring unnecessary columns
-        // TODO: Convert self.filters (logical Expr) to physical predicates for filter pushdown
+        // Get full batches from cache, apply this query's projection
         cache.get(partition_key, self.projection.as_deref(), &[])
-    }
-
-    /// Store batches in hot partition cache
-    fn store_in_hot_cache(
-        &self,
-        partition_key: PartitionKey,
-        batches: Vec<RecordBatch>,
-        file_count: usize,
-    ) {
-        if let Some(cache) = &self.hot_partition_cache {
-            if cache.is_enabled() && cache.is_hot_date(partition_key.date) {
-                cache.put(partition_key, batches, file_count);
-            }
-        }
     }
 }
 
@@ -210,12 +202,9 @@ impl ExecutionPlan for ParquetExecPlan {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // For single partition, read all files
-        // For multiple partitions, each partition reads one file
-        let files_to_read = if self.files.len() <= 1 {
+        // Single partition reads all files; buffered(4) provides I/O parallelism
+        let files_to_read = if partition == 0 {
             self.files.clone()
-        } else if partition < self.files.len() {
-            vec![self.files[partition].clone()]
         } else {
             vec![]
         };
@@ -226,9 +215,8 @@ impl ExecutionPlan for ParquetExecPlan {
         }
 
         // CHECK HOT PARTITION CACHE
-        // If all files belong to the same date partition and it's cached, return cached data
+        // Cache stores full (non-projected) batches; check_hot_cache applies this query's projection
         if let Some(first_key) = self.extract_partition_key(&files_to_read[0]) {
-            // Check if all files have the same partition key
             let all_same_partition = files_to_read.iter().all(|file| {
                 self.extract_partition_key(file)
                     .map(|key| key.date == first_key.date)
@@ -237,25 +225,33 @@ impl ExecutionPlan for ParquetExecPlan {
 
             if all_same_partition {
                 if let Some(cached_batches) = self.check_hot_cache(&first_key) {
-                    info!(
-                        "Hot partition cache HIT: {}.{}.{} date={}, returning {} batches",
-                        first_key.catalog,
-                        first_key.schema,
-                        first_key.table,
-                        first_key.date_str(),
-                        cached_batches.len()
+                    if !cached_batches.is_empty() {
+                        info!(
+                            "Hot partition cache HIT: {}.{}.{} date={}, returning {} batches ({} rows)",
+                            first_key.catalog,
+                            first_key.schema,
+                            first_key.table,
+                            first_key.date_str(),
+                            cached_batches.len(),
+                            cached_batches.iter().map(|b| b.num_rows()).sum::<usize>()
+                        );
+                        return Ok(Box::pin(MemoryStream::new(
+                            self.schema.clone(),
+                            cached_batches,
+                        )));
+                    }
+                    // Cache returned empty batches (projection mismatch) — treat as miss
+                    debug!(
+                        "Hot partition cache returned empty for {}.{}.{} date={}, treating as miss",
+                        first_key.catalog, first_key.schema, first_key.table, first_key.date_str()
                     );
-                    return Ok(Box::pin(MemoryStream::new(
-                        self.schema.clone(),
-                        cached_batches,
-                    )));
                 }
             }
         }
 
         // CACHE MISS - read from Parquet and cache result
-        let schema = self.schema.clone();
-        let projection = self.projection.clone();
+        // When caching is active, read ALL columns (full_schema) so the cache
+        // stores complete batches that work with any future projection.
         let batch_size = self.config.batch_size;
         let limit = self.limit;
         let partition_column = self.config.partition_column.clone();
@@ -282,11 +278,29 @@ impl ExecutionPlan for ParquetExecPlan {
             None
         };
 
+        // Determine if we should cache this partition
+        let should_cache = partition_key_for_cache.as_ref().map_or(false, |pk| {
+            hot_cache.as_ref().map_or(false, |c| c.is_enabled() && c.is_hot_date(pk.date))
+        });
+
+        // When caching, read with FULL schema (no projection) so cache stores complete data.
+        // When not caching, read with projected schema for efficiency.
+        let read_schema = if should_cache {
+            self.full_schema.clone()
+        } else {
+            self.schema.clone()
+        };
+        let read_projection = if should_cache {
+            None
+        } else {
+            self.projection.clone()
+        };
+
         // Create async stream that reads files
         let batches_stream = stream::iter(files_to_read)
             .map(move |file_info| {
-                let schema = schema.clone();
-                let projection = projection.clone();
+                let schema = read_schema.clone();
+                let projection = read_projection.clone();
                 let partition_column = partition_column.clone();
                 let node_id_column = node_id_column.clone();
                 let filters = filters.clone();
@@ -312,24 +326,23 @@ impl ExecutionPlan for ParquetExecPlan {
             .buffered(4) // Read up to 4 files concurrently
             .try_flatten();
 
-        // If we should cache this partition, collect batches and store
-        if let Some(partition_key) = partition_key_for_cache {
-            if let Some(cache) = hot_cache {
-                if cache.is_enabled() && cache.is_hot_date(partition_key.date) {
-                    let schema_for_stream = self.schema.clone();
+        // If we should cache this partition, collect full batches and store
+        if let (Some(partition_key), true) = (partition_key_for_cache, should_cache) {
+            let cache = hot_cache.unwrap(); // safe: should_cache implies hot_cache is Some
+            let output_schema = self.schema.clone();
+            let projection_for_output = self.projection.clone();
 
-                    // Create a stream that collects batches for caching
-                    let stream = CachingStream::new(
-                        schema_for_stream.clone(),
-                        batches_stream,
-                        cache,
-                        partition_key,
-                        file_count,
-                    );
+            // CachingStream: collects full batches for cache, projects before yielding
+            let stream = CachingStream::new(
+                output_schema,
+                batches_stream,
+                cache,
+                partition_key,
+                file_count,
+                projection_for_output,
+            );
 
-                    return Ok(Box::pin(stream));
-                }
-            }
+            return Ok(Box::pin(stream));
         }
 
         // No caching needed, just return regular stream
@@ -379,14 +392,22 @@ impl datafusion::physical_plan::RecordBatchStream for MemoryStream {
     }
 }
 
-/// Stream that reads batches, collects them for caching, and passes through
+/// Stream that reads full batches, caches them, and projects before yielding.
+///
+/// The inner stream produces FULL (non-projected) batches so the cache stores
+/// complete data. Before yielding to the consumer, projection is applied so
+/// the output matches the expected projected schema.
 struct CachingStream<S> {
+    /// Output schema (projected)
     schema: SchemaRef,
     inner: S,
     hot_cache: Arc<HotPartitionCache>,
     partition_key: PartitionKey,
     file_count: usize,
+    /// Full batches collected for caching
     collected_batches: Vec<RecordBatch>,
+    /// Projection to apply before yielding (None = no projection)
+    projection: Option<Vec<usize>>,
     done: bool,
 }
 
@@ -397,6 +418,7 @@ impl<S> CachingStream<S> {
         hot_cache: Arc<HotPartitionCache>,
         partition_key: PartitionKey,
         file_count: usize,
+        projection: Option<Vec<usize>>,
     ) -> Self {
         Self {
             schema,
@@ -405,6 +427,7 @@ impl<S> CachingStream<S> {
             partition_key,
             file_count,
             collected_batches: Vec::new(),
+            projection,
             done: false,
         }
     }
@@ -421,15 +444,31 @@ where
 
         match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(Some(Ok(batch))) => {
-                // Collect batch for caching
+                // Collect FULL batch for caching
                 this.collected_batches.push(batch.clone());
-                Poll::Ready(Some(Ok(batch)))
+
+                // Apply projection before yielding to consumer
+                let output_batch = if let Some(ref proj) = this.projection {
+                    match batch.project(proj) {
+                        Ok(projected) => projected,
+                        Err(e) => {
+                            warn!("Failed to project cached batch: {}", e);
+                            return Poll::Ready(Some(Err(
+                                datafusion::common::DataFusionError::ArrowError(e, None),
+                            )));
+                        }
+                    }
+                } else {
+                    batch
+                };
+
+                Poll::Ready(Some(Ok(output_batch)))
             }
             Poll::Ready(None) => {
-                // Stream ended - store collected batches in cache
+                // Stream ended - store collected FULL batches in cache
                 if !this.done && !this.collected_batches.is_empty() {
                     debug!(
-                        "Caching partition: {}.{}.{} date={}, {} batches, {} rows",
+                        "Caching partition: {}.{}.{} date={}, {} batches, {} rows (full schema)",
                         this.partition_key.catalog,
                         this.partition_key.schema,
                         this.partition_key.table,

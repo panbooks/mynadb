@@ -227,7 +227,7 @@ impl QueryEngine {
     ) -> Result<(), String> {
         let full_name = format!("{}.{}.{}", catalog_name, schema_name, table_name);
 
-        let config = ParquetTableConfig::new(full_name.clone()).with_batch_size(8192);
+        let config = ParquetTableConfig::new(table_name).with_batch_size(8192);
 
         // Use ObjectStore-based async constructor
         let mut provider = if let Some(ref storage) = self.storage {
@@ -405,8 +405,7 @@ impl QueryEngine {
         table_name: &str,
         table_path: &str,
     ) -> Result<(), String> {
-        let full_name = format!("{}.{}.{}", catalog_name, schema_name, table_name);
-        let config = ParquetTableConfig::new(full_name.clone()).with_batch_size(8192);
+        let config = ParquetTableConfig::new(table_name).with_batch_size(8192);
 
         let mut provider = if let Some(ref storage) = self.storage {
             let base_path = format!("{}/{}/{}/{}", STORE_DIR, catalog_name, schema_name, table_name);

@@ -106,19 +106,28 @@ pub async fn run(config_path: &str) {
     ));
 
     // Start background compaction if enabled
+    // Create cache invalidation callback so compaction invalidates stale caches
+    let qe_for_compaction = query_engine.clone();
+    let compaction_cache_invalidation: Option<compactor::CacheInvalidationFn> =
+        Some(Arc::new(move |catalog: &str, schema: &str, table: &str| {
+            qe_for_compaction.invalidate_table_cache(catalog, schema, table);
+        }));
+
     if config.compaction.interval_secs > 0 {
-        Arc::clone(&compactor).start_background_lsm_compaction(
+        Arc::clone(&compactor).start_background_lsm_compaction_with_callback(
             config.compaction.interval_secs,
             compaction_config.clone(),
+            compaction_cache_invalidation.clone(),
         );
     }
 
     if config.compaction.full_compaction_enabled
         && config.compaction.full_compaction_interval_secs > 0
     {
-        Arc::clone(&compactor).start_background_full_compaction(
+        Arc::clone(&compactor).start_background_full_compaction_with_callback(
             config.compaction.full_compaction_interval_secs,
             compaction_config,
+            compaction_cache_invalidation,
         );
     }
 

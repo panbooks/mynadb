@@ -217,8 +217,10 @@ impl TableProvider for ParquetTableProvider {
         );
 
         // Create the execution plan
+        // Pass both projected_schema (for output) and full schema (for caching full batches)
         let exec = exec_plan::ParquetExecPlan::new(
             projected_schema,
+            self.schema.clone(),
             files,
             projection.cloned(),
             filters.to_vec(),

@@ -1418,7 +1418,11 @@ pub async fn compact_handler(
     let config = compactor::CompactionConfig::from(&state.config.compaction);
 
     match shared::compact_catalog_impl(&state.compactor, &catalog, &config).await {
-        Ok(msg) => (StatusCode::OK, msg),
+        Ok(msg) => {
+            // Invalidate caches after compaction so queries see fresh data
+            state.query_engine.invalidate_database_cache(&catalog);
+            (StatusCode::OK, msg)
+        }
         Err(e) => {
             error!("Compaction error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, e)
@@ -1438,7 +1442,11 @@ pub async fn compact_table_handler(
     let config = compactor::CompactionConfig::from(&state.config.compaction);
 
     match shared::compact_table_impl(&state.compactor, &catalog, &schema, &table, &config).await {
-        Ok(msg) => (StatusCode::OK, msg),
+        Ok(msg) => {
+            // Invalidate caches after compaction so queries see fresh data
+            state.query_engine.invalidate_table_cache(&catalog, &schema, &table);
+            (StatusCode::OK, msg)
+        }
         Err(e) => {
             error!("Compaction error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, e)
@@ -1468,6 +1476,8 @@ pub async fn compact_partition_handler(
     .await
     {
         Ok(msg) => {
+            // Invalidate caches after compaction so queries see fresh data
+            state.query_engine.invalidate_table_cache(&catalog, &schema, &table);
             info!("{}", msg);
             (StatusCode::OK, msg)
         }

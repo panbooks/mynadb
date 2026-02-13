@@ -4,10 +4,15 @@
 //! Uses Object Store abstraction for both local and S3/MinIO storage.
 
 use crate::storage::layout::STORE_DIR;
+use std::collections::HashSet;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::{CompactionConfig, CompactionResult, Compactor};
+
+/// Callback type for invalidating caches after compaction.
+/// Called with (catalog, schema, table) for each compacted table.
+pub type CacheInvalidationFn = Arc<dyn Fn(&str, &str, &str) + Send + Sync>;
 
 impl Compactor {
     /// Start background LSM compaction task for all catalogs
@@ -19,6 +24,16 @@ impl Compactor {
         interval_secs: u64,
         config: CompactionConfig,
     ) {
+        self.start_background_lsm_compaction_with_callback(interval_secs, config, None);
+    }
+
+    /// Start background LSM compaction with optional cache invalidation callback
+    pub fn start_background_lsm_compaction_with_callback(
+        self: Arc<Self>,
+        interval_secs: u64,
+        config: CompactionConfig,
+        on_compacted: Option<CacheInvalidationFn>,
+    ) {
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
 
@@ -29,31 +44,39 @@ impl Compactor {
 
             loop {
                 ticker.tick().await;
-                self.run_lsm_compaction_cycle(&config).await;
+                let results = self.run_lsm_compaction_cycle(&config).await;
+                if let Some(ref cb) = on_compacted {
+                    invalidate_compacted_tables(&results, cb);
+                }
             }
         });
     }
 
     /// Run a single LSM compaction cycle across all catalogs
-    async fn run_lsm_compaction_cycle(&self, config: &CompactionConfig) {
+    async fn run_lsm_compaction_cycle(&self, config: &CompactionConfig) -> Vec<CompactionResult> {
         let catalogs = match self.storage.list_prefixes(STORE_DIR).await {
             Ok(c) => c,
             Err(e) => {
                 warn!("Failed to list catalogs for compaction: {}", e);
-                return;
+                return Vec::new();
             }
         };
 
+        let mut all_results = Vec::new();
         for catalog_name in catalogs {
             if catalog_name.starts_with('.') {
                 continue;
             }
 
             match self.compact_catalog(&catalog_name, config).await {
-                Ok(results) => log_compaction_results("LSM", &results),
+                Ok(results) => {
+                    log_compaction_results("LSM", &results);
+                    all_results.extend(results);
+                }
                 Err(e) => error!("LSM compaction error for {}: {}", catalog_name, e),
             }
         }
+        all_results
     }
 
     /// Start background full compaction task
@@ -62,6 +85,16 @@ impl Compactor {
         self: Arc<Self>,
         check_interval_secs: u64,
         config: CompactionConfig,
+    ) {
+        self.start_background_full_compaction_with_callback(check_interval_secs, config, None);
+    }
+
+    /// Start background full compaction with optional cache invalidation callback
+    pub fn start_background_full_compaction_with_callback(
+        self: Arc<Self>,
+        check_interval_secs: u64,
+        config: CompactionConfig,
+        on_compacted: Option<CacheInvalidationFn>,
     ) {
         tokio::spawn(async move {
             let mut ticker =
@@ -76,11 +109,34 @@ impl Compactor {
                 ticker.tick().await;
 
                 match self.full_compact_yesterday(&config).await {
-                    Ok(results) => log_compaction_results("Full", &results),
+                    Ok(results) => {
+                        log_compaction_results("Full", &results);
+                        if let Some(ref cb) = on_compacted {
+                            invalidate_compacted_tables(&results, cb);
+                        }
+                    }
                     Err(e) => error!("Full compaction error: {}", e),
                 }
             }
         });
+    }
+}
+
+/// Invalidate caches for each unique table that was compacted
+fn invalidate_compacted_tables(results: &[CompactionResult], callback: &CacheInvalidationFn) {
+    if results.is_empty() {
+        return;
+    }
+
+    let mut seen: HashSet<(&str, &str, &str)> = HashSet::new();
+    for r in results {
+        if seen.insert((&r.catalog, &r.schema, &r.table)) {
+            debug!(
+                "Invalidating caches after compaction: {}.{}.{}",
+                r.catalog, r.schema, r.table
+            );
+            callback(&r.catalog, &r.schema, &r.table);
+        }
     }
 }
 
