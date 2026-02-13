@@ -64,11 +64,10 @@ MynaDB `high-cpu-all` and `groupby-orderby-limit` run with 1 worker / 100 querie
 | **cpu-max-all-8** | 483.79 | **210.66** | InfluxDB 3 (2.3x) |
 | **double-groupby-1** | **373.42** | 899.05 | MynaDB (2.4x) |
 | **high-cpu-all** | 1082.12* | **722.13** | InfluxDB 3 (1.5x) |
-| **lastpoint** | N/A (unsupported)\*\* | 1688.01 | - |
+| **lastpoint** | **79.06** | 1688.01 | **MynaDB (21.3x)** |
 | **groupby-orderby-limit** | **107.94*** | 1198.15 | MynaDB (11.1x) |
 
 \* MynaDB ran with 1 worker / 100 queries; others ran with 4 workers / 500 queries.
-\*\* Lastpoint now supported via ROW_NUMBER() window function. See `correctness-comparison-2026-02-10.md` for verification. Re-benchmark pending.
 
 ### Query Descriptions
 
@@ -84,6 +83,51 @@ MynaDB `high-cpu-all` and `groupby-orderby-limit` run with 1 worker / 100 querie
 | lastpoint | Last reading per host (GROUP BY hostname ORDER BY time DESC LIMIT 1) |
 | groupby-orderby-limit | MAX of 1 metric, grouped by 1 minute, LIMIT 5 |
 
+## Concurrency Benchmark (wrk)
+
+InfluxQL query latency and throughput under varying concurrency, measured with `wrk -t1 -d10s`.
+Dataset: 10K hosts, 6 hours, 5min interval (720K rows). Query cache disabled on MynaDB.
+
+**Queries:**
+- **Q1** (1 series): `SELECT max(usage_user) FROM cpu WHERE hostname = 'host_249' AND time >= now() - 4h GROUP BY time(5m)`
+- **Q2** (~1% series): `SELECT max(usage_user) FROM cpu WHERE rack = '60' AND time >= now() - 4h GROUP BY time(5m)`
+- **Q3** (~5% series): `SELECT max(usage_user) FROM cpu WHERE service = '15' AND time >= now() - 4h GROUP BY time(5m)`
+
+### Latency (avg)
+
+| Query | Conc | MynaDB | InfluxDB 3 | Ratio |
+|-------|------|--------|------------|-------|
+| Q1 (1 series) | 1 | **7.70ms** | 75.37ms | **9.8x** |
+| Q1 (1 series) | 10 | **12.29ms** | 148.29ms | **12.1x** |
+| Q1 (1 series) | 100 | **87.58ms** | 1,590ms | **18.2x** |
+| Q2 (1% series) | 1 | **9.62ms** | 70.59ms | **7.3x** |
+| Q2 (1% series) | 10 | **14.93ms** | 164.73ms | **11.0x** |
+| Q2 (1% series) | 100 | **86.39ms** | 1,780ms | **20.6x** |
+| Q3 (5% series) | 1 | **10.08ms** | 71.19ms | **7.1x** |
+| Q3 (5% series) | 10 | **15.54ms** | 170.26ms | **11.0x** |
+| Q3 (5% series) | 100 | **92.36ms** | 1,840ms | **19.9x** |
+
+### Throughput (req/sec)
+
+| Query | Conc | MynaDB | InfluxDB 3 | Ratio |
+|-------|------|--------|------------|-------|
+| Q1 (1 series) | 1 | **130** | 13.5 | **9.6x** |
+| Q1 (1 series) | 10 | **817** | 68.2 | **12.0x** |
+| Q1 (1 series) | 100 | **1,230** | 47.1 | **26.1x** |
+| Q2 (1% series) | 1 | **104** | 14.1 | **7.4x** |
+| Q2 (1% series) | 10 | **672** | 62.0 | **10.8x** |
+| Q2 (1% series) | 100 | **1,190** | 50.1 | **23.8x** |
+| Q3 (5% series) | 1 | **100** | 14.1 | **7.1x** |
+| Q3 (5% series) | 10 | **648** | 59.6 | **10.9x** |
+| Q3 (5% series) | 100 | **1,120** | 49.5 | **22.6x** |
+
+### Key Takeaways
+
+- MynaDB is **7-10x faster at low concurrency** and **18-26x faster at high concurrency (c=100)**.
+- MynaDB scales well from c=1 to c=100: throughput increases from ~100-130 rps to ~1,100-1,230 rps.
+- InfluxDB 3 saturates early: throughput barely changes from c=10 to c=100, with latency degrading to ~1.6-1.8s.
+- Query selectivity (1 series vs 5% series) has minimal impact on MynaDB latency (~8-10ms at c=1), suggesting efficient partition pruning.
+
 ## Summary
 
 ### Writes
@@ -91,14 +135,14 @@ MynaDB delivers **5.3x higher write throughput** than InfluxDB 3 Core, sustainin
 
 ### Queries
 Mixed results:
-- **MynaDB wins** on aggregation-heavy queries spanning all hosts (`double-groupby-1`: 2.4x faster) and order-by-limit queries (`groupby-orderby-limit`: 11.1x faster).
+- **MynaDB wins** on lastpoint (`lastpoint`: 21.3x faster), aggregation-heavy queries spanning all hosts (`double-groupby-1`: 2.4x faster), and order-by-limit queries (`groupby-orderby-limit`: 11.1x faster).
 - **InfluxDB 3 wins** on narrow, single/few-host point queries (`single-groupby-*`: 3-12x faster) due to its columnar storage optimizations for tag-based filtering.
 - **cpu-max-all-1** (1 host, all metrics): MynaDB is 2.9x faster. With 8 hosts, InfluxDB 3 is 2.3x faster, suggesting MynaDB's multi-host query path has room for optimization.
 
 ### Key Observations
 1. MynaDB's write path is highly optimized for bulk ingestion with its in-memory cache architecture.
 2. InfluxDB 3's query engine (based on DataFusion/Apache Arrow, same as MynaDB) shows better performance on narrow-host queries, likely due to its native tag indexing.
-3. MynaDB's InfluxQL transpiler handles all TSBS query types. The `lastpoint` query (`GROUP BY tag ORDER BY time DESC LIMIT 1`) is now supported via `ROW_NUMBER()` window function transpilation.
+3. MynaDB's InfluxQL transpiler handles all TSBS query types. The `lastpoint` query (`GROUP BY tag ORDER BY time DESC LIMIT 1`) is transpiled to a `ROW_NUMBER()` window function and is 21.3x faster than InfluxDB 3.
 4. Memory usage is a concern for MynaDB on large datasets - the cache + query engine can exceed available RAM on resource-constrained systems.
 
 ## Reproduction
