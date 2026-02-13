@@ -65,24 +65,52 @@ fn transpile_select(stmt: &SelectStatement, ctx: &TranspileContext) -> Result<St
     // Handle GROUP BY time() with aggregations
     let has_time_group = stmt.group_by.as_ref().map(|g| g.time.is_some()).unwrap_or(false);
 
-    let fields: Vec<String> = stmt
-        .fields
-        .iter()
-        .map(|f| transpile_field(f, has_time_group))
-        .collect::<Result<Vec<_>, _>>()?;
-    sql.push_str(&fields.join(", "));
+    // Build SELECT columns: time first (InfluxDB convention), then fields, then GROUP BY tags
+    let mut select_parts: Vec<String> = Vec::new();
 
-    // Add time bucket if GROUP BY time()
+    // 1. Time bucket column first (if GROUP BY time)
     if has_time_group {
         if let Some(ref gb) = stmt.group_by {
             if let Some(ref duration) = gb.time {
-                sql.push_str(&format!(
-                    ", time_bucket(\"time\", {}, 0) AS time",
+                select_parts.push(format!(
+                    "time_bucket(\"time\", {}, 0) AS time",
                     duration.to_nanoseconds()
                 ));
             }
         }
     }
+
+    // 2. Field expressions (aggregates, etc.)
+    let fields: Vec<String> = stmt
+        .fields
+        .iter()
+        .map(|f| transpile_field(f, has_time_group))
+        .collect::<Result<Vec<_>, _>>()?;
+    select_parts.extend(fields);
+
+    // 3. GROUP BY tag columns (so their values appear in the result for grouping)
+    if let Some(ref gb) = stmt.group_by {
+        for tag in &gb.tags {
+            if tag == "*" {
+                // Expand * to columns from WHERE clause
+                if let Some(ref cond) = stmt.condition {
+                    for col in extract_filter_columns(cond) {
+                        let quoted = quote_ident(&col);
+                        if !select_parts.contains(&quoted) {
+                            select_parts.push(quoted);
+                        }
+                    }
+                }
+            } else {
+                let quoted = quote_ident(tag);
+                if !select_parts.contains(&quoted) {
+                    select_parts.push(quoted);
+                }
+            }
+        }
+    }
+
+    sql.push_str(&select_parts.join(", "));
 
     // FROM clause
     sql.push_str(" FROM ");
@@ -384,6 +412,9 @@ fn transpile_select_with_cte(stmt: &SelectStatement, ctx: &TranspileContext) -> 
 
     let mut select_parts = Vec::new();
 
+    // Time column first (InfluxDB convention)
+    select_parts.push("time".to_string());
+
     for (i, df) in deriv_fields.iter().enumerate() {
         let val_col = format!("\"_deriv_val_{}\"", i);
 
@@ -440,9 +471,6 @@ fn transpile_select_with_cte(stmt: &SelectStatement, ctx: &TranspileContext) -> 
         select_parts.push(format!("{} AS \"{}\"", final_expr, alias.replace('"', "\"\"")));
     }
 
-    // Add time column
-    select_parts.push("time".to_string());
-
     // Add group tags
     for tag in &group_tags {
         select_parts.push(quote_ident(tag));
@@ -471,17 +499,35 @@ fn transpile_select_simple(stmt: &SelectStatement, ctx: &TranspileContext) -> Re
     let mut sql = String::new();
     sql.push_str("SELECT ");
     let has_time_group = stmt.group_by.as_ref().map(|g| g.time.is_some()).unwrap_or(false);
-    let fields: Vec<String> = stmt.fields.iter()
-        .map(|f| transpile_field(f, has_time_group))
-        .collect::<Result<Vec<_>, _>>()?;
-    sql.push_str(&fields.join(", "));
+
+    // Build SELECT columns: time first (InfluxDB convention), then fields, then tags
+    let mut select_parts: Vec<String> = Vec::new();
+
+    // 1. Time bucket column first (if GROUP BY time)
     if has_time_group {
         if let Some(ref gb) = stmt.group_by {
             if let Some(ref duration) = gb.time {
-                sql.push_str(&format!(", time_bucket(\"time\", {}, 0) AS time", duration.to_nanoseconds()));
+                select_parts.push(format!("time_bucket(\"time\", {}, 0) AS time", duration.to_nanoseconds()));
             }
         }
     }
+
+    // 2. Field expressions (aggregates, etc.)
+    let fields: Vec<String> = stmt.fields.iter()
+        .map(|f| transpile_field(f, has_time_group))
+        .collect::<Result<Vec<_>, _>>()?;
+    select_parts.extend(fields);
+
+    // 3. GROUP BY tag columns (so their values appear in the result for InfluxDB tags)
+    if let Some(ref gb) = stmt.group_by {
+        for tag in &gb.tags {
+            if tag != "*" {
+                select_parts.push(quote_ident(tag));
+            }
+        }
+    }
+
+    sql.push_str(&select_parts.join(", "));
     sql.push_str(" FROM ");
     sql.push_str(&transpile_measurement(&stmt.from, ctx));
     if let Some(ref cond) = stmt.condition {
@@ -552,16 +598,37 @@ fn transpile_expr(expr: &Expr) -> Result<String, TranspileError> {
         Expr::Literal(lit) => transpile_literal(lit),
         Expr::Function(func) => transpile_function(func),
         Expr::BinaryOp { left, op, right } => {
-            // Special handling: when Duration is used in arithmetic with now()
-            // (e.g., `now() - 1h`), emit it as INTERVAL for Timestamp arithmetic.
-            // When Duration is used in comparison with time (e.g., `time >= 1770ms`),
-            // it's an epoch timestamp — emit as nanoseconds Int64.
+            // Special handling for time comparisons and Duration arithmetic:
+            //
+            // 1. `now() - 1h` → emit Duration as INTERVAL for Timestamp arithmetic
+            // 2. `time >= 1770474693254000000` → wrap Int64 with to_timestamp_nanos()
+            // 3. `time >= 1770ms` → Duration as nanos, wrapped with to_timestamp_nanos()
+            let is_time_compare = expr_is_time_ref(left) || expr_is_time_ref(right);
+            let is_comparison = matches!(
+                op,
+                BinaryOperator::Eq | BinaryOperator::Ne
+                    | BinaryOperator::Lt | BinaryOperator::Le
+                    | BinaryOperator::Gt | BinaryOperator::Ge
+            );
+
             let right_sql = if matches!(right.as_ref(), Expr::Duration(_)) && expr_involves_now(left) {
+                // Case 1: now() - 1h → INTERVAL
                 transpile_expr_as_interval(right)?
+            } else if is_time_compare && is_comparison && expr_is_epoch_value(right) {
+                // Case 2 & 3: time >= <epoch nanos> → to_timestamp_nanos(value)
+                let nanos = transpile_expr(right)?;
+                format!("to_timestamp_nanos({})", nanos)
             } else {
                 transpile_expr(right)?
             };
-            let left_sql = transpile_expr(left)?;
+
+            let left_sql = if is_time_compare && is_comparison && expr_is_epoch_value(left) {
+                let nanos = transpile_expr(left)?;
+                format!("to_timestamp_nanos({})", nanos)
+            } else {
+                transpile_expr(left)?
+            };
+
             Ok(format!("({} {} {})", left_sql, transpile_binary_op(op), right_sql))
         }
         Expr::UnaryOp { op, expr } => {
@@ -582,6 +649,20 @@ fn transpile_expr(expr: &Expr) -> Result<String, TranspileError> {
         }
         Expr::Now => Ok("now()".to_string()),
     }
+}
+
+/// Check whether an expression references the "time" column.
+fn expr_is_time_ref(expr: &Expr) -> bool {
+    matches!(expr, Expr::Identifier(name) if name == "time")
+}
+
+/// Check whether an expression is an epoch nanosecond value
+/// (numeric literal or Duration converted to nanoseconds).
+fn expr_is_epoch_value(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Literal(Literal::Integer(_)) | Expr::Literal(Literal::Float(_)) | Expr::Duration(_)
+    )
 }
 
 /// Check whether an expression involves `now()` (possibly nested in arithmetic).
@@ -932,7 +1013,7 @@ fn transpile_show_condition(expr: &Expr, column: &str) -> Result<String, Transpi
 ///
 /// Collects left-hand identifiers from equality (`=`), inequality (`<>`),
 /// and regex match (`=~`, `!~`) conditions, excluding `time`.
-fn extract_filter_columns(expr: &Expr) -> Vec<String> {
+pub fn extract_filter_columns(expr: &Expr) -> Vec<String> {
     let mut columns = Vec::new();
     collect_filter_columns(expr, &mut columns);
     columns
@@ -1199,5 +1280,33 @@ mod tests {
         let where_pos = sql.find("WHERE").unwrap();
         let group_pos = sql.find("GROUP BY").unwrap();
         assert!(where_pos < group_pos, "WHERE should be before GROUP BY. SQL was: {}", sql);
+    }
+
+    #[test]
+    fn test_select_column_order_time_first_then_fields_then_tags() {
+        // InfluxDB convention: time first, then field expressions, then GROUP BY tag columns
+        let stmt = parse(
+            r#"SELECT mean("usage_user") AS "user", mean("usage_system") AS "system" FROM "cpu" WHERE time > now() - 1h GROUP BY time(10s), "host", "cpu""#
+        ).unwrap();
+        let sql = transpile(&stmt, &ctx()).unwrap();
+        // Time bucket should come first in SELECT
+        let select_part = sql.split(" FROM ").next().unwrap();
+        assert!(select_part.starts_with("SELECT time_bucket("),
+            "time_bucket should be first in SELECT. SQL was: {}", sql);
+        // Tag columns should be in SELECT
+        assert!(select_part.contains(r#""host""#), "host should be in SELECT. SQL was: {}", sql);
+        assert!(select_part.contains(r#""cpu""#), "cpu should be in SELECT. SQL was: {}", sql);
+    }
+
+    #[test]
+    fn test_group_by_star_includes_tags_in_select() {
+        let stmt = parse(
+            r#"SELECT mean("usage_user") FROM "cpu" WHERE "host" =~ /server1/ AND "cpu" = 'cpu-total' GROUP BY time(5m), *"#
+        ).unwrap();
+        let sql = transpile(&stmt, &ctx()).unwrap();
+        let select_part = sql.split(" FROM ").next().unwrap();
+        // Expanded * tag columns should appear in SELECT
+        assert!(select_part.contains(r#""host""#), "host from WHERE should be in SELECT. SQL was: {}", sql);
+        assert!(select_part.contains(r#""cpu""#), "cpu from WHERE should be in SELECT. SQL was: {}", sql);
     }
 }

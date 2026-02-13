@@ -72,7 +72,7 @@ pub use response::{
     batches_to_grouped_response, batches_to_grouped_response_with_epoch, batches_to_response,
     batches_to_response_with_epoch, ErrorResponse, InfluxResponse, Series, StatementResult,
 };
-pub use transpiler::{transpile, TranspileContext, TranspileError};
+pub use transpiler::{extract_filter_columns, transpile, TranspileContext, TranspileError};
 
 /// Combined error type for InfluxQL processing
 #[derive(Debug)]
@@ -223,8 +223,28 @@ pub fn get_measurement_name(stmt: &Statement) -> Option<String> {
 pub fn has_tag_grouping(stmt: &Statement) -> Option<Vec<String>> {
     if let Statement::Select(s) = stmt {
         if let Some(ref gb) = s.group_by {
-            if !gb.tags.is_empty() && gb.tags[0] != "*" {
-                return Some(gb.tags.clone());
+            if gb.tags.is_empty() {
+                return None;
+            }
+            // Expand GROUP BY * to concrete tag names from WHERE clause
+            let mut tags = Vec::new();
+            for tag in &gb.tags {
+                if tag == "*" {
+                    if let Some(ref cond) = s.condition {
+                        for col in extract_filter_columns(cond) {
+                            if !tags.contains(&col) {
+                                tags.push(col);
+                            }
+                        }
+                    }
+                } else {
+                    if !tags.contains(tag) {
+                        tags.push(tag.clone());
+                    }
+                }
+            }
+            if !tags.is_empty() {
+                return Some(tags);
             }
         }
     }
