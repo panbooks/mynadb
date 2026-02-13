@@ -19,6 +19,7 @@
 //! ```
 
 use async_trait::async_trait;
+use datafusion::arrow::array::new_null_array;
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
@@ -145,43 +146,80 @@ pub(super) fn unwrap_dictionary_field(field: &Field) -> Field {
     }
 }
 
-/// Cast a RecordBatch's columns to match the expected output schema.
+/// Remap projection indices from the union schema to a child's schema.
 ///
-/// Parquet readers may return Dictionary-encoded strings (Dictionary(Int32, Utf8))
-/// while memtable data uses plain Utf8. This function casts any mismatched columns
-/// so downstream operators (aggregation, GROUP BY) don't panic.
-pub(super) fn normalize_batch(
+/// The union schema may have columns that only exist in one child provider.
+/// This maps by column name to produce valid projection indices for the child.
+pub(super) fn remap_projection_for_child(
+    union_schema: &SchemaRef,
+    child_schema: &SchemaRef,
+    projection: Option<&Vec<usize>>,
+) -> Option<Vec<usize>> {
+    // Determine which column names are being projected from the union schema
+    let projected_names: Vec<&str> = match projection {
+        Some(indices) => indices
+            .iter()
+            .map(|&i| union_schema.field(i).name().as_str())
+            .collect(),
+        None => union_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect(),
+    };
+
+    // Map those names to indices in the child's schema
+    let child_indices: Vec<usize> = projected_names
+        .iter()
+        .filter_map(|name| child_schema.index_of(name).ok())
+        .collect();
+
+    if child_indices.is_empty() {
+        None // No matching columns — let child return whatever it has
+    } else {
+        Some(child_indices)
+    }
+}
+
+/// Align a RecordBatch to match the target schema by column name.
+///
+/// Handles three cases per column:
+/// - Column exists with correct type → use as-is
+/// - Column exists with different type (e.g., Dictionary → Utf8) → cast
+/// - Column missing → fill with nulls
+///
+/// This is essential because child providers in a union may have different schemas
+/// (e.g., memtable has all columns, parquet may have a subset).
+pub(super) fn align_batch_to_schema(
     batch: &datafusion::arrow::array::RecordBatch,
     target_schema: &SchemaRef,
 ) -> Result<datafusion::arrow::array::RecordBatch> {
     let batch_schema = batch.schema();
 
-    // Fast path: schemas already match
-    if batch_schema.fields().len() == target_schema.fields().len()
-        && batch_schema
-            .fields()
-            .iter()
-            .zip(target_schema.fields().iter())
-            .all(|(a, b)| a.data_type() == b.data_type())
-    {
+    // Fast path: schemas are identical
+    if *batch_schema == **target_schema {
         return Ok(batch.clone());
     }
 
-    let columns: Vec<Arc<dyn datafusion::arrow::array::Array>> = batch
-        .columns()
+    let num_rows = batch.num_rows();
+    let columns: Vec<Arc<dyn datafusion::arrow::array::Array>> = target_schema
+        .fields()
         .iter()
-        .enumerate()
-        .map(|(i, col)| {
-            if i < target_schema.fields().len() {
-                let target_type = target_schema.field(i).data_type();
-                if col.data_type() != target_type {
-                    // Cast Dictionary → primitive, or any other compatible cast
-                    cast(col.as_ref(), target_type).unwrap_or_else(|_| col.clone())
-                } else {
-                    col.clone()
+        .map(|field| {
+            match batch_schema.index_of(field.name()) {
+                Ok(idx) => {
+                    let col = batch.column(idx);
+                    if col.data_type() != field.data_type() {
+                        // Cast type (e.g., Dictionary(Int32, Utf8) → Utf8)
+                        cast(col.as_ref(), field.data_type()).unwrap_or_else(|_| col.clone())
+                    } else {
+                        col.clone()
+                    }
                 }
-            } else {
-                col.clone()
+                Err(_) => {
+                    // Column not in batch — fill with nulls
+                    new_null_array(field.data_type(), num_rows)
+                }
             }
         })
         .collect();
@@ -222,19 +260,30 @@ impl TableProvider for UnionTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Compute the projected schema
+        // Compute the projected schema (based on union schema)
         let projected_schema = project_schema(&self.schema, projection)?;
 
+        // Remap projection indices from union schema to each child's schema.
+        // The union schema may have columns that only exist in one child,
+        // so we map by column name to get valid indices for each child.
+        let primary_proj =
+            remap_projection_for_child(&self.schema, &self.primary.schema(), projection);
+        let secondary_proj =
+            remap_projection_for_child(&self.schema, &self.secondary.schema(), projection);
+
         debug!(
-            "UnionTableProvider scan: table={}, projection={:?}",
-            self.table_name, projection
+            "UnionTableProvider scan: table={}, union_projection={:?}, primary_proj={:?}, secondary_proj={:?}",
+            self.table_name, projection, primary_proj, secondary_proj
         );
 
-        // Get execution plans from both providers
-        let primary_plan = self.primary.scan(state, projection, filters, limit).await?;
+        // Get execution plans from both providers with remapped projections
+        let primary_plan = self
+            .primary
+            .scan(state, primary_proj.as_ref(), filters, limit)
+            .await?;
         let secondary_plan = self
             .secondary
-            .scan(state, projection, filters, limit)
+            .scan(state, secondary_proj.as_ref(), filters, limit)
             .await?;
 
         // Create union execution plan
@@ -357,12 +406,12 @@ impl ExecutionPlan for UnionExec {
         let streams = vec![primary_stream, secondary_stream];
         let combined = futures::stream::select_all(streams);
 
-        // Normalize each batch so column types match the declared output schema.
-        // Parquet readers may return Dictionary(Int32, Utf8) for string columns while
-        // memtable uses plain Utf8 — without casting, downstream operators panic.
-        let normalize_schema = schema.clone();
+        // Align each batch to the union's output schema by column name.
+        // Child providers may have different schemas (different columns, different types).
+        // This handles: missing columns (null-filled), type mismatches (cast), reordering.
+        let align_schema = schema.clone();
         let normalized = futures::StreamExt::map(combined, move |batch_result| {
-            batch_result.and_then(|batch| normalize_batch(&batch, &normalize_schema))
+            batch_result.and_then(|batch| align_batch_to_schema(&batch, &align_schema))
         });
 
         let stream = RecordBatchStreamAdapter::new(schema, normalized);
@@ -475,7 +524,7 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_batch_dictionary_to_utf8() {
+    fn test_align_batch_to_schema_dictionary_to_utf8() {
         // Target schema expects plain Utf8
         let target_schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int64, false),
@@ -502,7 +551,7 @@ mod tests {
         )
         .unwrap();
 
-        let normalized = normalize_batch(&batch, &target_schema).unwrap();
+        let normalized = align_batch_to_schema(&batch, &target_schema).unwrap();
         assert_eq!(normalized.schema(), target_schema);
         assert_eq!(normalized.column(1).data_type(), &DataType::Utf8);
 
@@ -518,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_batch_already_matching() {
+    fn test_align_batch_to_schema_already_matching() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int64, false),
             Field::new("name", DataType::Utf8, true),
@@ -531,13 +580,13 @@ mod tests {
                 .unwrap();
 
         // Should return clone without any casting
-        let result = normalize_batch(&batch, &schema).unwrap();
+        let result = align_batch_to_schema(&batch, &schema).unwrap();
         assert_eq!(result.num_rows(), 2);
         assert_eq!(result.schema(), schema);
     }
 
     #[test]
-    fn test_normalize_batch_multiple_dict_columns() {
+    fn test_align_batch_to_schema_multiple_dict_columns() {
         // Telegraf-like schema with multiple Dictionary-encoded tag columns
         let target_schema = Arc::new(Schema::new(vec![
             Field::new("time", DataType::Int64, false),
@@ -575,7 +624,7 @@ mod tests {
         )
         .unwrap();
 
-        let normalized = normalize_batch(&batch, &target_schema).unwrap();
+        let normalized = align_batch_to_schema(&batch, &target_schema).unwrap();
         assert_eq!(normalized.schema(), target_schema);
 
         let host_col = normalized
@@ -593,5 +642,90 @@ mod tests {
             .unwrap();
         assert_eq!(svc_col.value(0), "web");
         assert_eq!(svc_col.value(1), "db");
+    }
+
+    #[test]
+    fn test_remap_projection_for_child() {
+        // Union schema: [time, host, usage_idle, date, node_id]
+        let union_schema = Arc::new(Schema::new(vec![
+            Field::new("time", DataType::Int64, false),
+            Field::new("host", DataType::Utf8, true),
+            Field::new("usage_idle", DataType::Float64, true),
+            Field::new("date", DataType::Utf8, true),
+            Field::new("node_id", DataType::Utf8, true),
+        ]));
+
+        // Child schema only has [date, node_id] (parquet with no data files)
+        let child_schema = Arc::new(Schema::new(vec![
+            Field::new("date", DataType::Utf8, true),
+            Field::new("node_id", DataType::Utf8, true),
+        ]));
+
+        // SELECT * → projection None → should remap to child's [date(0), node_id(1)]
+        let remapped = remap_projection_for_child(&union_schema, &child_schema, None);
+        assert_eq!(remapped, Some(vec![0, 1]));
+
+        // SELECT time, host → projection [0, 1] → no matching columns in child
+        let remapped = remap_projection_for_child(&union_schema, &child_schema, Some(&vec![0, 1]));
+        assert_eq!(remapped, None);
+
+        // SELECT time, date → projection [0, 3] → only date matches at child index 0
+        let remapped = remap_projection_for_child(&union_schema, &child_schema, Some(&vec![0, 3]));
+        assert_eq!(remapped, Some(vec![0]));
+
+        // Full child has all columns — should pass through correctly
+        let full_child = union_schema.clone();
+        let remapped = remap_projection_for_child(&union_schema, &full_child, Some(&vec![0, 2, 4]));
+        assert_eq!(remapped, Some(vec![0, 2, 4]));
+    }
+
+    #[test]
+    fn test_align_batch_missing_columns_filled_with_nulls() {
+        // Target schema wants [time, host, usage_idle, date]
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("time", DataType::Int64, false),
+            Field::new("host", DataType::Utf8, true),
+            Field::new("usage_idle", DataType::Float64, true),
+            Field::new("date", DataType::Utf8, true),
+        ]));
+
+        // Batch only has [date, time] (parquet with minimal columns, different order)
+        let batch_schema = Arc::new(Schema::new(vec![
+            Field::new("date", DataType::Utf8, true),
+            Field::new("time", DataType::Int64, false),
+        ]));
+        let dates = StringArray::from(vec![Some("2024-01-01"), Some("2024-01-02")]);
+        let times = Int64Array::from(vec![1000, 2000]);
+        let batch =
+            RecordBatch::try_new(batch_schema, vec![Arc::new(dates), Arc::new(times)]).unwrap();
+
+        let aligned = align_batch_to_schema(&batch, &target_schema).unwrap();
+        assert_eq!(aligned.schema(), target_schema);
+        assert_eq!(aligned.num_rows(), 2);
+        assert_eq!(aligned.num_columns(), 4);
+
+        // time should come from batch (mapped by name, not position)
+        let time_col = aligned
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(time_col.value(0), 1000);
+        assert_eq!(time_col.value(1), 2000);
+
+        // host should be all nulls (missing)
+        assert_eq!(aligned.column(1).null_count(), 2);
+
+        // usage_idle should be all nulls (missing)
+        assert_eq!(aligned.column(2).null_count(), 2);
+
+        // date should come from batch
+        let date_col = aligned
+            .column(3)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(date_col.value(0), "2024-01-01");
+        assert_eq!(date_col.value(1), "2024-01-02");
     }
 }

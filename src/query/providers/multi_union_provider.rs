@@ -204,10 +204,16 @@ impl TableProvider for MultiUnionTableProvider {
             projection
         );
 
-        // Get execution plans from all providers
+        // Get execution plans from all providers with remapped projections
         let mut child_plans = Vec::with_capacity(self.providers.len());
         for (i, provider) in self.providers.iter().enumerate() {
-            match provider.scan(state, projection, filters, limit).await {
+            // Remap projection from union schema to this child's schema by column name
+            let child_proj = super::union_provider::remap_projection_for_child(
+                &self.schema,
+                &provider.schema(),
+                projection,
+            );
+            match provider.scan(state, child_proj.as_ref(), filters, limit).await {
                 Ok(plan) => {
                     child_plans.push(plan);
                 }
@@ -352,13 +358,12 @@ impl ExecutionPlan for MultiUnionExec {
         // Use select_all to interleave all streams (order doesn't matter for union)
         let combined = futures::stream::select_all(streams);
 
-        // Normalize each batch so column types match the declared output schema.
-        // Parquet readers may return Dictionary(Int32, Utf8) for string columns while
-        // memtable uses plain Utf8 — without casting, downstream operators panic.
-        let normalize_schema = schema.clone();
+        // Align each batch to the union's output schema by column name.
+        // Handles missing columns (null-filled), type mismatches (cast), reordering.
+        let align_schema = schema.clone();
         let normalized = futures::StreamExt::map(combined, move |batch_result| {
             batch_result.and_then(|batch| {
-                super::union_provider::normalize_batch(&batch, &normalize_schema)
+                super::union_provider::align_batch_to_schema(&batch, &align_schema)
             })
         });
 
