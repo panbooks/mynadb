@@ -9,6 +9,7 @@
 pub mod api;
 pub mod cache_invalidation;
 pub mod client;
+pub mod fan_out;
 pub mod config;
 pub mod flight;
 pub mod health_checker;

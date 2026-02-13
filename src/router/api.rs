@@ -3,6 +3,7 @@
 //! Provides HTTP endpoints for the Router node that route requests
 //! through WriteRouter and QueryCoordinator to Data nodes.
 
+use super::fan_out::fan_out;
 use super::state::RouterAppState;
 use crate::query::influxql::{self, InfluxResponse};
 use crate::utils::json::batches_to_json;
@@ -13,8 +14,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::debug;
 
 // ============================================================================
@@ -240,17 +243,27 @@ async fn execute_influxql_query(
                 return (StatusCode::OK, Json(response));
             }
             Statement::ShowMeasurements(ref s) => {
-                // Collect tables from data nodes (same approach as list_tables_handler)
+                // Collect tables from data nodes in parallel
                 let target_db = s.database.as_deref().unwrap_or(&db);
                 let nodes = state.shard_cache.get_active_primary_nodes();
+
+                let futures: Vec<_> = nodes.iter().map(|node| {
+                    let pool = Arc::clone(&state.data_node_pool);
+                    let node_id = node.node_id.clone();
+                    let target_db = target_db.to_string();
+                    (node_id.clone(), Box::pin(async move {
+                        pool.list_tables(&node_id, &target_db).await
+                    }) as BoxFuture<'_, _>)
+                }).collect();
+
+                let (results, _errors) = fan_out::<serde_json::Value>(futures).await;
+
                 let mut all_tables = std::collections::HashSet::new();
-                for node in &nodes {
-                    if let Ok(result) = state.data_node_pool.list_tables(&node.node_id, target_db).await {
-                        if let Some(tables) = result["tables"].as_array() {
-                            for table in tables {
-                                if let Some(t) = table.as_str() {
-                                    all_tables.insert(t.to_string());
-                                }
+                for (_node_id, result) in &results {
+                    if let Some(tables) = result["tables"].as_array() {
+                        for table in tables {
+                            if let Some(t) = table.as_str() {
+                                all_tables.insert(t.to_string());
                             }
                         }
                     }
@@ -540,22 +553,25 @@ pub async fn list_tables_handler(
         );
     }
 
-    // Collect tables from all nodes and deduplicate
-    let mut all_tables = std::collections::HashSet::new();
-    let mut errors = Vec::new();
+    let futures: Vec<_> = nodes.iter().map(|node| {
+        let pool = Arc::clone(&state.data_node_pool);
+        let node_id = node.node_id.clone();
+        let db = db.clone();
+        (node_id.clone(), Box::pin(async move {
+            pool.list_tables(&node_id, &db).await
+        }) as BoxFuture<'_, _>)
+    }).collect();
 
-    for node in &nodes {
-        match state.data_node_pool.list_tables(&node.node_id, &db).await {
-            Ok(result) => {
-                if let Some(tables) = result["tables"].as_array() {
-                    for table in tables {
-                        if let Some(t) = table.as_str() {
-                            all_tables.insert(t.to_string());
-                        }
-                    }
+    let (results, errors) = fan_out::<serde_json::Value>(futures).await;
+
+    let mut all_tables = std::collections::HashSet::new();
+    for (_node_id, result) in &results {
+        if let Some(tables) = result["tables"].as_array() {
+            for table in tables {
+                if let Some(t) = table.as_str() {
+                    all_tables.insert(t.to_string());
                 }
             }
-            Err(e) => errors.push(format!("{}: {}", node.node_id, e)),
         }
     }
 
@@ -586,22 +602,25 @@ pub async fn list_schemas_handler(
         );
     }
 
-    // Collect schemas from all nodes and deduplicate
-    let mut all_schemas = std::collections::HashSet::new();
-    let mut errors = Vec::new();
+    let futures: Vec<_> = nodes.iter().map(|node| {
+        let pool = Arc::clone(&state.data_node_pool);
+        let node_id = node.node_id.clone();
+        let db = db.clone();
+        (node_id.clone(), Box::pin(async move {
+            pool.list_schemas(&node_id, &db).await
+        }) as BoxFuture<'_, _>)
+    }).collect();
 
-    for node in &nodes {
-        match state.data_node_pool.list_schemas(&node.node_id, &db).await {
-            Ok(result) => {
-                if let Some(schemas) = result["schemas"].as_array() {
-                    for schema in schemas {
-                        if let Some(s) = schema.as_str() {
-                            all_schemas.insert(s.to_string());
-                        }
-                    }
+    let (results, errors) = fan_out::<serde_json::Value>(futures).await;
+
+    let mut all_schemas = std::collections::HashSet::new();
+    for (_node_id, result) in &results {
+        if let Some(schemas) = result["schemas"].as_array() {
+            for schema in schemas {
+                if let Some(s) = schema.as_str() {
+                    all_schemas.insert(s.to_string());
                 }
             }
-            Err(e) => errors.push(format!("{}: {}", node.node_id, e)),
         }
     }
 
@@ -632,26 +651,26 @@ pub async fn list_schema_tables_handler(
         );
     }
 
-    // Collect tables from all nodes and deduplicate
-    let mut all_tables = std::collections::HashSet::new();
-    let mut errors = Vec::new();
+    let futures: Vec<_> = nodes.iter().map(|node| {
+        let pool = Arc::clone(&state.data_node_pool);
+        let node_id = node.node_id.clone();
+        let db = db.clone();
+        let schema = schema.clone();
+        (node_id.clone(), Box::pin(async move {
+            pool.list_schema_tables(&node_id, &db, &schema).await
+        }) as BoxFuture<'_, _>)
+    }).collect();
 
-    for node in &nodes {
-        match state
-            .data_node_pool
-            .list_schema_tables(&node.node_id, &db, &schema)
-            .await
-        {
-            Ok(result) => {
-                if let Some(tables) = result["tables"].as_array() {
-                    for table in tables {
-                        if let Some(t) = table.as_str() {
-                            all_tables.insert(t.to_string());
-                        }
-                    }
+    let (results, errors) = fan_out::<serde_json::Value>(futures).await;
+
+    let mut all_tables = std::collections::HashSet::new();
+    for (_node_id, result) in &results {
+        if let Some(tables) = result["tables"].as_array() {
+            for table in tables {
+                if let Some(t) = table.as_str() {
+                    all_tables.insert(t.to_string());
                 }
             }
-            Err(e) => errors.push(format!("{}: {}", node.node_id, e)),
         }
     }
 
@@ -686,19 +705,25 @@ pub async fn schema_handler(
     // Construct full table path: schema.table
     let full_table = format!("{}.{}", schema, table);
 
-    // Try each node until one succeeds (table might only be on some nodes)
-    let mut last_error = String::new();
-    for node in &nodes {
-        match state
-            .data_node_pool
-            .get_table_schema(&node.node_id, &db, &full_table)
-            .await
-        {
-            Ok(schema) => return (StatusCode::OK, schema),
-            Err(e) => last_error = e,
-        }
+    // Try all nodes in parallel (table might only be on some nodes)
+    let futures: Vec<_> = nodes.iter().map(|node| {
+        let pool = Arc::clone(&state.data_node_pool);
+        let node_id = node.node_id.clone();
+        let db = db.clone();
+        let full_table = full_table.clone();
+        (node_id.clone(), Box::pin(async move {
+            pool.get_table_schema(&node_id, &db, &full_table).await
+        }) as BoxFuture<'_, _>)
+    }).collect();
+
+    let (results, errors) = fan_out::<String>(futures).await;
+
+    // Return first successful result
+    if let Some((_node_id, schema)) = results.into_iter().next() {
+        return (StatusCode::OK, schema);
     }
 
+    let last_error = errors.into_iter().last().unwrap_or_else(|| "No nodes responded".to_string());
     (StatusCode::NOT_FOUND, last_error)
 }
 
@@ -719,39 +744,41 @@ pub async fn list_partitions_handler(
         );
     }
 
-    // Collect partitions from all nodes and combine
-    // Use a map to deduplicate by partition name while keeping the richest info
+    // Fan out partition requests to all nodes in parallel
+    let futures: Vec<_> = nodes.iter().map(|node| {
+        let pool = Arc::clone(&state.data_node_pool);
+        let node_id = node.node_id.clone();
+        let catalog = catalog.clone();
+        let schema = schema.clone();
+        let table = table.clone();
+        (node_id.clone(), Box::pin(async move {
+            pool.list_partitions(&node_id, &catalog, &schema, &table).await
+        }) as BoxFuture<'_, _>)
+    }).collect();
+
+    let (results, errors) = fan_out::<serde_json::Value>(futures).await;
+
+    // Deduplicate by partition name, merging file_count and size
     let mut partition_map: std::collections::HashMap<String, serde_json::Value> =
         std::collections::HashMap::new();
-    let mut errors = Vec::new();
 
-    for node in &nodes {
-        match state
-            .data_node_pool
-            .list_partitions(&node.node_id, &catalog, &schema, &table)
-            .await
-        {
-            Ok(result) => {
-                if let Some(partitions) = result["partitions"].as_array() {
-                    for partition in partitions {
-                        if let Some(part_name) = partition["partition"].as_str() {
-                            // If this partition already exists, merge file_count and size
-                            if let Some(existing) = partition_map.get_mut(part_name) {
-                                let existing_count = existing["file_count"].as_u64().unwrap_or(0);
-                                let new_count = partition["file_count"].as_u64().unwrap_or(0);
-                                let existing_size = existing["size_mb"].as_f64().unwrap_or(0.0);
-                                let new_size = partition["size_mb"].as_f64().unwrap_or(0.0);
-                                existing["file_count"] =
-                                    serde_json::json!(existing_count + new_count);
-                                existing["size_mb"] = serde_json::json!(existing_size + new_size);
-                            } else {
-                                partition_map.insert(part_name.to_string(), partition.clone());
-                            }
-                        }
+    for (_node_id, result) in &results {
+        if let Some(partitions) = result["partitions"].as_array() {
+            for partition in partitions {
+                if let Some(part_name) = partition["partition"].as_str() {
+                    if let Some(existing) = partition_map.get_mut(part_name) {
+                        let existing_count = existing["file_count"].as_u64().unwrap_or(0);
+                        let new_count = partition["file_count"].as_u64().unwrap_or(0);
+                        let existing_size = existing["size_mb"].as_f64().unwrap_or(0.0);
+                        let new_size = partition["size_mb"].as_f64().unwrap_or(0.0);
+                        existing["file_count"] =
+                            serde_json::json!(existing_count + new_count);
+                        existing["size_mb"] = serde_json::json!(existing_size + new_size);
+                    } else {
+                        partition_map.insert(part_name.to_string(), partition.clone());
                     }
                 }
             }
-            Err(e) => errors.push(format!("{}: {}", node.node_id, e)),
         }
     }
 
@@ -795,40 +822,50 @@ pub async fn memory_handler(State(state): State<RouterAppState>) -> impl IntoRes
         );
     }
 
+    let futures: Vec<_> = nodes.iter().map(|node| {
+        let pool = Arc::clone(&state.data_node_pool);
+        let node_id = node.node_id.clone();
+        (node_id.clone(), Box::pin(async move {
+            pool.get_memory_stats(&node_id).await
+        }) as BoxFuture<'_, _>)
+    }).collect();
+
+    let (results, errors) = fan_out::<serde_json::Value>(futures).await;
+
     let mut node_results = Vec::new();
     let mut total_size: u64 = 0;
     let mut total_max_size: u64 = 0;
     let mut total_rows: u64 = 0;
     let mut total_tables: u64 = 0;
 
-    for node in &nodes {
-        match state.data_node_pool.get_memory_stats(&node.node_id).await {
-            Ok(stats) => {
-                let size = stats["size_bytes"].as_u64().unwrap_or(0);
-                let max_size = stats["max_size_bytes"].as_u64().unwrap_or(0);
-                let rows = stats["total_rows"].as_u64().unwrap_or(0);
-                let tables = stats["num_tables"].as_u64().unwrap_or(0);
+    for (node_id, stats) in &results {
+        let size = stats["size_bytes"].as_u64().unwrap_or(0);
+        let max_size = stats["max_size_bytes"].as_u64().unwrap_or(0);
+        let rows = stats["total_rows"].as_u64().unwrap_or(0);
+        let tables = stats["num_tables"].as_u64().unwrap_or(0);
 
-                total_size += size;
-                total_max_size += max_size;
-                total_rows += rows;
-                total_tables += tables;
+        total_size += size;
+        total_max_size += max_size;
+        total_rows += rows;
+        total_tables += tables;
 
-                node_results.push(serde_json::json!({
-                    "node_id": node.node_id,
-                    "size_bytes": size,
-                    "max_size_bytes": max_size,
-                    "total_rows": rows,
-                    "num_tables": tables
-                }));
-            }
-            Err(e) => {
-                node_results.push(serde_json::json!({
-                    "node_id": node.node_id,
-                    "error": e
-                }));
-            }
-        }
+        node_results.push(serde_json::json!({
+            "node_id": node_id,
+            "size_bytes": size,
+            "max_size_bytes": max_size,
+            "total_rows": rows,
+            "num_tables": tables
+        }));
+    }
+
+    for error in &errors {
+        // Error format is "node_id: error_message"
+        let node_id = error.split(':').next().unwrap_or("unknown");
+        let err_msg = error.splitn(2, ": ").nth(1).unwrap_or(error);
+        node_results.push(serde_json::json!({
+            "node_id": node_id,
+            "error": err_msg
+        }));
     }
 
     let response = serde_json::json!({
