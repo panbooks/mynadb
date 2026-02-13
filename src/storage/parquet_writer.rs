@@ -439,6 +439,18 @@ impl ParquetWriter {
                 if let Some(existing) = field_map.get(&name) {
                     // Compare normalized types
                     if existing.data_type() != normalized_field.data_type() {
+                        // When one type is Utf8, widen to Utf8 (string can represent any value).
+                        // This handles tag columns that were mis-parsed as numeric due to
+                        // escaped spaces in line protocol (e.g., irq=8 vs irq=NMI).
+                        if existing.data_type() == &DataType::Utf8
+                            || normalized_field.data_type() == &DataType::Utf8
+                        {
+                            field_map.insert(
+                                name,
+                                Field::new(existing.name(), DataType::Utf8, true),
+                            );
+                            continue;
+                        }
                         return Err(format!(
                             "Incompatible types for field '{}': {:?} vs {:?}",
                             name,
