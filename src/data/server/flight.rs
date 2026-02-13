@@ -808,11 +808,23 @@ impl FlightService for DataNodeFlightService {
         // Execute query with scope
         // QueryEngine now uses legacy prefixes (if set) when registering tables,
         // creating MultiUnionTableProvider to scan all relevant S3 prefixes.
-        let df_batches = self
+        let df_batches = match self
             .query_engine
             .execute_query_with_db_and_scope(&sql_with_node_id, &ticket.catalog, ticket.query_scope)
             .await
-            .map_err(|e| Status::internal(format!("Query execution error: {}", e)))?;
+        {
+            Ok(batches) => batches,
+            Err(e) if e.contains("not found") => {
+                // Table doesn't exist on this data node — return empty results.
+                // In a cluster, not all tables exist on all nodes; this is normal.
+                debug!("Table not found on this node, returning empty: {}", e);
+                let output = stream::empty();
+                return Ok(Response::new(Box::pin(output)));
+            }
+            Err(e) => {
+                return Err(Status::internal(format!("Query execution error: {}", e)));
+            }
+        };
 
         let elapsed = start.elapsed();
         debug!(
