@@ -90,12 +90,11 @@ fn test_table_key_components() {
 
 #[test]
 fn test_node_states_for_query() {
-    let states_queryable = vec![NodeState::Active, NodeState::Retiring];
+    let states_queryable = vec![NodeState::Active, NodeState::Retiring, NodeState::Suspect];
     let states_not_queryable = vec![
         NodeState::Unhealthy,
         NodeState::Draining,
         NodeState::Drained,
-        NodeState::Suspect,
     ];
 
     for state in states_queryable {
