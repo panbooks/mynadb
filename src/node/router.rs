@@ -32,10 +32,7 @@ pub async fn start(config_path: &str) {
     // Initialize logging
     common::init_logging(&config);
 
-    welcome!("===============================================");
-    welcome!("  MynaDB Router Node");
-    welcome!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
-    welcome!("===============================================");
+    common::print_banner("Router");
 
     // Load Router-specific config
     let router_config = config.router.clone().unwrap_or_default();

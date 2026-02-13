@@ -437,12 +437,7 @@ pub async fn run(config_path: &str) {
 
 /// Print welcome banner
 fn print_welcome_banner(config: &Config) {
-    welcome!("===============================================");
-    welcome!("  MynaDB - The Voice of Your Machines");
-    welcome!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
-    welcome!("  Built: {}", env!("BUILD_TIME"));
-    welcome!("===============================================");
-    welcome!("");
+    common::print_banner("Standalone");
     welcome!("  Starting server...");
     let scheme = if config.tls.enabled { "https" } else { "http" };
     welcome!("   HTTP API: {}://{}", scheme, config.http_addr());

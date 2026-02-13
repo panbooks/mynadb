@@ -176,10 +176,7 @@ pub fn stop(config_path: &str) {
 
 fn print_welcome_banner(config: &Config) {
     let data_config = config.data.clone().unwrap_or_default();
-    println!("===============================================");
-    println!("  MynaDB Data Node");
-    println!("  Version: {} ({})", env!("GIT_VERSION"), env!("GIT_HASH"));
-    println!("===============================================");
+    common::print_banner("Data Node");
     println!("  Node ID: {}", data_config.node_id);
     println!("  Advertise: {}", data_config.advertise_addr);
     println!("  HTTP port: {}", data_config.http_port);
@@ -211,7 +208,6 @@ fn print_welcome_banner(config: &Config) {
             println!("    Data dir: {}", config.storage.data_dir);
         }
     }
-    println!("===============================================");
 }
 
 /// Connect to Meta service with retry
