@@ -40,7 +40,12 @@ website/
     ├── security.html       # Authentication, RBAC & security
     ├── forecasting.html    # Forecasting & geospatial functions
     ├── admin-console.html  # Admin console
+    ├── admin-guide.html    # Admin dashboard guide
+    ├── admin-operations.html # Cluster operations guide
     ├── monitoring.html     # Monitoring & observability
+    ├── cluster-getting-started.html # Cluster getting started guide
+    ├── cluster-architecture.html    # Cluster architecture deep dive
+    ├── cluster-scaling.html         # Cluster scaling operations
     ├── faq.html            # Frequently asked questions
     └── troubleshooting.html # Troubleshooting guide
 ```
@@ -129,7 +134,12 @@ Edit CSS variables in `css/style.css`:
 | Security & RBAC | Authentication, roles, TLS, audit logging |
 | Forecasting & Geospatial | Built-in forecasting and geospatial UDFs |
 | Admin Console | Web-based SQL editor and cluster management |
+| Admin Dashboard Guide | Getting started tour, navigation, and key concepts |
+| Cluster Operations | Node management, tables, scale-in, events, and debug tools |
 | Monitoring | Prometheus metrics and observability |
+| Cluster Getting Started | Step-by-step cluster setup guide |
+| Cluster Architecture | Meta, Router, Data node internals |
+| Cluster Scaling | Scale-out, scale-in, and failover |
 | FAQ | Frequently asked questions |
 | Troubleshooting | Common issues and solutions |
 

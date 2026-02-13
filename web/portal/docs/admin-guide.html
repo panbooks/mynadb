@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Admin Dashboard Guide - Introduction, getting started tour, and key concepts for the web-based administration interface">
+  <title>Admin Dashboard Guide - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Ingestion &amp; Protocols</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Query &amp; Analytics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-guide.html" class="active">Admin Guide <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-operations.html">Cluster Operations <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
+          <li><a href="cluster-getting-started.html">Cluster Getting Started</a></li>
+          <li><a href="cluster-architecture.html">Cluster Architecture</a></li>
+          <li><a href="cluster-scaling.html">Cluster Scaling</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="testing.html">Testing</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <div class="docs-badge" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">
+        NEW IN v0.3.0
+      </div>
+
+      <h1>Admin Dashboard Guide</h1>
+
+      <p class="lead">
+        A comprehensive tour of the MynaDB Admin Console -- from cluster health monitoring
+        to interactive SQL queries. Learn how the dashboard works, what each page does,
+        and how to get started managing your cluster through the browser.
+      </p>
+
+      <h2 id="overview">Overview</h2>
+
+      <p>
+        The MynaDB Admin Console is a standalone React web application that provides full
+        visibility and control over your MynaDB cluster. It runs as a separate admin node
+        that connects to the meta service for cluster discovery and forwards requests to
+        the appropriate data nodes.
+      </p>
+
+      <h3>Architecture</h3>
+
+      <p>
+        The admin node sits alongside your cluster and communicates with two layers:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>  Browser (Admin UI)
+        |
+        v
+  +------------------+
+  |   Admin Node     |  Port 18080
+  |   (Axum HTTP)    |
+  +--------+---------+
+           |
+     +-----+-----+
+     |           |
+     v           v
+  +------+   +--------+    +--------+
+  | Meta |   | Data 1 |    | Data 2 |  ...
+  | Svc  |   | Node   |    | Node   |
+  +------+   +--------+    +--------+
+
+  Meta Service:  Cluster discovery, node registry, leader election
+  Data Nodes:    Query execution, storage, compaction
+  Admin Node:    Web UI, request forwarding, event streaming</code></pre>
+        </div>
+      </div>
+
+      <ul>
+        <li><strong>Meta Service</strong> -- The admin node queries meta endpoints to discover all registered data nodes, their roles, states, and table assignments</li>
+        <li><strong>Data Nodes</strong> -- Queries, storage operations, compaction, and flush commands are forwarded directly to the appropriate data node's HTTP API</li>
+        <li><strong>Event Streaming</strong> -- The admin node receives real-time cluster events (node joins, leader changes, table reassignments) and streams them to the browser via WebSocket</li>
+      </ul>
+
+      <h2 id="dashboard">Dashboard</h2>
+
+      <p>
+        The Dashboard is the landing page of the Admin Console. It provides a high-level
+        overview of your cluster's health and key statistics at a glance.
+      </p>
+
+      <h3>Cluster Health</h3>
+
+      <p>
+        The top section displays the overall cluster status:
+      </p>
+
+      <ul>
+        <li><strong>Cluster Status</strong> -- Healthy (all nodes responding) or Degraded (one or more nodes unreachable)</li>
+        <li><strong>Meta Leader</strong> -- The current meta leader node ID and its Raft term number</li>
+      </ul>
+
+      <h3>Node Count Cards</h3>
+
+      <p>
+        Four summary cards show the count of each node type in the cluster:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Card</th>
+            <th>Shows</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Meta Nodes</strong></td>
+            <td>Total meta service instances (active/inactive)</td>
+          </tr>
+          <tr>
+            <td><strong>Router Nodes</strong></td>
+            <td>Total router instances for query routing</td>
+          </tr>
+          <tr>
+            <td><strong>Data Nodes</strong></td>
+            <td>Total data nodes with primary/standby/retiring/drained breakdown</td>
+          </tr>
+          <tr>
+            <td><strong>Tables</strong></td>
+            <td>Total registered tables and partitions across the cluster</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Data Node Breakdown</h3>
+
+      <p>
+        Below the cards, a detailed breakdown shows data node states:
+      </p>
+
+      <ul>
+        <li><strong>Primary</strong> -- Active nodes accepting writes and queries</li>
+        <li><strong>Standby</strong> -- Healthy nodes ready to take over if a primary fails</li>
+        <li><strong>Retiring</strong> -- Nodes in the process of draining tables during scale-in</li>
+        <li><strong>Drained</strong> -- Nodes that have completed table migration and can be safely removed</li>
+      </ul>
+
+      <h3>Quick Actions</h3>
+
+      <p>
+        The dashboard includes quick action cards that link to the most common operational pages:
+        Nodes management, Tables overview, and Scale-In wizard.
+      </p>
+
+      <h2 id="navigation">Navigation</h2>
+
+      <p>
+        The Admin Console uses a sidebar navigation layout. All pages are organized into
+        two groups:
+      </p>
+
+      <h3>Main Pages</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Page</th>
+            <th>Path</th>
+            <th>Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Dashboard</strong></td>
+            <td><code>/</code></td>
+            <td>Cluster health overview, node counts, quick actions</td>
+          </tr>
+          <tr>
+            <td><strong>Query Console</strong></td>
+            <td><code>/query</code></td>
+            <td>Monaco SQL editor with execute, explain, and analyze</td>
+          </tr>
+          <tr>
+            <td><strong>Storage Browser</strong></td>
+            <td><code>/storage</code></td>
+            <td>Tree view of catalogs, schemas, tables, and Parquet files</td>
+          </tr>
+          <tr>
+            <td><strong>Nodes</strong></td>
+            <td><code>/nodes</code></td>
+            <td>Node list with role/state filters and search</td>
+          </tr>
+          <tr>
+            <td><strong>Node Detail</strong></td>
+            <td><code>/nodes/:id</code></td>
+            <td>Individual node health, stats, and management actions</td>
+          </tr>
+          <tr>
+            <td><strong>Tables</strong></td>
+            <td><code>/tables</code></td>
+            <td>Table list with ownership, size, and reassignment</td>
+          </tr>
+          <tr>
+            <td><strong>Scale-In</strong></td>
+            <td><code>/scale-in</code></td>
+            <td>Multi-step wizard for cluster scale-in operations</td>
+          </tr>
+          <tr>
+            <td><strong>Events</strong></td>
+            <td><code>/events</code></td>
+            <td>Real-time cluster event stream with filters</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Operations Pages</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Page</th>
+            <th>Path</th>
+            <th>Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Meta Operations</strong></td>
+            <td><code>/meta-operations</code></td>
+            <td>Meta cluster status, elections, distribution config</td>
+          </tr>
+          <tr>
+            <td><strong>Data Operations</strong></td>
+            <td><code>/data-operations</code></td>
+            <td>Bulk flush, compact, and cache operations across nodes</td>
+          </tr>
+          <tr>
+            <td><strong>Debug Tools</strong></td>
+            <td><code>/debug</code></td>
+            <td>Test data generation, profiling, and cache management</td>
+          </tr>
+          <tr>
+            <td><strong>Settings</strong></td>
+            <td><code>/settings</code></td>
+            <td>Admin node configuration and cluster info display</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2 id="getting-started">Getting Started Walkthrough</h2>
+
+      <p>
+        Follow these six steps to familiarize yourself with the Admin Console after
+        launching your cluster:
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Prerequisites</div>
+        <p>
+          Make sure your cluster is running with an admin node configured. See
+          <a href="admin-console.html#configuration">Admin Console Configuration</a> or use
+          the <a href="cluster-getting-started.html">dev cluster quick start</a>.
+        </p>
+      </div>
+
+      <h3>Step 1: Check Cluster Health</h3>
+
+      <p>
+        Open <code>http://localhost:18080</code> in your browser. The Dashboard loads
+        automatically, showing the cluster status, meta leader, and node counts. Verify
+        that the cluster is <strong>Healthy</strong> and all expected nodes appear.
+      </p>
+
+      <h3>Step 2: Generate Test Data</h3>
+
+      <p>
+        Navigate to <strong>Debug Tools</strong> in the sidebar. Use the test data generation
+        card to write sample metrics (CPU, memory, disk, network) into a database. Configure
+        the database name, date range, and number of data points, then click <strong>Generate</strong>.
+      </p>
+
+      <h3>Step 3: Run Your First Query</h3>
+
+      <p>
+        Go to the <strong>Query Console</strong>. Select your catalog from the dropdown,
+        then try a simple query:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- List all tables in the selected catalog</span>
+SHOW TABLES;
+
+<span class="token-comment">-- Query the test data you just generated</span>
+SELECT * FROM default.cpu ORDER BY time DESC LIMIT 10;</code></pre>
+        </div>
+      </div>
+
+      <p>
+        Press <code>Ctrl+Enter</code> (or <code>Cmd+Enter</code> on macOS) to execute.
+        Results appear in a sortable, paginated table below the editor.
+      </p>
+
+      <h3>Step 4: Browse Storage</h3>
+
+      <p>
+        Open the <strong>Storage Browser</strong> and expand the catalog tree. Navigate
+        through schemas and tables to see partition details, file counts, and storage sizes.
+        Click on a Parquet file to inspect its row groups, compression, and column statistics.
+      </p>
+
+      <h3>Step 5: Monitor Events</h3>
+
+      <p>
+        Visit the <strong>Events</strong> page to see the real-time cluster event stream.
+        Events like node joins, table registrations, and leader elections appear as they
+        happen. Use the type and time filters to narrow the view.
+      </p>
+
+      <h3>Step 6: Review Settings</h3>
+
+      <p>
+        Check the <strong>Settings</strong> page to confirm your admin node configuration,
+        including the HTTP port, meta endpoints, and cluster information.
+      </p>
+
+      <h2 id="key-concepts">Key Concepts</h2>
+
+      <p>
+        These definitions will help you understand the terminology used throughout
+        the Admin Console:
+      </p>
+
+      <div class="features-grid" style="margin-top: 1.5rem;">
+        <div class="feature-card">
+          <div class="feature-icon">&#128451;</div>
+          <h3>Catalog</h3>
+          <p>
+            The top-level namespace, corresponding to the database name in the write URI
+            (<code>/write/{db}</code>). Each catalog contains one or more schemas.
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128193;</div>
+          <h3>Schema</h3>
+          <p>
+            A grouping within a catalog, derived from the <code>service</code> tag
+            (ServiceAsSchema mode) or fixed as <code>default</code> (ServiceAsTable mode).
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128197;</div>
+          <h3>Partition</h3>
+          <p>
+            Data within a table is partitioned by date (<code>date=YYYY-MM-DD</code>).
+            Partitions enable efficient time-range pruning during queries.
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128202;</div>
+          <h3>Compaction Level</h3>
+          <p>
+            Parquet files progress through compaction levels: <strong>L0</strong> (recent writes),
+            <strong>L1</strong> (first merge), <strong>L2+</strong> (higher merges). Higher
+            levels have fewer, larger files for better query performance.
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128221;</div>
+          <h3>WAL (Write-Ahead Log)</h3>
+          <p>
+            Incoming writes are recorded in the WAL for durability before being stored
+            in the in-memory cache. The WAL is replayed on restart to recover unflushed data.
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#127760;</div>
+          <h3>Node States</h3>
+          <p>
+            Data nodes transition between states: <strong>Active</strong> (serving traffic),
+            <strong>Inactive</strong> (unreachable), <strong>Draining</strong>/<strong>Retiring</strong>
+            (migrating tables), <strong>Drained</strong> (safe to remove).
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128279;</div>
+          <h3>Table Ownership</h3>
+          <p>
+            Each table is assigned to a primary data node that handles its writes and
+            compaction. Tables can be reassigned to other nodes for load balancing or scale-in.
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128200;</div>
+          <h3>Scale-In</h3>
+          <p>
+            The process of gracefully reducing cluster size by retiring data nodes.
+            Tables are migrated to remaining nodes before the retiring node is drained.
+          </p>
+        </div>
+      </div>
+
+      <h2 id="configuration">Configuration</h2>
+
+      <p>
+        The admin node is configured via a TOML configuration file. Here is a typical
+        setup:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[admin]
+<span class="token-comment"># Enable the admin console</span>
+enabled = true
+
+<span class="token-comment"># HTTP host and port for the admin web interface</span>
+host = "0.0.0.0"
+port = 18080
+
+<span class="token-comment"># Meta service endpoints for cluster discovery</span>
+<span class="token-comment"># List multiple endpoints for high availability</span>
+meta_endpoints = [
+    "http://127.0.0.1:6000",
+    "http://127.0.0.1:6100",
+    "http://127.0.0.1:6200"
+]</code></pre>
+        </div>
+      </div>
+
+      <h3>Configuration Options</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Option</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>enabled</code></td>
+            <td>bool</td>
+            <td><code>false</code></td>
+            <td>Enable or disable the admin console</td>
+          </tr>
+          <tr>
+            <td><code>host</code></td>
+            <td>string</td>
+            <td><code>"0.0.0.0"</code></td>
+            <td>Bind address for the admin HTTP server</td>
+          </tr>
+          <tr>
+            <td><code>port</code></td>
+            <td>u16</td>
+            <td><code>18080</code></td>
+            <td>HTTP port for the admin web interface</td>
+          </tr>
+          <tr>
+            <td><code>meta_endpoints</code></td>
+            <td>array</td>
+            <td><code>[]</code></td>
+            <td>List of meta service URLs for cluster discovery</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Dev Cluster Quick Start</h3>
+
+      <p>
+        The fastest way to try the admin console is with the local development cluster:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Start the full local cluster (meta x3, data x2, router, admin)</span>
+goreman -f dev/Procfile.cluster-local start
+
+<span class="token-comment"># Default ports:</span>
+<span class="token-comment">#   Meta nodes:  6000, 6100, 6200</span>
+<span class="token-comment">#   Data nodes:  5000, 5100</span>
+<span class="token-comment">#   Router:      7000</span>
+<span class="token-comment">#   Admin:       18080</span>
+
+<span class="token-comment"># Open the admin console</span>
+open http://localhost:18080</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; What's Next?</div>
+        <p>
+          Now that you're familiar with the dashboard layout, explore the
+          <a href="admin-operations.html">Cluster Operations Guide</a> for detailed
+          instructions on managing nodes, tables, scale-in, events, and more.
+        </p>
+      </div>
+
+      <div class="docs-nav">
+        <a href="admin-console.html" class="docs-nav-prev">&larr; Admin Console</a>
+        <a href="admin-operations.html" class="docs-nav-next">Cluster Operations &rarr;</a>
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 MynaDB. The Voice of Your Machines.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

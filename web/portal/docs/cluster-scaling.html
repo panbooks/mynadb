@@ -1,0 +1,1317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Cluster Scaling - Elastic scale-out and scale-in operations, node lifecycle, failure detection, and cold standby replication">
+  <title>Cluster Scaling - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Ingestion &amp; Protocols</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Query &amp; Analytics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-guide.html">Admin Guide <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-operations.html">Cluster Operations <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
+          <li><a href="cluster-getting-started.html">Cluster Getting Started</a></li>
+          <li><a href="cluster-architecture.html">Cluster Architecture</a></li>
+          <li><a href="cluster-scaling.html" class="active">Cluster Scaling</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="testing.html">Testing</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>Cluster Scaling</h1>
+
+      <p class="lead">
+        MynaDB clusters are designed for elastic scaling. Add data nodes to increase write throughput and query
+        parallelism, or remove nodes to reduce cost during low-traffic periods. Because all persistent data lives in
+        shared object storage (S3, MinIO, or OSS), scaling operations never require data migration or rebalancing.
+        This page covers the complete node lifecycle, scale-out and scale-in procedures, failure detection, cold
+        standby replication, and operational best practices.
+      </p>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #eff6ff, #dbeafe); border-left: 4px solid #3b82f6; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>Prerequisite:</strong> This page assumes you have a running MynaDB cluster. If you are setting up a
+        cluster for the first time, start with the <a href="cluster-getting-started.html">Cluster Getting Started</a>
+        guide and review the <a href="cluster-architecture.html">Cluster Architecture</a> page for background on
+        Meta consensus, write coordination, and cache invalidation.
+      </div>
+
+      <!-- ================================================================== -->
+      <!-- Node Lifecycle                                                      -->
+      <!-- ================================================================== -->
+      <h2>Node Lifecycle</h2>
+
+      <p>
+        Every data node in a MynaDB cluster progresses through a well-defined set of states. Understanding these
+        states is essential for planning maintenance windows, executing scale-in operations, and reasoning about
+        failure recovery. The Meta cluster tracks the current state of every registered node and publishes state
+        transitions as events to all Routers and Admin consoles.
+      </p>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
+  Node Lifecycle State Machine
+  ============================
+
+  +-----------+     RegisterNode      +----------+
+  | Starting  | --------------------&gt; |  Active  | &lt;----- heartbeat refreshes lease
+  |   (1)     |    (auto on boot)     |   (2)    |
+  +-----------+                       +----+-----+
+                                           |
+                        +------------------+------------------+
+                        |                                     |
+                   drain request                     heartbeat timeout
+                        |                              (3 missed)
+                        v                                     |
+                  +-----------+                               v
+                  | Draining  |                        +------------+
+                  |   (3)     |                        |  Inactive  |
+                  +-----+-----+                        |    (4)     |
+                        |                              +------------+
+                   scale-in plan                  (detected by Meta leader;
+                   assigns tables                  triggers recovery manager)
+                   to other nodes
+                        |
+                        v
+                  +-----------+       flush complete    +-----------+
+                  | Retiring  | ---------------------&gt;  |  Drained  |
+                  |   (5)     |   memtable flushed,     |   (6)     |
+                  +-----------+   tables reassigned     +-----------+
+                                                     (safe to terminate)
+        </pre>
+      </div>
+
+      <p>
+        The following table describes each state in detail, including the conditions that trigger transitions and the
+        operational implications of each state.
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>State</th>
+            <th>ID</th>
+            <th>Description</th>
+            <th>Accepts Writes</th>
+            <th>Serves Queries</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Starting</strong></td>
+            <td>1</td>
+            <td>Node is initializing: loading configuration, connecting to Meta, replaying WAL. Not yet visible to Routers and not ready for traffic.</td>
+            <td>No</td>
+            <td>No</td>
+          </tr>
+          <tr>
+            <td><strong>Active</strong></td>
+            <td>2</td>
+            <td>Healthy and fully operational. Actively heartbeating to Meta, serving read and write traffic, and running background jobs if elected leader.</td>
+            <td>Yes</td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td><strong>Draining</strong></td>
+            <td>3</td>
+            <td>Maintenance mode. No new writes are accepted. Existing in-flight requests are allowed to complete. Active connections drain over a configurable timeout (default 30s).</td>
+            <td>No</td>
+            <td>Yes (existing only)</td>
+          </tr>
+          <tr>
+            <td><strong>Inactive</strong></td>
+            <td>4</td>
+            <td>Node is dead or unreachable, detected when the Meta leader observes 3 consecutive missed heartbeats (15s with default 5s interval). Triggers the recovery manager.</td>
+            <td>No</td>
+            <td>No</td>
+          </tr>
+          <tr>
+            <td><strong>Retiring</strong></td>
+            <td>5</td>
+            <td>Scale-in in progress. The node is flushing its in-memory DataCache to object storage and its table ownership is being reassigned to other active nodes by the Meta leader.</td>
+            <td>No</td>
+            <td>Yes (read-only)</td>
+          </tr>
+          <tr>
+            <td><strong>Drained</strong></td>
+            <td>6</td>
+            <td>Scale-in complete. All cached data has been flushed to S3 and all table ownership has been transferred. The node can be safely terminated or decommissioned.</td>
+            <td>No</td>
+            <td>No</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- ================================================================== -->
+      <!-- Scale-Out (Adding Nodes)                                            -->
+      <!-- ================================================================== -->
+      <h2>Scale-Out (Adding Nodes)</h2>
+
+      <p>
+        Scaling out a MynaDB cluster is straightforward: start a new node with the correct configuration pointing to
+        the Meta cluster, and it will automatically register itself and begin serving traffic. No data migration is
+        needed because all nodes share the same object storage backend.
+      </p>
+
+      <h3>Adding Data Nodes</h3>
+
+      <p>
+        When a new data node starts, the following sequence occurs automatically:
+      </p>
+
+      <ol>
+        <li>The data node loads its configuration and connects to the Meta cluster via gRPC.</li>
+        <li>It calls <code>RegisterNode</code> on the Meta leader, providing its node ID, advertise address, HTTP port, Flight port, and capabilities.</li>
+        <li>The Meta leader persists the registration in the Raft log and transitions the node to <strong>Active</strong> state.</li>
+        <li>A <code>NodeRegistered</code> event is published to all subscribers (Routers, Admin consoles).</li>
+        <li>Each Router receives the event and updates its <code>ShardCache</code> to include the new node in the routing table.</li>
+        <li>New writes for tables not yet owned by any node may be routed to the new node (least-loaded selection).</li>
+        <li>The new node can immediately serve queries against historical data in shared object storage.</li>
+      </ol>
+
+      <p>
+        Configure and start a new data node:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># dev/configs/cluster-local/data3.toml
+[data]
+node_id = "data-3"
+http_port = 5200
+flight_port = 5201
+advertise_addr = "127.0.0.1:5201"
+meta_endpoints = ["127.0.0.1:6001", "127.0.0.1:6101", "127.0.0.1:6201"]
+
+[storage]
+backend = "local"
+data_dir = "./dev/data/cluster/data3"
+
+[cache]
+flush_interval_secs = 60
+max_size_mb = 1024
+
+[wal]
+enabled = true
+sync_on_write = false
+rotate_size_mb = 128</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Start the new data node
+./target/release/mynadb -c dev/configs/cluster-local/data3.toml data start
+
+# Verify registration (should show 3 data nodes)
+curl -s http://localhost:7000/cluster/nodes | jq '.nodes[] | {node_id, state, http_addr}'</code></pre>
+        </div>
+      </div>
+
+      <h3>Adding Router Nodes</h3>
+
+      <p>
+        Router nodes are completely stateless. They discover data nodes through the Meta cluster and maintain an
+        in-memory routing table (<code>ShardCache</code>) that is refreshed via Meta event subscriptions. Adding a
+        new Router requires no coordination with existing Routers.
+      </p>
+
+      <ol>
+        <li>Start the Router with Meta endpoints configured.</li>
+        <li>The Router connects to Meta and subscribes to cluster events.</li>
+        <li>It builds its <code>ShardCache</code> from the current node registry.</li>
+        <li>The Router is immediately ready to serve traffic on HTTP, Arrow Flight, and MySQL wire protocols.</li>
+        <li>Place the new Router behind your existing load balancer (HAProxy, NGINX, ALB, etc.).</li>
+      </ol>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># dev/configs/cluster/router2.toml
+[router]
+node_id = "router-2"
+http_port = 7010
+flight_port = 7011
+mysql_port = 7012
+
+[router.meta]
+endpoints = ["127.0.0.1:6001", "127.0.0.1:6101", "127.0.0.1:6201"]
+connect_timeout_ms = 5000
+request_timeout_ms = 30000
+
+[router.routing]
+cache_refresh_interval_ms = 1000
+data_node_pool_size = 10</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Start the second router
+./target/release/mynadb -c dev/configs/cluster/router2.toml router start
+
+# Add to HAProxy backend (example)
+# server router2 127.0.0.1:7010 check inter 5s fall 3 rise 2
+
+# Verify the new router can serve queries
+curl "http://localhost:7010/query/testdb" -d "SELECT * FROM cpu LIMIT 5"</code></pre>
+        </div>
+      </div>
+
+      <h3>Table Ownership Assignment</h3>
+
+      <p>
+        MynaDB uses a table-level ownership model to coordinate writes. When a write arrives for a table that is not
+        yet owned by any data node, the Router assigns ownership to the least-loaded active data node. The assignment
+        is recorded in the Meta cluster and maintained with a TTL-based lease.
+      </p>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
+  Table Ownership Assignment Flow
+  ================================
+
+  Client                     Router                    Meta                  Data Node
+    |                          |                         |                       |
+    |  POST /write/mydb        |                         |                       |
+    |  cpu,host=a value=1      |                         |                       |
+    |--------------------------&gt;|                         |                       |
+    |                          |                         |                       |
+    |                          |  LookupOwner("mydb",    |                       |
+    |                          |    "default", "cpu")     |                       |
+    |                          |------------------------&gt;|                       |
+    |                          |                         |                       |
+    |                          |  owner = None            |                       |
+    |                          |&lt;------------------------|                       |
+    |                          |                         |                       |
+    |                          |  RegisterTable("mydb",  |                       |
+    |                          |    "default", "cpu",    |                       |
+    |                          |    node_id="data-3",    |                       |
+    |                          |    ttl=600)             |                       |
+    |                          |------------------------&gt;|                       |
+    |                          |                         |  TableRegistered      |
+    |                          |                         |  event published      |
+    |                          |                         |                       |
+    |                          |  Forward write to       |                       |
+    |                          |  data-3                 |                       |
+    |                          |------------------------------------------------&gt;|
+    |                          |                         |                       |
+    |                          |                         |                  204 OK
+    |                          |&lt;------------------------------------------------|
+    |  204 OK                  |                         |                       |
+    |&lt;--------------------------|                         |                       |
+        </pre>
+      </div>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #f0fdf4, #dcfce7); border-left: 4px solid #22c55e; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>No data migration needed!</strong> Because all data lives in shared object storage (S3/MinIO/OSS),
+        any node can read historical data for any table regardless of ownership. Ownership only determines which node
+        accepts <em>writes</em> for a given table. Queries are distributed across all active nodes.
+      </div>
+
+      <!-- ================================================================== -->
+      <!-- Scale-In (Removing Nodes)                                           -->
+      <!-- ================================================================== -->
+      <h2>Scale-In (Removing Nodes)</h2>
+
+      <p>
+        Removing nodes from a MynaDB cluster requires careful orchestration to prevent data loss. The scale-in process
+        ensures that all in-memory data is flushed to object storage and all table ownership is transferred to
+        remaining nodes before a node is terminated. MynaDB provides both a planning (dry-run) API and an execution
+        API for safe scale-in operations.
+      </p>
+
+      <h3>Graceful Scale-In Process</h3>
+
+      <p>
+        A graceful scale-in operation proceeds through four distinct phases:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Phase</th>
+            <th>Action</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>1. Plan</strong></td>
+            <td>Determine target nodes</td>
+            <td>Select which data nodes to retire based on the chosen strategy (<code>least_loaded</code> or <code>most_idle</code>). Validate that enough active nodes remain to serve the cluster. A dry-run mode shows the plan without executing it.</td>
+          </tr>
+          <tr>
+            <td><strong>2. Migration</strong></td>
+            <td>Reassign table ownership</td>
+            <td>For each table owned by a retiring node, the Meta leader calls <code>ReassignTable</code> to transfer ownership to a healthy active node. Routers receive <code>TableReassigned</code> events and update their ShardCache.</td>
+          </tr>
+          <tr>
+            <td><strong>3. Draining</strong></td>
+            <td>Flush and drain</td>
+            <td>The retiring node is marked as <strong>Retiring</strong> (state 5). It stops accepting new writes, flushes its entire DataCache to object storage, completes any in-flight write operations, and publishes cache invalidation events for all flushed files.</td>
+          </tr>
+          <tr>
+            <td><strong>4. Drained</strong></td>
+            <td>Safe to terminate</td>
+            <td>Once all data is flushed and all tables are reassigned, the node transitions to <strong>Drained</strong> (state 6). It can now be safely terminated, and its resources can be released.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
+  Graceful Scale-In Flow
+  =======================
+
+  Admin/Operator         Meta Leader          Retiring Node        Remaining Nodes       Router
+       |                      |                     |                     |                  |
+       |  POST scale-in/plan  |                     |                     |                  |
+       |  (dry_run: true)     |                     |                     |                  |
+       |---------------------&gt;|                     |                     |                  |
+       |  plan: retire data-2 |                     |                     |                  |
+       |&lt;---------------------|                     |                     |                  |
+       |                      |                     |                     |                  |
+       |  POST scale-in/      |                     |                     |                  |
+       |  execute-plan        |                     |                     |                  |
+       |---------------------&gt;|                     |                     |                  |
+       |                      |                     |                     |                  |
+       |                      |  ReassignTable      |                     |                  |
+       |                      |  (cpu -&gt; data-1)    |                     |                  |
+       |                      |--------------------------------------------&gt;|                  |
+       |                      |                     |                     |  TableReassigned |
+       |                      |------------------------------------------------------------&gt;|
+       |                      |                     |                     |                  |
+       |                      |  SetState(Retiring) |                     |                  |
+       |                      |--------------------&gt;|                     |                  |
+       |                      |                     |                     |                  |
+       |                      |                     |  flush DataCache    |                  |
+       |                      |                     |  to S3              |                  |
+       |                      |                     |--&gt; (writes parquet) |                  |
+       |                      |                     |                     |                  |
+       |                      |                     |  cache invalidation |                  |
+       |                      |                     |--------------------&gt;|                  |
+       |                      |                     |                     |                  |
+       |                      |  SetState(Drained)  |                     |                  |
+       |                      |&lt;--------------------|                     |                  |
+       |                      |                     |                     |                  |
+       |  scale-in complete   |                     |                     |                  |
+       |&lt;---------------------|                     |                     |                  |
+       |                      |                     |                     |                  |
+       |              (safe to terminate data-2)    |                     |                  |
+        </pre>
+      </div>
+
+      <h3>Scale-In API</h3>
+
+      <p>
+        The scale-in API is available on the Router (which forwards to the Meta leader). Always start with a dry-run
+        to review the plan before executing.
+      </p>
+
+      <h4>Step 1: Plan (Dry Run)</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Preview which nodes will be retired and which tables will be reassigned
+curl -s -X POST http://localhost:7000/cluster/scale-in/plan \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reduce_primaries": 2,
+    "strategy": "least_loaded",
+    "dry_run": true
+  }' | jq .</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">JSON Response</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>{
+  "plan": {
+    "nodes_to_retire": ["data-4", "data-5"],
+    "tables_to_reassign": [
+      {
+        "catalog": "mydb",
+        "schema": "default",
+        "table": "cpu",
+        "current_owner": "data-4",
+        "new_owner": "data-1"
+      },
+      {
+        "catalog": "mydb",
+        "schema": "default",
+        "table": "memory",
+        "current_owner": "data-4",
+        "new_owner": "data-2"
+      },
+      {
+        "catalog": "mydb",
+        "schema": "service_1",
+        "table": "disk",
+        "current_owner": "data-5",
+        "new_owner": "data-3"
+      }
+    ],
+    "remaining_active_nodes": 3,
+    "estimated_flush_size_mb": 512.4
+  },
+  "dry_run": true,
+  "strategy": "least_loaded"
+}</code></pre>
+        </div>
+      </div>
+
+      <p>
+        The <code>strategy</code> parameter determines how nodes are selected for retirement:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Strategy</th>
+            <th>Selection Criteria</th>
+            <th>Best For</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>least_loaded</code></td>
+            <td>Retires nodes with the fewest owned tables and smallest in-memory cache size</td>
+            <td>Minimizing flush time and reassignment overhead</td>
+          </tr>
+          <tr>
+            <td><code>most_idle</code></td>
+            <td>Retires nodes with the lowest recent write/query throughput</td>
+            <td>Cost optimization during low-traffic periods</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h4>Step 2: Execute</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Execute the scale-in plan (removes dry_run flag)
+curl -s -X POST http://localhost:7000/cluster/scale-in/execute-plan \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reduce_primaries": 2,
+    "strategy": "least_loaded"
+  }' | jq .</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">JSON Response</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>{
+  "status": "in_progress",
+  "nodes_retiring": ["data-4", "data-5"],
+  "tables_reassigned": 3,
+  "estimated_completion_secs": 45,
+  "tracking_id": "scale-in-2026-02-13T10:30:00Z"
+}</code></pre>
+        </div>
+      </div>
+
+      <h4>Step 3: Monitor Progress</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Check progress of an active scale-in operation
+curl -s http://localhost:7000/cluster/scale-in/status | jq .
+
+# Poll until all retiring nodes reach Drained state
+watch -n 5 'curl -s http://localhost:7000/cluster/nodes | \
+  jq ".nodes[] | select(.state == \"Retiring\" or .state == \"Drained\") | {node_id, state}"'</code></pre>
+        </div>
+      </div>
+
+      <h3>Table Reassignment</h3>
+
+      <p>
+        When a node is retiring, the Meta leader orchestrates the transfer of table ownership. This is the critical
+        path of the scale-in operation and proceeds as follows:
+      </p>
+
+      <ol>
+        <li>The Meta leader iterates over all tables owned by the retiring node.</li>
+        <li>For each table, it selects the best target node using a load-balancing heuristic (fewest owned tables, most available memory).</li>
+        <li><code>Meta.ReassignTable</code> atomically transfers ownership in the Raft log.</li>
+        <li>A <code>TableReassigned</code> event is published. All Routers update their <code>ShardCache</code>.</li>
+        <li>New writes for the reassigned table are immediately routed to the new owner.</li>
+        <li>The old (retiring) node flushes any remaining cached data for that table to object storage.</li>
+        <li>Once all tables are reassigned and flushed, the node transitions to <strong>Drained</strong>.</li>
+      </ol>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Manually reassign a single table (advanced usage)
+curl -s -X POST http://localhost:7000/cluster/reassign-table \
+  -H "Content-Type: application/json" \
+  -d '{
+    "catalog": "mydb",
+    "schema": "default",
+    "table": "cpu",
+    "from_node": "data-2",
+    "to_node": "data-1"
+  }' | jq .</code></pre>
+        </div>
+      </div>
+
+      <!-- ================================================================== -->
+      <!-- Failure Detection & Recovery                                        -->
+      <!-- ================================================================== -->
+      <h2>Failure Detection &amp; Recovery</h2>
+
+      <p>
+        MynaDB uses a heartbeat and lease-based system to detect node failures. When a data node becomes unreachable,
+        the Meta leader automatically triggers a recovery workflow that preserves data integrity and restores cluster
+        health without operator intervention.
+      </p>
+
+      <h3>Heartbeat &amp; Lease System</h3>
+
+      <p>
+        Every active data node sends a heartbeat to the Meta leader at a configurable interval (default: every 5
+        seconds). Each heartbeat renews the node's lease, which has a TTL of 15 seconds (3x the heartbeat interval).
+        If a node fails to heartbeat before its lease expires, the Meta leader marks it as <strong>Inactive</strong>.
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Parameter</th>
+            <th>Default</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>heartbeat_interval_secs</code></td>
+            <td>5</td>
+            <td>How often each data node sends a heartbeat to the Meta leader</td>
+          </tr>
+          <tr>
+            <td><code>lease_ttl_secs</code></td>
+            <td>15</td>
+            <td>Time after the last heartbeat before the lease expires (should be 3x heartbeat interval)</td>
+          </tr>
+          <tr>
+            <td><code>expire_check_interval_secs</code></td>
+            <td>5</td>
+            <td>How often the Meta leader scans for expired leases</td>
+          </tr>
+          <tr>
+            <td><code>max_missed_heartbeats</code></td>
+            <td>3</td>
+            <td>Number of missed heartbeats before a node is considered dead (informational; actual detection is lease-based)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Data node heartbeat configuration
+[data.heartbeat]
+interval_secs = 5           # Send heartbeat every 5 seconds
+lease_ttl_secs = 15         # Lease expires after 15 seconds of silence
+
+# Meta leader lease expiration settings
+[meta.leases]
+expire_check_interval_secs = 5
+recovery_delay_secs = 3     # Wait 3s after expiry before triggering recovery
+                            # (prevents false positives during brief network blips)</code></pre>
+        </div>
+      </div>
+
+      <h3>Crash Recovery Flow</h3>
+
+      <p>
+        When the Meta leader detects an expired lease, the following recovery sequence is triggered automatically:
+      </p>
+
+      <ol>
+        <li><strong>Lease expiration detected:</strong> The Meta leader's periodic <code>ExpireLeases</code> task discovers a stale lease for the failed node.</li>
+        <li><strong>Node marked Inactive:</strong> The Meta leader updates the node's state to <strong>Inactive</strong> (state 4) in the Raft log. A <code>NodeStateChanged</code> event is published.</li>
+        <li><strong>Recovery manager triggered:</strong> After the configurable <code>recovery_delay_secs</code> (default 3s), the recovery manager begins processing the failed node.</li>
+        <li><strong>Standby flush (if configured):</strong> If the failed node has a configured cold standby (backing standby), the standby node flushes its replicated DataCache to object storage, preserving any in-flight data that had not yet been flushed by the primary.</li>
+        <li><strong>Orphaned tables reassigned:</strong> All tables previously owned by the failed node are reassigned to healthy active nodes using the same load-balancing heuristic as scale-in.</li>
+        <li><strong>Router notification:</strong> Routers receive <code>NodeStateChanged</code> and <code>TableReassigned</code> events, updating their <code>ShardCache</code> to exclude the failed node and route writes to new owners.</li>
+        <li><strong>Writes automatically reroute:</strong> Subsequent writes for affected tables are transparently directed to the new owner nodes. Clients experience a brief latency spike but no errors (Routers retry on transient failures).</li>
+      </ol>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
+  Crash Recovery Timeline
+  ========================
+
+  Time (seconds)
+  0s        5s       10s       15s       18s       20s       25s
+  |---------|---------|---------|---------|---------|---------|
+  ^         ^         ^         ^         ^         ^
+  |         |         |         |         |         |
+  Node      Last      Missed    Lease     Recovery  Tables
+  crashes   heartbeat heartbeat expires   manager   reassigned;
+            received  #3        (Meta     triggers  writes
+                      detected  marks                rerouted
+                                Inactive)
+
+  |&lt;-- heartbeat_interval --&gt;|
+                      |&lt;-- lease_ttl (15s) --&gt;|
+                                        |&lt;-3s-&gt;|
+                                        delay    |&lt;-- ~5s --&gt;|
+                                                  recovery     traffic
+                                                  processing   restored
+
+  Total recovery time: ~20-25 seconds (worst case)
+        </pre>
+      </div>
+
+      <!-- ================================================================== -->
+      <!-- Cold Standby Replication                                            -->
+      <!-- ================================================================== -->
+      <h2>Cold Standby Replication</h2>
+
+      <p>
+        For workloads that require minimal data loss during node failures, MynaDB supports a cold standby replication
+        model. Each primary data node can have one standby node that asynchronously replicates the primary's in-memory
+        DataCache. If the primary fails, the standby can flush the replicated cache to object storage before table
+        ownership is reassigned, preserving data that had not yet been persisted.
+      </p>
+
+      <h4>Primary/Standby Model</h4>
+
+      <p>
+        Data nodes operate in one of two modes, determined by the <code>DataNodeMode</code> configuration:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Mode</th>
+            <th>Accepts Writes</th>
+            <th>Serves Queries</th>
+            <th>Replicates</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Primary</strong></td>
+            <td>Yes</td>
+            <td>Yes</td>
+            <td>Sends to Standby</td>
+            <td>The active write owner for assigned tables. Asynchronously replicates cached data to its configured standby node via Arrow Flight.</td>
+          </tr>
+          <tr>
+            <td><strong>Standby</strong></td>
+            <td>No (replication only)</td>
+            <td>Yes (read-only)</td>
+            <td>Receives from Primary</td>
+            <td>Maintains a replica of the primary's DataCache. Can serve read queries to offload the primary. Automatically flushes cache if the primary fails.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h4>Configuration</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Primary data node configuration (data1.toml)
+[data]
+node_id = "data-1"
+mode = "primary"
+http_port = 5000
+flight_port = 5001
+advertise_addr = "10.0.1.10:5001"
+meta_endpoints = ["10.0.1.1:6001", "10.0.1.2:6001", "10.0.1.3:6001"]
+
+# Configure the standby that will receive replication data
+[data.replication]
+backing_standby = "data-1-standby"      # Node ID of the standby
+replication_mode = "async"               # "async" (default) or "sync"
+batch_size = 1000                        # Records per replication batch
+max_lag_secs = 30                        # Alert if standby falls behind</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Standby data node configuration (data1-standby.toml)
+[data]
+node_id = "data-1-standby"
+mode = "standby"
+http_port = 5010
+flight_port = 5011
+advertise_addr = "10.0.1.11:5011"
+meta_endpoints = ["10.0.1.1:6001", "10.0.1.2:6001", "10.0.1.3:6001"]
+
+# Configure the primary this standby replicates from
+[data.replication]
+replication_source = "data-1"            # Node ID of the primary
+flight_endpoint = "10.0.1.10:5001"       # Primary's Flight address for receiving data</code></pre>
+        </div>
+      </div>
+
+      <h4>Write Replication Flow</h4>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
+  Write Replication Flow (Async Mode)
+  ====================================
+
+  Client         Router          Primary (data-1)      Standby (data-1-standby)    S3
+    |               |                  |                        |                    |
+    | POST /write   |                  |                        |                    |
+    |--------------&gt;|                  |                        |                    |
+    |               | forward write    |                        |                    |
+    |               |-----------------&gt;|                        |                    |
+    |               |                  |                        |                    |
+    |               |                  | 1. Write to WAL        |                    |
+    |               |                  | 2. Buffer in DataCache |                    |
+    |               |                  | 3. Return 204          |                    |
+    |               |&lt;-----------------|                        |                    |
+    | 204 OK        |                  |                        |                    |
+    |&lt;--------------|                  |                        |                    |
+    |               |                  |                        |                    |
+    |               |                  | (async, batched)       |                    |
+    |               |                  | Replicate via Flight   |                    |
+    |               |                  |-----------------------&gt;|                    |
+    |               |                  |                        | Buffer in local    |
+    |               |                  |                        | DataCache replica  |
+    |               |                  |                        |                    |
+    |               |                  | (periodic flush)       |                    |
+    |               |                  |---------------------------------------------&gt;|
+    |               |                  | Flush to Parquet on S3 |                    |
+    |               |                  |                        |                    |
+        </pre>
+      </div>
+
+      <h4>Primary Failure with Standby</h4>
+
+      <p>
+        When a primary node with a configured standby fails, the recovery flow is enhanced:
+      </p>
+
+      <ol>
+        <li>Meta leader detects the primary's expired lease and marks it <strong>Inactive</strong>.</li>
+        <li>Recovery manager identifies the configured backing standby (<code>data-1-standby</code>).</li>
+        <li>The standby is instructed to flush its replicated DataCache to object storage. This preserves writes that the primary had accepted but not yet flushed.</li>
+        <li>After the standby flush completes, orphaned tables are reassigned to healthy primary nodes.</li>
+        <li>The standby resumes its standby role for whichever primary is assigned its tables (or can be promoted to primary if configured).</li>
+      </ol>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #fefce8, #fef9c3); border-left: 4px solid #eab308; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>Data loss window:</strong> In async replication mode, the standby may lag behind the primary by up to
+        <code>max_lag_secs</code> (default 30s). Writes accepted by the primary but not yet replicated to the standby
+        will be lost if the primary crashes. For zero data loss, use <code>replication_mode = "sync"</code> at the cost
+        of higher write latency.
+      </div>
+
+      <!-- ================================================================== -->
+      <!-- Table Ownership TTL                                                 -->
+      <!-- ================================================================== -->
+      <h2>Table Ownership TTL</h2>
+
+      <p>
+        Table ownership in MynaDB is maintained through a TTL (Time-To-Live) based lease mechanism. This design
+        prevents stale ownership records from persisting indefinitely when nodes crash or are removed without a
+        graceful scale-in. Active data nodes must periodically refresh their ownership leases to maintain write
+        access to their tables.
+      </p>
+
+      <h4>How TTL-Based Ownership Works</h4>
+
+      <ol>
+        <li>When a table is first assigned to a data node (via <code>RegisterTable</code>), an ownership record is created in the Meta Raft log with a default TTL of <strong>600 seconds (10 minutes)</strong>.</li>
+        <li>The owning data node calls <code>RefreshOwnerTTL</code> periodically (typically every 60 seconds) to reset the TTL timer.</li>
+        <li>If the owning node crashes or becomes unreachable, the TTL counts down. After 600 seconds without a refresh, the ownership record expires.</li>
+        <li>The Meta leader's periodic cleanup task detects expired ownership records and removes them.</li>
+        <li>The table becomes unowned and can be claimed by the next node that receives a write for it.</li>
+      </ol>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Ownership Lifecycle</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Ownership lifecycle for table "mydb.default.cpu"
+
+t=0s     RegisterTable(mydb, default, cpu, owner=data-1, ttl=600s)
+         ownership.expires_at = now + 600s
+
+t=60s    RefreshOwnerTTL(mydb, default, cpu, owner=data-1)
+         ownership.expires_at = now + 600s   # reset
+
+t=120s   RefreshOwnerTTL(mydb, default, cpu, owner=data-1)
+         ownership.expires_at = now + 600s   # reset
+
+t=180s   [data-1 crashes]
+         (no more RefreshOwnerTTL calls)
+
+t=195s   Meta detects expired lease, marks data-1 as Inactive
+         Recovery manager reassigns tables immediately
+         (does NOT wait for TTL expiry in crash recovery)
+
+# TTL expiry is a safety net for edge cases:
+# - Meta was temporarily partitioned and missed the crash
+# - Node was removed from cluster without graceful scale-in
+# - Stale ownership from a previous cluster incarnation
+
+t=780s   If not already cleaned up: TTL expires
+         Meta removes stale ownership record
+         Table becomes unowned, available for new assignment</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Table ownership TTL configuration
+[data.ownership]
+ttl_secs = 600                   # Ownership expires after 10 minutes without refresh
+refresh_interval_secs = 60       # Refresh every 60 seconds (should be &lt;&lt; ttl_secs)
+cleanup_interval_secs = 120      # Meta checks for expired ownership every 2 minutes</code></pre>
+        </div>
+      </div>
+
+      <!-- ================================================================== -->
+      <!-- Monitoring Cluster Health                                           -->
+      <!-- ================================================================== -->
+      <h2>Monitoring Cluster Health</h2>
+
+      <p>
+        Effective monitoring is essential for operating a scaled MynaDB cluster. MynaDB exposes health endpoints,
+        Prometheus metrics, and structured log events that provide visibility into node states, ownership
+        distribution, heartbeat status, and scaling operations.
+      </p>
+
+      <h3>Health Endpoints</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Basic health check (returns 200 if healthy, 503 if degraded)
+curl -s http://localhost:7000/health | jq .
+
+# Detailed cluster status (node count, leader info, coordinator state)
+curl -s http://localhost:7000/cluster/status | jq .
+
+# List all registered nodes with their states
+curl -s http://localhost:7000/cluster/nodes | jq .</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">JSON Response (/cluster/nodes)</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>{
+  "nodes": [
+    {
+      "node_id": "data-1",
+      "state": "Active",
+      "http_addr": "10.0.1.10:5000",
+      "flight_addr": "10.0.1.10:5001",
+      "mode": "primary",
+      "tables_owned": 12,
+      "cache_size_mb": 256.3,
+      "last_heartbeat": "2026-02-13T10:30:05Z",
+      "uptime_secs": 86400
+    },
+    {
+      "node_id": "data-2",
+      "state": "Active",
+      "http_addr": "10.0.1.20:5000",
+      "flight_addr": "10.0.1.20:5001",
+      "mode": "primary",
+      "tables_owned": 10,
+      "cache_size_mb": 198.7,
+      "last_heartbeat": "2026-02-13T10:30:04Z",
+      "uptime_secs": 86400
+    },
+    {
+      "node_id": "data-1-standby",
+      "state": "Active",
+      "http_addr": "10.0.1.11:5010",
+      "flight_addr": "10.0.1.11:5011",
+      "mode": "standby",
+      "replication_source": "data-1",
+      "replication_lag_secs": 2,
+      "last_heartbeat": "2026-02-13T10:30:03Z",
+      "uptime_secs": 86400
+    }
+  ],
+  "total": 3,
+  "healthy": 3,
+  "active": 2,
+  "standbys": 1
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Prometheus Metrics</h3>
+
+      <p>
+        The following Prometheus metrics are exposed at <code>/metrics</code> on every node and are particularly
+        useful for monitoring scaling operations and cluster health:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>mynadb_cluster_nodes_total</code></td>
+            <td>Gauge</td>
+            <td>Total number of registered nodes (all states)</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_nodes_healthy</code></td>
+            <td>Gauge</td>
+            <td>Number of nodes in Active state with a valid lease</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_nodes_by_state</code></td>
+            <td>Gauge (labeled)</td>
+            <td>Node count per state: <code>state="active|draining|retiring|inactive|drained"</code></td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_lock_acquisitions_total</code></td>
+            <td>Counter</td>
+            <td>Total number of distributed lock acquisitions (partition-level write locks)</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_lock_wait_seconds</code></td>
+            <td>Histogram</td>
+            <td>Time spent waiting to acquire distributed locks</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_heartbeat_latency_seconds</code></td>
+            <td>Histogram</td>
+            <td>Round-trip time for heartbeat RPCs from data nodes to Meta</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_tables_owned</code></td>
+            <td>Gauge</td>
+            <td>Number of tables owned by this node</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_replication_lag_seconds</code></td>
+            <td>Gauge</td>
+            <td>Standby replication lag behind primary (standby nodes only)</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_scale_in_operations_total</code></td>
+            <td>Counter</td>
+            <td>Total number of scale-in operations executed</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_table_reassignments_total</code></td>
+            <td>Counter</td>
+            <td>Total number of table ownership reassignments</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Grafana Alerting Rules</h3>
+
+      <p>
+        The following alerting rules are recommended for production deployments. Import them into Grafana or
+        configure them in your Prometheus alerting rules file:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">yaml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>groups:
+  - name: mynadb_cluster_health
+    interval: 15s
+    rules:
+      # Alert if any node has been inactive for more than 2 minutes
+      - alert: MynaDBNodeInactive
+        expr: mynadb_cluster_nodes_by_state{state="inactive"} > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MynaDB node is inactive"
+          description: "{{ $value }} node(s) have been in Inactive state for over 2 minutes. Check Meta logs for recovery status."
+
+      # Alert if healthy node count drops below minimum
+      - alert: MynaDBClusterDegraded
+        expr: mynadb_cluster_nodes_healthy < 2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MynaDB cluster has fewer than 2 healthy nodes"
+          description: "Only {{ $value }} healthy data node(s) remaining. Cluster may be unable to handle write load."
+
+      # Alert if heartbeat latency is elevated
+      - alert: MynaDBHeartbeatSlow
+        expr: histogram_quantile(0.99, rate(mynadb_cluster_heartbeat_latency_seconds_bucket[5m])) > 5
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MynaDB heartbeat latency is high"
+          description: "p99 heartbeat latency is {{ $value }}s. Network issues may cause false failure detection."
+
+      # Alert if standby replication lag exceeds threshold
+      - alert: MynaDBReplicationLag
+        expr: mynadb_cluster_replication_lag_seconds > 60
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MynaDB standby replication lag is high"
+          description: "Standby replication lag is {{ $value }}s. Data loss window in case of primary failure."
+
+      # Alert if a scale-in operation is stuck
+      - alert: MynaDBScaleInStuck
+        expr: mynadb_cluster_nodes_by_state{state="retiring"} > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MynaDB scale-in operation appears stuck"
+          description: "{{ $value }} node(s) have been in Retiring state for over 15 minutes. Check for flush errors."</code></pre>
+        </div>
+      </div>
+
+      <!-- ================================================================== -->
+      <!-- Best Practices                                                      -->
+      <!-- ================================================================== -->
+      <h2>Best Practices</h2>
+
+      <h3>Meta Cluster</h3>
+      <ul>
+        <li><strong>Always run 3 or 5 meta nodes.</strong> Raft requires a majority quorum (2 of 3, or 3 of 5) to function. An even number of meta nodes provides no benefit and wastes resources.</li>
+        <li><strong>Place meta nodes in different availability zones.</strong> Distribute meta nodes across at least 2 (ideally 3) AZs to survive a single AZ failure.</li>
+        <li><strong>Use dedicated instances for meta nodes.</strong> Meta nodes are lightweight but latency-sensitive. Co-locating them with data nodes can cause election timeouts under heavy write load.</li>
+      </ul>
+
+      <h3>Router Layer</h3>
+      <ul>
+        <li><strong>Use separate router and data nodes in production.</strong> While a "hybrid" node mode exists, separating concerns improves resource isolation and simplifies scaling.</li>
+        <li><strong>Place routers behind a load balancer.</strong> Use HAProxy, NGINX, or a cloud ALB. Configure health checks against <code>/health</code>.</li>
+        <li><strong>Scale routers independently of data nodes.</strong> Routers are stateless and can be scaled based on query/write request rate, while data nodes scale based on storage and compute needs.</li>
+      </ul>
+
+      <h3>Scaling Operations</h3>
+      <ul>
+        <li><strong>Always test scale-in with <code>dry_run: true</code> first.</strong> Review the plan output to understand which tables will be reassigned and estimate the flush duration.</li>
+        <li><strong>Scale in during low-traffic periods.</strong> While MynaDB handles scale-in gracefully, performing it during off-peak hours minimizes the impact on write latency during table reassignment.</li>
+        <li><strong>Monitor the scale-in progress.</strong> Watch the <code>/cluster/scale-in/status</code> endpoint and verify that nodes reach the <strong>Drained</strong> state before terminating them.</li>
+        <li><strong>Do not terminate nodes in Retiring state.</strong> Killing a node before it finishes flushing its DataCache will result in data loss for unflushed writes. Wait for the <strong>Drained</strong> state.</li>
+      </ul>
+
+      <h3>High Availability</h3>
+      <ul>
+        <li><strong>Keep standby nodes for critical workloads.</strong> Cold standby replication significantly reduces the data loss window during primary failures. The cost is one additional node per primary.</li>
+        <li><strong>Monitor heartbeat and lease metrics.</strong> Elevated heartbeat latency can indicate network issues that may lead to false failure detection. Tune <code>lease_ttl_secs</code> if you operate in a high-latency network environment.</li>
+        <li><strong>Maintain at least N+1 data nodes.</strong> Always have one more data node than strictly necessary so the cluster can absorb a node failure without becoming overloaded.</li>
+        <li><strong>Use <code>replication_mode = "sync"</code> for zero-RPO workloads.</strong> Synchronous replication guarantees zero data loss at the cost of higher write latency (the primary waits for the standby to acknowledge each batch).</li>
+      </ul>
+
+      <h3>Configuration Tuning</h3>
+      <ul>
+        <li><strong>Set <code>flush_interval_secs</code> based on acceptable data loss.</strong> A shorter interval means less data in the DataCache at any given time, reducing the flush duration during scale-in and the data loss window during crashes.</li>
+        <li><strong>Size <code>max_size_mb</code> to avoid OOM.</strong> The DataCache holds all writes between flushes. If the write rate exceeds the flush rate, the cache grows unbounded. Set a conservative limit and monitor <code>/memory</code>.</li>
+        <li><strong>Tune <code>ownership.ttl_secs</code> for your environment.</strong> In stable environments, the default 600s is fine. In environments with frequent scaling, consider reducing it to 300s for faster cleanup of stale ownership.</li>
+      </ul>
+
+      <div class="docs-nav">
+        <a href="cluster-architecture.html" class="docs-nav-prev">&larr; Cluster Architecture</a>
+        <a href="guides.html" class="docs-nav-next">Guides &rarr;</a>
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 MynaDB. The Voice of Your Machines.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Cluster Operations Guide - Detailed instructions for managing nodes, tables, scale-in, events, and cluster operations through the Admin Console">
+  <title>Cluster Operations Guide - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Ingestion &amp; Protocols</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Query &amp; Analytics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-guide.html">Admin Guide <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-operations.html" class="active">Cluster Operations <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
+          <li><a href="cluster-getting-started.html">Cluster Getting Started</a></li>
+          <li><a href="cluster-architecture.html">Cluster Architecture</a></li>
+          <li><a href="cluster-scaling.html">Cluster Scaling</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="testing.html">Testing</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <div class="docs-badge" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">
+        NEW IN v0.3.0
+      </div>
+
+      <h1>Cluster Operations Guide</h1>
+
+      <p class="lead">
+        Detailed instructions for managing your MynaDB cluster through the Admin Console.
+        This guide covers node management, table operations, scale-in workflows, event
+        monitoring, meta and data operations, debug tools, and settings.
+      </p>
+
+      <!-- ============================================================ -->
+      <h2 id="nodes-management">Nodes Management</h2>
+
+      <p>
+        The <strong>Nodes</strong> page (<code>/nodes</code>) displays all registered cluster
+        nodes in a card-based grid layout. Each card shows the node ID, advertise address,
+        and color-coded badges for role, state, and mode.
+      </p>
+
+      <h3>Filters</h3>
+
+      <p>
+        Use the filter bar at the top to narrow the node list:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Filter</th>
+            <th>Options</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Search</strong></td>
+            <td>Free text</td>
+            <td>Filter nodes by ID or address</td>
+          </tr>
+          <tr>
+            <td><strong>Role</strong></td>
+            <td>Meta, Router, Data, Compactor</td>
+            <td>Filter by the node's cluster role</td>
+          </tr>
+          <tr>
+            <td><strong>State</strong></td>
+            <td>Active, Inactive, Draining, Retiring, Drained</td>
+            <td>Filter by operational state</td>
+          </tr>
+          <tr>
+            <td><strong>Mode</strong></td>
+            <td>Primary, Standby</td>
+            <td>Filter by node mode (data nodes only)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Node Cards</h3>
+
+      <p>
+        Each node card displays:
+      </p>
+
+      <ul>
+        <li><strong>Node ID</strong> -- Unique identifier assigned at registration</li>
+        <li><strong>Advertise Address</strong> -- The host:port other nodes use to reach this node</li>
+        <li><strong>Role Badge</strong> -- Meta (blue), Router (green), Data (purple), Compactor (orange)</li>
+        <li><strong>State Badge</strong> -- Active (green), Inactive (gray), Draining (yellow), Retiring (orange), Drained (red)</li>
+        <li><strong>Mode Badge</strong> -- Primary or Standby (data nodes only)</li>
+        <li><strong>Zone</strong> -- Availability zone or rack assignment</li>
+        <li><strong>Tables Owned</strong> -- Number of tables assigned to this node</li>
+        <li><strong>Last Heartbeat</strong> -- Relative timestamp of the last health check</li>
+      </ul>
+
+      <p>
+        Click any node card to navigate to the <strong>Node Detail</strong> page.
+      </p>
+
+      <h3>Node Detail Page</h3>
+
+      <p>
+        The Node Detail page (<code>/nodes/:id</code>) provides full information about a
+        single node and management actions:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Action</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Flush Node</strong></td>
+            <td>Force the node to flush its in-memory write cache to Parquet files</td>
+          </tr>
+          <tr>
+            <td><strong>Compact Node</strong></td>
+            <td>Trigger compaction of all tables on this node</td>
+          </tr>
+          <tr>
+            <td><strong>Clear Node Cache</strong></td>
+            <td>Clear the node's metadata and query result caches</td>
+          </tr>
+          <tr>
+            <td><strong>Retire Node</strong></td>
+            <td>Begin retiring the node -- migrates tables to other nodes, then drains</td>
+          </tr>
+          <tr>
+            <td><strong>Cancel Retire</strong></td>
+            <td>Cancel an in-progress retirement (available during draining/retiring states)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        When a node is in a retiring or draining state, the detail page shows a progress
+        tracker with the number of tables migrated and remaining.
+      </p>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; Retire vs Remove</div>
+        <p>
+          Always use the Retire action instead of abruptly stopping a data node. Retiring
+          gracefully migrates table ownership to other healthy nodes before the node shuts
+          down, preventing data unavailability.
+        </p>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2 id="tables-management">Tables Management</h2>
+
+      <p>
+        The <strong>Tables</strong> page (<code>/tables</code>) lists all tables registered
+        in the cluster with key metadata and management actions.
+      </p>
+
+      <h3>Table List</h3>
+
+      <p>
+        The table list supports search, filtering by catalog and schema, and pagination
+        (20 tables per page). Each row displays:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Column</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Name</strong></td>
+            <td>Fully qualified name (<code>catalog.schema.table</code>)</td>
+          </tr>
+          <tr>
+            <td><strong>Size</strong></td>
+            <td>Total storage size across all partitions</td>
+          </tr>
+          <tr>
+            <td><strong>Rows</strong></td>
+            <td>Approximate total row count</td>
+          </tr>
+          <tr>
+            <td><strong>Partitions</strong></td>
+            <td>Number of date partitions</td>
+          </tr>
+          <tr>
+            <td><strong>Owner Node</strong></td>
+            <td>The primary data node responsible for this table (clickable link to node detail)</td>
+          </tr>
+          <tr>
+            <td><strong>Replica Count</strong></td>
+            <td>Number of replica copies across nodes</td>
+          </tr>
+          <tr>
+            <td><strong>Actions</strong></td>
+            <td>Reassign button to move the table to a different node</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Reassign Table</h3>
+
+      <p>
+        Click the <strong>Reassign</strong> button on any table row to open a dialog where
+        you can select a target data node. Table reassignment transfers ownership so that
+        the new node handles writes and compaction for that table.
+      </p>
+
+      <p>
+        Common reasons to reassign a table:
+      </p>
+
+      <ul>
+        <li><strong>Load balancing</strong> -- Move tables from overloaded nodes to less busy ones</li>
+        <li><strong>Maintenance</strong> -- Migrate tables off a node before performing maintenance</li>
+        <li><strong>Scaling</strong> -- Redistribute tables after adding new data nodes</li>
+        <li><strong>Recovery</strong> -- Re-home tables from a failed node to healthy nodes</li>
+      </ul>
+
+      <!-- ============================================================ -->
+      <h2 id="scale-in">Scale-In Operations</h2>
+
+      <p>
+        The <strong>Scale-In</strong> page (<code>/scale-in</code>) provides a guided
+        three-step wizard for gracefully reducing the number of data nodes in your cluster.
+      </p>
+
+      <h3>Step 1: Configure</h3>
+
+      <p>
+        In the configuration step, you specify:
+      </p>
+
+      <ul>
+        <li><strong>Node Count</strong> -- How many nodes to remove from the cluster</li>
+        <li><strong>Strategy</strong> -- The algorithm for selecting which nodes to retire:</li>
+      </ul>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Strategy</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Least Loaded</strong></td>
+            <td>Retire the nodes with the fewest tables (minimizes migration work)</td>
+          </tr>
+          <tr>
+            <td><strong>First In</strong></td>
+            <td>Retire the oldest nodes by registration time</td>
+          </tr>
+          <tr>
+            <td><strong>Last In</strong></td>
+            <td>Retire the most recently added nodes</td>
+          </tr>
+          <tr>
+            <td><strong>HA Unit</strong></td>
+            <td>Retire nodes from the same availability zone to maintain zone balance</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        Optionally, you can manually select specific node IDs instead of using an automatic
+        strategy. The wizard shows recommendations based on the current cluster state.
+      </p>
+
+      <h3>Step 2: Preview</h3>
+
+      <p>
+        After configuring, the wizard performs a <strong>dry-run</strong> and displays the
+        scale-in plan:
+      </p>
+
+      <ul>
+        <li><strong>Plan Summary</strong> -- Total nodes to retire, tables to migrate, estimated duration</li>
+        <li><strong>Nodes to Retire</strong> -- List of selected nodes with their current table counts</li>
+        <li><strong>Execution Phases</strong> -- Ordered list of migration steps showing which tables move where</li>
+      </ul>
+
+      <p>
+        Review the plan carefully before proceeding. You can go back to Step 1 to adjust
+        the configuration.
+      </p>
+
+      <h3>Step 3: Execute</h3>
+
+      <p>
+        Click <strong>Execute</strong> to begin the scale-in operation. The page shows
+        real-time progress:
+      </p>
+
+      <ul>
+        <li><strong>Progress Bar</strong> -- Overall completion percentage</li>
+        <li><strong>Phase Status</strong> -- Current phase and its status (pending, in-progress, completed)</li>
+        <li><strong>Per-Node Progress</strong> -- Tables migrated vs total for each retiring node</li>
+        <li><strong>Operation Status</strong> -- Running, Completed, or Failed with error details</li>
+      </ul>
+
+      <p>
+        You can <strong>Cancel</strong> a running scale-in operation. Cancellation stops
+        future migrations but does not roll back already-completed table moves.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Scale-In Best Practices</div>
+        <p>
+          Scale in one or two nodes at a time rather than many at once. This limits the
+          amount of in-flight table migration and reduces impact on query performance.
+          See <a href="cluster-scaling.html">Cluster Scaling</a> for architectural details.
+        </p>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2 id="events">Events Monitoring</h2>
+
+      <p>
+        The <strong>Events</strong> page (<code>/events</code>) displays a real-time stream
+        of cluster events delivered via WebSocket.
+      </p>
+
+      <h3>Real-Time Stream</h3>
+
+      <p>
+        Events appear as cards in reverse chronological order. Each event card shows:
+      </p>
+
+      <ul>
+        <li><strong>Timestamp</strong> -- Relative time (e.g., "2 minutes ago") with full ISO timestamp on hover</li>
+        <li><strong>Type Icon</strong> -- Color-coded icon indicating the event category</li>
+        <li><strong>Source</strong> -- The node or component that generated the event</li>
+        <li><strong>Severity</strong> -- Visual indicator for info, warning, or error events</li>
+        <li><strong>Details</strong> -- Event-specific data payload</li>
+      </ul>
+
+      <h3>Connection Status</h3>
+
+      <p>
+        A status indicator shows whether the WebSocket connection to the admin node is
+        active. If the connection drops, the page automatically attempts to reconnect.
+        Use <strong>Pause</strong> / <strong>Resume</strong> to temporarily stop the live
+        stream without disconnecting.
+      </p>
+
+      <h3>Filters</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Filter</th>
+            <th>Options</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Time Range</strong></td>
+            <td>All Time, Last 1 Hour, Last 24 Hours, Last 7 Days</td>
+          </tr>
+          <tr>
+            <td><strong>Event Type</strong></td>
+            <td>Select from the event types listed below</td>
+          </tr>
+          <tr>
+            <td><strong>Event Source</strong></td>
+            <td>Filter by originating node or component</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Event Types</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Event Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>NodeJoined</strong></td>
+            <td>A node registered with the meta service</td>
+          </tr>
+          <tr>
+            <td><strong>NodeLeft</strong></td>
+            <td>A node deregistered or timed out</td>
+          </tr>
+          <tr>
+            <td><strong>NodeStateChanged</strong></td>
+            <td>A node transitioned between states (Active, Retiring, Drained, etc.)</td>
+          </tr>
+          <tr>
+            <td><strong>LeaderChanged</strong></td>
+            <td>A new meta leader was elected</td>
+          </tr>
+          <tr>
+            <td><strong>TableReassigned</strong></td>
+            <td>A table's ownership was moved to a different node</td>
+          </tr>
+          <tr>
+            <td><strong>TableOwnerSet</strong></td>
+            <td>A table was assigned an owner for the first time</td>
+          </tr>
+          <tr>
+            <td><strong>TableOwnerRemoved</strong></td>
+            <td>A table's owner was removed (node failure or deregistration)</td>
+          </tr>
+          <tr>
+            <td><strong>CacheInvalidate</strong></td>
+            <td>A cache invalidation message was broadcast to data nodes</td>
+          </tr>
+          <tr>
+            <td><strong>SchemaChanged</strong></td>
+            <td>A table's schema was modified (new columns, type changes)</td>
+          </tr>
+          <tr>
+            <td><strong>FlushForRecovery</strong></td>
+            <td>A node was instructed to flush its cache for WAL recovery</td>
+          </tr>
+          <tr>
+            <td><strong>DistributionConfigChanged</strong></td>
+            <td>The table distribution configuration was updated</td>
+          </tr>
+          <tr>
+            <td><strong>TablesCacheRefresh</strong></td>
+            <td>The tables cache was refreshed on one or more nodes</td>
+          </tr>
+          <tr>
+            <td><strong>Unknown</strong></td>
+            <td>An unrecognized event type (forward compatibility)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Export</h3>
+
+      <p>
+        Use the export buttons to download the current event list:
+      </p>
+
+      <ul>
+        <li><strong>JSON</strong> -- Full event objects with all metadata</li>
+        <li><strong>CSV</strong> -- Tabular format for spreadsheet analysis</li>
+      </ul>
+
+      <p>
+        Enable <strong>Browser Notifications</strong> (bell icon) to receive desktop
+        alerts for important events like node failures or leader changes.
+      </p>
+
+      <!-- ============================================================ -->
+      <h2 id="meta-operations">Meta Operations</h2>
+
+      <p>
+        The <strong>Meta Operations</strong> page (<code>/meta-operations</code>) provides
+        visibility and control over the meta service cluster.
+      </p>
+
+      <h3>Meta Cluster Status</h3>
+
+      <p>
+        The status section displays:
+      </p>
+
+      <ul>
+        <li><strong>Cluster Health</strong> -- Healthy if a majority of meta peers are reachable</li>
+        <li><strong>Current Term</strong> -- The Raft consensus term number</li>
+        <li><strong>Commit Index</strong> -- Latest committed log entry index</li>
+        <li><strong>Meta Leader</strong> -- Node ID and address of the current leader</li>
+      </ul>
+
+      <h3>Meta Peers</h3>
+
+      <p>
+        A table lists all meta service instances with their addresses, roles (Leader/Follower),
+        and connectivity status.
+      </p>
+
+      <h3>Leader Elections</h3>
+
+      <p>
+        Two buttons allow you to manually trigger leader election actions:
+      </p>
+
+      <ul>
+        <li><strong>Campaign</strong> -- Force the current meta leader to start a new election</li>
+        <li><strong>Resign</strong> -- Ask the current leader to step down, triggering a new election</li>
+      </ul>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; Election Caution</div>
+        <p>
+          Manually triggering elections causes a brief disruption while a new leader is
+          elected. Only use these during maintenance windows or when troubleshooting
+          leadership issues.
+        </p>
+      </div>
+
+      <h3>Distribution Configuration</h3>
+
+      <p>
+        The distribution configuration controls how new tables are assigned to data nodes.
+        You can view and modify:
+      </p>
+
+      <ul>
+        <li><strong>Scope</strong> -- Apply distribution rules at the catalog, schema, or node level</li>
+        <li><strong>Replication Factor</strong> -- Number of replica copies for table data</li>
+        <li><strong>Placement Strategy</strong> -- Algorithm for choosing which nodes receive new tables</li>
+      </ul>
+
+      <!-- ============================================================ -->
+      <h2 id="data-operations">Data Operations</h2>
+
+      <p>
+        The <strong>Data Operations</strong> page (<code>/data-operations</code>) provides
+        bulk and per-node operations for all data nodes in the cluster.
+      </p>
+
+      <h3>Summary Cards</h3>
+
+      <p>
+        At the top, summary cards show the total number of data nodes, active nodes,
+        and the last operation status.
+      </p>
+
+      <h3>Bulk Operations</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Action</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Flush All</strong></td>
+            <td>Trigger a cache flush on all active data nodes simultaneously</td>
+          </tr>
+          <tr>
+            <td><strong>Compact All</strong></td>
+            <td>Trigger compaction on all active data nodes simultaneously</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Per-Node Operations</h3>
+
+      <p>
+        Below the bulk actions, a table lists each data node with individual action buttons:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Action</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Flush</strong></td>
+            <td>Flush the node's in-memory write cache to Parquet files on disk/object store</td>
+          </tr>
+          <tr>
+            <td><strong>Compact</strong></td>
+            <td>Run compaction on all tables owned by this node, merging small L0 files into larger L1/L2 files</td>
+          </tr>
+          <tr>
+            <td><strong>Clear Cache</strong></td>
+            <td>Clear the node's metadata cache and query result cache to free memory</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        Each action button shows a loading spinner while the operation is in progress.
+        State badges on each row indicate the node's current operational status.
+      </p>
+
+      <!-- ============================================================ -->
+      <h2 id="debug-tools">Debug Tools</h2>
+
+      <p>
+        The <strong>Debug Tools</strong> page (<code>/debug</code>) provides utilities for
+        testing, profiling, and cache management.
+      </p>
+
+      <h3>Test Data Generation</h3>
+
+      <p>
+        Generate sample time-series data for testing and demonstration. Configure:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Option</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Data Types</strong></td>
+            <td>CPU, Memory, Disk, Network metrics (select one or more)</td>
+          </tr>
+          <tr>
+            <td><strong>Database</strong></td>
+            <td>Target catalog name for the generated data</td>
+          </tr>
+          <tr>
+            <td><strong>Date Range</strong></td>
+            <td>Start and end dates for the generated time series</td>
+          </tr>
+          <tr>
+            <td><strong>Points</strong></td>
+            <td>Number of data points to generate per metric type</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        Click <strong>Generate</strong> to write the test data via the data node's write API.
+        The data is immediately queryable in the Query Console.
+      </p>
+
+      <h3>Profiling</h3>
+
+      <p>
+        Download profiling snapshots from the data nodes:
+      </p>
+
+      <ul>
+        <li><strong>Heap Profile</strong> -- Memory allocation snapshot showing what is consuming memory</li>
+        <li><strong>CPU Profile</strong> -- CPU usage profile for identifying hot code paths</li>
+      </ul>
+
+      <p>
+        Profiles are downloaded as files that can be analyzed with standard profiling tools
+        like <code>pprof</code> or flamegraph generators.
+      </p>
+
+      <h3>Cache Management</h3>
+
+      <ul>
+        <li><strong>Prewarm Cache</strong> -- Load metadata for a specific catalog into the data node's cache proactively, reducing first-query latency</li>
+        <li><strong>Clear All Caches</strong> -- Drop all cached metadata and query results across data nodes to free memory</li>
+      </ul>
+
+      <!-- ============================================================ -->
+      <h2 id="settings">Settings</h2>
+
+      <p>
+        The <strong>Settings</strong> page (<code>/settings</code>) displays the current
+        admin node configuration in a read-only view.
+      </p>
+
+      <h3>Information Displayed</h3>
+
+      <ul>
+        <li><strong>Admin Configuration</strong> -- HTTP host, port, meta endpoints</li>
+        <li><strong>Cluster Info</strong> -- Cluster ID, deployment mode</li>
+        <li><strong>Network</strong> -- Bind addresses and connectivity details</li>
+        <li><strong>Node Counts</strong> -- Summary of registered meta, router, and data nodes</li>
+      </ul>
+
+      <p>
+        Use the <strong>Refresh</strong> button to reload the configuration from the
+        admin node.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Configuration Changes</div>
+        <p>
+          The Settings page is read-only. To change the admin node configuration, edit the
+          TOML config file and restart the admin node. See
+          <a href="admin-guide.html#configuration">Admin Guide - Configuration</a> for
+          available options.
+        </p>
+      </div>
+
+      <div class="docs-nav">
+        <a href="admin-guide.html" class="docs-nav-prev">&larr; Admin Guide</a>
+        <a href="security.html" class="docs-nav-next">Authentication &amp; RBAC &rarr;</a>
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 MynaDB. The Voice of Your Machines.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

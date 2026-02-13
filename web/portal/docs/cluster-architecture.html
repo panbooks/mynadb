@@ -1,0 +1,1353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Cluster Architecture - Disaggregated architecture with Raft consensus, table-level routing, and shared object storage">
+  <title>Cluster Architecture - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Ingestion &amp; Protocols</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Query &amp; Analytics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-guide.html">Admin Guide <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-operations.html">Cluster Operations <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
+          <li><a href="cluster-getting-started.html">Cluster Getting Started</a></li>
+          <li><a href="cluster-architecture.html" class="active">Cluster Architecture</a></li>
+          <li><a href="cluster-scaling.html">Cluster Scaling</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="testing.html">Testing</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>Cluster Architecture</h1>
+
+      <p class="lead">
+        MynaDB uses a disaggregated architecture with four distinct node types: Meta nodes for Raft-based consensus
+        and metadata coordination, Router nodes for stateless request routing, Data nodes for storage and query
+        execution, and an optional Admin node for cluster management. Table-level routing keeps the metadata
+        footprint small while enabling horizontal scaling across hundreds of data nodes.
+      </p>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #eff6ff, #dbeafe); border-left: 4px solid #3b82f6; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>Prerequisites:</strong> This page assumes you have read the
+        <a href="cluster-getting-started.html">Cluster Getting Started</a> guide and have a running local cluster.
+        For production deployment guidance, see <a href="cluster-scaling.html">Cluster Scaling</a>.
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- Architecture Overview                                         -->
+      <!-- ============================================================ -->
+      <h2>Architecture Overview</h2>
+
+      <p>
+        The following diagram shows all four node types and their interactions. Clients connect through a load
+        balancer to Router nodes, which coordinate with Meta nodes for table ownership and route data operations
+        to the appropriate Data nodes. Data nodes persist Parquet files to shared object storage (S3, MinIO, or OSS).
+        The Admin node connects to Meta for discovery and forwards management requests to individual data nodes.
+      </p>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
+                                    Clients
+                  (InfluxDB Line Protocol / SQL / Arrow Flight / MySQL)
+                                       |
+                                       v
+                              +------------------+
+                              |  Load Balancer   |
+                              |  (HAProxy/Nginx) |
+                              +--------+---------+
+                                       |
+                  +--------------------+--------------------+
+                  |                    |                    |
+                  v                    v                    v
+          +---------------+    +---------------+    +---------------+
+          |  Router Node  |    |  Router Node  |    |  Router Node  |
+          |  HTTP  :7000  |    |  HTTP  :7010  |    |  HTTP  :7020  |
+          |  Flight:7001  |    |  Flight:7011  |    |  Flight:7021  |
+          |  MySQL :7002  |    |  MySQL :7012  |    |  MySQL :7022  |
+          |  [ShardCache] |    |  [ShardCache] |    |  [ShardCache] |
+          +-------+-------+    +-------+-------+    +-------+-------+
+                  |                    |                    |
+                  |  Arrow Flight DoPut/DoGet              |
+                  +--------------------+--------------------+
+                                       |
+                  +--------------------+--------------------+
+                  |                    |                    |
+                  v                    v                    v
+          +---------------+    +---------------+    +---------------+
+          |  Data Node 1  |    |  Data Node 2  |    |  Data Node N  |
+          |  Primary      |    |  Primary      |    |  Standby      |
+          |  [DataCache]  |    |  [DataCache]  |    |  [DataCache]  |
+          |  [WAL]        |    |  [WAL]        |    |  [read-only]  |
+          |  [QueryEngine]|    |  [QueryEngine]|    |  [QueryEngine]|
+          +-------+-------+    +-------+-------+    +-------+-------+
+                  |                    |                    |
+                  +--------------------+--------------------+
+                                       |
+                  +--------------------------------------------+
+                  |       SHARED OBJECT STORAGE                |
+                  |       (S3 / MinIO / Alibaba OSS)           |
+                  |                                            |
+                  |  {catalog}/{schema}/{table}/date=YYYY-MM-DD|
+                  |    /node_id={id}/L0_*.parquet              |
+                  +--------------------------------------------+
+
+  +-------------------+                         +-------------------+
+  |   Admin Node      | ---- Meta Discovery --> |   Meta Node 1     |
+  |   HTTP :18080     |                         |   (Raft Leader)   |
+  |   [Web Console]   |                         |   gRPC :6001      |
+  |   [Query Editor]  |                         |   [sled DB]       |
+  +-------------------+                         +--------+----------+
+          |                                              |
+          | HTTP forwarding                    Raft Log Replication
+          | to Data Nodes                              |
+          v                                   +--------+----------+
+  +-------------------+                       |                   |
+  |  Data Node APIs   |               +-------+------+    +-------+------+
+  |  /query, /tables  |               | Meta Node 2  |    | Meta Node 3  |
+  |  /schema, /stats  |               | (Follower)   |    | (Follower)   |
+  +-------------------+               | gRPC :6101   |    | gRPC :6201   |
+                                      | [sled DB]    |    | [sled DB]    |
+                                      +--------------+    +--------------+
+
+  Router &lt;------ Event Stream (NodeRegistered, TableOwnershipChanged) ------- Meta
+  Router ------&gt; MetaCommand (RegisterTable, AcquireLock, Heartbeat) ------&gt; Meta
+        </pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- Meta Nodes (Raft Consensus)                                   -->
+      <!-- ============================================================ -->
+      <h2>Meta Nodes (Raft Consensus)</h2>
+
+      <p>
+        Meta nodes form the coordination backbone of the cluster. They maintain a strongly consistent,
+        replicated metadata store using the Raft consensus protocol. Every piece of cluster state &mdash;
+        node registrations, table ownership, distributed locks, and leader elections &mdash; is replicated
+        across all Meta nodes via Raft log entries.
+      </p>
+
+      <ul>
+        <li><strong>Technology:</strong> OpenRaft 0.9 with sled embedded key-value database for persistent storage</li>
+        <li><strong>Deployment:</strong> Always deploy an odd number of Meta nodes (3 or 5) to maintain Raft quorum</li>
+        <li><strong>Fault tolerance:</strong> A cluster of <em>N</em> Meta nodes can tolerate <code>&lfloor;N/2&rfloor;</code> simultaneous failures (e.g., 3 nodes tolerate 1 failure, 5 nodes tolerate 2)</li>
+        <li><strong>Consistency:</strong> All writes go through the Raft leader; reads can be served by any node (with optional linearizable reads via ReadIndex)</li>
+      </ul>
+
+      <h3>Raft Configuration</h3>
+
+      <p>
+        The Raft parameters control leader election timing and log compaction. These defaults are tuned for
+        low-latency local networks. For cross-datacenter deployments, increase the election timeouts proportionally
+        to the round-trip time between Meta nodes.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>[meta.raft]
+heartbeat_interval_ms = 150          # Leader sends heartbeats at this interval
+election_timeout_min_ms = 300        # Minimum election timeout (randomized)
+election_timeout_max_ms = 500        # Maximum election timeout (randomized)
+snapshot_threshold = 10000           # Compact Raft log after this many entries
+max_payload_entries = 300            # Max entries per AppendEntries RPC
+replication_lag_threshold = 5000     # Warn if follower is this far behind
+
+# Derived timing:
+#   Heartbeat:         150ms
+#   Election timeout:  300-500ms (randomized per node)
+#   Failover time:     ~500-650ms (election timeout + 1 heartbeat)</code></pre>
+        </div>
+      </div>
+
+      <p>
+        The election timeout must be at least 2x the heartbeat interval to avoid spurious elections. The
+        randomized range (300-500ms) ensures that when a leader fails, followers do not all start elections
+        simultaneously, reducing the chance of split votes.
+      </p>
+
+      <h3>State Machine</h3>
+
+      <p>
+        The Raft state machine is backed by sled, an embedded key-value store that provides crash-safe
+        persistent storage. All cluster metadata is organized under well-defined key prefixes:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Key Prefix</th>
+            <th>Value Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/raft/vote</code></td>
+            <td>Vote</td>
+            <td>Current term and voted-for candidate (Raft protocol state)</td>
+          </tr>
+          <tr>
+            <td><code>/raft/log/{index}</code></td>
+            <td>LogEntry</td>
+            <td>Raft log entries indexed by log position; compacted after snapshot</td>
+          </tr>
+          <tr>
+            <td><code>/raft/snapshot</code></td>
+            <td>Snapshot</td>
+            <td>Serialized state machine snapshot for log compaction and new-node catch-up</td>
+          </tr>
+          <tr>
+            <td><code>/nodes/{node_id}</code></td>
+            <td>NodeInfo</td>
+            <td>Node registration: role, state, mode, addresses, lease expiry, capabilities</td>
+          </tr>
+          <tr>
+            <td><code>/tables/{catalog}/{schema}/{table}</code></td>
+            <td>TableMeta</td>
+            <td>Table ownership: owner nodes, partition count, total bytes, version counter</td>
+          </tr>
+          <tr>
+            <td><code>/locks/{key}</code></td>
+            <td>LockEntry</td>
+            <td>Distributed locks with TTL: holder node, acquired_at, expires_at</td>
+          </tr>
+          <tr>
+            <td><code>/events/{sequence}</code></td>
+            <td>ClusterEvent</td>
+            <td>Ordered event stream for cache invalidation and Router notification</td>
+          </tr>
+          <tr>
+            <td><code>/leader/campaign/{role}</code></td>
+            <td>LeaderEntry</td>
+            <td>Leader election for background tasks (compaction, retention) &mdash; separate from Raft leader</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>MetaCommand Types</h3>
+
+      <p>
+        All mutations to the Meta state machine are expressed as <code>MetaCommand</code> variants. These commands
+        are proposed to the Raft leader, replicated to a quorum of followers, and then applied to the state machine.
+        The following table lists every command type:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Command</th>
+            <th>Issued By</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>RegisterNode</code></td>
+            <td>Data / Router</td>
+            <td>Register a new node with its role, addresses, and capabilities. Creates a lease with TTL.</td>
+          </tr>
+          <tr>
+            <td><code>DeregisterNode</code></td>
+            <td>Admin / Node</td>
+            <td>Gracefully remove a node from the cluster. Triggers table reassignment if the node owned tables.</td>
+          </tr>
+          <tr>
+            <td><code>Heartbeat</code></td>
+            <td>Data / Router</td>
+            <td>Renew the node lease. Includes current load metrics (CPU, memory, open connections, table count).</td>
+          </tr>
+          <tr>
+            <td><code>UpdateNodeState</code></td>
+            <td>Admin / Node</td>
+            <td>Transition a node between states (Active, Draining, Retiring, etc.).</td>
+          </tr>
+          <tr>
+            <td><code>RegisterTable</code></td>
+            <td>Router / Data</td>
+            <td>Register a new table in the metadata catalog. Assigns initial ownership to the requesting data node.</td>
+          </tr>
+          <tr>
+            <td><code>AddTableOwner</code></td>
+            <td>Router</td>
+            <td>Add a secondary owner for a table (for standby replication or read scaling).</td>
+          </tr>
+          <tr>
+            <td><code>RefreshOwnerTTL</code></td>
+            <td>Data</td>
+            <td>Renew ownership TTL for a table. Prevents ownership from expiring during normal operation.</td>
+          </tr>
+          <tr>
+            <td><code>RemoveTableOwner</code></td>
+            <td>Router / Admin</td>
+            <td>Remove a node from a table's owner list (e.g., during node drain or manual reassignment).</td>
+          </tr>
+          <tr>
+            <td><code>ReassignTable</code></td>
+            <td>Meta (internal)</td>
+            <td>Move table ownership to a different data node. Triggered by node failure or load balancing.</td>
+          </tr>
+          <tr>
+            <td><code>AcquireLock</code></td>
+            <td>Data / Router</td>
+            <td>Acquire a distributed lock with a TTL. Used for compaction coordination and write serialization.</td>
+          </tr>
+          <tr>
+            <td><code>ReleaseLock</code></td>
+            <td>Data / Router</td>
+            <td>Release a previously acquired lock. Automatically released if the holder's lease expires.</td>
+          </tr>
+          <tr>
+            <td><code>Campaign</code></td>
+            <td>Data</td>
+            <td>Campaign for a named leader role (e.g., compaction leader). Only one node wins per role.</td>
+          </tr>
+          <tr>
+            <td><code>Publish</code></td>
+            <td>Data / Meta</td>
+            <td>Publish a cluster event to the event stream for Router cache updates and Admin notifications.</td>
+          </tr>
+          <tr>
+            <td><code>ExpireLeases</code></td>
+            <td>Meta (timer)</td>
+            <td>Periodic command that removes expired node leases and ownership entries. Runs on the Raft leader every 5 seconds.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Leader Election</h3>
+
+      <p>
+        Raft leader election in the Meta cluster is automatic and requires no manual intervention. When the current
+        leader becomes unavailable (crash, network partition, or graceful shutdown), the remaining followers detect
+        the absence of heartbeats and begin a new election.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Election Timeline</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>T=0ms     Leader sends last heartbeat
+T=150ms   Heartbeat interval passes, no new heartbeat
+T=300ms   Follower A's election timeout fires (randomized: 300-500ms)
+T=300ms   Follower A increments term, votes for self, sends RequestVote RPCs
+T=310ms   Follower B receives RequestVote, grants vote (has not voted this term)
+T=310ms   Follower A receives majority vote, becomes new leader
+T=320ms   New leader sends heartbeat to establish authority
+T=320ms   New leader begins accepting MetaCommand proposals
+
+Total failover time: ~320ms (best case) to ~650ms (worst case)</code></pre>
+        </div>
+      </div>
+
+      <p>
+        The Raft leader is responsible for all state machine mutations. In addition, certain background tasks
+        run exclusively on the Raft leader to avoid duplicate work:
+      </p>
+
+      <ul>
+        <li><strong>Lease expiration:</strong> The leader runs <code>ExpireLeases</code> every 5 seconds to clean up nodes that have stopped heartbeating</li>
+        <li><strong>Table reassignment:</strong> When a node's lease expires, the leader automatically reassigns its tables to healthy nodes</li>
+        <li><strong>Event stream pruning:</strong> Old events are removed to bound memory usage</li>
+      </ul>
+
+      <h3>Event Stream</h3>
+
+      <p>
+        The Meta cluster publishes an ordered stream of cluster events. Router nodes subscribe to this stream
+        to keep their local ShardCache up to date without polling. Events are assigned monotonically increasing
+        sequence numbers and are retained for a configurable duration (default: 5 minutes).
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Event Type</th>
+            <th>Triggered By</th>
+            <th>Consumer Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>NodeRegistered</code></td>
+            <td><code>RegisterNode</code></td>
+            <td>Router adds new data node to its connection pool</td>
+          </tr>
+          <tr>
+            <td><code>NodeStateChanged</code></td>
+            <td><code>UpdateNodeState</code>, lease expiry</td>
+            <td>Router marks node as draining or removes it from routing targets</td>
+          </tr>
+          <tr>
+            <td><code>TableOwnershipChanged</code></td>
+            <td><code>RegisterTable</code>, <code>ReassignTable</code>, <code>RemoveTableOwner</code></td>
+            <td>Router invalidates ShardCache entry for the affected table</td>
+          </tr>
+          <tr>
+            <td><code>LeaderChanged</code></td>
+            <td>Raft election, <code>Campaign</code></td>
+            <td>Admin UI updates leader indicator; data nodes check if they should run background tasks</td>
+          </tr>
+          <tr>
+            <td><code>LockAcquired</code></td>
+            <td><code>AcquireLock</code></td>
+            <td>Data nodes waiting for the same lock can back off immediately</td>
+          </tr>
+          <tr>
+            <td><code>LockReleased</code></td>
+            <td><code>ReleaseLock</code>, lease expiry</td>
+            <td>Data nodes waiting for the lock can attempt acquisition</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Event Subscription (Router)</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>// Router subscribes to the Meta event stream on startup.
+// The stream is a gRPC server-streaming RPC.
+//
+// MetaClient::subscribe_events(last_seen_seq) -> Stream&lt;ClusterEvent&gt;
+//
+// On reconnect, the Router sends its last_seen_seq so Meta can replay
+// missed events. If the gap is too large, Meta sends a full snapshot.
+
+let mut stream = meta_client.subscribe_events(last_seq).await?;
+while let Some(event) = stream.next().await {
+    match event.event_type {
+        EventType::TableOwnershipChanged =&gt; {
+            shard_cache.invalidate(&amp;event.table_key);
+        }
+        EventType::NodeStateChanged =&gt; {
+            connection_pool.update_node(&amp;event.node_id, event.new_state);
+        }
+        // ...
+    }
+    last_seq = event.sequence;
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- Router Nodes (Request Routing)                                -->
+      <!-- ============================================================ -->
+      <h2>Router Nodes (Request Routing)</h2>
+
+      <p>
+        Router nodes are the client-facing entry point for all data operations. They are completely stateless
+        &mdash; no data is stored locally, and any Router can handle any request. This makes them trivially
+        horizontally scalable behind a load balancer.
+      </p>
+
+      <ul>
+        <li><strong>Protocols:</strong> HTTP (InfluxDB line protocol writes, SQL queries), Apache Arrow Flight (high-throughput binary), MySQL wire protocol (BI tool compatibility)</li>
+        <li><strong>Routing:</strong> Table-level routing based on a local ShardCache that maps tables to owner data nodes</li>
+        <li><strong>Failover:</strong> Automatic retry to secondary owners on data node failure</li>
+        <li><strong>Connection pooling:</strong> Maintains persistent Arrow Flight connections to all data nodes</li>
+      </ul>
+
+      <h3>Table-Level Routing</h3>
+
+      <p>
+        MynaDB uses <strong>table-level routing</strong> rather than file-level or partition-level routing. This
+        is a deliberate design choice that balances routing overhead against granularity. The following table
+        compares the three approaches for a cluster with 100 databases, 100 tables per database, and 365 daily
+        partitions per table, with an average of 16 Parquet files per partition:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Routing Granularity</th>
+            <th>Routing Table Size</th>
+            <th>Metadata Overhead</th>
+            <th>Rebalancing Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>File-Level</td>
+            <td>~58,400,000 entries</td>
+            <td>Very High (~2.3 GB RAM)</td>
+            <td>Per-file migration</td>
+          </tr>
+          <tr>
+            <td>Partition-Level</td>
+            <td>~3,650,000 entries</td>
+            <td>High (~146 MB RAM)</td>
+            <td>Per-partition migration</td>
+          </tr>
+          <tr>
+            <td><strong>Table-Level (chosen)</strong></td>
+            <td><strong>~100,000 entries</strong></td>
+            <td><strong>Low (~4 MB RAM)</strong></td>
+            <td><strong>Per-table reassignment</strong></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        Table-level routing means that all partitions and files for a given table are owned by the same data node
+        (the primary owner). This dramatically simplifies write coordination &mdash; the Router only needs to know
+        which node owns the table, not which node owns each individual partition or file. The tradeoff is that
+        very large tables cannot be split across nodes; however, this is rarely a bottleneck because MynaDB's
+        schema strategy (ServiceAsSchema or ServiceAsTable) naturally distributes data across many tables.
+      </p>
+
+      <h3>ShardCache</h3>
+
+      <p>
+        The ShardCache is the Router's local, in-memory cache of table-to-node mappings. It is implemented as a
+        <code>DashMap</code> for lock-free concurrent reads and is automatically updated via the Meta event stream.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">ShardCache Structure</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>// Key: "catalog/schema/table" (e.g., "metrics/service_1/cpu")
+// Value: CachedTableMeta
+
+struct CachedTableMeta {
+    owner_node_id: String,              // Primary owner data node
+    secondary_owners: Vec&lt;String&gt;,      // Standby nodes for failover reads
+    version: u64,                       // Monotonic version from Meta
+    cached_at: Instant,                 // Local cache timestamp
+}
+
+// The ShardCache is a DashMap for concurrent access:
+//   DashMap&lt;String, CachedTableMeta&gt;
+//
+// Lookup: O(1) amortized
+// Memory: ~40 bytes per entry (key) + ~120 bytes per entry (value)
+// 100K tables: ~15.6 MB total</code></pre>
+        </div>
+      </div>
+
+      <p>
+        When a Meta event arrives indicating a table ownership change, the Router invalidates the affected
+        cache entry. On the next request for that table, the Router fetches the latest ownership from Meta
+        and populates the cache.
+      </p>
+
+      <h3>Write Routing Flow</h3>
+
+      <p>
+        When a client sends data via <code>POST /write/:db</code>, the Router parses the InfluxDB line protocol,
+        groups lines by table (measurement), and routes each group to the appropriate data node. The following
+        diagram illustrates the complete write routing flow:
+      </p>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
+  Client                  Router                    Meta                    Data Node
+    |                       |                        |                         |
+    |  POST /write/mydb     |                        |                         |
+    |  body: line protocol  |                        |                         |
+    |----------------------&gt;|                        |                         |
+    |                       |                        |                         |
+    |                [1] Parse line protocol          |                         |
+    |                    Extract measurement          |                         |
+    |                    (e.g., "cpu")                |                         |
+    |                       |                        |                         |
+    |                [2] Lookup "mydb/default/cpu"    |                         |
+    |                    in ShardCache               |                         |
+    |                       |                        |                         |
+    |              (cache hit)                       |                         |
+    |                       |                        |                         |
+    |                [4] Convert to RecordBatch       |                         |
+    |                    (Arrow columnar format)      |                         |
+    |                       |                        |                         |
+    |                       |  Arrow Flight DoPut    |                         |
+    |                       |---------------------------------------------&gt;   |
+    |                       |                        |                   [5] Insert into
+    |                       |                        |                       DataCache
+    |                       |                        |                   [6] Write to WAL
+    |                       |                        |                         |
+    |                       |          DoPut OK      |                         |
+    |                       |&lt;---------------------------------------------- |
+    |                       |                        |                         |
+    |    204 No Content     |                        |                         |
+    |&lt;----------------------|                        |                         |
+    |                       |                        |                         |
+
+  --- If cache miss (new table): ---
+
+    |                       |                        |                         |
+    |                [2] Lookup "mydb/default/cpu"    |                         |
+    |                    in ShardCache               |                         |
+    |                    (MISS)                      |                         |
+    |                       |                        |                         |
+    |                [3a] Select least-loaded         |                         |
+    |                     data node                  |                         |
+    |                       |                        |                         |
+    |                       |  RegisterTable         |                         |
+    |                       |  (mydb/default/cpu     |                         |
+    |                       |   owner=data-1)        |                         |
+    |                       |----------------------&gt; |                         |
+    |                       |                        |  (Raft replicate)       |
+    |                       |  OK (version=1)        |                         |
+    |                       |&lt;-----------------------|                         |
+    |                       |                        |                         |
+    |                [3b] Update ShardCache           |                         |
+    |                       |                        |                         |
+    |                [4] Convert to RecordBatch       |                         |
+    |                       | ...continues as above...|                        |
+        </pre>
+      </div>
+
+      <p>
+        If the DoPut to the primary owner fails (connection error, node unavailable), the Router automatically
+        retries the write to a secondary owner. If no secondary owners exist and the primary is unreachable,
+        the Router sends a <code>ReassignTable</code> command to Meta and retries after reassignment.
+      </p>
+
+      <h3>Query Coordination</h3>
+
+      <p>
+        Query routing is more complex than write routing because a single SQL query may reference multiple tables
+        owned by different data nodes. The Router implements a fan-out/fan-in pattern:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Query Routing Steps</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>1. PARSE       Parse the SQL query and extract all referenced table names
+               Example: "SELECT * FROM cpu JOIN memory ON cpu.host = memory.host"
+               Tables: ["cpu", "memory"]
+
+2. RESOLVE     For each table, look up the owner data node(s) in the ShardCache
+               cpu    -> data-1 (primary), data-3 (secondary)
+               memory -> data-2 (primary), data-1 (secondary)
+
+3. DETERMINE   Identify the set of unique data nodes that need to participate
+               Target nodes: {data-1, data-2}
+
+4. FAN-OUT     Send the full SQL query to each target node via Arrow Flight DoGet
+               (parallel, non-blocking)
+               data-1: executes locally, returns partial results for cpu + memory
+               data-2: executes locally, returns partial results for memory
+
+5. AGGREGATE   Receive RecordBatch streams from all nodes
+               Merge partial results (union, then re-apply ORDER BY / LIMIT)
+
+6. RETURN      Stream the final result back to the client
+               (Arrow Flight stream, JSON, or MySQL result set)</code></pre>
+        </div>
+      </div>
+
+      <p>
+        For queries that reference only a single table (the common case for time series workloads), the Router
+        simply forwards the query to the owner node and streams results back directly &mdash; no aggregation step
+        is needed.
+      </p>
+
+      <!-- ============================================================ -->
+      <!-- Data Nodes (Storage & Execution)                              -->
+      <!-- ============================================================ -->
+      <h2>Data Nodes (Storage &amp; Execution)</h2>
+
+      <p>
+        Data nodes are the workhorses of the cluster. They receive writes from Router nodes via Arrow Flight,
+        buffer data in memory, persist to shared object storage, and execute SQL queries using Apache DataFusion.
+        Each data node operates independently &mdash; there is no direct communication between data nodes.
+      </p>
+
+      <ul>
+        <li><strong>Primary mode:</strong> Accepts writes and serves queries for owned tables</li>
+        <li><strong>Standby mode:</strong> Read-only query execution for tables it backs up (no writes, no WAL)</li>
+        <li><strong>Background tasks:</strong> Compaction, retention, and cache flush (leader-elected tasks run on one node only)</li>
+      </ul>
+
+      <h3>Registration &amp; Heartbeat</h3>
+
+      <p>
+        When a data node starts, it registers with the Meta cluster by sending a <code>RegisterNode</code> command
+        with its capabilities and addresses. After registration, it heartbeats every 5 seconds to renew its lease.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Registration &amp; Heartbeat</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>// On startup:
+meta_client.register_node(NodeInfo {
+    node_id: "data-1",
+    role: Role::Data,
+    state: NodeState::Starting,
+    mode: NodeMode::Primary,
+    advertise_addr: "10.0.1.10:5001",
+    http_port: 5000,
+    flight_port: 5001,
+    backing_standby: None,
+}).await?;
+
+// Transition to Active after initialization:
+meta_client.update_node_state("data-1", NodeState::Active).await?;
+
+// Heartbeat loop (every 5 seconds):
+loop {
+    meta_client.heartbeat(HeartbeatPayload {
+        node_id: "data-1",
+        cpu_usage: 0.45,
+        memory_usage_mb: 2048,
+        open_connections: 12,
+        owned_tables: 1500,
+    }).await?;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+}
+
+// Lease TTL: 15 seconds (3 missed heartbeats = node considered dead)
+// Meta will expire the node's lease and reassign its tables</code></pre>
+        </div>
+      </div>
+
+      <h3>Write Path</h3>
+
+      <p>
+        The data node write path mirrors the standalone MynaDB write path, with the addition of receiving data
+        via Arrow Flight instead of directly from HTTP clients:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Data Node Write Path</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>1. RECEIVE     Arrow Flight DoPut with RecordBatch from Router
+               (already parsed from line protocol by the Router)
+
+2. VALIDATE    Check that this node is the primary owner for the table
+               If not owner: return error, Router will re-route
+
+3. INSERT      Insert RecordBatch into DataCache (in-memory write buffer)
+               - Organized by catalog/schema/table/date partition
+               - Lock-free concurrent inserts via DashMap
+
+4. WAL         Append to Write-Ahead Log (if WAL enabled)
+               - WAL path: {data_dir}/wal/{catalog}/{schema}/{table}/
+               - Configurable sync_on_write (true=durable, false=faster)
+
+5. REGISTER    If this is a new table, send RegisterTable to Meta
+               (table not yet in Meta's catalog)
+
+6. RESPOND     Return success to Router (DoPut acknowledgment)
+
+7. FLUSH       Background task (every flush_interval_secs):
+               - Serialize DataCache partitions to Parquet format
+               - Upload to S3: {catalog}/{schema}/{table}/date={date}/
+                               node_id={id}/L0_{timestamp}.parquet
+               - Clear flushed data from DataCache
+               - Publish cache invalidation event via Meta</code></pre>
+        </div>
+      </div>
+
+      <h3>Query Execution</h3>
+
+      <p>
+        Data nodes execute SQL queries locally using Apache DataFusion. The query engine combines data from
+        two sources: the in-memory DataCache (hot, recently written data) and Parquet files on S3 (cold, flushed data).
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Data Node Query Execution</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>1. RECEIVE     Arrow Flight DoGet with SQL query from Router
+
+2. PARSE       Parse SQL via DataFusion's SQL parser
+               Extract table references, date range, predicates
+
+3. PLAN        Create logical plan via DataFusion
+               Register table providers:
+               - MemtableProvider (DataCache, in-memory hot data)
+               - ParquetProvider  (S3 Parquet files, cold data)
+               - UnionProvider    (combines both sources)
+
+4. OPTIMIZE    Apply optimization rules:
+               - Partition pruning (date range -> skip irrelevant partitions)
+               - Predicate pushdown (push filters to Parquet reader)
+               - Row group pruning (skip row groups via Parquet statistics)
+               - Projection pushdown (read only needed columns)
+
+5. EXECUTE     Execute physical plan via DataFusion ExecutionPipeline
+               - Parallel scan of Parquet files
+               - Stream merge of hot + cold data
+
+6. RETURN      Stream RecordBatch results back to Router via Arrow Flight</code></pre>
+        </div>
+      </div>
+
+      <h3>Storage Layout</h3>
+
+      <p>
+        On shared object storage (S3/MinIO/OSS), Parquet files are organized in a hierarchical directory
+        structure with date partitioning and node-level namespacing:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">S3 Storage Layout</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>{bucket}/
+  {catalog}/                              # Database name (e.g., "metrics")
+    {schema}/                             # Schema name (e.g., "service_1")
+      {table}/                            # Table/measurement (e.g., "cpu")
+        date=2026-02-13/                  # Date partition
+          node_id=data-1/                 # Node namespace (prevents conflicts)
+            L0_1739462400_0001.parquet    # Level 0 (recent flush)
+            L0_1739462460_0002.parquet    # Level 0 (another flush)
+          node_id=data-2/                 # Different node's files
+            L0_1739462400_0001.parquet
+        date=2026-02-12/
+          node_id=data-1/
+            L1_1739376000_0001.parquet    # Level 1 (compacted from L0)
+            L2_1739376000_0001.parquet    # Level 2 (compacted from L1)
+
+# File naming convention:
+#   L{level}_{timestamp}_{sequence}.parquet
+#
+# Level 0: Direct flush from DataCache (many small files)
+# Level 1: First compaction pass (fewer, larger files)
+# Level 2+: Higher compaction levels (fewest, largest files)</code></pre>
+        </div>
+      </div>
+
+      <p>
+        The <code>node_id=</code> prefix within each date partition prevents write conflicts when multiple
+        nodes own the same table (primary + standby). During queries, the DataFusion table provider scans
+        all <code>node_id=*/</code> subdirectories within the requested date partitions.
+      </p>
+
+      <h3>Compaction</h3>
+
+      <p>
+        Compaction merges small L0 Parquet files into larger, more query-efficient files at higher levels.
+        MynaDB uses an LSM-tree-inspired leveled compaction strategy:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Level</th>
+            <th>File Size (typical)</th>
+            <th>Source</th>
+            <th>Trigger</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>L0</td>
+            <td>1-10 MB</td>
+            <td>DataCache flush</td>
+            <td>Automatic (flush_interval_secs)</td>
+          </tr>
+          <tr>
+            <td>L1</td>
+            <td>50-100 MB</td>
+            <td>L0 compaction</td>
+            <td>When L0 file count exceeds <code>min_files</code> (default: 5)</td>
+          </tr>
+          <tr>
+            <td>L2</td>
+            <td>200-500 MB</td>
+            <td>L1 compaction</td>
+            <td>When L1 file count exceeds threshold</td>
+          </tr>
+          <tr>
+            <td>L3+</td>
+            <td>500 MB - 1 GB</td>
+            <td>L2+ compaction</td>
+            <td>Configurable up to <code>max_level</code> (default: 5)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        In a cluster, compaction is coordinated through Meta distributed locks to prevent two nodes from
+        compacting the same table partition simultaneously:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Distributed Compaction</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>// LSM compaction: Runs on the table's primary owner node
+// Lock key: "compaction/{catalog}/{schema}/{table}/{date}"
+
+let lock_key = format!("compaction/{}/{}/{}/{}", catalog, schema, table, date);
+let lock = meta_client.acquire_lock(&amp;lock_key, Duration::from_secs(300)).await?;
+
+// Perform compaction: merge L0 files into L1
+compact_partition(catalog, schema, table, date, Level::L0, Level::L1).await?;
+
+meta_client.release_lock(lock).await?;
+
+// Full compaction: Runs ONLY on the elected compaction leader
+// (one node in the entire cluster, elected via Campaign command)
+// This prevents excessive S3 API calls from parallel full compactions
+
+if is_compaction_leader {
+    for table in owned_tables {
+        full_compact(table).await?;
+    }
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- Admin Node                                                    -->
+      <!-- ============================================================ -->
+      <h2>Admin Node</h2>
+
+      <p>
+        The Admin node provides a web-based management console for monitoring and operating the cluster. It is
+        entirely optional and has no impact on the data path. The Admin node:
+      </p>
+
+      <ul>
+        <li>Connects to the Meta cluster for service discovery (discovers all Router and Data nodes)</li>
+        <li>Provides a web UI at <code>http://&lt;admin-host&gt;:18080</code> for cluster monitoring</li>
+        <li>Forwards query requests to individual data nodes via HTTP (not Arrow Flight)</li>
+        <li>Displays real-time node health, table ownership, and event history</li>
+        <li>Offers an interactive SQL query console with syntax highlighting and result visualization</li>
+        <li>Provides a storage browser for exploring Parquet files and partition metadata</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Admin API Endpoints</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>GET  /api/v1/nodes              # List all registered nodes with health status
+GET  /api/v1/nodes/:id          # Get details for a specific node
+GET  /api/v1/tables             # List all tables across the cluster
+GET  /api/v1/events             # Recent cluster events (paginated)
+POST /api/v1/query/:db          # Execute SQL on a specific data node
+GET  /api/v1/storage/catalogs   # Browse storage catalogs
+GET  /api/v1/storage/info       # Storage backend information</code></pre>
+        </div>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- Data Flow Diagrams                                            -->
+      <!-- ============================================================ -->
+      <h2>Data Flow Diagrams</h2>
+
+      <h3>Complete Write Path</h3>
+
+      <p>
+        The following diagram traces a single write request from the client all the way to persistent
+        storage on S3, including the background flush process:
+      </p>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
+  CLIENT                 ROUTER                  META                  DATA NODE               S3
+    |                      |                      |                      |                      |
+    | POST /write/mydb     |                      |                      |                      |
+    | cpu,host=a val=42.0  |                      |                      |                      |
+    |---------------------&gt;|                      |                      |                      |
+    |                      |                      |                      |                      |
+    |               [1] Parse line protocol        |                      |                      |
+    |                   table = "cpu"              |                      |                      |
+    |                      |                      |                      |                      |
+    |               [2] ShardCache lookup          |                      |                      |
+    |                   "mydb/default/cpu"         |                      |                      |
+    |                   -> owner: "data-1"         |                      |                      |
+    |                      |                      |                      |                      |
+    |               [3] Convert to RecordBatch     |                      |                      |
+    |                      |                      |                      |                      |
+    |                      |  Arrow Flight DoPut   |                      |                      |
+    |                      |-------------------------------------------&gt;|                      |
+    |                      |                      |                      |                      |
+    |                      |                      |               [4] Validate ownership        |
+    |                      |                      |               [5] Insert into DataCache     |
+    |                      |                      |               [6] Append to WAL             |
+    |                      |                      |                      |                      |
+    |                      |          DoPut OK     |                      |                      |
+    |                      |&lt;-------------------------------------------|                      |
+    |                      |                      |                      |                      |
+    |   204 No Content     |                      |                      |                      |
+    |&lt;---------------------|                      |                      |                      |
+    |                      |                      |                      |                      |
+    .                      .                      .                      .                      .
+    . (flush_interval_secs later, background)     .                      .                      .
+    .                      .                      .                      .                      .
+    |                      |                      |               [7] Serialize DataCache       |
+    |                      |                      |                   to Parquet format         |
+    |                      |                      |                      |                      |
+    |                      |                      |                      |  PUT L0_*.parquet    |
+    |                      |                      |                      |---------------------&gt;|
+    |                      |                      |                      |                      |
+    |                      |                      |                      |         200 OK       |
+    |                      |                      |                      |&lt;---------------------|
+    |                      |                      |                      |                      |
+    |                      |                      |  Publish event:      |                      |
+    |                      |                      |  CacheInvalidation   |                      |
+    |                      |                      |&lt;---------------------|                      |
+    |                      |                      |                      |                      |
+    |                      | Event: table updated |                      |                      |
+    |                      |&lt;---------------------|                      |                      |
+    |                      |                      |                      |                      |
+    |               [8] ShardCache: update         |                      |                      |
+    |                   version for table          |                      |                      |
+    |                      |                      |                      |                      |
+        </pre>
+      </div>
+
+      <h3>Complete Query Path</h3>
+
+      <p>
+        The following diagram shows a multi-table query that requires fan-out to two data nodes, aggregation
+        at the Router, and result streaming back to the client:
+      </p>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
+  CLIENT                 ROUTER                  DATA-1                DATA-2                  S3
+    |                      |                      |                      |                      |
+    | POST /query/mydb     |                      |                      |                      |
+    | SELECT cpu.host,     |                      |                      |                      |
+    |   cpu.value,         |                      |                      |                      |
+    |   mem.usage          |                      |                      |                      |
+    | FROM cpu             |                      |                      |                      |
+    | JOIN memory AS mem   |                      |                      |                      |
+    |   ON cpu.host =      |                      |                      |                      |
+    |      mem.host        |                      |                      |                      |
+    | WHERE date &gt;=       |                      |                      |                      |
+    |   '2026-02-10'       |                      |                      |                      |
+    |---------------------&gt;|                      |                      |                      |
+    |                      |                      |                      |                      |
+    |               [1] Parse SQL                  |                      |                      |
+    |                   Tables: [cpu, memory]      |                      |                      |
+    |                   Date range: &gt;= 2026-02-10 |                      |                      |
+    |                      |                      |                      |                      |
+    |               [2] ShardCache lookup          |                      |                      |
+    |                   cpu    -> data-1           |                      |                      |
+    |                   memory -> data-2           |                      |                      |
+    |                      |                      |                      |                      |
+    |               [3] Fan-out (parallel):        |                      |                      |
+    |                      |                      |                      |                      |
+    |                      |  DoGet: full SQL     |                      |                      |
+    |                      |---------------------&gt;|                      |                      |
+    |                      |                      |                      |                      |
+    |                      |  DoGet: full SQL     |                      |                      |
+    |                      |-------------------------------------------&gt;|                      |
+    |                      |                      |                      |                      |
+    |                      |               [4a] DataFusion plan          |                      |
+    |                      |                  Scan DataCache (hot)       |                      |
+    |                      |                      |  LIST partitions     |                      |
+    |                      |                      |---------------------&gt;|                      |
+    |                      |                      |  GET L1_*.parquet    |                      |
+    |                      |                      |---------------------&gt;|                      |
+    |                      |                      |                      |                      |
+    |                      |               [4b] DataFusion plan          |                      |
+    |                      |                      |               Scan DataCache (hot)          |
+    |                      |                      |                      |  LIST partitions     |
+    |                      |                      |                      |---------------------&gt;|
+    |                      |                      |                      |  GET L1_*.parquet    |
+    |                      |                      |                      |---------------------&gt;|
+    |                      |                      |                      |                      |
+    |                      |  RecordBatch stream  |                      |                      |
+    |                      |&lt;---------------------|                      |                      |
+    |                      |                      |                      |                      |
+    |                      |  RecordBatch stream  |                      |                      |
+    |                      |&lt;-------------------------------------------|                      |
+    |                      |                      |                      |                      |
+    |               [5] Aggregate partial results  |                      |                      |
+    |                   Merge streams              |                      |                      |
+    |                   Apply JOIN, ORDER BY       |                      |                      |
+    |                      |                      |                      |                      |
+    |  JSON result         |                      |                      |                      |
+    |  [{host, value,      |                      |                      |                      |
+    |    usage}, ...]      |                      |                      |                      |
+    |&lt;---------------------|                      |                      |                      |
+    |                      |                      |                      |                      |
+        </pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- Key Data Structures                                           -->
+      <!-- ============================================================ -->
+      <h2>Key Data Structures</h2>
+
+      <p>
+        The following data structures are the core building blocks of the cluster coordination layer. They are
+        serialized as JSON for Meta storage and gRPC transport.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">NodeInfo</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>struct NodeInfo {
+    node_id: String,                // Unique identifier (e.g., "data-1", "router-1")
+    role: NodeRole,                 // Data, Router, Admin
+    state: NodeState,               // Starting, Active, Draining, Inactive, Retiring, Drained
+    mode: NodeMode,                 // Primary (read-write) or Standby (read-only)
+    advertise_addr: String,         // Address other nodes use to reach this node
+    http_port: u16,                 // HTTP API port
+    flight_port: Option&lt;u16&gt;,      // Arrow Flight port (Data and Router only)
+    mysql_port: Option&lt;u16&gt;,       // MySQL wire protocol port (Router only)
+    backing_standby: Option&lt;String&gt;,// Node ID of the standby backing this primary
+    lease_expires_at: u64,          // Unix timestamp (ms) when the lease expires
+    registered_at: u64,             // Unix timestamp (ms) when the node first registered
+    last_heartbeat: u64,            // Unix timestamp (ms) of the most recent heartbeat
+    version: String,                // MynaDB version (e.g., "0.3.0")
+    capabilities: Vec&lt;String&gt;,     // ["write", "query", "compact", "flight", "mysql"]
+}</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">NodeState Enum</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>enum NodeState {
+    Starting,    // Node is initializing (loading WAL, warming caches)
+    Active,      // Node is fully operational and accepting requests
+    Draining,    // Node is finishing in-flight requests but not accepting new ones
+    Inactive,    // Node has stopped heartbeating (lease may still be valid)
+    Retiring,    // Node is being permanently removed; tables are being reassigned
+    Drained,     // Node has completed draining; safe to shut down
+}
+
+// State transitions:
+//   Starting -> Active          (initialization complete)
+//   Active -> Draining          (admin requests graceful shutdown)
+//   Active -> Inactive          (missed heartbeats, possible crash)
+//   Draining -> Drained         (all in-flight requests completed)
+//   Inactive -> Active          (node resumes heartbeating)
+//   Inactive -> Retiring        (admin decides to remove the node)
+//   Retiring -> Drained         (all tables reassigned)</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">TableMeta</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>struct TableMeta {
+    catalog: String,                       // Database name (e.g., "metrics")
+    schema: String,                        // Schema name (e.g., "service_1")
+    table: String,                         // Table/measurement (e.g., "cpu")
+    owner_node_ids: Vec&lt;TableOwnerEntry&gt;, // Ordered: primary first, then secondaries
+    partition_count: u64,                  // Number of date partitions
+    total_bytes: u64,                      // Total size across all partitions
+    created_at: u64,                       // Unix timestamp (ms) when table was registered
+    updated_at: u64,                       // Unix timestamp (ms) of last metadata change
+    version: u64,                          // Monotonically increasing version counter
+}
+
+struct TableOwnerEntry {
+    node_id: String,                       // Owning data node ID
+    role: OwnerRole,                       // Primary or Secondary
+    ttl_ms: u64,                           // Ownership TTL in milliseconds (default: 30000)
+    expires_at: u64,                       // Unix timestamp (ms) when ownership expires
+    assigned_at: u64,                      // Unix timestamp (ms) when ownership was assigned
+}
+
+enum OwnerRole {
+    Primary,     // Accepts writes and serves queries
+    Secondary,   // Read-only, serves queries as failover
+}</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">ClusterEvent</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>struct ClusterEvent {
+    sequence: u64,                  // Monotonically increasing sequence number
+    event_type: EventType,          // Type discriminator
+    timestamp: u64,                 // Unix timestamp (ms) when event was created
+    source_node: Option&lt;String&gt;,   // Node that triggered the event (if applicable)
+    payload: EventPayload,          // Event-specific data
+}
+
+enum EventType {
+    NodeRegistered,
+    NodeStateChanged,
+    TableOwnershipChanged,
+    LeaderChanged,
+    LockAcquired,
+    LockReleased,
+    CacheInvalidation,
+}
+
+// Example event payloads:
+//
+// NodeRegistered:
+//   { node_id: "data-3", role: "data", addr: "10.0.1.12:5001" }
+//
+// TableOwnershipChanged:
+//   { table_key: "metrics/service_1/cpu", old_owner: "data-1",
+//     new_owner: "data-2", reason: "node_failure" }
+//
+// CacheInvalidation:
+//   { table_key: "metrics/service_1/cpu", partition: "date=2026-02-13",
+//     files_added: ["L0_1739462400_0001.parquet"], reason: "flush" }</code></pre>
+        </div>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- Navigation                                                    -->
+      <!-- ============================================================ -->
+      <div class="docs-nav">
+        <a href="cluster-getting-started.html" class="docs-nav-prev">&larr; Cluster Getting Started</a>
+        <a href="cluster-scaling.html" class="docs-nav-next">Cluster Scaling &rarr;</a>
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 MynaDB. The Voice of Your Machines.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

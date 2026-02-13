@@ -1,0 +1,1027 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Cluster Getting Started - Deploy a multi-node MynaDB cluster from scratch with step-by-step instructions">
+  <title>Cluster Getting Started - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Ingestion &amp; Protocols</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Query &amp; Analytics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-guide.html">Admin Guide <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-operations.html">Cluster Operations <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
+          <li><a href="cluster-getting-started.html" class="active">Cluster Getting Started</a></li>
+          <li><a href="cluster-architecture.html">Cluster Architecture</a></li>
+          <li><a href="cluster-scaling.html">Cluster Scaling</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="testing.html">Testing</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>Cluster Getting Started</h1>
+
+      <p class="lead">
+        Get a fully functional MynaDB cluster running on your local machine in minutes. This guide walks you through
+        building the project from source, understanding the four node types, configuring each component, starting a
+        development cluster with a single command, and verifying that data flows correctly end-to-end.
+      </p>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #eff6ff, #dbeafe); border-left: 4px solid #3b82f6; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>Tip:</strong> If you are new to MynaDB clustering, start here. Once your local cluster is running,
+        move on to <a href="cluster-architecture.html">Cluster Architecture</a> for a deeper understanding and
+        <a href="cluster-scaling.html">Cluster Scaling</a> for production deployment guidance.
+      </div>
+
+      <!-- Prerequisites -->
+      <h2>Prerequisites</h2>
+
+      <p>Before you begin, make sure you have the following installed on your system:</p>
+
+      <h3>Build from Source</h3>
+
+      <p>MynaDB is written in Rust. You need a recent stable Rust toolchain to compile the project. Install it via <a href="https://rustup.rs" target="_blank">rustup.rs</a> if you do not already have it.</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Install Rust (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Clone and build
+git clone https://github.com/mynadb/mynadb.git
+cd mynadb
+cargo build --release</code></pre>
+        </div>
+      </div>
+
+      <p>The compiled binary will be located at <code>./target/release/mynadb</code>. All cluster node types (meta, router, data, admin) are served by this single binary with different configuration files and subcommands.</p>
+
+      <h3>Install goreman</h3>
+
+      <p><a href="https://github.com/mattn/goreman" target="_blank">goreman</a> is a process manager for Procfile-based applications. It starts all cluster processes with a single command and provides color-coded log output.</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Install via Go (requires Go toolchain)
+go install github.com/mattn/goreman@latest
+
+# Or download a prebuilt binary from the releases page
+# https://github.com/mattn/goreman/releases</code></pre>
+        </div>
+      </div>
+
+      <h3>MinIO (Optional)</h3>
+
+      <p>MinIO is only required if you want to test the cluster with S3-compatible shared object storage. The default local-storage cluster profile stores data on the local filesystem and does not need MinIO. If you want to test the S3 backend:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Run MinIO with Docker
+docker run -d --name minio \
+  -p 9000:9000 -p 9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin \
+  -e MINIO_ROOT_PASSWORD=minioadmin \
+  minio/minio server /data --console-address ":9001"
+
+# Create a bucket for MynaDB
+mc alias set local http://localhost:9000 minioadmin minioadmin
+mc mb local/mynadb</code></pre>
+        </div>
+      </div>
+
+      <!-- Understanding Node Types -->
+      <h2>Understanding Node Types</h2>
+
+      <p>A MynaDB cluster consists of four distinct node types, each with a dedicated responsibility. Understanding these roles is essential before deploying your first cluster.</p>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; margin: 1.5rem 0;">
+        <div class="feature-card" style="padding: 1.25rem; border: 1px solid #e2e8f0; border-radius: 0.75rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa); width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-bottom: 0.75rem;">&#9878;</div>
+          <h3 style="margin-top: 0;">Meta Nodes</h3>
+          <p>The brain of the cluster. Meta nodes form a <strong>Raft consensus group</strong> that stores all cluster metadata: node registrations, table schemas, partition assignments, and leader election state. They provide service discovery so routers and data nodes can find each other.</p>
+          <p><strong>Deploy:</strong> 3 or 5 nodes (odd number required for Raft quorum)<br>
+          <strong>Ports:</strong> HTTP 6000, gRPC 6001<br>
+          <strong>Stateful:</strong> Yes (Raft log + snapshots persisted to disk)</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem; border: 1px solid #e2e8f0; border-radius: 0.75rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #3b82f6, #60a5fa); width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-bottom: 0.75rem;">&#8644;</div>
+          <h3 style="margin-top: 0;">Router Nodes</h3>
+          <p>The gateway for all client connections. Routers are <strong>completely stateless</strong> and expose HTTP (InfluxDB line protocol + SQL), Apache Arrow Flight (gRPC), and MySQL wire protocol. They discover data nodes via meta and route writes to the correct data node, and coordinate distributed queries across multiple data nodes.</p>
+          <p><strong>Deploy:</strong> 1+ (load-balance with HAProxy or Nginx for HA)<br>
+          <strong>Ports:</strong> HTTP 7000, Flight 7001, MySQL 7002<br>
+          <strong>Stateful:</strong> No (can be killed and restarted freely)</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem; border: 1px solid #e2e8f0; border-radius: 0.75rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #10b981, #34d399); width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-bottom: 0.75rem;">&#128451;</div>
+          <h3 style="margin-top: 0;">Data Nodes</h3>
+          <p>The workhorses of the cluster. Data nodes <strong>store time series data</strong> in Parquet format, execute queries locally using Apache DataFusion, run background compaction jobs, and manage retention policies. Each data node registers with the meta cluster and receives write assignments based on partition ownership.</p>
+          <p><strong>Deploy:</strong> 2+ (scale horizontally for more throughput and storage)<br>
+          <strong>Ports:</strong> HTTP 5000, Flight 5001<br>
+          <strong>Stateful:</strong> Yes (Parquet files + WAL on local or shared storage)</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem; border: 1px solid #e2e8f0; border-radius: 0.75rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #f59e0b, #fbbf24); width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-bottom: 0.75rem;">&#128421;</div>
+          <h3 style="margin-top: 0;">Admin Node</h3>
+          <p>An <strong>optional web-based management console</strong> that provides a unified view of the entire cluster. The admin node connects to meta for node discovery and forwards API requests to individual data nodes. It offers a query console, storage browser, cluster monitoring dashboard, and event log.</p>
+          <p><strong>Deploy:</strong> 0 or 1 (optional, for operational convenience)<br>
+          <strong>Ports:</strong> HTTP 18080<br>
+          <strong>Stateful:</strong> No (all state is derived from meta + data nodes)</p>
+        </div>
+      </div>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Node Type</th>
+            <th>Role</th>
+            <th>Default Ports</th>
+            <th>Recommended Count</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Meta</strong></td>
+            <td>Raft consensus, metadata storage, service discovery, cluster coordination</td>
+            <td>HTTP: 6000, gRPC: 6001</td>
+            <td>3 (odd number required for Raft quorum)</td>
+          </tr>
+          <tr>
+            <td><strong>Router</strong></td>
+            <td>Stateless request routing, client-facing protocols (HTTP, Arrow Flight, MySQL wire)</td>
+            <td>HTTP: 7000, Flight: 7001, MySQL: 7002</td>
+            <td>1+ (load-balance for HA)</td>
+          </tr>
+          <tr>
+            <td><strong>Data</strong></td>
+            <td>Data storage, query execution, compaction, and background jobs</td>
+            <td>HTTP: 5000, Flight: 5001</td>
+            <td>2+ (scale horizontally)</td>
+          </tr>
+          <tr>
+            <td><strong>Admin</strong></td>
+            <td>Web-based management console for monitoring, queries, and cluster administration</td>
+            <td>HTTP: 18080</td>
+            <td>0&ndash;1 (optional)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #fef3c7, #fde68a); border-left: 4px solid #f59e0b; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>Startup order matters:</strong> Meta nodes must start first and complete Raft leader election before any other
+        node type can register. Router and data nodes connect to the meta cluster for service discovery, and the admin
+        node connects to meta for cluster-wide visibility.
+      </div>
+
+      <!-- Configuration -->
+      <h2>Configuration</h2>
+
+      <p>Each node type has its own TOML configuration file. Below are annotated examples for each node in a local development cluster. In production, you would adjust ports, addresses, and storage paths to match your infrastructure.</p>
+
+      <h3>Meta Node Configuration (meta1.toml)</h3>
+
+      <p>Meta nodes use Raft consensus to maintain a consistent, replicated metadata store. The <code>peers</code> list must include the gRPC addresses of all <em>other</em> meta nodes in the cluster (not the node's own address).</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml &mdash; dev/configs/cluster/meta1.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>[meta]
+node_id = 1                              # Unique integer ID for this meta node
+http_port = 6000                         # HTTP API for management and health checks
+bind_addr = "0.0.0.0:6001"              # gRPC listen address (Raft + client RPCs)
+advertise_addr = "127.0.0.1:6001"       # Address other nodes use to reach this node
+data_dir = "./dev/data/cluster/meta1"   # Persistent storage for Raft log and snapshots
+peers = ["127.0.0.1:6101", "127.0.0.1:6201"]  # gRPC addresses of OTHER meta nodes
+
+[meta.raft]
+heartbeat_interval_ms = 150              # Raft heartbeat frequency
+election_timeout_min_ms = 300            # Minimum election timeout
+election_timeout_max_ms = 500            # Maximum election timeout (randomized)
+snapshot_threshold = 10000               # Compact Raft log after this many entries</code></pre>
+        </div>
+      </div>
+
+      <p>For the second and third meta nodes, change <code>node_id</code>, ports, <code>data_dir</code>, and <code>peers</code> accordingly:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml &mdash; dev/configs/cluster/meta2.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>[meta]
+node_id = 2
+http_port = 6100
+bind_addr = "0.0.0.0:6101"
+advertise_addr = "127.0.0.1:6101"
+data_dir = "./dev/data/cluster/meta2"
+peers = ["127.0.0.1:6001", "127.0.0.1:6201"]
+
+[meta.raft]
+heartbeat_interval_ms = 150
+election_timeout_min_ms = 300
+election_timeout_max_ms = 500
+snapshot_threshold = 10000</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml &mdash; dev/configs/cluster/meta3.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>[meta]
+node_id = 3
+http_port = 6200
+bind_addr = "0.0.0.0:6201"
+advertise_addr = "127.0.0.1:6201"
+data_dir = "./dev/data/cluster/meta3"
+peers = ["127.0.0.1:6001", "127.0.0.1:6101"]
+
+[meta.raft]
+heartbeat_interval_ms = 150
+election_timeout_min_ms = 300
+election_timeout_max_ms = 500
+snapshot_threshold = 10000</code></pre>
+        </div>
+      </div>
+
+      <h3>Router Node Configuration (router1.toml)</h3>
+
+      <p>Routers are stateless and handle all client-facing protocols. They discover data nodes through the meta cluster and route write and query requests accordingly. You can run multiple routers behind a load balancer.</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml &mdash; dev/configs/cluster/router1.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>[router]
+node_id = "router-1"                    # Unique string ID for this router
+http_port = 7000                         # HTTP API (write/query endpoints)
+flight_port = 7001                       # Apache Arrow Flight gRPC port
+mysql_port = 7002                        # MySQL wire protocol port
+
+[router.meta]
+endpoints = [                            # All meta node gRPC addresses
+  "127.0.0.1:6001",
+  "127.0.0.1:6101",
+  "127.0.0.1:6201"
+]
+connect_timeout_ms = 5000               # Timeout for connecting to meta nodes
+request_timeout_ms = 30000              # Timeout for meta RPC requests
+
+[router.routing]
+cache_refresh_interval_ms = 1000        # How often to refresh the routing table
+data_node_pool_size = 10                # HTTP connection pool size per data node</code></pre>
+        </div>
+      </div>
+
+      <h3>Data Node Configuration (data1.toml)</h3>
+
+      <p>Data nodes store Parquet files, execute queries using Apache DataFusion, and run background jobs like compaction and retention. In local-storage mode, each node writes to a separate directory on the local filesystem. For production S3 deployments, all nodes share the same bucket.</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml &mdash; dev/configs/cluster-local/data1.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>[data]
+node_id = "data-1"                       # Unique string ID for this data node
+http_port = 5000                          # HTTP API for direct access and health checks
+advertise_addr = "127.0.0.1:5001"        # Address the router uses to reach this node
+meta_endpoints = [                        # All meta node gRPC addresses
+  "127.0.0.1:6001",
+  "127.0.0.1:6101",
+  "127.0.0.1:6201"
+]
+
+[storage]
+backend = "local"                         # Storage backend: "local", "s3", "minio", "oss"
+data_dir = "./dev/data/cluster/data1"    # Local data directory for Parquet files
+
+[cache]
+flush_interval_secs = 60                 # Flush write cache to Parquet every 60 seconds
+max_size_mb = 1024                       # Maximum in-memory write cache size
+
+[wal]
+enabled = true                            # Enable write-ahead log for durability
+sync_on_write = false                     # true = durable but slower, false = faster
+rotate_size_mb = 128                      # Rotate WAL file at this size
+
+[compaction]
+min_files = 5                             # Minimum L0 files before triggering compaction
+max_level = 5                             # Maximum compaction level
+max_concurrent_compactions = 4            # Parallel compaction jobs
+
+[retention]
+enabled = true                            # Enable automatic partition cleanup
+default_days = 7                          # Delete partitions older than N days
+interval_secs = 3600                      # Check every hour</code></pre>
+        </div>
+      </div>
+
+      <p>For the second data node, change <code>node_id</code>, <code>http_port</code>, <code>advertise_addr</code>, and <code>data_dir</code>:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml &mdash; dev/configs/cluster-local/data2.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>[data]
+node_id = "data-2"
+http_port = 5100
+advertise_addr = "127.0.0.1:5101"
+meta_endpoints = [
+  "127.0.0.1:6001",
+  "127.0.0.1:6101",
+  "127.0.0.1:6201"
+]
+
+[storage]
+backend = "local"
+data_dir = "./dev/data/cluster/data2"
+
+[cache]
+flush_interval_secs = 60
+max_size_mb = 1024
+
+[wal]
+enabled = true
+sync_on_write = false
+rotate_size_mb = 128
+
+[compaction]
+min_files = 5
+max_level = 5
+max_concurrent_compactions = 4
+
+[retention]
+enabled = true
+default_days = 7
+interval_secs = 3600</code></pre>
+        </div>
+      </div>
+
+      <h3>Admin Node Configuration (admin.toml)</h3>
+
+      <p>The admin node connects to the meta cluster to discover all other nodes and provides a web-based management interface with a query console, storage browser, and cluster dashboard.</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml &mdash; dev/configs/cluster/admin.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>[admin]
+enabled = true                           # Enable the admin console
+port = 18080                             # HTTP port for the web UI and API
+meta_endpoints = [                       # All meta node gRPC addresses
+  "127.0.0.1:6001",
+  "127.0.0.1:6101",
+  "127.0.0.1:6201"
+]</code></pre>
+        </div>
+      </div>
+
+      <!-- Starting a Local Cluster -->
+      <h2>Starting a Local Cluster</h2>
+
+      <h3>Quick Start with goreman</h3>
+
+      <p>The fastest way to start a complete cluster is with goreman using the included Procfile. This launches all node types with local-storage configuration (no MinIO required). The Procfile defines the startup order and delay between process groups:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Procfile &mdash; dev/Procfile.cluster-local</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Meta nodes start first (Raft consensus group)
+meta1: ./target/release/mynadb -c dev/configs/cluster/meta1.toml meta start
+meta2: ./target/release/mynadb -c dev/configs/cluster/meta2.toml meta start
+meta3: ./target/release/mynadb -c dev/configs/cluster/meta3.toml meta start
+
+# Router and data nodes start after 3s delay (meta must be ready)
+router1: sleep 3 && ./target/release/mynadb -c dev/configs/cluster/router1.toml router start
+data1: sleep 3 && ./target/release/mynadb -c dev/configs/cluster-local/data1.toml data start
+data2: sleep 3 && ./target/release/mynadb -c dev/configs/cluster-local/data2.toml data start
+
+# Admin starts after 5s delay (data nodes must be registered)
+admin: sleep 5 && ./target/release/mynadb -c dev/configs/cluster/admin.toml admin start</code></pre>
+        </div>
+      </div>
+
+      <p>Start the entire cluster with a single command:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>goreman -f dev/Procfile.cluster-local start</code></pre>
+        </div>
+      </div>
+
+      <h3>Startup Sequence</h3>
+
+      <p>Understanding the startup sequence helps with debugging. Here is what happens when the cluster boots:</p>
+
+      <ol>
+        <li><strong>Meta nodes start</strong> &mdash; All three meta nodes start simultaneously. They connect to each other via the <code>peers</code> list and begin the Raft leader election process. Within 300&ndash;500ms, one node is elected leader and begins accepting metadata writes.</li>
+        <li><strong>Router connects to meta</strong> (after ~3s) &mdash; The router connects to the meta cluster using the <code>endpoints</code> list. It fetches the routing table (which data nodes exist and which partitions they own) and starts accepting client connections on HTTP, Flight, and MySQL ports.</li>
+        <li><strong>Data nodes register with meta</strong> (after ~3s) &mdash; Each data node connects to the meta cluster, registers itself (advertising its HTTP and Flight addresses), and begins heartbeating. The meta leader updates the routing table so the router can discover the new data nodes.</li>
+        <li><strong>Admin discovers all nodes</strong> (after ~5s) &mdash; The admin node connects to meta, retrieves the full list of registered nodes, and starts the web UI. It periodically polls meta for changes and forwards requests to data nodes as needed.</li>
+      </ol>
+
+      <p>This single command starts the following processes:</p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Process</th>
+            <th>Description</th>
+            <th>Ports</th>
+            <th>Startup Delay</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>meta1</code></td>
+            <td>First meta node (initial Raft leader candidate)</td>
+            <td>HTTP: 6000, gRPC: 6001</td>
+            <td>Immediate</td>
+          </tr>
+          <tr>
+            <td><code>meta2</code></td>
+            <td>Second meta node</td>
+            <td>HTTP: 6100, gRPC: 6101</td>
+            <td>Immediate</td>
+          </tr>
+          <tr>
+            <td><code>meta3</code></td>
+            <td>Third meta node</td>
+            <td>HTTP: 6200, gRPC: 6201</td>
+            <td>Immediate</td>
+          </tr>
+          <tr>
+            <td><code>router1</code></td>
+            <td>Router node (client entry point)</td>
+            <td>HTTP: 7000, Flight: 7001, MySQL: 7002</td>
+            <td>3 seconds</td>
+          </tr>
+          <tr>
+            <td><code>data1</code></td>
+            <td>First data node</td>
+            <td>HTTP: 5000, Flight: 5001</td>
+            <td>3 seconds</td>
+          </tr>
+          <tr>
+            <td><code>data2</code></td>
+            <td>Second data node</td>
+            <td>HTTP: 5100, Flight: 5101</td>
+            <td>3 seconds</td>
+          </tr>
+          <tr>
+            <td><code>admin</code></td>
+            <td>Admin web console</td>
+            <td>HTTP: 18080</td>
+            <td>5 seconds</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>goreman handles process lifecycle and outputs color-coded logs to the terminal. Press <code>Ctrl+C</code> to stop all processes gracefully.</p>
+
+      <h3>Manual Start (Step by Step)</h3>
+
+      <p>If you prefer to start each node individually, or if you need to debug a specific node, follow these steps in order. Open a separate terminal for each command.</p>
+
+      <h4>Step 1: Start the Meta Nodes</h4>
+
+      <p>The three meta nodes form a Raft consensus group. They must all be started before other nodes can register. Start them in three separate terminals:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash &mdash; Terminal 1</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Meta node 1
+./target/release/mynadb -c dev/configs/cluster/meta1.toml meta start</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash &mdash; Terminal 2</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Meta node 2
+./target/release/mynadb -c dev/configs/cluster/meta2.toml meta start</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash &mdash; Terminal 3</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Meta node 3
+./target/release/mynadb -c dev/configs/cluster/meta3.toml meta start</code></pre>
+        </div>
+      </div>
+
+      <p>Wait approximately 3 seconds for the Raft leader election to complete. You will see a log message like <code>INFO raft: node 1 elected as leader for term 1</code> in one of the terminals.</p>
+
+      <h4>Step 2: Start the Router Node</h4>
+
+      <p>The router connects to the meta cluster for service discovery and begins accepting client requests on all three protocols.</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash &mdash; Terminal 4</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Router node
+./target/release/mynadb -c dev/configs/cluster/router1.toml router start</code></pre>
+        </div>
+      </div>
+
+      <h4>Step 3: Start the Data Nodes</h4>
+
+      <p>Data nodes register with the meta cluster and begin heartbeating. They are responsible for storing data, executing queries, and running compaction.</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash &mdash; Terminal 5</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Data node 1
+./target/release/mynadb -c dev/configs/cluster-local/data1.toml data start</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash &mdash; Terminal 6</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Data node 2
+./target/release/mynadb -c dev/configs/cluster-local/data2.toml data start</code></pre>
+        </div>
+      </div>
+
+      <h4>Step 4: Start the Admin Console (Optional)</h4>
+
+      <p>The admin console provides a web-based UI for cluster monitoring and management. Wait a couple of seconds after the data nodes start so they have time to register with meta.</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash &mdash; Terminal 7</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Admin console
+./target/release/mynadb -c dev/configs/cluster/admin.toml admin start</code></pre>
+        </div>
+      </div>
+
+      <!-- Verify the Cluster -->
+      <h2>Verify the Cluster</h2>
+
+      <p>Once all nodes are running, verify that the cluster is healthy and data flows correctly through the entire system.</p>
+
+      <h3>Check Cluster Health</h3>
+
+      <p>The router exposes a health endpoint that reports its connectivity to the meta cluster and data nodes:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Check cluster health via router
+curl http://localhost:7000/health</code></pre>
+        </div>
+      </div>
+
+      <p>Expected response:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">json</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>{
+  "status": "ok",
+  "version": "0.3.0",
+  "uptime_secs": 12
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>List Registered Nodes</h3>
+
+      <p>Use the admin API to see all nodes that have registered with the meta cluster:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># List all registered nodes via admin console API
+curl http://localhost:18080/api/v1/nodes</code></pre>
+        </div>
+      </div>
+
+      <p>Expected response (truncated):</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">json</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>{
+  "success": true,
+  "data": {
+    "nodes": [
+      {
+        "node_id": "data-1",
+        "role": "data",
+        "http_addr": "127.0.0.1:5000",
+        "status": "healthy"
+      },
+      {
+        "node_id": "data-2",
+        "role": "data",
+        "http_addr": "127.0.0.1:5100",
+        "status": "healthy"
+      }
+    ],
+    "count": 2
+  }
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Write Test Data</h3>
+
+      <p>Send time series data to the router using InfluxDB line protocol. The router will route the write to the appropriate data node:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Write a single point through the router
+curl -X POST http://localhost:7000/write/testdb \
+  -d "cpu,host=server1,region=us-east value=85.5"
+
+# Write multiple points at once
+curl -X POST http://localhost:7000/write/testdb \
+  -d "cpu,host=server1,region=us-east value=85.5
+cpu,host=server2,region=us-west value=72.3
+cpu,host=server3,region=eu-west value=91.0
+memory,host=server1,region=us-east used_percent=64.2
+memory,host=server2,region=us-west used_percent=48.7
+disk,host=server1,region=us-east used_gb=450,total_gb=1000"</code></pre>
+        </div>
+      </div>
+
+      <p>A successful write returns HTTP 204 No Content with an empty body.</p>
+
+      <h3>Query Data Back</h3>
+
+      <p>Query the data through the router using SQL. The router coordinates the query across all data nodes and merges the results:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Query all CPU metrics
+curl "http://localhost:7000/query/testdb" \
+  -d "SELECT * FROM cpu ORDER BY time DESC LIMIT 10"
+
+# Aggregate query
+curl "http://localhost:7000/query/testdb" \
+  -d "SELECT host, AVG(value) as avg_cpu FROM cpu GROUP BY host"
+
+# Use the EXPLAIN endpoint to inspect query plans
+curl "http://localhost:7000/explain/testdb?sql=SELECT+*+FROM+cpu+LIMIT+10"</code></pre>
+        </div>
+      </div>
+
+      <h3>Access the Admin Console</h3>
+
+      <p>Open your browser and navigate to <a href="http://localhost:18080" target="_blank"><code>http://localhost:18080</code></a> to access the admin web console. From there you can:</p>
+
+      <ul>
+        <li><strong>Dashboard</strong> &mdash; Monitor node health, write throughput, and query latency in real time</li>
+        <li><strong>Query Console</strong> &mdash; Execute SQL queries with autocomplete, syntax highlighting, and result visualization</li>
+        <li><strong>Storage Browser</strong> &mdash; Navigate the catalog/schema/table hierarchy, inspect Parquet files, and view partition details</li>
+        <li><strong>Cluster View</strong> &mdash; See all registered nodes, their roles, health status, and resource usage</li>
+        <li><strong>Events</strong> &mdash; View a timeline of cluster events (node joins, compactions, leader elections)</li>
+      </ul>
+
+      <!-- Port Reference -->
+      <h2>Port Reference</h2>
+
+      <p>The following table lists all default ports used by a local development cluster. When deploying to production, customize these in each node's configuration file.</p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Service</th>
+            <th>Port</th>
+            <th>Protocol</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>meta1 HTTP</td>
+            <td>6000</td>
+            <td>HTTP</td>
+            <td>Meta node 1 management API and health checks</td>
+          </tr>
+          <tr>
+            <td>meta1 gRPC</td>
+            <td>6001</td>
+            <td>gRPC</td>
+            <td>Meta node 1 Raft consensus and client RPCs</td>
+          </tr>
+          <tr>
+            <td>meta2 HTTP</td>
+            <td>6100</td>
+            <td>HTTP</td>
+            <td>Meta node 2 management API and health checks</td>
+          </tr>
+          <tr>
+            <td>meta2 gRPC</td>
+            <td>6101</td>
+            <td>gRPC</td>
+            <td>Meta node 2 Raft consensus and client RPCs</td>
+          </tr>
+          <tr>
+            <td>meta3 HTTP</td>
+            <td>6200</td>
+            <td>HTTP</td>
+            <td>Meta node 3 management API and health checks</td>
+          </tr>
+          <tr>
+            <td>meta3 gRPC</td>
+            <td>6201</td>
+            <td>gRPC</td>
+            <td>Meta node 3 Raft consensus and client RPCs</td>
+          </tr>
+          <tr>
+            <td>data1 HTTP</td>
+            <td>5000</td>
+            <td>HTTP</td>
+            <td>Data node 1 direct access and health checks</td>
+          </tr>
+          <tr>
+            <td>data1 Flight</td>
+            <td>5001</td>
+            <td>gRPC</td>
+            <td>Data node 1 Arrow Flight interface</td>
+          </tr>
+          <tr>
+            <td>data2 HTTP</td>
+            <td>5100</td>
+            <td>HTTP</td>
+            <td>Data node 2 direct access and health checks</td>
+          </tr>
+          <tr>
+            <td>data2 Flight</td>
+            <td>5101</td>
+            <td>gRPC</td>
+            <td>Data node 2 Arrow Flight interface</td>
+          </tr>
+          <tr>
+            <td>Router HTTP</td>
+            <td>7000</td>
+            <td>HTTP</td>
+            <td>Client write and query API (InfluxDB line protocol, SQL)</td>
+          </tr>
+          <tr>
+            <td>Router Flight</td>
+            <td>7001</td>
+            <td>gRPC</td>
+            <td>Apache Arrow Flight for high-throughput queries</td>
+          </tr>
+          <tr>
+            <td>Router MySQL</td>
+            <td>7002</td>
+            <td>MySQL wire</td>
+            <td>MySQL wire protocol for BI tool compatibility</td>
+          </tr>
+          <tr>
+            <td>Admin</td>
+            <td>18080</td>
+            <td>HTTP</td>
+            <td>Web-based management console and API</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #eff6ff, #dbeafe); border-left: 4px solid #3b82f6; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>Port conflicts:</strong> If any of these ports are already in use on your machine, update the corresponding
+        configuration file. Make sure to also update any <code>peers</code>, <code>endpoints</code>, or <code>advertise_addr</code>
+        references that point to the changed port.
+      </div>
+
+      <!-- Next Steps -->
+      <h2>Next Steps</h2>
+
+      <p>Now that your local cluster is running, explore these guides to deepen your understanding and prepare for production deployment:</p>
+
+      <div class="cards-grid">
+        <a href="cluster-architecture.html" class="card">
+          <div class="card-icon">&#127959;</div>
+          <h3>Cluster Architecture</h3>
+          <p>Deep dive into meta consensus, write coordination, partition locking, cache invalidation, and leader election internals.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="cluster-scaling.html" class="card">
+          <div class="card-icon">&#128200;</div>
+          <h3>Cluster Scaling</h3>
+          <p>Learn how to add and remove nodes, configure S3 shared storage, tune performance, and deploy to production with Kubernetes.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="monitoring.html" class="card">
+          <div class="card-icon">&#128202;</div>
+          <h3>Monitoring</h3>
+          <p>Set up Prometheus metrics, Grafana dashboards, and alerting for your MynaDB cluster in production.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="admin-console.html" class="card">
+          <div class="card-icon">&#128421;</div>
+          <h3>Admin Console</h3>
+          <p>Explore the web-based management UI for monitoring, querying, and administering your cluster.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+      </div>
+
+      <div class="docs-nav">
+        <a href="cluster.html" class="docs-nav-prev">&larr; Enterprise Cluster</a>
+        <a href="cluster-architecture.html" class="docs-nav-next">Cluster Architecture &rarr;</a>
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 MynaDB. The Voice of Your Machines.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

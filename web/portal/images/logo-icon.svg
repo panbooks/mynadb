@@ -1,54 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#0ea5e9"/>
-      <stop offset="100%" style="stop-color:#0284c7"/>
-    </linearGradient>
-    <linearGradient id="bird" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#1e293b"/>
-      <stop offset="100%" style="stop-color:#0f172a"/>
-    </linearGradient>
-  </defs>
-
-  <!-- Rounded square background -->
-  <rect x="4" y="4" width="120" height="120" rx="24" fill="url(#bg)"/>
-
-  <!-- Stylized Myna Bird silhouette -->
-  <g transform="translate(64, 68)">
-    <!-- Body -->
-    <path d="
-      M -25 8
-      C -35 -5, -30 -30, -10 -38
-      C 10 -45, 35 -35, 42 -15
-      C 48 0, 42 20, 30 30
-      C 15 42, -10 40, -25 30
-      C -32 22, -32 15, -25 8
-      Z
-    " fill="url(#bird)"/>
-
-    <!-- Head -->
-    <circle cx="-18" cy="-28" r="18" fill="url(#bird)"/>
-
-    <!-- Eye patch (myna characteristic) - orange/yellow -->
-    <ellipse cx="-22" cy="-30" rx="10" ry="8" fill="#f59e0b"/>
-
-    <!-- Eye -->
-    <circle cx="-22" cy="-30" r="5" fill="#0f172a"/>
-    <circle cx="-20" cy="-32" r="2" fill="#ffffff"/>
-
-    <!-- Beak -->
-    <path d="M -35 -26 L -48 -22 L -35 -20 Z" fill="#fb923c"/>
-
-    <!-- Sound wave - "Voice" -->
-    <path d="M -50 -22 Q -56 -22 -58 -16" stroke="#ffffff" stroke-width="2.5" fill="none" stroke-linecap="round" opacity="0.9"/>
-    <path d="M -52 -22 Q -60 -22 -64 -14" stroke="#ffffff" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.6"/>
-
-    <!-- Tail -->
-    <path d="M 35 20 L 52 35 L 45 25 L 55 30 L 40 18 Z" fill="url(#bird)"/>
-
-    <!-- Data dots -->
-    <circle cx="45" cy="-25" r="4" fill="#ffffff" opacity="0.9"/>
-    <circle cx="52" cy="-8" r="3" fill="#ffffff" opacity="0.7"/>
-    <circle cx="50" cy="8" r="2.5" fill="#ffffff" opacity="0.5"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <path d="M4 52C20 24 44 32 64 56c20-24 44-32 60-4" stroke="#5b8def" stroke-width="10" stroke-linecap="round"/>
+  <path d="M64 56l-16 52 16-16 16 16-16-52z" fill="#5b8def"/>
+  <path d="M64 56l0 36 16 16-16-52z" fill="#3d6fd1"/>
 </svg>

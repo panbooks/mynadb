@@ -96,6 +96,8 @@
           <li><a href="retention.html">Retention</a></li>
           <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
           <li><a href="admin-console.html" class="active">Admin Console <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-guide.html">Admin Guide <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-operations.html">Cluster Operations <span class="badge-new">NEW</span></a></li>
         </ul>
       </div>
 
@@ -111,6 +113,9 @@
         <ul class="sidebar-nav">
           <li><a href="high-availability.html">High Availability</a></li>
           <li><a href="cluster.html">Enterprise Cluster</a></li>
+          <li><a href="cluster-getting-started.html">Cluster Getting Started</a></li>
+          <li><a href="cluster-architecture.html">Cluster Architecture</a></li>
+          <li><a href="cluster-scaling.html">Cluster Scaling</a></li>
         </ul>
       </div>
 
@@ -560,9 +565,139 @@ open http://localhost:18080</code></pre>
         </div>
       </div>
 
+      <h2 id="events-monitoring">Events Monitoring</h2>
+
+      <p>
+        The Events page provides a real-time stream of cluster events delivered via WebSocket.
+        Monitor node joins, departures, leader elections, table reassignments, and more as
+        they happen. Filter events by type, time range, and source, and export them as JSON
+        or CSV for analysis.
+      </p>
+
+      <p>
+        For a complete list of all 13 event types and detailed usage instructions, see the
+        <a href="admin-operations.html#events">Events Monitoring</a> section in the
+        Cluster Operations Guide.
+      </p>
+
+      <h2 id="scale-in-operations">Scale-In Operations</h2>
+
+      <p>
+        The Scale-In page provides a guided three-step wizard for gracefully reducing the
+        number of data nodes in your cluster. Choose from strategies like Least Loaded, First In,
+        Last In, or HA Unit, preview the migration plan, and execute with real-time progress
+        tracking.
+      </p>
+
+      <p>
+        For the full walkthrough of the scale-in wizard, see the
+        <a href="admin-operations.html#scale-in">Scale-In Operations</a> section in the
+        Cluster Operations Guide.
+      </p>
+
+      <h2 id="debug-tools">Debug Tools</h2>
+
+      <p>
+        The Debug Tools page provides utilities for test data generation, CPU and heap
+        profiling, and cache management. Generate sample time-series metrics, download
+        profiling snapshots, or prewarm and clear caches across your data nodes.
+      </p>
+
+      <p>
+        For detailed instructions on each debug tool, see the
+        <a href="admin-operations.html#debug-tools">Debug Tools</a> section in the
+        Cluster Operations Guide.
+      </p>
+
+      <h2 id="navigation-reference">Navigation Reference</h2>
+
+      <p>
+        The Admin Console includes 12 pages accessible from the sidebar:
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Page</th>
+            <th>Path</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Dashboard</strong></td>
+            <td><code>/</code></td>
+            <td>Cluster health overview, node counts, and quick actions</td>
+          </tr>
+          <tr>
+            <td><strong>Query Console</strong></td>
+            <td><code>/query</code></td>
+            <td>Monaco SQL editor with execute, explain, and analyze</td>
+          </tr>
+          <tr>
+            <td><strong>Storage Browser</strong></td>
+            <td><code>/storage</code></td>
+            <td>Tree view of catalogs, schemas, tables, and Parquet files</td>
+          </tr>
+          <tr>
+            <td><strong>Nodes</strong></td>
+            <td><code>/nodes</code></td>
+            <td>Node list with role/state/mode filters and search</td>
+          </tr>
+          <tr>
+            <td><strong>Node Detail</strong></td>
+            <td><code>/nodes/:id</code></td>
+            <td>Individual node health, stats, and management actions</td>
+          </tr>
+          <tr>
+            <td><strong>Tables</strong></td>
+            <td><code>/tables</code></td>
+            <td>Table list with ownership, size, and reassignment</td>
+          </tr>
+          <tr>
+            <td><strong>Scale-In</strong></td>
+            <td><code>/scale-in</code></td>
+            <td>Multi-step wizard for graceful cluster scale-in</td>
+          </tr>
+          <tr>
+            <td><strong>Events</strong></td>
+            <td><code>/events</code></td>
+            <td>Real-time cluster event stream with filters and export</td>
+          </tr>
+          <tr>
+            <td><strong>Meta Operations</strong></td>
+            <td><code>/meta-operations</code></td>
+            <td>Meta cluster status, elections, distribution config</td>
+          </tr>
+          <tr>
+            <td><strong>Data Operations</strong></td>
+            <td><code>/data-operations</code></td>
+            <td>Bulk flush, compact, and cache operations across nodes</td>
+          </tr>
+          <tr>
+            <td><strong>Debug Tools</strong></td>
+            <td><code>/debug</code></td>
+            <td>Test data generation, profiling, and cache management</td>
+          </tr>
+          <tr>
+            <td><strong>Settings</strong></td>
+            <td><code>/settings</code></td>
+            <td>Admin node configuration and cluster info display</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Learn More</div>
+        <p>
+          For a getting started tour and key concepts, see the <a href="admin-guide.html">Admin Dashboard Guide</a>.
+          For detailed operational instructions, see the <a href="admin-operations.html">Cluster Operations Guide</a>.
+        </p>
+      </div>
+
       <div class="docs-nav">
         <a href="monitoring.html" class="docs-nav-prev">&larr; Monitoring</a>
-        <a href="security.html" class="docs-nav-next">Authentication &amp; RBAC &rarr;</a>
+        <a href="admin-guide.html" class="docs-nav-next">Admin Guide &rarr;</a>
       </div>
     </main>
   </div>

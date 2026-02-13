@@ -96,6 +96,8 @@
           <li><a href="retention.html">Retention</a></li>
           <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
           <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-guide.html">Admin Guide <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-operations.html">Cluster Operations <span class="badge-new">NEW</span></a></li>
         </ul>
       </div>
 
@@ -111,6 +113,9 @@
         <ul class="sidebar-nav">
           <li><a href="high-availability.html">High Availability</a></li>
           <li><a href="cluster.html" class="active">Enterprise Cluster</a></li>
+          <li><a href="cluster-getting-started.html">Cluster Getting Started</a></li>
+          <li><a href="cluster-architecture.html">Cluster Architecture</a></li>
+          <li><a href="cluster-scaling.html">Cluster Scaling</a></li>
         </ul>
       </div>
 
@@ -149,36 +154,50 @@
 
       <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
         <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
-                              Clients
-                                 │
-                                 ▼
-                         ┌─────────────┐
-                         │Load Balancer│
-                         │  (HAProxy)  │
-                         └──────┬──────┘
-                                │
-           ┌────────────────────┼────────────────────┐
-           │                    │                    │
-           ▼                    ▼                    ▼
-    ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
-    │   Node 1    │      │   Node 2    │      │   Node 3    │
-    │  (Compute)  │      │  (Compute)  │      │  (Compute)  │
-    │ + LocalCache│      │ + LocalCache│      │ + LocalCache│
-    └──────┬──────┘      └──────┬──────┘      └──────┬──────┘
-           │                    │                    │
-           └────────────────────┼────────────────────┘
-                                │
-                                ▼
-    ┌─────────────────────────────────────────────────────────┐
-    │                   SHARED OBJECT STORAGE                  │
-    │                    (S3 / MinIO / OSS)                    │
-    └─────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-    ┌─────────────────────────────────────────────────────────┐
-    │                  COORDINATION SERVICE                    │
-    │    etcd: Locks • Leader Election • Cache Invalidation   │
-    └─────────────────────────────────────────────────────────┘
+                            Clients (HTTP / Flight / MySQL)
+                                        │
+                                        ▼
+                              ┌───────────────────┐
+                              │   Load Balancer    │
+                              └─────────┬─────────┘
+                                        │
+              ┌─────────────────────────┼─────────────────────────┐
+              │                         │                         │
+              ▼                         ▼                         ▼
+     ┌────────────────┐      ┌────────────────┐      ┌────────────────┐
+     │  Router Node 1 │      │  Router Node 2 │      │  Router Node N │
+     │  HTTP:7000      │      │  (Stateless)   │      │  (Stateless)   │
+     │  Flight:7001    │      │  ShardCache    │      │  ShardCache    │
+     │  MySQL:7002     │      │  QueryCoord    │      │  QueryCoord    │
+     └──────┬─────────┘      └──────┬─────────┘      └──────┬─────────┘
+            │  Arrow Flight          │                        │
+            ├────────────────────────┼────────────────────────┘
+            │                        │
+            ▼                        ▼
+     ┌────────────────┐      ┌────────────────┐
+     │  Data Node 1   │      │  Data Node N   │      ┌────────────────┐
+     │  HTTP:5000      │      │  (Scaled-out)  │      │  Admin Console │
+     │  Flight:5001    │      │  DataCache     │      │  HTTP:18080    │
+     │  DataCache      │      │  WAL + Parquet │      │  Cluster Mgmt  │
+     │  WAL + Parquet  │      │  Compaction    │      │  SQL Editor    │
+     └──────┬─────────┘      └──────┬─────────┘      └──────┬─────────┘
+            │                        │                        │
+            └────────────┬───────────┘                        │
+                         ▼                                    │
+   ┌──────────────────────────────────────────────────┐       │
+   │          SHARED OBJECT STORAGE                    │       │
+   │            (S3 / MinIO / OSS)                     │       │
+   └──────────────────────────────────────────────────┘       │
+                                                              │
+   ┌──────────────────────────────────────────────────┐       │
+   │           META SERVICE (Raft Consensus)           │◄──────┘
+   │  ┌────────┐  ┌────────┐  ┌────────┐             │
+   │  │ Meta 1 │  │ Meta 2 │  │ Meta 3 │             │
+   │  │ Leader │  │Follower│  │Follower│             │
+   │  │ :6000  │  │ :6100  │  │ :6200  │             │
+   │  └────────┘  └────────┘  └────────┘             │
+   │  Metadata • Table Routing • Locks • Events       │
+   └──────────────────────────────────────────────────┘
         </pre>
       </div>
 
@@ -210,100 +229,90 @@
         </div>
       </div>
 
-      <h2>Cluster Components</h2>
+      <h2>Node Types</h2>
 
-      <h3>1. Coordinator (etcd)</h3>
-      <p>
-        The coordinator provides distributed primitives for cluster coordination:
-      </p>
-      <ul>
-        <li><strong>Distributed Locks:</strong> Partition-level locking for write coordination</li>
-        <li><strong>Leader Election:</strong> Single leader for background tasks (compaction)</li>
-        <li><strong>Pub/Sub:</strong> Real-time cache invalidation across nodes</li>
-        <li><strong>Service Discovery:</strong> Node registration and health tracking</li>
-      </ul>
-
-      <div class="code-block">
-        <div class="code-header">
-          <span class="lang">etcd Key Structure</span>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #f59e0b, #fbbf24);">&#9881;</div>
+          <h3>Meta Nodes</h3>
+          <p>Raft-based consensus service (OpenRaft 0.9). Manages metadata, table routing, distributed locks, leader election, and event streaming. Deploy 3 or 5 nodes.</p>
+          <p style="font-size: 0.8rem; color: #6b7394;">Ports: HTTP 6000, gRPC 6001</p>
         </div>
-        <div class="code-content">
-<pre><code>/mynadb/
-├── nodes/{node_id}              # Node registration (ephemeral)
-├── locks/
-│   ├── write/{partition}        # Partition write locks
-│   └── compaction/{path}        # Compaction locks
-├── leader/
-│   └── compactor                # Compaction leader
-└── cache/
-    └── invalidate               # Cache invalidation channel</code></pre>
-        </div>
-      </div>
 
-      <h3>2. Node Registration</h3>
-      <p>
-        Each node registers itself with the coordinator on startup:
-      </p>
-
-      <div class="code-block">
-        <div class="code-header">
-          <span class="lang">Node Info</span>
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #3b82f6, #60a5fa);">&#128268;</div>
+          <h3>Router Nodes</h3>
+          <p>Stateless request routers with table-level routing via ShardCache. Client-facing HTTP, Arrow Flight, and MySQL wire protocol. Fan-out query coordination.</p>
+          <p style="font-size: 0.8rem; color: #6b7394;">Ports: HTTP 7000, Flight 7001, MySQL 7002</p>
         </div>
-        <div class="code-content">
-<pre><code>{
-  "node_id": "mynadb-1",
-  "advertise_addr": "mynadb-1.cluster.local:7000",
-  "role": "hybrid",
-  "state": "active",
-  "http_port": 7000,
-  "flight_port": 7001,
-  "mysql_port": 7002,
-  "version": "0.3.0",
-  "is_leader": true
-}</code></pre>
+
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #10b981, #34d399);">&#128451;</div>
+          <h3>Data Nodes</h3>
+          <p>Storage and query execution engines. Accept writes into DataCache, flush to Parquet on S3, run LSM compaction, and execute SQL queries locally via DataFusion.</p>
+          <p style="font-size: 0.8rem; color: #6b7394;">Ports: HTTP 5000, Flight 5001</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa);">&#128421;</div>
+          <h3>Admin Console</h3>
+          <p>Optional web-based management UI. Connects to Meta for node discovery, provides SQL editor, storage browser, and cluster monitoring dashboards.</p>
+          <p style="font-size: 0.8rem; color: #6b7394;">Port: HTTP 18080</p>
         </div>
       </div>
 
-      <h3>3. Write Coordination</h3>
+      <h2>How It Works</h2>
+
+      <h3>Table-Level Routing</h3>
       <p>
-        Writes are coordinated using partition-level locks to prevent conflicts:
+        MynaDB uses <strong>table-level routing</strong> for optimal performance in time-series workloads.
+        Each table is owned by a specific Data node, with ownership tracked in the Meta service.
+        This provides 600x fewer metadata entries than file-level routing while maintaining excellent cache locality.
       </p>
 
+      <h3>Write Path</h3>
       <div class="code-block">
         <div class="code-header">
           <span class="lang">Write Flow</span>
         </div>
         <div class="code-content">
-<pre><code>1. Client → POST /write/:db
-2. Parse line protocol
-3. Acquire partition lock (etcd)
-4. Write to WAL (node-prefixed path)
-5. Buffer in memory cache
-6. Return 204 OK
-7. (Background) Flush to S3
-8. Release lock
-9. Publish cache invalidation</code></pre>
+<pre><code>1. Client → POST /write/:db (to Router)
+2. Router parses line protocol, extracts table name
+3. Router looks up table owner in ShardCache
+4. Router sends RecordBatch to Data node via Arrow Flight
+5. Data node inserts into DataCache (in-memory)
+6. Data node registers table with Meta (if new)
+7. Background: DataCache flushes to Parquet on S3 every 60s
+8. Background: Compactor merges Parquet files (L0 → L1 → L2)</code></pre>
         </div>
       </div>
 
-      <h3>4. Cache Invalidation</h3>
-      <p>
-        When one node writes data, all other nodes are notified to invalidate their caches:
-      </p>
-
+      <h3>Query Path</h3>
       <div class="code-block">
         <div class="code-header">
-          <span class="lang">Invalidation Message</span>
+          <span class="lang">Query Flow</span>
         </div>
         <div class="code-content">
-<pre><code>{
-  "paths": ["mydb/default/cpu/date=2024-01-15/L0_1705312800.parquet"],
-  "reason": "NewFile",
-  "source_node": "mynadb-1",
-  "timestamp": 1705312800
-}</code></pre>
+<pre><code>1. Client → GET /query/:db?sql=... (to Router)
+2. Router parses SQL, extracts table references
+3. Router determines target Data nodes from ShardCache
+4. Router fans out query to Data nodes in parallel (Arrow Flight)
+5. Each Data node executes locally:
+   - Check DataCache for hot data
+   - Read matching Parquet files from S3
+   - Apply partition pruning + predicate pushdown
+6. Router aggregates partial results
+7. Return combined result to client</code></pre>
         </div>
       </div>
+
+      <h3>Failure Recovery</h3>
+      <p>
+        Data nodes send heartbeats every 5 seconds with a 15-second lease TTL. When a node crashes,
+        the Meta leader detects the expired lease, marks the node as Inactive, and triggers the recovery manager.
+        Orphaned tables are reassigned to healthy nodes, and Router ShardCaches are updated via events.
+        Optional cold standby nodes can flush in-flight data to S3 before failover.
+      </p>
 
       <h2>Configuration</h2>
 
@@ -588,9 +597,26 @@ open http://localhost:8404/stats</code></pre>
         </tbody>
       </table>
 
+      <h2>Deep Dive</h2>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+        <div style="background: var(--card-bg, #1e293b); border: 1px solid var(--border, #334155); border-radius: 0.75rem; padding: 1.25rem;">
+          <h3 style="margin-top: 0;"><a href="cluster-getting-started.html" style="color: var(--primary, #3b82f6); text-decoration: none;">Cluster Getting Started</a></h3>
+          <p>Step-by-step guide to building, configuring, and starting a local development cluster with all node types.</p>
+        </div>
+        <div style="background: var(--card-bg, #1e293b); border: 1px solid var(--border, #334155); border-radius: 0.75rem; padding: 1.25rem;">
+          <h3 style="margin-top: 0;"><a href="cluster-architecture.html" style="color: var(--primary, #3b82f6); text-decoration: none;">Cluster Architecture</a></h3>
+          <p>Deep dive into Meta (Raft), Router (ShardCache), Data (storage/query), and Admin node internals.</p>
+        </div>
+        <div style="background: var(--card-bg, #1e293b); border: 1px solid var(--border, #334155); border-radius: 0.75rem; padding: 1.25rem;">
+          <h3 style="margin-top: 0;"><a href="cluster-scaling.html" style="color: var(--primary, #3b82f6); text-decoration: none;">Cluster Scaling</a></h3>
+          <p>Scale-out/scale-in operations, node lifecycle, failover detection, cold standby replication.</p>
+        </div>
+      </div>
+
       <div class="docs-nav">
         <a href="high-availability.html" class="docs-nav-prev">&larr; High Availability</a>
-        <a href="configuration.html" class="docs-nav-next">Configuration &rarr;</a>
+        <a href="cluster-getting-started.html" class="docs-nav-next">Cluster Getting Started &rarr;</a>
       </div>
     </main>
   </div>
