@@ -14,20 +14,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{query_api, state::AdminState, storage_api, websocket};
+use super::{query_api, response::ApiResponse, state::AdminState, storage_api, websocket};
 use crate::meta::types::{DataNodeMode, NodeRole, NodeState};
 
-// ============ Helpers ============
-
-/// Convert Unix timestamp (milliseconds) to RFC3339 string
-fn timestamp_to_rfc3339(ts_ms: i64) -> Option<String> {
-    if ts_ms <= 0 {
-        return None;
-    }
-    let secs = (ts_ms / 1000) as i64;
-    let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
-    chrono::DateTime::from_timestamp(secs, nsecs).map(|dt| dt.to_rfc3339())
-}
+use super::response::timestamp_to_rfc3339;
 
 /// Build API routes (REST + WebSocket)
 pub fn routes() -> Router<AdminState> {
@@ -70,35 +60,6 @@ pub fn routes() -> Router<AdminState> {
         .merge(query_api::routes())
         // Storage Browser
         .merge(storage_api::routes())
-}
-
-// ============ Response Types ============
-
-#[derive(Serialize)]
-struct ApiResponse<T> {
-    success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<T>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-impl<T> ApiResponse<T> {
-    fn ok(data: T) -> Self {
-        Self {
-            success: true,
-            data: Some(data),
-            error: None,
-        }
-    }
-
-    fn error(msg: impl Into<String>) -> Self {
-        Self {
-            success: false,
-            data: None,
-            error: Some(msg.into()),
-        }
-    }
 }
 
 // ============ Cluster Endpoints ============
@@ -874,9 +835,6 @@ async fn list_tables(
 #[derive(Deserialize)]
 struct ReassignTableRequest {
     new_owner_id: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    force: bool,
 }
 
 #[derive(Serialize)]
@@ -999,9 +957,6 @@ async fn scale_in_recommend(
 struct ScaleInPlanRequest {
     #[serde(default)]
     node_ids: Vec<String>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    dry_run: bool,
 }
 
 #[derive(Serialize)]
@@ -1303,8 +1258,6 @@ struct SetDistributionRequest {
     schema: Option<String>,
     table: Option<String>,
     replication_factor: u8,
-    #[allow(dead_code)]
-    placement_strategy: Option<String>,
 }
 
 /// Set distribution configuration
@@ -1628,32 +1581,11 @@ async fn cache_prewarm(
     State(state): State<AdminState>,
     Path(catalog): Path<String>,
 ) -> impl IntoResponse {
-    let node_url = match state.get_data_node_url().await {
-        Ok(url) => url,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ApiResponse::<CacheActionResponse>::error(e)),
-            );
-        }
-    };
-
-    let url = format!("{}/cache/prewarm/{}", node_url, catalog);
-    let response = match state.http_client.post(&url).send().await {
+    let path = format!("/cache/prewarm/{}", catalog);
+    let (status, body) = match state.data_node_post(&path, "").await {
         Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ApiResponse::<CacheActionResponse>::error(format!(
-                    "Failed to reach data node: {}",
-                    e
-                ))),
-            );
-        }
+        Err((code, msg)) => return (code, Json(ApiResponse::<CacheActionResponse>::error(msg))),
     };
-
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
 
     if !status.is_success() {
         return (
@@ -1673,32 +1605,10 @@ async fn cache_prewarm(
 
 /// Clear all caches by forwarding to data node
 async fn cache_clear(State(state): State<AdminState>) -> impl IntoResponse {
-    let node_url = match state.get_data_node_url().await {
-        Ok(url) => url,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ApiResponse::<CacheActionResponse>::error(e)),
-            );
-        }
-    };
-
-    let url = format!("{}/cache/clear", node_url);
-    let response = match state.http_client.post(&url).send().await {
+    let (status, body) = match state.data_node_post("/cache/clear", "").await {
         Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ApiResponse::<CacheActionResponse>::error(format!(
-                    "Failed to reach data node: {}",
-                    e
-                ))),
-            );
-        }
+        Err((code, msg)) => return (code, Json(ApiResponse::<CacheActionResponse>::error(msg))),
     };
-
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
 
     if !status.is_success() {
         return (

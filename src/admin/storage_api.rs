@@ -14,6 +14,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::response::ApiResponse;
 use super::state::AdminState;
 
 // ============ Routes ============
@@ -48,35 +49,6 @@ pub fn routes() -> Router<AdminState> {
             "/storage/compact/:catalog/:schema/:table",
             post(compact_table),
         )
-}
-
-// ============ Response Types ============
-
-#[derive(Serialize)]
-struct ApiResponse<T> {
-    success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<T>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-impl<T> ApiResponse<T> {
-    fn ok(data: T) -> Self {
-        Self {
-            success: true,
-            data: Some(data),
-            error: None,
-        }
-    }
-
-    fn error(msg: impl Into<String>) -> Self {
-        Self {
-            success: false,
-            data: None,
-            error: Some(msg.into()),
-        }
-    }
 }
 
 // ============ Storage Info ============
@@ -385,45 +357,15 @@ fn parse_schema_columns(text: &str) -> Vec<ParquetColumnInfo> {
         }
     }
 
-    // Parse Rust Debug format
-    let mut columns = Vec::new();
-    let mut in_field = false;
-    let mut current_name = String::new();
-    let mut current_type = String::new();
-
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("Field {") || trimmed == "Field {" {
-            in_field = true;
-            current_name.clear();
-            current_type.clear();
-        } else if in_field {
-            if trimmed.starts_with("name:") {
-                if let Some(start) = trimmed.find('"') {
-                    if let Some(end) = trimmed[start + 1..].find('"') {
-                        current_name = trimmed[start + 1..start + 1 + end].to_string();
-                    }
-                }
-            } else if trimmed.starts_with("data_type:") {
-                current_type = trimmed
-                    .trim_start_matches("data_type:")
-                    .trim()
-                    .trim_end_matches(',')
-                    .to_string();
-            } else if trimmed == "}," || trimmed == "}" {
-                if !current_name.is_empty() {
-                    columns.push(ParquetColumnInfo {
-                        name: current_name.clone(),
-                        data_type: current_type.clone(),
-                        nullable: true,
-                    });
-                }
-                in_field = false;
-            }
-        }
-    }
-
-    columns
+    // Fall back to Rust Debug format parser
+    super::response::parse_schema_fields(text)
+        .into_iter()
+        .map(|c| ParquetColumnInfo {
+            name: c.name,
+            data_type: c.data_type,
+            nullable: true,
+        })
+        .collect()
 }
 
 /// Parse compaction level from file name (e.g., "L0_xxx.parquet" → 0)
@@ -440,47 +382,11 @@ async fn get_table_storage(
     State(state): State<AdminState>,
     Path((catalog, schema, table)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
-    let node_url = match state.get_data_node_url().await {
-        Ok(url) => url,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ApiResponse::<TableStorageInfo>::error(e)),
-            );
-        }
-    };
-
     // Forward to data node's GET /partitions/:catalog/:schema/:table
-    let url = format!(
-        "{}/partitions/{}/{}/{}",
-        node_url, catalog, schema, table
-    );
-
-    let response = match state.http_client.get(&url).send().await {
+    let path = format!("/partitions/{}/{}/{}", catalog, schema, table);
+    let (status, body) = match state.data_node_get(&path).await {
         Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ApiResponse::<TableStorageInfo>::error(format!(
-                    "Failed to reach data node: {}",
-                    e
-                ))),
-            );
-        }
-    };
-
-    let status = response.status();
-    let body = match response.text().await {
-        Ok(b) => b,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ApiResponse::<TableStorageInfo>::error(format!(
-                    "Failed to read response: {}",
-                    e
-                ))),
-            );
-        }
+        Err((code, msg)) => return (code, Json(ApiResponse::<TableStorageInfo>::error(msg))),
     };
 
     if !status.is_success() {
@@ -586,7 +492,7 @@ async fn get_table_storage(
     // query partition info via SQL
     if partitions.is_empty() {
         if let Ok(sql_partitions) =
-            query_partitions_via_sql(&state, &node_url, &catalog, &schema, &table).await
+            query_partitions_via_sql(&state, &catalog, &schema, &table).await
         {
             partitions = sql_partitions.0;
             total_file_count = sql_partitions.1;
@@ -628,7 +534,6 @@ async fn get_table_storage(
 /// Returns (partitions, total_file_count, total_rows).
 async fn query_partitions_via_sql(
     state: &AdminState,
-    node_url: &str,
     catalog: &str,
     schema: &str,
     table: &str,
@@ -637,33 +542,17 @@ async fn query_partitions_via_sql(
         "SELECT date, node_id, count(*) as row_count FROM {}.{} GROUP BY date, node_id ORDER BY date, node_id",
         schema, table
     );
-    let encoded_sql: String = sql
-        .bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            b' ' => "+".to_string(),
-            _ => format!("%{:02X}", b),
-        })
-        .collect();
-    let url = format!("{}/query/{}?sql={}", node_url, catalog, encoded_sql);
+    let path = format!(
+        "/query/{}?sql={}",
+        catalog,
+        urlencoding::encode(&sql)
+    );
 
-    let response = state
-        .http_client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("SQL query failed: {}", e))?;
+    let (status, body) = state.data_node_get(&path).await.map_err(|(_, msg)| msg)?;
 
-    if !response.status().is_success() {
+    if !status.is_success() {
         return Err("SQL query returned error".to_string());
     }
-
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read SQL response: {}", e))?;
 
     // Data node query returns an array of row objects: [{date, row_count}, ...]
     // or a wrapper: {success, data: [...]}
@@ -938,23 +827,8 @@ async fn get_parquet_details(
     State(state): State<AdminState>,
     Query(query): Query<FileQuery>,
 ) -> impl IntoResponse {
-    // Try to get file details from a data node
-    // Note: The data node may not have a dedicated parquet details endpoint,
-    // so we attempt to use the schema endpoint as a proxy
-    let node_url = match state.get_data_node_url().await {
-        Ok(url) => url,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ApiResponse::<ParquetFileDetails>::error(e)),
-            );
-        }
-    };
-
     // Parse table info from the path: catalog/schema/table/date=.../file.parquet
     let path_parts: Vec<&str> = query.path.split('/').collect();
-    let filename = path_parts.last().unwrap_or(&"");
-    let _level = parse_level(filename);
 
     // Return basic info derived from the path
     let result = ParquetFileDetails {
@@ -968,26 +842,21 @@ async fn get_parquet_details(
         statistics: None,
     };
 
-    // Try to get schema info if we can parse the table path
+    // Try to enrich with schema info from a data node
     if path_parts.len() >= 3 {
-        let catalog = path_parts[0];
-        let schema_name = path_parts[1];
-        let table = path_parts[2];
-
-        let url = format!("{}/schema/{}/{}/{}", node_url, catalog, schema_name, table);
-        if let Ok(response) = state.http_client.get(&url).send().await {
-            if response.status().is_success() {
-                if let Ok(body) = response.text().await {
-                    if !body.is_empty() {
-                        let columns = parse_schema_columns(&body);
-                        if !columns.is_empty() {
-                            let enriched = ParquetFileDetails {
-                                schema: columns,
-                                ..result
-                            };
-                            return (StatusCode::OK, Json(ApiResponse::ok(enriched)));
-                        }
-                    }
+        let schema_path = format!(
+            "/schema/{}/{}/{}",
+            path_parts[0], path_parts[1], path_parts[2]
+        );
+        if let Ok((status, body)) = state.data_node_get(&schema_path).await {
+            if status.is_success() && !body.is_empty() {
+                let columns = parse_schema_columns(&body);
+                if !columns.is_empty() {
+                    let enriched = ParquetFileDetails {
+                        schema: columns,
+                        ..result
+                    };
+                    return (StatusCode::OK, Json(ApiResponse::ok(enriched)));
                 }
             }
         }
@@ -1109,42 +978,9 @@ async fn forward_compaction(
     state: &AdminState,
     path: &str,
 ) -> (StatusCode, Json<ApiResponse<CompactionResponse>>) {
-    let node_url = match state.get_data_node_url().await {
-        Ok(url) => url,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ApiResponse::<CompactionResponse>::error(e)),
-            );
-        }
-    };
-
-    let url = format!("{}{}", node_url, path);
-    let response = match state.http_client.post(&url).send().await {
+    let (status, body) = match state.data_node_post(path, "").await {
         Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ApiResponse::<CompactionResponse>::error(format!(
-                    "Failed to reach data node: {}",
-                    e
-                ))),
-            );
-        }
-    };
-
-    let status = response.status();
-    let body = match response.text().await {
-        Ok(b) => b,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ApiResponse::<CompactionResponse>::error(format!(
-                    "Failed to read response: {}",
-                    e
-                ))),
-            );
-        }
+        Err((code, msg)) => return (code, Json(ApiResponse::<CompactionResponse>::error(msg))),
     };
 
     if !status.is_success() {

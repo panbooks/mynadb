@@ -50,7 +50,8 @@ pub fn meta_event_to_detail(meta_event: &MetaEvent) -> AdminEventDetail {
     let message = generate_message(meta_event.event_type, &payload, &meta_event.source_node);
 
     // Convert timestamp from milliseconds to RFC3339
-    let timestamp = timestamp_to_rfc3339(meta_event.timestamp);
+    let timestamp = super::response::timestamp_to_rfc3339(meta_event.timestamp)
+        .unwrap_or_default();
 
     AdminEventDetail {
         id: format!("evt-{}", meta_event.sequence),
@@ -206,18 +207,6 @@ fn format_table_name(payload: &Value) -> String {
     } else {
         table.to_string()
     }
-}
-
-/// Convert Unix timestamp (milliseconds) to RFC3339 string
-fn timestamp_to_rfc3339(ts_ms: i64) -> String {
-    if ts_ms <= 0 {
-        return String::new();
-    }
-    let secs = ts_ms / 1000;
-    let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
-    chrono::DateTime::from_timestamp(secs, nsecs)
-        .map(|dt| dt.to_rfc3339())
-        .unwrap_or_default()
 }
 
 /// Callback for caching events

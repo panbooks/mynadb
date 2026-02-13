@@ -5,6 +5,7 @@
 mod api;
 pub mod events;
 mod query_api;
+pub(crate) mod response;
 mod state;
 mod static_files;
 mod storage_api;

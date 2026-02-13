@@ -204,6 +204,75 @@ impl AdminState {
         }
     }
 
+    /// GET a path on a data node, returning (status, body) or an error tuple
+    /// suitable for returning from an Axum handler.
+    pub async fn data_node_get(
+        &self,
+        path: &str,
+    ) -> Result<(reqwest::StatusCode, String), (axum::http::StatusCode, String)> {
+        let node_url = self.get_data_node_url().await.map_err(|e| {
+            (axum::http::StatusCode::SERVICE_UNAVAILABLE, e)
+        })?;
+
+        let url = format!("{}{}", node_url, path);
+        let response = self
+            .http_client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| {
+                (
+                    axum::http::StatusCode::BAD_GATEWAY,
+                    format!("Failed to reach data node: {}", e),
+                )
+            })?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            (
+                axum::http::StatusCode::BAD_GATEWAY,
+                format!("Failed to read response: {}", e),
+            )
+        })?;
+
+        Ok((status, body))
+    }
+
+    /// POST a body to a data node, returning (status, body) or an error tuple.
+    pub async fn data_node_post(
+        &self,
+        path: &str,
+        body: impl Into<reqwest::Body>,
+    ) -> Result<(reqwest::StatusCode, String), (axum::http::StatusCode, String)> {
+        let node_url = self.get_data_node_url().await.map_err(|e| {
+            (axum::http::StatusCode::SERVICE_UNAVAILABLE, e)
+        })?;
+
+        let url = format!("{}{}", node_url, path);
+        let response = self
+            .http_client
+            .post(&url)
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| {
+                (
+                    axum::http::StatusCode::BAD_GATEWAY,
+                    format!("Failed to reach data node: {}", e),
+                )
+            })?;
+
+        let status = response.status();
+        let resp_body = response.text().await.map_err(|e| {
+            (
+                axum::http::StatusCode::BAD_GATEWAY,
+                format!("Failed to read response: {}", e),
+            )
+        })?;
+
+        Ok((status, resp_body))
+    }
+
     /// Broadcast an event to all connected WebSocket clients
     pub fn broadcast_event(&self, event: AdminEvent) {
         let _ = self.event_tx.send(event);

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Instant;
 
+use super::response::ApiResponse;
 use super::state::AdminState;
 
 // ============ Routes ============
@@ -38,35 +39,6 @@ pub fn routes() -> Router<AdminState> {
             "/query/history",
             get(get_query_history).delete(clear_query_history),
         )
-}
-
-// ============ Response Types ============
-
-#[derive(Serialize)]
-struct ApiResponse<T> {
-    success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<T>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-impl<T> ApiResponse<T> {
-    fn ok(data: T) -> Self {
-        Self {
-            success: true,
-            data: Some(data),
-            error: None,
-        }
-    }
-
-    fn error(msg: impl Into<String>) -> Self {
-        Self {
-            success: false,
-            data: None,
-            error: Some(msg.into()),
-        }
-    }
 }
 
 // ============ Query Execute ============
@@ -335,53 +307,19 @@ async fn explain_query(
     Path(catalog): Path<String>,
     Query(query): Query<ExplainQuery>,
 ) -> impl IntoResponse {
-    let node_url = match state.get_data_node_url().await {
-        Ok(url) => url,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ApiResponse::<QueryExplain>::error(e)),
-            );
-        }
-    };
-
-    // Forward to data node's GET /explain/:catalog
     let verbose = query.verbose.unwrap_or(true);
     let analyze = query.analyze.unwrap_or(false);
-    let url = format!(
-        "{}/explain/{}?sql={}&verbose={}&analyze={}",
-        node_url,
+    let path = format!(
+        "/explain/{}?sql={}&verbose={}&analyze={}",
         catalog,
         urlencoding::encode(&query.sql),
         verbose,
         analyze
     );
 
-    let response = match state.http_client.get(&url).send().await {
+    let (status, body) = match state.data_node_get(&path).await {
         Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ApiResponse::<QueryExplain>::error(format!(
-                    "Failed to reach data node: {}",
-                    e
-                ))),
-            );
-        }
-    };
-
-    let status = response.status();
-    let body = match response.text().await {
-        Ok(b) => b,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ApiResponse::<QueryExplain>::error(format!(
-                    "Failed to read response: {}",
-                    e
-                ))),
-            );
-        }
+        Err((code, msg)) => return (code, Json(ApiResponse::<QueryExplain>::error(msg))),
     };
 
     if !status.is_success() {
@@ -477,48 +415,15 @@ async fn analyze_query(
     Path(catalog): Path<String>,
     Query(query): Query<AnalyzeQuery>,
 ) -> impl IntoResponse {
-    let node_url = match state.get_data_node_url().await {
-        Ok(url) => url,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ApiResponse::<QueryAnalysis>::error(e)),
-            );
-        }
-    };
-
-    let url = format!(
-        "{}/analyze/{}?sql={}",
-        node_url,
+    let path = format!(
+        "/analyze/{}?sql={}",
         catalog,
         urlencoding::encode(&query.sql)
     );
 
-    let response = match state.http_client.get(&url).send().await {
+    let (status, body) = match state.data_node_get(&path).await {
         Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ApiResponse::<QueryAnalysis>::error(format!(
-                    "Failed to reach data node: {}",
-                    e
-                ))),
-            );
-        }
-    };
-
-    let status = response.status();
-    let body = match response.text().await {
-        Ok(b) => b,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ApiResponse::<QueryAnalysis>::error(format!(
-                    "Failed to read response: {}",
-                    e
-                ))),
-            );
-        }
+        Err((code, msg)) => return (code, Json(ApiResponse::<QueryAnalysis>::error(msg))),
     };
 
     if !status.is_success() {
@@ -716,43 +621,10 @@ async fn get_columns(
     State(state): State<AdminState>,
     Path((catalog, schema, table)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
-    let node_url = match state.get_data_node_url().await {
-        Ok(url) => url,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ApiResponse::<Vec<ColumnDetail>>::error(e)),
-            );
-        }
-    };
-
-    // Forward to data node's GET /schema/:db/:schema/:table
-    let url = format!("{}/schema/{}/{}/{}", node_url, catalog, schema, table);
-    let response = match state.http_client.get(&url).send().await {
+    let path = format!("/schema/{}/{}/{}", catalog, schema, table);
+    let (status, body) = match state.data_node_get(&path).await {
         Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ApiResponse::<Vec<ColumnDetail>>::error(format!(
-                    "Failed to reach data node: {}",
-                    e
-                ))),
-            );
-        }
-    };
-
-    let status = response.status();
-    let body = match response.text().await {
-        Ok(b) => b,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ApiResponse::<Vec<ColumnDetail>>::error(format!(
-                    "Failed to read response: {}",
-                    e
-                ))),
-            );
-        }
+        Err((code, msg)) => return (code, Json(ApiResponse::<Vec<ColumnDetail>>::error(msg))),
     };
 
     if !status.is_success() || body.is_empty() {
@@ -789,58 +661,16 @@ async fn get_columns(
         }
     } else {
         // Parse Rust Debug format: extract Field { name: "...", data_type: ..., ... } blocks
-        parse_debug_schema(&body)
+        super::response::parse_schema_fields(&body)
+            .into_iter()
+            .map(|c| ColumnDetail {
+                name: c.name,
+                data_type: c.data_type,
+            })
+            .collect()
     };
 
     (StatusCode::OK, Json(ApiResponse::ok(columns)))
-}
-
-/// Parse column info from Rust's Debug format of DFSchema/Arrow Schema.
-/// Extracts Field { name: "col_name", data_type: TypeName, ... } blocks.
-fn parse_debug_schema(text: &str) -> Vec<ColumnDetail> {
-    let mut columns = Vec::new();
-    let mut in_field = false;
-    let mut current_name = String::new();
-    let mut current_type = String::new();
-
-    for line in text.lines() {
-        let trimmed = line.trim();
-
-        if trimmed.starts_with("Field {") || trimmed == "Field {" {
-            in_field = true;
-            current_name.clear();
-            current_type.clear();
-            continue;
-        }
-
-        if in_field {
-            if trimmed.starts_with("name:") {
-                // Extract name: "column_name",
-                if let Some(start) = trimmed.find('"') {
-                    if let Some(end) = trimmed[start + 1..].find('"') {
-                        current_name = trimmed[start + 1..start + 1 + end].to_string();
-                    }
-                }
-            } else if trimmed.starts_with("data_type:") {
-                // Extract data_type: TypeName,
-                current_type = trimmed
-                    .trim_start_matches("data_type:")
-                    .trim()
-                    .trim_end_matches(',')
-                    .to_string();
-            } else if trimmed == "}," || trimmed == "}" {
-                if !current_name.is_empty() {
-                    columns.push(ColumnDetail {
-                        name: current_name.clone(),
-                        data_type: current_type.clone(),
-                    });
-                }
-                in_field = false;
-            }
-        }
-    }
-
-    columns
 }
 
 // ============ Saved Queries ============
