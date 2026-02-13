@@ -85,11 +85,12 @@ arima = "0.2"
 
 # Prometheus Remote Storage
 snap = "1.1"  # Snappy compression for Prometheus remote write
+flate2 = "1"  # Gzip decompression for InfluxDB line protocol writes
 
 # Admin Console
 futures-util = "0.3"
 axum-extra = { version = "0.9", features = ["typed-header"] }
-tower-http = { version = "0.5", features = ["cors", "fs"] }
+tower-http = { version = "0.5", features = ["cors", "fs", "decompression-gzip"] }
 reqwest = { version = "0.12", features = ["json"] }
 
 [dev-dependencies]

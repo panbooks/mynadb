@@ -223,6 +223,7 @@ pub fn build_router(state: DataNodeState) -> Router {
             post(delete_old_partitions_handler),
         )
         .with_state(state)
+        .layer(axum::extract::DefaultBodyLimit::max(250 * 1024 * 1024)) // 250MB
 }
 
 // ============================================================================
@@ -785,19 +786,9 @@ async fn write_handler(
         }
     };
 
-    let body = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
-        Ok(b) => b,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("Error reading body: {}", e),
-            )
-        }
-    };
-
-    let data = match String::from_utf8(body.to_vec()) {
+    let data = match extract_write_body(req).await {
         Ok(s) => s,
-        Err(e) => return (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e)),
+        Err(e) => return e,
     };
 
     match shared::process_write_impl(&state.cache, config, state.wal.as_ref(), &db, &data).await {
@@ -822,19 +813,9 @@ async fn write_handler_query_param(
         }
     };
 
-    let body = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
-        Ok(b) => b,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("Error reading body: {}", e),
-            )
-        }
-    };
-
-    let data = match String::from_utf8(body.to_vec()) {
+    let data = match extract_write_body(req).await {
         Ok(s) => s,
-        Err(e) => return (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e)),
+        Err(e) => return e,
     };
 
     match shared::process_write_impl(&state.cache, config, state.wal.as_ref(), &params.db, &data)
@@ -843,6 +824,42 @@ async fn write_handler_query_param(
         Ok(_result) => (StatusCode::NO_CONTENT, "".to_string()),
         Err(e) => (StatusCode::BAD_REQUEST, e),
     }
+}
+
+/// Extract write body from request, handling gzip Content-Encoding.
+async fn extract_write_body(req: Request) -> Result<String, (StatusCode, String)> {
+    let is_gzip = req
+        .headers()
+        .get("content-encoding")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("gzip"))
+        .unwrap_or(false);
+
+    let body = axum::body::to_bytes(req.into_body(), 250 * 1024 * 1024)
+        .await
+        .map_err(|e| {
+            (StatusCode::BAD_REQUEST, format!("Error reading body: {}", e))
+        })?;
+
+    let bytes = if is_gzip {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+        let mut decoder = GzDecoder::new(&body[..]);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Gzip decompression failed: {}", e),
+            )
+        })?;
+        decompressed
+    } else {
+        body.to_vec()
+    };
+
+    String::from_utf8(bytes).map_err(|e| {
+        (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e))
+    })
 }
 
 // ============================================================================

@@ -1237,24 +1237,9 @@ pub async fn write_handler(
 ) -> impl IntoResponse {
     debug!("Write Request: db={}", db);
 
-    // Read body
-    let body = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
-        Ok(b) => b,
-        Err(e) => {
-            error!("Error reading body: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("Error reading body: {}", e),
-            );
-        }
-    };
-
-    let data = match String::from_utf8(body.to_vec()) {
+    let data = match extract_write_body(req).await {
         Ok(s) => s,
-        Err(e) => {
-            error!("Invalid UTF-8: {}", e);
-            return (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e));
-        }
+        Err(e) => return e,
     };
 
     process_write_data(&db, &data, state).await
@@ -1267,27 +1252,51 @@ pub async fn write_handler_query_param(
 ) -> impl IntoResponse {
     debug!("Write Request (InfluxDB-compatible): db={}", params.db);
 
-    // Read body
-    let body = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
-        Ok(b) => b,
-        Err(e) => {
-            error!("Error reading body: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("Error reading body: {}", e),
-            );
-        }
-    };
-
-    let data = match String::from_utf8(body.to_vec()) {
+    let data = match extract_write_body(req).await {
         Ok(s) => s,
-        Err(e) => {
-            error!("Invalid UTF-8: {}", e);
-            return (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e));
-        }
+        Err(e) => return e,
     };
 
     process_write_data(&params.db, &data, state).await
+}
+
+/// Extract write body from request, handling gzip Content-Encoding.
+async fn extract_write_body(req: Request) -> Result<String, (StatusCode, String)> {
+    let is_gzip = req
+        .headers()
+        .get("content-encoding")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("gzip"))
+        .unwrap_or(false);
+
+    let body = axum::body::to_bytes(req.into_body(), 250 * 1024 * 1024)
+        .await
+        .map_err(|e| {
+            error!("Error reading body: {}", e);
+            (StatusCode::BAD_REQUEST, format!("Error reading body: {}", e))
+        })?;
+
+    let bytes = if is_gzip {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+        let mut decoder = GzDecoder::new(&body[..]);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed).map_err(|e| {
+            error!("Gzip decompression failed: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Gzip decompression failed: {}", e),
+            )
+        })?;
+        decompressed
+    } else {
+        body.to_vec()
+    };
+
+    String::from_utf8(bytes).map_err(|e| {
+        error!("Invalid UTF-8: {}", e);
+        (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e))
+    })
 }
 
 async fn process_write_data(db: &str, data: &str, state: AppState) -> (StatusCode, String) {
@@ -2595,6 +2604,7 @@ pub fn build_router(state: AppState, auth_middleware: Arc<auth::AuthMiddleware>)
         .route("/downsampling/policies/:name", delete(delete_downsampling_policy_handler))
         .fallback(log_request)
         .with_state(state)
+        .layer(axum::extract::DefaultBodyLimit::max(250 * 1024 * 1024)) // 250MB
         .layer(axum::middleware::from_fn(auth::auth_middleware_fn))
         .layer(axum::Extension(auth_middleware))
 }

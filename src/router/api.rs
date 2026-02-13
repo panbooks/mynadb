@@ -8,7 +8,7 @@ use super::state::RouterAppState;
 use crate::query::influxql::{self, InfluxResponse};
 use crate::utils::json::batches_to_json;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -129,6 +129,7 @@ pub fn build_router(state: RouterAppState) -> Router {
         .route("/stats", get(stats_handler))
         .route("/flush", post(flush_handler))
         .with_state(state)
+        .layer(axum::extract::DefaultBodyLimit::max(250 * 1024 * 1024)) // 250MB
 }
 
 // ============================================================================
@@ -309,8 +310,12 @@ async fn execute_influxql_query(
 pub async fn write_handler(
     Path(db): Path<String>,
     State(state): State<RouterAppState>,
-    body: String,
+    req: Request,
 ) -> impl IntoResponse {
+    let body = match extract_write_body(req).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
     let result = state.write_router.route_write(&db, &body).await;
 
     if result.success {
@@ -330,12 +335,16 @@ pub async fn write_handler(
 pub async fn write_handler_query_param(
     Query(params): Query<HashMap<String, String>>,
     State(state): State<RouterAppState>,
-    body: String,
+    req: Request,
 ) -> impl IntoResponse {
     let db = params
         .get("db")
         .cloned()
         .unwrap_or_else(|| "default".to_string());
+    let body = match extract_write_body(req).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
     let result = state.write_router.route_write(&db, &body).await;
 
     if result.success {
@@ -349,6 +358,42 @@ pub async fn write_handler_query_param(
         };
         (StatusCode::INTERNAL_SERVER_ERROR, serde_json::to_string(&response).unwrap_or_default())
     }
+}
+
+/// Extract write body from request, handling gzip Content-Encoding.
+async fn extract_write_body(req: Request) -> Result<String, (StatusCode, String)> {
+    let is_gzip = req
+        .headers()
+        .get("content-encoding")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("gzip"))
+        .unwrap_or(false);
+
+    let body = axum::body::to_bytes(req.into_body(), 250 * 1024 * 1024)
+        .await
+        .map_err(|e| {
+            (StatusCode::BAD_REQUEST, format!("Error reading body: {}", e))
+        })?;
+
+    let bytes = if is_gzip {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+        let mut decoder = GzDecoder::new(&body[..]);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Gzip decompression failed: {}", e),
+            )
+        })?;
+        decompressed
+    } else {
+        body.to_vec()
+    };
+
+    String::from_utf8(bytes).map_err(|e| {
+        (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e))
+    })
 }
 
 // ============================================================================
