@@ -16,6 +16,116 @@ use super::{
 };
 
 impl Compactor {
+    /// Discover all partition prefixes containing parquet files for a given date partition.
+    ///
+    /// Walks catalog → schema → table → date, handling both new layout (node_id= subdirs)
+    /// and legacy layout (files directly under date=).
+    async fn discover_compaction_targets(
+        &self,
+        yesterday_partition: &str,
+    ) -> Vec<(String, String, String, String)> {
+        let catalogs = self
+            .storage
+            .list_prefixes(STORE_DIR)
+            .await
+            .unwrap_or_else(|e| {
+                warn!("Failed to list catalogs: {}", e);
+                Vec::new()
+            });
+
+        let mut targets = Vec::new();
+
+        for catalog in catalogs {
+            if catalog.starts_with('.') {
+                continue;
+            }
+
+            let schemas = self
+                .storage
+                .list_prefixes(&format!("{}/{}", STORE_DIR, catalog))
+                .await
+                .unwrap_or_default();
+
+            for schema in schemas {
+                if schema.starts_with('.') || schema.ends_with(".json") {
+                    continue;
+                }
+
+                let tables = self
+                    .storage
+                    .list_prefixes(&format!("{}/{}/{}", STORE_DIR, catalog, schema))
+                    .await
+                    .unwrap_or_default();
+
+                for table in tables {
+                    let date_prefix = format!(
+                        "{}/{}/{}/{}/{}",
+                        STORE_DIR, catalog, schema, table, yesterday_partition
+                    );
+                    self.collect_partition_entries(
+                        &catalog,
+                        &schema,
+                        &table,
+                        &date_prefix,
+                        &mut targets,
+                    )
+                    .await;
+                }
+            }
+        }
+
+        targets
+    }
+
+    /// Collect compaction entries for a single date prefix, handling node_id= vs legacy layout.
+    async fn collect_partition_entries(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        date_prefix: &str,
+        targets: &mut Vec<(String, String, String, String)>,
+    ) {
+        let node_dirs = self
+            .storage
+            .list_prefixes(date_prefix)
+            .await
+            .unwrap_or_default();
+
+        if node_dirs.iter().any(|d| d.starts_with("node_id=")) {
+            for node_dir in &node_dirs {
+                if !node_dir.starts_with("node_id=") {
+                    continue;
+                }
+                let partition_prefix = format!("{}/{}", date_prefix, node_dir);
+                if self.has_parquet_files(&partition_prefix).await {
+                    targets.push((
+                        catalog.to_string(),
+                        schema.to_string(),
+                        table.to_string(),
+                        partition_prefix,
+                    ));
+                }
+            }
+        } else if self.has_parquet_files(date_prefix).await {
+            targets.push((
+                catalog.to_string(),
+                schema.to_string(),
+                table.to_string(),
+                date_prefix.to_string(),
+            ));
+        }
+    }
+
+    /// Check if a prefix contains any parquet files.
+    async fn has_parquet_files(&self, prefix: &str) -> bool {
+        self.storage
+            .list(prefix)
+            .await
+            .map(|files| files.iter().any(|f| f.ends_with(".parquet")))
+            .unwrap_or(false)
+    }
+
     /// Full compaction for yesterday's partitions (date-based, no metadata overhead)
     ///
     /// Runs partitions in parallel (up to max_concurrent_compactions).
@@ -49,94 +159,10 @@ impl Compactor {
             yesterday_partition, current_hour
         );
 
-        // Phase 1: Collect all partitions that need compaction using Object Store
-        let mut partitions_to_compact: Vec<(String, String, String, String)> = Vec::new();
-
-        // Discover catalogs using Object Store (under store/ prefix)
-        let catalogs = match self.storage.list_prefixes(STORE_DIR).await {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("Failed to list catalogs: {}", e);
-                return Ok(Vec::new());
-            }
-        };
-
-        for catalog in catalogs {
-            if catalog.starts_with('.') {
-                continue;
-            }
-
-            // Discover schemas
-            let schemas = match self.storage.list_prefixes(&format!("{}/{}", STORE_DIR, catalog)).await {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-
-            for schema in schemas {
-                if schema.starts_with('.') || schema.ends_with(".json") {
-                    continue;
-                }
-
-                // Discover tables
-                let schema_prefix = format!("{}/{}/{}", STORE_DIR, catalog, schema);
-                let tables = match self.storage.list_prefixes(&schema_prefix).await {
-                    Ok(t) => t,
-                    Err(_) => continue,
-                };
-
-                for table in tables {
-                    // Check if yesterday's partition exists
-                    let date_prefix =
-                        format!("{}/{}/{}/{}/{}", STORE_DIR, catalog, schema, table, yesterday_partition);
-
-                    // Check for node_id= subdirectories
-                    let node_dirs = self
-                        .storage
-                        .list_prefixes(&date_prefix)
-                        .await
-                        .unwrap_or_default();
-
-                    if node_dirs.iter().any(|d| d.starts_with("node_id=")) {
-                        // New layout: add each node_id subdirectory separately
-                        for node_dir in &node_dirs {
-                            if node_dir.starts_with("node_id=") {
-                                let partition_prefix =
-                                    format!("{}/{}", date_prefix, node_dir);
-
-                                let files = match self.storage.list(&partition_prefix).await {
-                                    Ok(f) => f,
-                                    Err(_) => continue,
-                                };
-
-                                if files.iter().any(|f| f.ends_with(".parquet")) {
-                                    partitions_to_compact.push((
-                                        catalog.clone(),
-                                        schema.clone(),
-                                        table.clone(),
-                                        partition_prefix,
-                                    ));
-                                }
-                            }
-                        }
-                    } else {
-                        // Legacy layout: check for files directly at date level
-                        let files = match self.storage.list(&date_prefix).await {
-                            Ok(f) => f,
-                            Err(_) => continue,
-                        };
-
-                        if files.iter().any(|f| f.ends_with(".parquet")) {
-                            partitions_to_compact.push((
-                                catalog.clone(),
-                                schema.clone(),
-                                table.clone(),
-                                date_prefix,
-                            ));
-                        }
-                    }
-                }
-            }
-        }
+        // Phase 1: Collect all partitions that need compaction
+        let partitions_to_compact = self
+            .discover_compaction_targets(&yesterday_partition)
+            .await;
 
         if partitions_to_compact.is_empty() {
             debug!(

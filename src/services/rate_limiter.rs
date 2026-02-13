@@ -90,7 +90,7 @@ impl RateLimiter {
     }
 
     /// Get current available tokens (for monitoring)
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub async fn available_tokens(&self) -> f64 {
         *self.tokens.lock().await
     }

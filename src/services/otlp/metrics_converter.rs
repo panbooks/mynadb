@@ -75,6 +75,55 @@ pub fn convert_metrics(
     points_by_table
 }
 
+/// Convert NumberDataPoint entries (shared by Gauge and Sum metric types).
+fn convert_number_data_points(
+    data_points: &[opentelemetry_proto::tonic::metrics::v1::NumberDataPoint],
+    table_name: &str,
+    schema: &str,
+    resource_tags: &HashMap<String, String>,
+    scope_tags: &HashMap<String, String>,
+    flatten_attributes: bool,
+    extra_tags: &[(&str, String)],
+) -> Vec<Point> {
+    let mut points = Vec::new();
+    for dp in data_points {
+        let mut tags = resource_tags.clone();
+        tags.extend(scope_tags.clone());
+        tags.extend(attributes_to_tags(
+            &dp.attributes,
+            if flatten_attributes { "attrs" } else { "" },
+            flatten_attributes,
+        ));
+        for (k, v) in extra_tags {
+            tags.insert(k.to_string(), v.clone());
+        }
+
+        let timestamp = dp.time_unix_nano;
+        let date = timestamp_nanos_to_date(timestamp);
+
+        let mut fields = HashMap::new();
+        match &dp.value {
+            Some(number_data_point::Value::AsDouble(v)) => {
+                fields.insert("value".to_string(), FieldValue::Float(*v));
+            }
+            Some(number_data_point::Value::AsInt(v)) => {
+                fields.insert("value".to_string(), FieldValue::Float(*v as f64));
+            }
+            None => continue,
+        }
+
+        points.push(Point {
+            measurement: table_name.to_string(),
+            tags,
+            fields,
+            timestamp: Some(timestamp as i64),
+            date,
+            service: schema.to_string(),
+        });
+    }
+    points
+}
+
 fn convert_metric_data(
     metric: &opentelemetry_proto::tonic::metrics::v1::Metric,
     table_name: &str,
@@ -87,77 +136,29 @@ fn convert_metric_data(
 
     match &metric.data {
         Some(metric::Data::Gauge(gauge)) => {
-            for dp in &gauge.data_points {
-                let mut tags = resource_tags.clone();
-                tags.extend(scope_tags.clone());
-                tags.extend(attributes_to_tags(
-                    &dp.attributes,
-                    if flatten_attributes { "attrs" } else { "" },
-                    flatten_attributes,
-                ));
-
-                let timestamp = dp.time_unix_nano;
-                let date = timestamp_nanos_to_date(timestamp);
-
-                let mut fields = HashMap::new();
-                match &dp.value {
-                    Some(number_data_point::Value::AsDouble(v)) => {
-                        fields.insert("value".to_string(), FieldValue::Float(*v));
-                    }
-                    Some(number_data_point::Value::AsInt(v)) => {
-                        fields.insert("value".to_string(), FieldValue::Float(*v as f64));
-                    }
-                    None => continue,
-                }
-
-                points.push(Point {
-                    measurement: table_name.to_string(),
-                    tags,
-                    fields,
-                    timestamp: Some(timestamp as i64),
-                    date,
-                    service: schema.to_string(),
-                });
-            }
+            return convert_number_data_points(
+                &gauge.data_points,
+                table_name,
+                schema,
+                resource_tags,
+                scope_tags,
+                flatten_attributes,
+                &[],
+            );
         }
         Some(metric::Data::Sum(sum)) => {
-            for dp in &sum.data_points {
-                let mut tags = resource_tags.clone();
-                tags.extend(scope_tags.clone());
-                tags.extend(attributes_to_tags(
-                    &dp.attributes,
-                    if flatten_attributes { "attrs" } else { "" },
-                    flatten_attributes,
-                ));
-                tags.insert(
-                    "otel.aggregation_temporality".to_string(),
-                    sum.aggregation_temporality.to_string(),
-                );
-                tags.insert("otel.is_monotonic".to_string(), sum.is_monotonic.to_string());
-
-                let timestamp = dp.time_unix_nano;
-                let date = timestamp_nanos_to_date(timestamp);
-
-                let mut fields = HashMap::new();
-                match &dp.value {
-                    Some(number_data_point::Value::AsDouble(v)) => {
-                        fields.insert("value".to_string(), FieldValue::Float(*v));
-                    }
-                    Some(number_data_point::Value::AsInt(v)) => {
-                        fields.insert("value".to_string(), FieldValue::Float(*v as f64));
-                    }
-                    None => continue,
-                }
-
-                points.push(Point {
-                    measurement: table_name.to_string(),
-                    tags,
-                    fields,
-                    timestamp: Some(timestamp as i64),
-                    date,
-                    service: schema.to_string(),
-                });
-            }
+            return convert_number_data_points(
+                &sum.data_points,
+                table_name,
+                schema,
+                resource_tags,
+                scope_tags,
+                flatten_attributes,
+                &[
+                    ("otel.aggregation_temporality", sum.aggregation_temporality.to_string()),
+                    ("otel.is_monotonic", sum.is_monotonic.to_string()),
+                ],
+            );
         }
         Some(metric::Data::Histogram(histogram)) => {
             for dp in &histogram.data_points {

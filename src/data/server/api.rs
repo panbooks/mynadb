@@ -48,6 +48,18 @@ pub struct DataNodeState {
     pub in_flight_queries: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
+impl DataNodeState {
+    /// Get the query engine or return a SERVICE_UNAVAILABLE error.
+    pub fn require_query_engine(&self) -> Result<&Arc<QueryEngine>, (StatusCode, String)> {
+        self.query_engine.as_ref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Query engine not available".to_string(),
+            )
+        })
+    }
+}
+
 /// Detailed retirement status
 #[derive(Clone, Serialize)]
 pub struct RetireStatusDetail {
@@ -650,14 +662,9 @@ async fn query_handler(
     State(state): State<DataNodeState>,
 ) -> impl IntoResponse {
     debug!("Query Request (GET): db={}, sql={}", db, params.sql);
-    let qe = match &state.query_engine {
-        Some(qe) => qe,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Query engine not available".to_string(),
-            )
-        }
+    let qe = match state.require_query_engine() {
+        Ok(qe) => qe,
+        Err(e) => return e,
     };
     match shared::execute_query_impl(qe, &db, &params.sql).await {
         Ok(json) => (StatusCode::OK, json),
@@ -671,14 +678,9 @@ async fn query_handler_post(
     body: String,
 ) -> impl IntoResponse {
     debug!("Query Request (POST): db={}, sql={}", db, body);
-    let qe = match &state.query_engine {
-        Some(qe) => qe,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Query engine not available".to_string(),
-            )
-        }
+    let qe = match state.require_query_engine() {
+        Ok(qe) => qe,
+        Err(e) => return e,
     };
     match shared::execute_query_impl(qe, &db, &body).await {
         Ok(json) => (StatusCode::OK, json),
@@ -691,14 +693,9 @@ async fn explain_handler(
     AxumQuery(params): AxumQuery<ExplainParams>,
     State(state): State<DataNodeState>,
 ) -> impl IntoResponse {
-    let qe = match &state.query_engine {
-        Some(qe) => qe,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Query engine not available".to_string(),
-            )
-        }
+    let qe = match state.require_query_engine() {
+        Ok(qe) => qe,
+        Err(e) => return e,
     };
     match shared::explain_query_impl(qe, &db, &params.sql, params.verbose, params.analyze).await {
         Ok(json) => (StatusCode::OK, json),
@@ -711,14 +708,9 @@ async fn explain_handler_post(
     State(state): State<DataNodeState>,
     Json(params): Json<ExplainParams>,
 ) -> impl IntoResponse {
-    let qe = match &state.query_engine {
-        Some(qe) => qe,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Query engine not available".to_string(),
-            )
-        }
+    let qe = match state.require_query_engine() {
+        Ok(qe) => qe,
+        Err(e) => return e,
     };
     match shared::explain_query_impl(qe, &db, &params.sql, params.verbose, params.analyze).await {
         Ok(json) => (StatusCode::OK, json),
@@ -731,14 +723,9 @@ async fn analyze_handler(
     AxumQuery(params): AxumQuery<QueryParams>,
     State(state): State<DataNodeState>,
 ) -> impl IntoResponse {
-    let qe = match &state.query_engine {
-        Some(qe) => qe,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Query engine not available".to_string(),
-            )
-        }
+    let qe = match state.require_query_engine() {
+        Ok(qe) => qe,
+        Err(e) => return e,
     };
     match shared::analyze_query_impl(qe, &db, &params.sql).await {
         Ok(json) => (StatusCode::OK, json),
@@ -751,14 +738,9 @@ async fn analyze_handler_post(
     State(state): State<DataNodeState>,
     body: String,
 ) -> impl IntoResponse {
-    let qe = match &state.query_engine {
-        Some(qe) => qe,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Query engine not available".to_string(),
-            )
-        }
+    let qe = match state.require_query_engine() {
+        Ok(qe) => qe,
+        Err(e) => return e,
     };
     match shared::analyze_query_impl(qe, &db, &body).await {
         Ok(json) => (StatusCode::OK, json),
@@ -786,7 +768,7 @@ async fn write_handler(
         }
     };
 
-    let data = match extract_write_body(req).await {
+    let data = match shared::extract_write_body(req).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -813,7 +795,7 @@ async fn write_handler_query_param(
         }
     };
 
-    let data = match extract_write_body(req).await {
+    let data = match shared::extract_write_body(req).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -826,42 +808,6 @@ async fn write_handler_query_param(
     }
 }
 
-/// Extract write body from request, handling gzip Content-Encoding.
-async fn extract_write_body(req: Request) -> Result<String, (StatusCode, String)> {
-    let is_gzip = req
-        .headers()
-        .get("content-encoding")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.eq_ignore_ascii_case("gzip"))
-        .unwrap_or(false);
-
-    let body = axum::body::to_bytes(req.into_body(), 250 * 1024 * 1024)
-        .await
-        .map_err(|e| {
-            (StatusCode::BAD_REQUEST, format!("Error reading body: {}", e))
-        })?;
-
-    let bytes = if is_gzip {
-        use flate2::read::GzDecoder;
-        use std::io::Read;
-        let mut decoder = GzDecoder::new(&body[..]);
-        let mut decompressed = Vec::new();
-        decoder.read_to_end(&mut decompressed).map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                format!("Gzip decompression failed: {}", e),
-            )
-        })?;
-        decompressed
-    } else {
-        body.to_vec()
-    };
-
-    String::from_utf8(bytes).map_err(|e| {
-        (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e))
-    })
-}
-
 // ============================================================================
 // Schema/Table Handlers (using shared)
 // ============================================================================
@@ -870,14 +816,9 @@ async fn list_tables_handler(
     Path(db): Path<String>,
     State(state): State<DataNodeState>,
 ) -> impl IntoResponse {
-    let qe = match &state.query_engine {
-        Some(qe) => qe,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Query engine not available".to_string(),
-            )
-        }
+    let qe = match state.require_query_engine() {
+        Ok(qe) => qe,
+        Err(e) => return e,
     };
     match shared::list_tables_impl(qe, &db).await {
         Ok(json) => (StatusCode::OK, serde_json::to_string_pretty(&json).unwrap()),
@@ -889,14 +830,9 @@ async fn list_schemas_handler(
     Path(db): Path<String>,
     State(state): State<DataNodeState>,
 ) -> impl IntoResponse {
-    let qe = match &state.query_engine {
-        Some(qe) => qe,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Query engine not available".to_string(),
-            )
-        }
+    let qe = match state.require_query_engine() {
+        Ok(qe) => qe,
+        Err(e) => return e,
     };
     match shared::list_schemas_impl(qe, &db).await {
         Ok(json) => (StatusCode::OK, serde_json::to_string_pretty(&json).unwrap()),
@@ -908,14 +844,9 @@ async fn list_schema_tables_handler(
     Path((db, schema)): Path<(String, String)>,
     State(state): State<DataNodeState>,
 ) -> impl IntoResponse {
-    let qe = match &state.query_engine {
-        Some(qe) => qe,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Query engine not available".to_string(),
-            )
-        }
+    let qe = match state.require_query_engine() {
+        Ok(qe) => qe,
+        Err(e) => return e,
     };
     match shared::list_schema_tables_impl(qe, &db, &schema).await {
         Ok(json) => (StatusCode::OK, serde_json::to_string_pretty(&json).unwrap()),
@@ -927,14 +858,9 @@ async fn schema_handler(
     Path((db, schema, table)): Path<(String, String, String)>,
     State(state): State<DataNodeState>,
 ) -> impl IntoResponse {
-    let qe = match &state.query_engine {
-        Some(qe) => qe,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Query engine not available".to_string(),
-            )
-        }
+    let qe = match state.require_query_engine() {
+        Ok(qe) => qe,
+        Err(e) => return e,
     };
     // Construct full table path: schema.table
     let full_table = format!("{}.{}", schema, table);
@@ -962,14 +888,9 @@ async fn flush_handler(State(state): State<DataNodeState>) -> impl IntoResponse 
 }
 
 async fn query_cache_stats_handler(State(state): State<DataNodeState>) -> impl IntoResponse {
-    let qe = match &state.query_engine {
-        Some(qe) => qe,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": "Query engine not available"})),
-            )
-        }
+    let qe = match state.require_query_engine() {
+        Ok(qe) => qe,
+        Err((s, m)) => return (s, Json(serde_json::json!({"error": m}))),
     };
     (StatusCode::OK, Json(shared::get_query_cache_stats_impl(qe)))
 }
@@ -989,14 +910,9 @@ async fn prewarm_cache_handler(
     Path(catalog): Path<String>,
     State(state): State<DataNodeState>,
 ) -> impl IntoResponse {
-    let qe = match &state.query_engine {
-        Some(qe) => qe,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": "Query engine not available"})),
-            )
-        }
+    let qe = match state.require_query_engine() {
+        Ok(qe) => qe,
+        Err((s, m)) => return (s, Json(serde_json::json!({"error": m}))),
     };
     match shared::prewarm_cache_impl(qe, &catalog).await {
         Ok(count) => (
@@ -1016,14 +932,9 @@ async fn prewarm_table_cache_handler(
     Path((catalog, schema, table)): Path<(String, String, String)>,
     State(state): State<DataNodeState>,
 ) -> impl IntoResponse {
-    let qe = match &state.query_engine {
-        Some(qe) => qe,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": "Query engine not available"})),
-            )
-        }
+    let qe = match state.require_query_engine() {
+        Ok(qe) => qe,
+        Err((s, m)) => return (s, Json(serde_json::json!({"error": m}))),
     };
     match shared::prewarm_table_cache_impl(qe, &catalog, &schema, &table).await {
         Ok(count) => (

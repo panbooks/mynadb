@@ -122,8 +122,6 @@ struct MysqlSession {
 #[derive(Clone)]
 struct PreparedStatement {
     sql: String,
-    #[allow(dead_code)]
-    param_count: usize,
 }
 
 impl MysqlSession {
@@ -570,7 +568,6 @@ impl<W: Read + Write> MysqlShim<W> for MysqlSession {
             stmt_id,
             PreparedStatement {
                 sql: query.to_string(),
-                param_count,
             },
         );
 

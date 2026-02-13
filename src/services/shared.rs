@@ -6,6 +6,8 @@
 //! These functions take the required components as parameters directly,
 //! allowing them to be called from handlers with different state types.
 
+use axum::extract::Request;
+use axum::http::StatusCode;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error, info};
@@ -112,6 +114,51 @@ pub async fn analyze_query_impl_auth(
         }
         Err(e) => Err(format!("Analyze error: {}", e)),
     }
+}
+
+// ============================================================================
+// Body Extraction
+// ============================================================================
+
+/// Extract write body from request, handling gzip Content-Encoding.
+///
+/// Shared across standalone, data node, and router write handlers.
+pub async fn extract_write_body(req: Request) -> Result<String, (StatusCode, String)> {
+    let is_gzip = req
+        .headers()
+        .get("content-encoding")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("gzip"))
+        .unwrap_or(false);
+
+    let body = axum::body::to_bytes(req.into_body(), 250 * 1024 * 1024)
+        .await
+        .map_err(|e| {
+            error!("Error reading body: {}", e);
+            (StatusCode::BAD_REQUEST, format!("Error reading body: {}", e))
+        })?;
+
+    let bytes = if is_gzip {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+        let mut decoder = GzDecoder::new(&body[..]);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed).map_err(|e| {
+            error!("Gzip decompression failed: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Gzip decompression failed: {}", e),
+            )
+        })?;
+        decompressed
+    } else {
+        body.to_vec()
+    };
+
+    String::from_utf8(bytes).map_err(|e| {
+        error!("Invalid UTF-8: {}", e);
+        (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e))
+    })
 }
 
 // ============================================================================

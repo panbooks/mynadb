@@ -87,10 +87,4 @@ impl MetaNode {
         }
     }
 
-    /// Apply a command directly to state machine (bypassing Raft)
-    /// Use only for read operations or internal state queries
-    #[allow(dead_code)]
-    pub(crate) fn apply_command_local(&self, cmd: MetaCommand) -> MetaResponse {
-        self.state_machine.apply_command(cmd)
-    }
 }

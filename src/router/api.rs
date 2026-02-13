@@ -319,7 +319,7 @@ pub async fn write_handler(
     State(state): State<RouterAppState>,
     req: Request,
 ) -> impl IntoResponse {
-    let body = match extract_write_body(req).await {
+    let body = match crate::services::shared::extract_write_body(req).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -348,7 +348,7 @@ pub async fn write_handler_query_param(
         .get("db")
         .cloned()
         .unwrap_or_else(|| "default".to_string());
-    let body = match extract_write_body(req).await {
+    let body = match crate::services::shared::extract_write_body(req).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -367,41 +367,6 @@ pub async fn write_handler_query_param(
     }
 }
 
-/// Extract write body from request, handling gzip Content-Encoding.
-async fn extract_write_body(req: Request) -> Result<String, (StatusCode, String)> {
-    let is_gzip = req
-        .headers()
-        .get("content-encoding")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.eq_ignore_ascii_case("gzip"))
-        .unwrap_or(false);
-
-    let body = axum::body::to_bytes(req.into_body(), 250 * 1024 * 1024)
-        .await
-        .map_err(|e| {
-            (StatusCode::BAD_REQUEST, format!("Error reading body: {}", e))
-        })?;
-
-    let bytes = if is_gzip {
-        use flate2::read::GzDecoder;
-        use std::io::Read;
-        let mut decoder = GzDecoder::new(&body[..]);
-        let mut decompressed = Vec::new();
-        decoder.read_to_end(&mut decompressed).map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                format!("Gzip decompression failed: {}", e),
-            )
-        })?;
-        decompressed
-    } else {
-        body.to_vec()
-    };
-
-    String::from_utf8(bytes).map_err(|e| {
-        (StatusCode::BAD_REQUEST, format!("Invalid UTF-8: {}", e))
-    })
-}
 
 // ============================================================================
 // Query Handlers
