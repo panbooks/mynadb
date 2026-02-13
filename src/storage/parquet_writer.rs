@@ -186,6 +186,18 @@ impl ParquetWriter {
             .map_err(|e| format!("Failed to create sorted batch: {}", e))
     }
 
+    /// Coalesce adjacent rows that share the same key (time + tag columns).
+    ///
+    /// After sorting, rows with the same timestamp and tags are adjacent.
+    /// This merges them into a single row by taking the first non-NULL value
+    /// for each field column, eliminating duplicates caused by heterogeneous
+    /// field sets (e.g., Telegraf sending swap with {free,total} and {in,out}).
+    /// Coalesce adjacent rows with the same key (time + tags) in a sorted batch.
+    /// Delegates to the shared utility in batch_converter.
+    fn coalesce_rows(batch: &RecordBatch) -> Result<RecordBatch, String> {
+        super::batch_converter::coalesce_record_batch(batch)
+    }
+
     /// Build optimal sort order: low cardinality tags first, then time
     /// This enables efficient partition pruning and data locality
     fn build_sort_order(schema: &Schema, tag_order_by_cardinality: &[String]) -> Vec<String> {
@@ -262,7 +274,7 @@ impl ParquetWriter {
             return Err("No batches to write".to_string());
         }
 
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        let _total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
 
         // Create directory structure with node_id prefix
         let partition_path = Self::get_partition_path(node_id, catalog, schema, table, date);
@@ -298,6 +310,13 @@ impl ParquetWriter {
         // Build optimal sort order based on cardinality
         let sort_order = Self::build_sort_order(&schema_ref, tag_order_by_cardinality);
         let sorted_batch = Self::sort_batch_by_columns(&merged_batch, &sort_order)?;
+
+        // Coalesce rows with the same (time, tags) to merge heterogeneous field sets.
+        // Telegraf may send the same measurement with different field subsets at the
+        // same timestamp (e.g., swap: {free,total,used,used_percent} and {in,out}).
+        // After sorting, identical keys are adjacent so we can merge in one pass.
+        let sorted_batch = Self::coalesce_rows(&sorted_batch)?;
+        let total_rows = sorted_batch.num_rows();
 
         let sort_desc = if tag_order_by_cardinality.is_empty() {
             "time".to_string()

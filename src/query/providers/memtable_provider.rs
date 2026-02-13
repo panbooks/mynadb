@@ -271,6 +271,63 @@ impl MemtableExec {
     fn full_name(&self) -> String {
         format!("{}.{}.{}", self.catalog, self.schema_name, self.table_name)
     }
+
+    /// Concatenate aligned batches, sort by key columns, and coalesce duplicate rows.
+    fn sort_and_coalesce(
+        batches: Vec<RecordBatch>,
+        schema: &SchemaRef,
+    ) -> std::result::Result<RecordBatch, String> {
+        use datafusion::arrow::compute::{concat_batches, lexsort_to_indices, take, SortColumn};
+
+        if batches.len() == 1 && batches[0].num_rows() <= 1 {
+            return Ok(batches.into_iter().next().unwrap());
+        }
+
+        // Concatenate all batches
+        let merged = concat_batches(schema, &batches)
+            .map_err(|e| format!("Failed to concat batches: {}", e))?;
+
+        if merged.num_rows() <= 1 {
+            return Ok(merged);
+        }
+
+        // Build sort columns: time + all Utf8 columns (tags)
+        let mut sort_cols: Vec<SortColumn> = Vec::new();
+        for (i, field) in schema.fields().iter().enumerate() {
+            if field.name() == "time"
+                || matches!(
+                    field.data_type(),
+                    datafusion::arrow::datatypes::DataType::Utf8
+                        | datafusion::arrow::datatypes::DataType::LargeUtf8
+                        | datafusion::arrow::datatypes::DataType::Dictionary(_, _)
+                )
+            {
+                sort_cols.push(SortColumn {
+                    values: merged.column(i).clone(),
+                    options: None,
+                });
+            }
+        }
+
+        if sort_cols.is_empty() {
+            return Ok(merged);
+        }
+
+        // Sort
+        let indices = lexsort_to_indices(&sort_cols, None)
+            .map_err(|e| format!("Failed to sort: {}", e))?;
+        let sorted_columns: Vec<Arc<dyn datafusion::arrow::array::Array>> = merged
+            .columns()
+            .iter()
+            .map(|col| take(col.as_ref(), &indices, None).map(Arc::from))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to reorder: {}", e))?;
+        let sorted = RecordBatch::try_new(schema.clone(), sorted_columns)
+            .map_err(|e| format!("Failed to create sorted batch: {}", e))?;
+
+        // Coalesce adjacent rows with the same key
+        crate::storage::batch_converter::coalesce_record_batch(&sorted)
+    }
 }
 
 impl DisplayAs for MemtableExec {
@@ -353,9 +410,10 @@ impl ExecutionPlan for MemtableExec {
 
         let mut schema_mappings: HashMap<SchemaRef, Vec<ColumnSource>> = HashMap::new();
 
-        let batch_results: Vec<Result<RecordBatch>> = batches
+        // Align all batches to full_schema (without projection — we need all columns for coalescing)
+        let aligned_batches: Vec<RecordBatch> = batches
             .into_iter()
-            .map(|batch| {
+            .filter_map(|batch| {
                 let batch_schema = batch.schema();
                 let mapping = schema_mappings
                     .entry(batch_schema.clone())
@@ -403,16 +461,29 @@ impl ExecutionPlan for MemtableExec {
                     })
                     .collect();
 
-                let full_batch = RecordBatch::try_new(full_schema.clone(), columns)?;
-
-                // Apply projection if specified
-                if let Some(ref proj) = projection {
-                    full_batch.project(proj).map_err(DataFusionError::from)
-                } else {
-                    Ok(full_batch)
-                }
+                RecordBatch::try_new(full_schema.clone(), columns).ok()
             })
             .collect();
+
+        // Coalesce rows with the same key (time + tags) to merge heterogeneous field sets.
+        // Telegraf may send the same measurement with different field subsets at the
+        // same timestamp, producing separate batches with NULL-padded columns.
+        // We concatenate, sort by key columns, then merge adjacent same-key rows.
+        let batch_results: Vec<Result<RecordBatch>> = if aligned_batches.is_empty() {
+            vec![]
+        } else {
+            match Self::sort_and_coalesce(aligned_batches, &full_schema) {
+                Ok(coalesced) => {
+                    // Apply projection if specified
+                    if let Some(ref proj) = projection {
+                        vec![coalesced.project(proj).map_err(DataFusionError::from)]
+                    } else {
+                        vec![Ok(coalesced)]
+                    }
+                }
+                Err(e) => vec![Err(DataFusionError::Execution(e))],
+            }
+        };
 
         // Create stream from batches
         let stream = stream::iter(batch_results);
