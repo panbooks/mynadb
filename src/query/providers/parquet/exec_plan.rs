@@ -143,15 +143,16 @@ impl ParquetExecPlan {
 
     /// Check hot partition cache for a given partition key.
     /// The cache stores FULL (non-projected) batches; projection is applied here.
-    fn check_hot_cache(&self, partition_key: &PartitionKey) -> Option<Vec<RecordBatch>> {
+    /// `current_file_count` is used to detect stale cache entries (e.g., after flush/compaction).
+    fn check_hot_cache(&self, partition_key: &PartitionKey, current_file_count: usize) -> Option<Vec<RecordBatch>> {
         let cache = self.hot_partition_cache.as_ref()?;
 
         if !cache.is_enabled() {
             return None;
         }
 
-        // Get full batches from cache, apply this query's projection
-        cache.get(partition_key, self.projection.as_deref(), &[])
+        // Get full batches from cache, validate file count to detect staleness
+        cache.get(partition_key, self.projection.as_deref(), &[], Some(current_file_count))
     }
 }
 
@@ -224,7 +225,7 @@ impl ExecutionPlan for ParquetExecPlan {
             });
 
             if all_same_partition {
-                if let Some(cached_batches) = self.check_hot_cache(&first_key) {
+                if let Some(cached_batches) = self.check_hot_cache(&first_key, files_to_read.len()) {
                     if !cached_batches.is_empty() {
                         info!(
                             "Hot partition cache HIT: {}.{}.{} date={}, returning {} batches ({} rows)",

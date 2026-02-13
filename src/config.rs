@@ -345,7 +345,7 @@ impl Default for HotPartitionCacheConfig {
 }
 
 fn default_hot_partition_enabled() -> bool {
-    true
+    false
 }
 
 fn default_hot_partition_max_size_mb() -> u64 {

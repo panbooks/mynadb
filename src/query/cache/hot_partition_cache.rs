@@ -127,7 +127,7 @@ pub struct HotPartitionCacheConfig {
 impl Default for HotPartitionCacheConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             max_size_bytes: 1024 * 1024 * 1024, // 1GB
             hot_days: 2,                        // Today + yesterday
             ttl_secs: 1800,                     // 30 minutes
@@ -248,11 +248,13 @@ impl HotPartitionCache {
     /// Parameters:
     /// - projection: If provided, only the specified columns are returned
     /// - predicates: If provided, filter batches to only include matching rows
+    /// - expected_file_count: If provided, validates against cached file count to detect staleness
     pub fn get(
         &self,
         key: &PartitionKey,
         projection: Option<&[usize]>,
         predicates: &[Arc<dyn PhysicalExpr>],
+        expected_file_count: Option<usize>,
     ) -> Option<Vec<RecordBatch>> {
         if !self.config.enabled {
             return None;
@@ -265,6 +267,20 @@ impl HotPartitionCache {
             if entry.is_expired(ttl) {
                 self.stats.misses.fetch_add(1, Ordering::Relaxed);
                 return None;
+            }
+
+            // Staleness check: if file count changed, cache is stale
+            // (new files written by flush, or files removed by compaction)
+            if let Some(expected) = expected_file_count {
+                if entry.file_count != expected {
+                    debug!(
+                        "Hot partition cache STALE: {}.{}.{} date={}, cached_files={}, current_files={}",
+                        key.catalog, key.schema, key.table, key.date_str(),
+                        entry.file_count, expected
+                    );
+                    self.stats.misses.fetch_add(1, Ordering::Relaxed);
+                    return None;
+                }
             }
 
             entry.hit_count.fetch_add(1, Ordering::Relaxed);
@@ -653,6 +669,7 @@ mod tests {
     #[test]
     fn test_is_hot_date() {
         let config = HotPartitionCacheConfig {
+            enabled: true,
             hot_days: 1,
             ..Default::default()
         };
@@ -668,6 +685,7 @@ mod tests {
     #[test]
     fn test_cache_put_get() {
         let config = HotPartitionCacheConfig {
+            enabled: true,
             hot_days: 30, // Make sure test date is hot
             ..Default::default()
         };
@@ -681,7 +699,7 @@ mod tests {
         assert!(cache.put(key.clone(), vec![batch], 1));
 
         // Get from cache (no projection, no predicates)
-        let result = cache.get(&key, None, &[]);
+        let result = cache.get(&key, None, &[], None);
         assert!(result.is_some());
         let cached = result.unwrap();
         assert_eq!(cached.len(), 1);
@@ -689,7 +707,7 @@ mod tests {
         assert_eq!(cached[0].num_columns(), 2);
 
         // Get with projection (only first column)
-        let result = cache.get(&key, Some(&[0]), &[]);
+        let result = cache.get(&key, Some(&[0]), &[], None);
         assert!(result.is_some());
         let cached = result.unwrap();
         assert_eq!(cached.len(), 1);
@@ -704,10 +722,14 @@ mod tests {
 
     #[test]
     fn test_cache_miss() {
-        let cache = HotPartitionCache::with_defaults();
+        let config = HotPartitionCacheConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let cache = HotPartitionCache::new(config);
 
         let key = PartitionKey::new("testdb", "default", "cpu", 20240115);
-        let result = cache.get(&key, None, &[]);
+        let result = cache.get(&key, None, &[], None);
 
         assert!(result.is_none());
 
@@ -719,6 +741,7 @@ mod tests {
     #[test]
     fn test_cache_invalidation() {
         let config = HotPartitionCacheConfig {
+            enabled: true,
             hot_days: 30,
             ..Default::default()
         };
@@ -741,13 +764,14 @@ mod tests {
         cache.invalidate_table("testdb", "default", "cpu");
 
         assert_eq!(cache.stats().entry_count, 0);
-        assert!(cache.get(&key1, None, &[]).is_none());
-        assert!(cache.get(&key2, None, &[]).is_none());
+        assert!(cache.get(&key1, None, &[], None).is_none());
+        assert!(cache.get(&key2, None, &[], None).is_none());
     }
 
     #[test]
     fn test_skip_old_date() {
         let config = HotPartitionCacheConfig {
+            enabled: true,
             hot_days: 1, // Only today and yesterday
             ..Default::default()
         };
@@ -775,12 +799,13 @@ mod tests {
         let batch = create_test_batch(10);
 
         assert!(!cache.put(key.clone(), vec![batch], 1));
-        assert!(cache.get(&key, None, &[]).is_none());
+        assert!(cache.get(&key, None, &[], None).is_none());
     }
 
     #[test]
     fn test_cache_clear() {
         let config = HotPartitionCacheConfig {
+            enabled: true,
             hot_days: 30,
             ..Default::default()
         };
@@ -796,5 +821,38 @@ mod tests {
         cache.clear();
         assert_eq!(cache.stats().entry_count, 0);
         assert_eq!(cache.stats().size_bytes, 0);
+    }
+
+    #[test]
+    fn test_cache_stale_file_count() {
+        let config = HotPartitionCacheConfig {
+            enabled: true,
+            hot_days: 30,
+            ..Default::default()
+        };
+        let cache = HotPartitionCache::new(config);
+
+        let today = today_date_int();
+        let key = PartitionKey::new("testdb", "default", "cpu", today);
+        let batch = create_test_batch(100);
+
+        // Put with file_count=3
+        assert!(cache.put(key.clone(), vec![batch], 3));
+
+        // Get with matching file count → HIT
+        let result = cache.get(&key, None, &[], Some(3));
+        assert!(result.is_some());
+
+        // Get with different file count (new file written) → MISS (stale)
+        let result = cache.get(&key, None, &[], Some(4));
+        assert!(result.is_none());
+
+        // Get with no file count check → HIT
+        let result = cache.get(&key, None, &[], None);
+        assert!(result.is_some());
+
+        let stats = cache.stats();
+        assert_eq!(stats.hits, 2);
+        assert_eq!(stats.misses, 1);
     }
 }
