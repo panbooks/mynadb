@@ -6,6 +6,7 @@
 
 use super::config::{ParquetFileInfo, ParquetTableConfig};
 use super::filters::{extract_partition_filters, matches_partition_filter};
+use crate::storage::manifest;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::{DataFusionError, Result};
 use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -109,6 +110,10 @@ pub async fn discover_files(
                 continue;
             }
 
+            // Read manifest to get set of superseded files for this partition
+            let superseded =
+                manifest::get_superseded_set(object_store, &node_id_dir).await;
+
             // List parquet files in this node_id directory
             let partition_files = object_store.list(Some(&node_id_dir));
             let objects: Vec<_> = partition_files
@@ -120,6 +125,15 @@ pub async fn discover_files(
                 let path_str = meta.location.to_string();
                 if !path_str.ends_with(".parquet") {
                     continue;
+                }
+
+                // Skip files that have been superseded by compaction
+                if !superseded.is_empty() {
+                    let filename = manifest::filename_from_path(&path_str);
+                    if superseded.contains(filename) {
+                        debug!("Skipping superseded file: {}", path_str);
+                        continue;
+                    }
                 }
 
                 let mut partition_values = HashMap::new();

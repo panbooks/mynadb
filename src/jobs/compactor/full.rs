@@ -4,6 +4,7 @@
 //! Uses Object Store abstraction for both local and S3/MinIO storage.
 
 use crate::storage::layout::STORE_DIR;
+use crate::storage::manifest;
 use chrono::Timelike;
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::time::Instant;
@@ -408,6 +409,19 @@ impl Compactor {
             if let Err(e) = manager.register_file(file_info).await {
                 warn!("Failed to register compacted file {}: {}", output_path, e);
             }
+        }
+
+        // Mark source files as superseded in manifest BEFORE deletion
+        // so queries immediately stop reading them even if deletion fails
+        let source_filenames: Vec<String> = compactable_files
+            .iter()
+            .map(|(p, _)| manifest::filename_from_path(p).to_string())
+            .collect();
+        if let Err(e) =
+            manifest::mark_files_superseded(&self.storage, partition_prefix, &source_filenames)
+                .await
+        {
+            warn!("Failed to update compaction manifest: {}", e);
         }
 
         // Delete old compacted files using Object Store

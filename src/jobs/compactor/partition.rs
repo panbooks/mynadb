@@ -4,6 +4,8 @@
 //! Uses Object Store abstraction for both local and S3/MinIO storage.
 
 use crate::storage::layout::STORE_DIR;
+use crate::storage::manifest;
+use std::collections::HashSet;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
@@ -135,6 +137,23 @@ impl Compactor {
             return Ok(None);
         }
 
+        // Filter out files already superseded by previous compactions
+        let superseded = manifest::get_superseded_set_from_storage(&self.storage, prefix).await;
+        if !superseded.is_empty() {
+            let before_count = file_infos.len();
+            file_infos.retain(|f| {
+                let filename = manifest::filename_from_path(&f.path);
+                !superseded.contains(filename)
+            });
+            let filtered = before_count - file_infos.len();
+            if filtered > 0 {
+                debug!("Filtered {} superseded files via manifest", filtered);
+            }
+            if file_infos.is_empty() {
+                return Ok(None);
+            }
+        }
+
         // Sort by level (ascending) then timestamp (ascending)
         file_infos.sort_by(|a, b| {
             a.level
@@ -189,6 +208,19 @@ impl Compactor {
 
         // Step 2: Major compactions (L1 → L2, L2 → L3, etc.)
         let file_infos_updated = self.list_parquet_file_infos_async(prefix).await?;
+        // Re-read manifest (may have been updated by L0→L1 compaction above)
+        let superseded = manifest::get_superseded_set_from_storage(&self.storage, prefix).await;
+        let file_infos_updated: Vec<_> = if superseded.is_empty() {
+            file_infos_updated
+        } else {
+            file_infos_updated
+                .into_iter()
+                .filter(|f| {
+                    let filename = manifest::filename_from_path(&f.path);
+                    !superseded.contains(filename)
+                })
+                .collect()
+        };
 
         for current_level in 1..=config.max_level {
             let all_level_files: Vec<_> = file_infos_updated
@@ -391,6 +423,19 @@ impl Compactor {
                     "Created L{} file: {} ({} rows from {} L{} files)",
                     target_level, filename, rows, group.len(), current_level
                 );
+            }
+
+            // Mark source files as superseded in manifest BEFORE deletion
+            // so queries immediately stop reading them even if deletion fails
+            let source_filenames: Vec<String> = paths
+                .iter()
+                .map(|p| manifest::filename_from_path(p).to_string())
+                .collect();
+            if let Err(e) =
+                manifest::mark_files_superseded(&self.storage, partition_prefix, &source_filenames)
+                    .await
+            {
+                warn!("Failed to update compaction manifest: {}", e);
             }
 
             // Delete old files after successful write using Object Store
