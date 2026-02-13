@@ -818,20 +818,20 @@ fn transpile_show_tag_values(stmt: &ShowTagValuesStatement, ctx: &TranspileConte
     };
 
     let mut sql = format!(
-        "SELECT '{}' AS key, {} AS value FROM {}.{}.{} GROUP BY {}",
+        "SELECT '{}' AS key, {} AS value FROM {}.{}.{}",
         tag_col,
         quote_ident(&tag_col),
         quote_ident(db),
         quote_ident(&ctx.schema),
         quote_ident(&table),
-        quote_ident(&tag_col)
     );
 
     if let Some(ref cond) = stmt.condition {
-        sql.push_str(" HAVING ");
+        sql.push_str(" WHERE ");
         sql.push_str(&transpile_expr(cond)?);
     }
 
+    sql.push_str(&format!(" GROUP BY {}", quote_ident(&tag_col)));
     sql.push_str(" ORDER BY value");
 
     if let Some(limit) = stmt.limit {
@@ -1144,5 +1144,21 @@ mod tests {
         let sql = transpile(&stmt, &ctx()).unwrap();
         // 1h = 3_600_000_000_000 nanoseconds
         assert!(sql.contains("time_bucket(\"time\", 3600000000000, 0)"), "SQL was: {}", sql);
+    }
+
+    #[test]
+    fn test_show_tag_values_with_where() {
+        // SHOW TAG VALUES WHERE should produce WHERE before GROUP BY, not HAVING
+        let stmt = parse(
+            r#"SHOW TAG VALUES FROM "net" WITH KEY = "interface" WHERE "host" =~ /yuhaomo/"#,
+        )
+        .unwrap();
+        let sql = transpile(&stmt, &ctx()).unwrap();
+        assert!(sql.contains("WHERE"), "Should have WHERE clause. SQL was: {}", sql);
+        assert!(!sql.contains("HAVING"), "Should NOT have HAVING clause. SQL was: {}", sql);
+        // WHERE should come before GROUP BY
+        let where_pos = sql.find("WHERE").unwrap();
+        let group_pos = sql.find("GROUP BY").unwrap();
+        assert!(where_pos < group_pos, "WHERE should be before GROUP BY. SQL was: {}", sql);
     }
 }
