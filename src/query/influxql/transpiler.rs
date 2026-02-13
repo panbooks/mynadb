@@ -98,9 +98,12 @@ fn transpile_select(stmt: &SelectStatement, ctx: &TranspileContext) -> Result<St
     if let Some(ref gb) = stmt.group_by {
         let mut group_parts = Vec::new();
 
-        // Time bucket
-        if gb.time.is_some() {
-            group_parts.push("time_bucket".to_string());
+        // Time bucket — use the full expression so DataFusion can resolve it
+        if let Some(ref duration) = gb.time {
+            group_parts.push(format!(
+                "time_bucket(\"time\", {}, 0)",
+                duration.to_nanoseconds()
+            ));
         }
 
         // Tags
@@ -137,8 +140,7 @@ fn transpile_select(stmt: &SelectStatement, ctx: &TranspileContext) -> Result<St
             sql.push_str(" ASC");
         }
     } else if has_time_group {
-        // Default order by time for grouped queries
-        sql.push_str(" ORDER BY time_bucket ASC");
+        sql.push_str(" ORDER BY time ASC");
     }
 
     // LIMIT/OFFSET
@@ -356,7 +358,12 @@ fn transpile_select_with_cte(stmt: &SelectStatement, ctx: &TranspileContext) -> 
     if has_time_group || !group_tags.is_empty() {
         let mut parts = Vec::new();
         if has_time_group {
-            parts.push("time_bucket".to_string());
+            if let Some(ref duration) = time_duration {
+                parts.push(format!(
+                    "time_bucket(\"time\", {}, 0)",
+                    duration.to_nanoseconds()
+                ));
+            }
         }
         for tag in &group_tags {
             parts.push(quote_ident(tag));
@@ -483,7 +490,12 @@ fn transpile_select_simple(stmt: &SelectStatement, ctx: &TranspileContext) -> Re
     }
     if let Some(ref gb) = stmt.group_by {
         let mut group_parts = Vec::new();
-        if gb.time.is_some() { group_parts.push("time_bucket".to_string()); }
+        if let Some(ref duration) = gb.time {
+            group_parts.push(format!(
+                "time_bucket(\"time\", {}, 0)",
+                duration.to_nanoseconds()
+            ));
+        }
         for tag in &gb.tags {
             if tag == "*" {
                 if let Some(ref cond) = stmt.condition {
@@ -507,7 +519,7 @@ fn transpile_select_simple(stmt: &SelectStatement, ctx: &TranspileContext) -> Re
         sql.push_str(" ORDER BY time");
         if ob.time_desc { sql.push_str(" DESC"); } else { sql.push_str(" ASC"); }
     } else if has_time_group {
-        sql.push_str(" ORDER BY time_bucket ASC");
+        sql.push_str(" ORDER BY time ASC");
     }
     if let Some(limit) = stmt.limit { sql.push_str(&format!(" LIMIT {}", limit)); }
     if let Some(offset) = stmt.offset { sql.push_str(&format!(" OFFSET {}", offset)); }
@@ -1116,17 +1128,16 @@ mod tests {
 
     #[test]
     fn test_group_by_star_excludes_time_from_group() {
-        // time comparisons in WHERE should NOT be added to GROUP BY
+        // time comparisons in WHERE should NOT be added to GROUP BY as a bare column
         let stmt = parse(
             r#"SELECT mean("value") FROM "cpu" WHERE "host" = 'server1' AND time > 1000 GROUP BY time(5m), *"#
         ).unwrap();
         let sql = transpile(&stmt, &ctx()).unwrap();
-        // host should be in GROUP BY, but time should not be duplicated
+        // host should be in GROUP BY, but time should not be a standalone GROUP BY column
         assert!(sql.contains(r#""host""#), "Should GROUP BY host. SQL was: {}", sql);
-        // time is already covered by time_bucket; raw "time" should not appear after GROUP BY
+        // GROUP BY should have time_bucket(...) and "host", but NOT a bare , "time" entry
         let group_by_part = sql.split("GROUP BY").nth(1).unwrap_or("");
-        let time_in_group = group_by_part.matches(r#""time""#).count();
-        assert_eq!(time_in_group, 0, "time should not be in GROUP BY tags. SQL was: {}", sql);
+        assert!(!group_by_part.contains(r#", "time""#), "time should not be a standalone GROUP BY column. SQL was: {}", sql);
     }
 
     #[test]
