@@ -168,6 +168,11 @@ pub(super) fn remap_projection_for_child(
             .collect(),
     };
 
+    // Empty projection (e.g., count(*)) — propagate as empty to avoid unnecessary full scans
+    if projected_names.is_empty() {
+        return Some(vec![]);
+    }
+
     // Map those names to indices in the child's schema
     let child_indices: Vec<usize> = projected_names
         .iter()
@@ -224,8 +229,16 @@ pub(super) fn align_batch_to_schema(
         })
         .collect();
 
-    datafusion::arrow::array::RecordBatch::try_new(target_schema.clone(), columns)
-        .map_err(|e| DataFusionError::ArrowError(e, None))
+    // Use try_new_with_options to handle 0-column projections (e.g., count(*))
+    // where RecordBatch::try_new would fail because it can't infer row count from 0 columns
+    let options = datafusion::arrow::array::RecordBatchOptions::new()
+        .with_row_count(Some(num_rows));
+    datafusion::arrow::array::RecordBatch::try_new_with_options(
+        target_schema.clone(),
+        columns,
+        &options,
+    )
+    .map_err(|e| DataFusionError::ArrowError(e, None))
 }
 
 #[async_trait]
@@ -727,5 +740,38 @@ mod tests {
             .unwrap();
         assert_eq!(date_col.value(0), "2024-01-01");
         assert_eq!(date_col.value(1), "2024-01-02");
+    }
+
+    #[test]
+    fn test_align_batch_to_empty_schema_for_count_star() {
+        // count(*) produces an empty projection — 0 columns, just need row count
+        let empty_schema = Arc::new(Schema::new(Vec::<Field>::new()));
+
+        let batch_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let ids = Int64Array::from(vec![1, 2, 3]);
+        let names = StringArray::from(vec![Some("a"), Some("b"), Some("c")]);
+        let batch =
+            RecordBatch::try_new(batch_schema, vec![Arc::new(ids), Arc::new(names)]).unwrap();
+
+        let aligned = align_batch_to_schema(&batch, &empty_schema).unwrap();
+        assert_eq!(aligned.num_rows(), 3);
+        assert_eq!(aligned.num_columns(), 0);
+    }
+
+    #[test]
+    fn test_remap_projection_empty_for_count_star() {
+        let union_schema = Arc::new(Schema::new(vec![
+            Field::new("time", DataType::Int64, false),
+            Field::new("host", DataType::Utf8, true),
+        ]));
+        let child_schema = union_schema.clone();
+
+        // Empty projection (count(*)) should return Some(vec![]), not None
+        let remapped =
+            remap_projection_for_child(&union_schema, &child_schema, Some(&vec![]));
+        assert_eq!(remapped, Some(vec![]));
     }
 }

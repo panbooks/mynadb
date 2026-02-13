@@ -23,6 +23,7 @@
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{new_null_array, RecordBatch, StringArray};
+use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{project_schema, DataFusionError, Result};
@@ -385,7 +386,16 @@ impl ExecutionPlan for MemtableExec {
                     .enumerate()
                     .map(|(field_idx, src)| match src {
                         ColumnSource::NodeId => node_id_array.clone(),
-                        ColumnSource::BatchColumn(idx) => batch.column(*idx).clone(),
+                        ColumnSource::BatchColumn(idx) => {
+                            let col = batch.column(*idx);
+                            let target_type = full_schema.field(field_idx).data_type();
+                            if col.data_type() != target_type {
+                                // Cast type mismatches (e.g., Int64 → Float64 across Telegraf batches)
+                                cast(col.as_ref(), target_type).unwrap_or_else(|_| col.clone())
+                            } else {
+                                col.clone()
+                            }
+                        }
                         ColumnSource::Null => {
                             let data_type = full_schema.field(field_idx).data_type();
                             new_null_array(data_type, num_rows)

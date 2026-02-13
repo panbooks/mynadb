@@ -2,7 +2,7 @@
 
 use super::config::ParquetFileInfo;
 use super::filters::{create_row_filter_from_predicates, extract_equality_predicates};
-use datafusion::arrow::array::{Array, RecordBatch, StringArray};
+use datafusion::arrow::array::{Array, RecordBatch, RecordBatchOptions, StringArray};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
@@ -178,6 +178,14 @@ fn add_partition_columns(
     node_id_column: &str,
     partition_values: &HashMap<String, String>,
 ) -> Result<RecordBatch> {
+    // Handle empty projection (e.g., count(*)) — return 0-column batch with correct row count
+    if target_schema.fields().is_empty() {
+        let options = datafusion::arrow::array::RecordBatchOptions::new()
+            .with_row_count(Some(batch.num_rows()));
+        return RecordBatch::try_new_with_options(target_schema.clone(), vec![], &options)
+            .map_err(|e| DataFusionError::External(Box::new(e)));
+    }
+
     // Check if any partition columns are in target schema
     let has_date_col = target_schema
         .fields()
