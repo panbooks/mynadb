@@ -316,8 +316,8 @@ mod tests {
         };
 
         let sql = influxql_to_sql("SELECT * FROM cpu", &ctx).unwrap();
-        assert!(sql.contains("SELECT *"));
-        assert!(sql.contains("mydb.default.cpu"));
+        assert!(sql.contains("SELECT *"), "SQL was: {}", sql);
+        assert!(sql.contains(r#""mydb"."default"."cpu""#), "SQL was: {}", sql);
     }
 
     #[test]
@@ -328,8 +328,8 @@ mod tests {
         };
 
         let sql = influxql_to_sql("SELECT mean(value) FROM cpu GROUP BY time(5m)", &ctx).unwrap();
-        assert!(sql.contains("AVG(value)"));
-        assert!(sql.contains("time_bucket"));
+        assert!(sql.contains(r#"AVG("value")"#), "SQL was: {}", sql);
+        assert!(sql.contains("time_bucket"), "SQL was: {}", sql);
     }
 
     #[test]

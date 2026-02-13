@@ -25,6 +25,7 @@ pub struct Parser {
     tokens: Vec<Token>,
     position: usize,
     input: String,
+    token_positions: Vec<usize>,
 }
 
 impl Parser {
@@ -34,10 +35,12 @@ impl Parser {
             message: e.message,
             position: e.position,
         })?;
+        let token_positions = lexer.token_positions().to_vec();
         Ok(Self {
             tokens,
             position: 0,
             input: input.to_string(),
+            token_positions,
         })
     }
 
@@ -385,41 +388,34 @@ impl Parser {
     }
 
     fn parse_regex_pattern(&mut self) -> Result<String, ParseError> {
-        // The regex should be in the format /pattern/
-        // Simplified approach - parse tokens between slashes
-        if let Token::Slash = self.current() {
+        // Lexer produces Token::Regex directly after =~ or !~
+        if let Token::Regex(s) = self.current().clone() {
             self.advance();
-            // Collect until next /
-            let mut pattern = String::new();
-            loop {
-                match self.current() {
-                    Token::Slash => {
-                        self.advance();
-                        return Ok(pattern);
-                    }
-                    Token::Ident(s) => {
-                        pattern.push_str(&s);
-                        self.advance();
-                    }
-                    Token::Star => {
-                        pattern.push('*');
-                        self.advance();
-                    }
-                    Token::Dot => {
-                        pattern.push('.');
-                        self.advance();
-                    }
-                    Token::Eof => {
-                        return Err(self.error("Unterminated regex"));
-                    }
-                    _ => {
-                        return Err(self.error(&format!("Unexpected token in regex: {:?}", self.current())));
-                    }
-                }
-            }
+            return Ok(s);
         }
 
-        // If not a slash-delimited regex, try string
+        // Fallback: if lexer produced Token::Slash (regex without =~/!~ context),
+        // use scan_regex on the raw input to handle special chars like ^, $, etc.
+        if let Token::Slash = self.current() {
+            let byte_pos = self.token_positions.get(self.position).copied().unwrap_or(0);
+            let (pattern, end_pos) = scan_regex(&self.input, byte_pos).map_err(|e| ParseError {
+                message: e.message,
+                position: e.position,
+            })?;
+
+            // Advance parser past all tokens consumed by the regex literal
+            while self.position < self.tokens.len() {
+                let tok_pos = self.token_positions.get(self.position).copied().unwrap_or(usize::MAX);
+                if tok_pos >= end_pos {
+                    break;
+                }
+                self.position += 1;
+            }
+
+            return Ok(pattern);
+        }
+
+        // Fallback: accept a string as regex pattern
         if let Token::String(s) = self.current().clone() {
             self.advance();
             return Ok(s);
@@ -1064,6 +1060,123 @@ mod tests {
             assert_eq!(s.from.database, Some("mydb".to_string()));
             assert_eq!(s.from.retention_policy, Some("myrp".to_string()));
             assert!(matches!(s.from.name, MeasurementName::Name(ref n) if n == "cpu"));
+        } else {
+            panic!("Expected SELECT statement");
+        }
+    }
+
+    #[test]
+    fn test_regex_pattern_simple() {
+        let stmt = parse(r#"SELECT * FROM cpu WHERE host =~ /server01/"#).unwrap();
+        if let Statement::Select(s) = stmt {
+            let cond = s.condition.unwrap();
+            if let Expr::BinaryOp { right, op, .. } = cond {
+                assert_eq!(op, BinaryOperator::RegexMatch);
+                assert!(matches!(*right, Expr::Regex(ref p) if p == "server01"));
+            } else {
+                panic!("Expected binary op");
+            }
+        } else {
+            panic!("Expected SELECT statement");
+        }
+    }
+
+    #[test]
+    fn test_regex_pattern_with_anchors() {
+        // /^server1$/ should parse correctly despite ^ and $ being special
+        let stmt = parse(r#"SELECT * FROM cpu WHERE host =~ /^server1$/"#).unwrap();
+        if let Statement::Select(s) = stmt {
+            let cond = s.condition.unwrap();
+            if let Expr::BinaryOp { right, .. } = cond {
+                assert!(matches!(*right, Expr::Regex(ref p) if p == "^server1$"),
+                    "Got: {:?}", right);
+            } else {
+                panic!("Expected binary op");
+            }
+        } else {
+            panic!("Expected SELECT statement");
+        }
+    }
+
+    #[test]
+    fn test_regex_not_match() {
+        let stmt = parse(r#"SELECT * FROM cpu WHERE host !~ /^test/"#).unwrap();
+        if let Statement::Select(s) = stmt {
+            let cond = s.condition.unwrap();
+            if let Expr::BinaryOp { op, right, .. } = cond {
+                assert_eq!(op, BinaryOperator::RegexNotMatch);
+                assert!(matches!(*right, Expr::Regex(ref p) if p == "^test"));
+            } else {
+                panic!("Expected binary op");
+            }
+        } else {
+            panic!("Expected SELECT statement");
+        }
+    }
+
+    #[test]
+    fn test_double_quoted_identifiers() {
+        // Double-quoted identifiers should be parsed as Identifier, not String
+        let stmt = parse(r#"SELECT "usage_user" FROM "cpu" WHERE "host" = 'server01'"#).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert_eq!(s.fields.len(), 1);
+            assert!(matches!(&s.fields[0].expr, Expr::Identifier(ref n) if n == "usage_user"),
+                "Got: {:?}", s.fields[0].expr);
+            assert!(matches!(&s.from.name, MeasurementName::Name(ref n) if n == "cpu"));
+        } else {
+            panic!("Expected SELECT statement");
+        }
+    }
+
+    #[test]
+    fn test_nested_derivative() {
+        // non_negative_derivative(mean("bytes_recv"), 1s) should parse as nested functions
+        let stmt = parse(
+            r#"SELECT non_negative_derivative(mean("bytes_recv"), 1s) FROM "net" GROUP BY time(5m)"#
+        ).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert_eq!(s.fields.len(), 1);
+            if let Expr::Function(ref f) = s.fields[0].expr {
+                assert_eq!(f.name, "non_negative_derivative");
+                assert_eq!(f.args.len(), 2);
+                if let Expr::Function(ref inner) = f.args[0] {
+                    assert_eq!(inner.name, "mean");
+                } else {
+                    panic!("Expected inner function, got: {:?}", f.args[0]);
+                }
+            } else {
+                panic!("Expected function, got: {:?}", s.fields[0].expr);
+            }
+        } else {
+            panic!("Expected SELECT statement");
+        }
+    }
+
+    #[test]
+    fn test_derivative_with_arithmetic() {
+        // non_negative_derivative(mean("bytes_recv"), 1s) * 8
+        let stmt = parse(
+            r#"SELECT non_negative_derivative(mean("bytes_recv"), 1s) * 8 FROM "net" GROUP BY time(5m)"#
+        ).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert_eq!(s.fields.len(), 1);
+            if let Expr::BinaryOp { left, op, right } = &s.fields[0].expr {
+                assert_eq!(*op, BinaryOperator::Mul);
+                assert!(matches!(**left, Expr::Function(_)));
+                assert!(matches!(**right, Expr::Literal(Literal::Integer(8))));
+            } else {
+                panic!("Expected binary op, got: {:?}", s.fields[0].expr);
+            }
+        } else {
+            panic!("Expected SELECT statement");
+        }
+    }
+
+    #[test]
+    fn test_alias_parsing() {
+        let stmt = parse(r#"SELECT mean("usage_user") AS "user" FROM "cpu""#).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert_eq!(s.fields[0].alias, Some("user".to_string()));
         } else {
             panic!("Expected SELECT statement");
         }

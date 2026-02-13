@@ -102,6 +102,7 @@ pub struct Lexer<'a> {
     input: &'a str,
     chars: Peekable<Chars<'a>>,
     position: usize,
+    token_positions: Vec<usize>,
 }
 
 impl<'a> Lexer<'a> {
@@ -110,21 +111,47 @@ impl<'a> Lexer<'a> {
             input,
             chars: input.chars().peekable(),
             position: 0,
+            token_positions: Vec::new(),
         }
     }
 
     /// Tokenize the entire input
     pub fn tokenize(&mut self) -> Result<Vec<Token>, LexerError> {
         let mut tokens = Vec::new();
+        self.token_positions.clear();
         loop {
+            self.skip_whitespace();
+            self.token_positions.push(self.position);
             let token = self.next_token()?;
             if token == Token::Eof {
                 tokens.push(token);
                 break;
             }
+
+            // After =~ or !~, scan a regex literal if the next char is /
+            if (token == Token::RegexMatch || token == Token::RegexNotMatch)
+                && self.peek_after_whitespace() == Some('/')
+            {
+                tokens.push(token);
+                self.skip_whitespace();
+                self.token_positions.push(self.position);
+                let (pattern, end_pos) = scan_regex(self.input, self.position)?;
+                // Advance the lexer past the regex
+                while self.position < end_pos {
+                    self.advance();
+                }
+                tokens.push(Token::Regex(pattern));
+                continue;
+            }
+
             tokens.push(token);
         }
         Ok(tokens)
+    }
+
+    /// Get the byte positions of each token in the original input
+    pub fn token_positions(&self) -> &[usize] {
+        &self.token_positions
     }
 
     fn next_token(&mut self) -> Result<Token, LexerError> {
@@ -261,6 +288,12 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Peek at the next non-whitespace character without consuming
+    fn peek_after_whitespace(&self) -> Option<char> {
+        let remaining = &self.input[self.position..];
+        remaining.chars().find(|c| !c.is_whitespace())
+    }
+
     fn skip_line(&mut self) {
         while let Some(c) = self.peek() {
             if c == '\n' {
@@ -296,7 +329,12 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        Ok(Token::String(value))
+        // In InfluxQL, double-quoted strings are identifiers, single-quoted are string literals
+        if quote == '"' {
+            Ok(Token::Ident(value))
+        } else {
+            Ok(Token::String(value))
+        }
     }
 
     fn scan_number(&mut self) -> Result<Token, LexerError> {
@@ -531,5 +569,36 @@ mod tests {
         assert_eq!(tokens[2], Token::Ne);
         assert_eq!(tokens[3], Token::Le);
         assert_eq!(tokens[4], Token::Ge);
+    }
+
+    #[test]
+    fn test_double_quoted_identifiers() {
+        // Double-quoted strings should produce Token::Ident, not Token::String
+        let mut lexer = Lexer::new(r#""host" = 'server01'"#);
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens[0], Token::Ident("host".to_string()));
+        assert_eq!(tokens[1], Token::Eq);
+        assert_eq!(tokens[2], Token::String("server01".to_string()));
+    }
+
+    #[test]
+    fn test_double_quoted_measurement() {
+        let mut lexer = Lexer::new(r#"SELECT * FROM "cpu""#);
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens[0], Token::Select);
+        assert_eq!(tokens[1], Token::Star);
+        assert_eq!(tokens[2], Token::From);
+        assert_eq!(tokens[3], Token::Ident("cpu".to_string()));
+    }
+
+    #[test]
+    fn test_token_positions() {
+        let mut lexer = Lexer::new("SELECT * FROM cpu");
+        let _tokens = lexer.tokenize().unwrap();
+        let positions = lexer.token_positions();
+        assert_eq!(positions[0], 0);  // SELECT
+        assert_eq!(positions[1], 7);  // *
+        assert_eq!(positions[2], 9);  // FROM
+        assert_eq!(positions[3], 14); // cpu
     }
 }
