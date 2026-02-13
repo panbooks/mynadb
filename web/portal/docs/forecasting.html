@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB built-in forecasting and geospatial UDFs for advanced time series analytics">
+  <title>Forecasting &amp; Geospatial - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Ingestion &amp; Protocols</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Query &amp; Analytics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html" class="active">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="testing.html">Testing</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <div class="docs-badge" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">
+        NEW IN v0.3.0
+      </div>
+
+      <h1>Forecasting &amp; Geospatial Functions</h1>
+
+      <p class="lead">
+        Built-in forecasting and geospatial UDFs for advanced time series analytics. Predict future
+        values directly in SQL queries and perform spatial calculations on location-aware time series data
+        without external tools or libraries.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; SQL-Native Analytics</div>
+        <p>
+          All forecasting and geospatial functions are implemented as native UDFs within the DataFusion
+          query engine. They run in-process with zero serialization overhead, enabling real-time
+          predictions and spatial queries alongside standard SQL aggregations.
+        </p>
+      </div>
+
+      <h2>Forecasting Functions</h2>
+
+      <p>
+        MynaDB provides a suite of forecasting functions that operate on time series data to predict
+        future values. These functions analyze historical patterns and extrapolate forward by the
+        specified number of periods.
+      </p>
+
+      <div class="table-wrapper">
+        <table class="docs-table">
+          <thead>
+            <tr>
+              <th>Function</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>forecast_linear(column, periods)</code></td>
+              <td>Simple linear regression forecast. Fits a straight line to historical data and projects forward by the given number of periods.</td>
+            </tr>
+            <tr>
+              <td><code>forecast_ema(column, periods, alpha)</code></td>
+              <td>Exponential moving average forecast. Uses weighted averaging with a smoothing factor (<code>alpha</code> between 0 and 1) for trend-sensitive predictions.</td>
+            </tr>
+            <tr>
+              <td><code>forecast_arima(column, periods, p, d, q)</code></td>
+              <td>ARIMA model forecast. Autoregressive integrated moving average with configurable order parameters <code>p</code> (AR), <code>d</code> (differencing), and <code>q</code> (MA).</td>
+            </tr>
+            <tr>
+              <td><code>forecast_auto(column, periods)</code></td>
+              <td>Automatic model selection forecast. Evaluates multiple models and selects the best fit based on AIC/BIC criteria.</td>
+            </tr>
+            <tr>
+              <td><code>forecast_series(column, periods, model)</code></td>
+              <td>Forecast using a named model. The <code>model</code> parameter accepts <code>'linear'</code>, <code>'ema'</code>, <code>'arima'</code>, <code>'holt_winters'</code>, or <code>'seasonal'</code>.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>forecast_linear</h3>
+
+      <p>
+        Fits a simple linear regression (least squares) to the historical data and projects the trend
+        forward. Best suited for data with a consistent upward or downward trend and minimal seasonality.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Predict the next 12 hourly CPU usage values using linear regression
+SELECT
+  forecast_linear(usage, 12) AS predicted
+FROM cpu
+WHERE host = 'server01'
+GROUP BY time(1h);</code></pre>
+        </div>
+      </div>
+
+      <h3>forecast_ema</h3>
+
+      <p>
+        Uses an exponential moving average with a configurable smoothing factor. A higher <code>alpha</code>
+        (closer to 1) gives more weight to recent observations, making the forecast more responsive to
+        recent changes. A lower <code>alpha</code> (closer to 0) produces smoother, more stable predictions.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Forecast next 24 data points with EMA (alpha=0.3 for moderate smoothing)
+SELECT
+  time_bucket('15 minutes', time) AS bucket,
+  AVG(temperature) AS actual,
+  forecast_ema(temperature, 24, 0.3) AS predicted
+FROM sensors.default.environment
+WHERE location = 'datacenter-east'
+  AND time &gt; now() - INTERVAL '7 days'
+GROUP BY bucket
+ORDER BY bucket;</code></pre>
+        </div>
+      </div>
+
+      <h3>forecast_arima</h3>
+
+      <p>
+        Implements the ARIMA (Autoregressive Integrated Moving Average) model, which is well-suited for
+        time series with complex trends and autocorrelation. The parameters <code>p</code>, <code>d</code>,
+        and <code>q</code> control the autoregressive order, differencing degree, and moving average order
+        respectively.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- ARIMA(2,1,1) forecast for memory usage over the next 48 periods
+SELECT
+  time_bucket('30 minutes', time) AS bucket,
+  AVG(mem_used_percent) AS actual,
+  forecast_arima(mem_used_percent, 48, 2, 1, 1) AS predicted
+FROM mydb.default.system_metrics
+WHERE host = 'db-primary'
+  AND time &gt; now() - INTERVAL '14 days'
+GROUP BY bucket
+ORDER BY bucket;</code></pre>
+        </div>
+      </div>
+
+      <h3>forecast_auto</h3>
+
+      <p>
+        Automatically evaluates multiple forecasting models (linear, EMA, ARIMA variants) against the
+        input data and selects the best-fitting model based on information criteria (AIC/BIC). This is
+        the recommended function when you are unsure which model best fits your data.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Let MynaDB automatically select the best forecasting model
+SELECT
+  time_bucket('1 hour', time) AS bucket,
+  AVG(request_rate) AS actual,
+  forecast_auto(request_rate, 72) AS predicted
+FROM mydb.default.api_metrics
+WHERE service = 'payment-gateway'
+  AND time &gt; now() - INTERVAL '30 days'
+GROUP BY bucket
+ORDER BY bucket;</code></pre>
+        </div>
+      </div>
+
+      <h3>forecast_series</h3>
+
+      <p>
+        A flexible forecasting function that accepts the model name as a string parameter. This is useful
+        when the model selection is driven by application logic or when comparing different models on the
+        same data.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Forecast using Holt-Winters for seasonal data (e.g., daily traffic patterns)
+SELECT
+  time_bucket('1 hour', time) AS bucket,
+  AVG(active_connections) AS actual,
+  forecast_series(active_connections, 168, 'holt_winters') AS predicted
+FROM mydb.default.network
+WHERE interface = 'eth0'
+  AND time &gt; now() - INTERVAL '60 days'
+GROUP BY bucket
+ORDER BY bucket;
+
+-- Compare different models side by side
+SELECT
+  time_bucket('1 hour', time) AS bucket,
+  AVG(cpu_usage) AS actual,
+  forecast_series(cpu_usage, 24, 'linear') AS linear_pred,
+  forecast_series(cpu_usage, 24, 'ema') AS ema_pred,
+  forecast_series(cpu_usage, 24, 'seasonal') AS seasonal_pred
+FROM mydb.default.host_metrics
+WHERE host = 'web-01'
+  AND time &gt; now() - INTERVAL '14 days'
+GROUP BY bucket
+ORDER BY bucket;</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Choosing the Right Model</div>
+        <p>
+          <strong>Linear</strong> works best for data with a clear trend and no seasonality.
+          <strong>EMA</strong> is ideal for noisy data where recent values matter most.
+          <strong>ARIMA</strong> handles complex autocorrelated patterns.
+          <strong>Holt-Winters</strong> and <strong>Seasonal</strong> excel at data with repeating
+          periodic patterns (e.g., daily or weekly cycles). When in doubt, use
+          <code>forecast_auto</code> to let MynaDB choose.
+        </p>
+      </div>
+
+      <h2>Geospatial Functions</h2>
+
+      <p>
+        MynaDB includes geospatial UDFs for calculating distances, encoding locations, and performing
+        spatial filtering on time series data with latitude/longitude coordinates. These functions use
+        the WGS84 ellipsoid model for accurate Earth-surface calculations.
+      </p>
+
+      <div class="table-wrapper">
+        <table class="docs-table">
+          <thead>
+            <tr>
+              <th>Function</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>geo_distance(lat1, lon1, lat2, lon2)</code></td>
+              <td>Calculates the great-circle distance in meters between two geographic points using the Haversine formula.</td>
+            </tr>
+            <tr>
+              <td><code>geo_hash(lat, lon, precision)</code></td>
+              <td>Encodes a latitude/longitude pair into a Geohash string with the specified precision (1-12 characters).</td>
+            </tr>
+            <tr>
+              <td><code>geo_within(lat, lon, polygon)</code></td>
+              <td>Returns <code>true</code> if the point is inside the given polygon. The polygon is specified as a WKT string (e.g., <code>'POLYGON((...))' </code>).</td>
+            </tr>
+            <tr>
+              <td><code>geo_bounding_box(lat, lon, min_lat, min_lon, max_lat, max_lon)</code></td>
+              <td>Returns <code>true</code> if the point falls within the specified bounding box (rectangle).</td>
+            </tr>
+            <tr>
+              <td><code>geo_bearing(lat1, lon1, lat2, lon2)</code></td>
+              <td>Calculates the initial bearing (forward azimuth) in degrees from point 1 to point 2, measured clockwise from north (0-360).</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>geo_distance</h3>
+
+      <p>
+        Computes the great-circle distance between two points on the Earth's surface using the Haversine
+        formula. The result is returned in meters. This is useful for proximity queries, geofencing, and
+        calculating travel distances for IoT fleet tracking.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Find all vehicle positions within 5km of a warehouse
+SELECT
+  time,
+  vehicle_id,
+  lat,
+  lon,
+  geo_distance(lat, lon, 37.7749, -122.4194) AS distance_m
+FROM fleet.default.vehicle_positions
+WHERE time &gt; now() - INTERVAL '1 hour'
+  AND geo_distance(lat, lon, 37.7749, -122.4194) &lt; 5000
+ORDER BY distance_m ASC;</code></pre>
+        </div>
+      </div>
+
+      <h3>geo_hash</h3>
+
+      <p>
+        Encodes geographic coordinates into a Geohash string, which is useful for spatial indexing,
+        clustering nearby points, and efficient area-based grouping. Higher precision values produce
+        longer strings representing smaller geographic areas.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Group sensor readings by geographic region (precision 5 ~ 4.9km x 4.9km cells)
+SELECT
+  geo_hash(lat, lon, 5) AS region,
+  COUNT(*) AS reading_count,
+  AVG(temperature) AS avg_temp,
+  MIN(temperature) AS min_temp,
+  MAX(temperature) AS max_temp
+FROM iot.default.weather_stations
+WHERE time &gt; now() - INTERVAL '24 hours'
+GROUP BY region
+ORDER BY avg_temp DESC;</code></pre>
+        </div>
+      </div>
+
+      <h3>geo_within</h3>
+
+      <p>
+        Tests whether a point lies inside a polygon defined in Well-Known Text (WKT) format. This is
+        essential for geofencing applications, such as determining if a vehicle has entered or exited a
+        defined zone.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Find all delivery trucks currently inside the downtown service zone
+SELECT
+  time,
+  vehicle_id,
+  lat,
+  lon,
+  speed_kmh
+FROM fleet.default.vehicle_positions
+WHERE time &gt; now() - INTERVAL '5 minutes'
+  AND geo_within(lat, lon,
+    'POLYGON((-122.42 37.77, -122.42 37.79, -122.40 37.79, -122.40 37.77, -122.42 37.77))')
+ORDER BY time DESC;</code></pre>
+        </div>
+      </div>
+
+      <h3>geo_bounding_box</h3>
+
+      <p>
+        A fast rectangular containment check that determines whether a point falls within a given
+        bounding box. This is computationally cheaper than polygon checks and ideal for initial
+        spatial filtering before applying more precise geometry tests.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Filter IoT sensor data to the San Francisco Bay Area bounding box
+SELECT
+  time,
+  sensor_id,
+  lat,
+  lon,
+  pm25,
+  pm10
+FROM iot.default.air_quality
+WHERE time &gt; now() - INTERVAL '6 hours'
+  AND geo_bounding_box(lat, lon, 37.20, -122.60, 37.90, -122.00)
+ORDER BY pm25 DESC
+LIMIT 100;</code></pre>
+        </div>
+      </div>
+
+      <h3>geo_bearing</h3>
+
+      <p>
+        Calculates the initial bearing (forward azimuth) from one geographic point to another. The result
+        is in degrees measured clockwise from true north (0 = north, 90 = east, 180 = south, 270 = west).
+        Useful for determining movement direction in tracking applications.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Calculate heading direction between consecutive vehicle positions
+SELECT
+  time,
+  vehicle_id,
+  lat,
+  lon,
+  geo_bearing(
+    LAG(lat) OVER (PARTITION BY vehicle_id ORDER BY time),
+    LAG(lon) OVER (PARTITION BY vehicle_id ORDER BY time),
+    lat,
+    lon
+  ) AS heading_degrees,
+  geo_distance(
+    LAG(lat) OVER (PARTITION BY vehicle_id ORDER BY time),
+    LAG(lon) OVER (PARTITION BY vehicle_id ORDER BY time),
+    lat,
+    lon
+  ) AS distance_m
+FROM fleet.default.vehicle_positions
+WHERE vehicle_id = 'truck-42'
+  AND time &gt; now() - INTERVAL '2 hours'
+ORDER BY time;</code></pre>
+        </div>
+      </div>
+
+      <h2>Combined Examples</h2>
+
+      <p>
+        The real power of MynaDB's analytical UDFs emerges when combining forecasting and geospatial
+        functions in a single query. Below are examples that demonstrate advanced use cases leveraging
+        both capabilities together.
+      </p>
+
+      <h3>Predict Air Quality by Region</h3>
+
+      <p>
+        Forecast PM2.5 levels for different geographic regions by combining geohash-based grouping
+        with time series forecasting.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Forecast PM2.5 levels per geographic region for the next 24 hours
+SELECT
+  geo_hash(lat, lon, 4) AS region,
+  time_bucket('1 hour', time) AS bucket,
+  AVG(pm25) AS avg_pm25,
+  forecast_auto(pm25, 24) AS predicted_pm25
+FROM iot.default.air_quality
+WHERE time &gt; now() - INTERVAL '30 days'
+  AND geo_bounding_box(lat, lon, 37.20, -122.60, 37.90, -122.00)
+GROUP BY region, bucket
+ORDER BY region, bucket;</code></pre>
+        </div>
+      </div>
+
+      <h3>Fleet Arrival Time Prediction</h3>
+
+      <p>
+        Estimate arrival times for delivery vehicles by combining distance calculations with speed
+        trend forecasting.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Predict remaining travel time for active deliveries
+SELECT
+  vehicle_id,
+  lat,
+  lon,
+  geo_distance(lat, lon, dest_lat, dest_lon) AS remaining_distance_m,
+  speed_kmh,
+  forecast_ema(speed_kmh, 6, 0.5) AS predicted_speed,
+  geo_distance(lat, lon, dest_lat, dest_lon) / (forecast_ema(speed_kmh, 6, 0.5) * 1000.0 / 3600.0) AS eta_seconds,
+  geo_bearing(lat, lon, dest_lat, dest_lon) AS heading_to_dest
+FROM fleet.default.vehicle_positions v
+JOIN fleet.default.active_deliveries d
+  ON v.vehicle_id = d.vehicle_id
+WHERE v.time &gt; now() - INTERVAL '30 minutes'
+  AND d.status = 'in_transit'
+ORDER BY eta_seconds ASC;</code></pre>
+        </div>
+      </div>
+
+      <h3>Geofenced Capacity Forecasting</h3>
+
+      <p>
+        Forecast resource utilization for servers within a specific data center region, combining
+        spatial filtering with capacity prediction.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Forecast disk usage for servers in the US-West region
+SELECT
+  host,
+  geo_hash(datacenter_lat, datacenter_lon, 3) AS dc_region,
+  time_bucket('1 day', time) AS bucket,
+  AVG(disk_used_percent) AS current_usage,
+  forecast_linear(disk_used_percent, 30) AS predicted_30d,
+  CASE
+    WHEN forecast_linear(disk_used_percent, 30) &gt; 90 THEN 'CRITICAL'
+    WHEN forecast_linear(disk_used_percent, 30) &gt; 75 THEN 'WARNING'
+    ELSE 'OK'
+  END AS capacity_status
+FROM mydb.default.host_metrics
+WHERE time &gt; now() - INTERVAL '90 days'
+  AND geo_within(datacenter_lat, datacenter_lon,
+    'POLYGON((-125.0 32.0, -125.0 49.0, -104.0 49.0, -104.0 32.0, -125.0 32.0))')
+GROUP BY host, dc_region, bucket
+ORDER BY predicted_30d DESC;</code></pre>
+        </div>
+      </div>
+
+      <h3>Anomaly Detection with Spatial Context</h3>
+
+      <p>
+        Identify temperature sensor anomalies by comparing actual readings against forecasted values,
+        enriched with spatial proximity data.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Detect anomalous temperature readings vs. forecast, grouped by area
+SELECT
+  sensor_id,
+  geo_hash(lat, lon, 6) AS micro_region,
+  time_bucket('15 minutes', time) AS bucket,
+  AVG(temperature) AS actual_temp,
+  forecast_ema(temperature, 1, 0.2) AS expected_temp,
+  ABS(AVG(temperature) - forecast_ema(temperature, 1, 0.2)) AS deviation,
+  geo_distance(lat, lon, 37.7749, -122.4194) AS distance_from_center
+FROM iot.default.temperature_sensors
+WHERE time &gt; now() - INTERVAL '7 days'
+  AND geo_bounding_box(lat, lon, 37.70, -122.50, 37.85, -122.35)
+GROUP BY sensor_id, micro_region, bucket, lat, lon
+HAVING ABS(AVG(temperature) - forecast_ema(temperature, 1, 0.2)) &gt; 5.0
+ORDER BY deviation DESC
+LIMIT 50;</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Performance Tip</div>
+        <p>
+          When combining geospatial filters with forecasting functions, place the spatial filters
+          (<code>geo_bounding_box</code>, <code>geo_within</code>) in the <code>WHERE</code> clause
+          to reduce the dataset before the forecasting computation runs. Forecasting functions
+          benefit from partition pruning via time range filters, so always include a
+          <code>time &gt; now() - INTERVAL '...'</code> predicate.
+        </p>
+      </div>
+
+      <div class="docs-nav">
+        <a href="streaming.html" class="docs-nav-prev">&larr; Streaming Queries</a>
+        <a href="grafana.html" class="docs-nav-next">Grafana &rarr;</a>
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 MynaDB. The Voice of Your Machines.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

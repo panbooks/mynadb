@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Streaming Queries - Real-time query subscriptions via WebSocket and Server-Sent Events">
+  <title>Streaming Queries - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Ingestion &amp; Protocols</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Query &amp; Analytics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html" class="active">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="testing.html">Testing</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <span class="badge-new">NEW</span>
+      <h1>Streaming Queries</h1>
+
+      <p class="lead">
+        Real-time query subscriptions via WebSocket and Server-Sent Events. Stream continuous query results
+        to clients as new data arrives, enabling live dashboards, alerting pipelines, and real-time data feeds.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#9889; Push-Based Query Results</div>
+        <p>Streaming queries automatically re-execute at a configurable interval and push new results to connected
+        clients. Unlike polling, streaming subscriptions maintain a persistent connection and deliver updates
+        with minimal latency.</p>
+      </div>
+
+      <!-- WebSocket Subscriptions -->
+      <h2 id="websocket-subscriptions">WebSocket Subscriptions</h2>
+
+      <p>
+        WebSocket subscriptions provide full-duplex communication for real-time query streaming.
+        Clients connect to the WebSocket endpoint, send a SQL subscription message, and receive
+        continuous result updates.
+      </p>
+
+      <h3>Endpoint</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>URL</strong></td>
+              <td><code>ws://host:port/ws/query/:db</code></td>
+            </tr>
+            <tr>
+              <td><strong>Protocol</strong></td>
+              <td>WebSocket (RFC 6455)</td>
+            </tr>
+            <tr>
+              <td><strong>Message Format</strong></td>
+              <td>JSON</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Subscription Message</h3>
+
+      <p>After connecting, send a JSON message to start a streaming subscription:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">json</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>{
+  <span class="token-string">"sql"</span>: <span class="token-string">"SELECT host, AVG(usage) as avg_cpu FROM cpu WHERE time &gt; now() - interval '5 minutes' GROUP BY host"</span>,
+  <span class="token-string">"interval_ms"</span>: <span class="token-number">5000</span>,
+  <span class="token-string">"format"</span>: <span class="token-string">"json"</span>
+}</code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Type</th>
+              <th>Required</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>sql</code></td>
+              <td>string</td>
+              <td>Yes</td>
+              <td>SQL query to execute on each interval</td>
+            </tr>
+            <tr>
+              <td><code>interval_ms</code></td>
+              <td>integer</td>
+              <td>No</td>
+              <td>Re-execution interval in milliseconds (default: 1000)</td>
+            </tr>
+            <tr>
+              <td><code>format</code></td>
+              <td>string</td>
+              <td>No</td>
+              <td>Result format: <code>json</code> or <code>arrow</code> (default: <code>json</code>)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>JavaScript Example</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">javascript</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">// Connect to the WebSocket streaming endpoint</span>
+<span class="token-keyword">const</span> ws = <span class="token-keyword">new</span> WebSocket(<span class="token-string">"ws://localhost:7000/ws/query/mydb"</span>);
+
+ws.onopen = () => {
+  <span class="token-function">console.log</span>(<span class="token-string">"Connected to MynaDB streaming"</span>);
+
+  <span class="token-comment">// Subscribe to a streaming query</span>
+  ws.send(JSON.stringify({
+    sql: <span class="token-string">"SELECT host, AVG(usage) as avg_cpu FROM cpu WHERE time &gt; now() - interval '5 minutes' GROUP BY host"</span>,
+    interval_ms: <span class="token-number">5000</span>
+  }));
+};
+
+ws.onmessage = (event) => {
+  <span class="token-keyword">const</span> message = JSON.parse(event.data);
+
+  <span class="token-keyword">if</span> (message.type === <span class="token-string">"result"</span>) {
+    <span class="token-comment">// Query result received</span>
+    <span class="token-function">console.log</span>(<span class="token-string">"Subscription:"</span>, message.subscription_id);
+    <span class="token-function">console.log</span>(<span class="token-string">"Rows:"</span>, message.data.length);
+    message.data.forEach(row => {
+      <span class="token-function">console.log</span>(<span class="token-string">`  ${row.host}: ${row.avg_cpu.toFixed(2)}%`</span>);
+    });
+  } <span class="token-keyword">else if</span> (message.type === <span class="token-string">"heartbeat"</span>) {
+    <span class="token-comment">// Connection keep-alive</span>
+    <span class="token-function">console.log</span>(<span class="token-string">"Heartbeat received"</span>);
+  } <span class="token-keyword">else if</span> (message.type === <span class="token-string">"error"</span>) {
+    <span class="token-function">console.error</span>(<span class="token-string">"Stream error:"</span>, message.message);
+  }
+};
+
+ws.onclose = (event) => {
+  <span class="token-function">console.log</span>(<span class="token-string">`Connection closed: ${event.code} ${event.reason}`</span>);
+};
+
+ws.onerror = (error) => {
+  <span class="token-function">console.error</span>(<span class="token-string">"WebSocket error:"</span>, error);
+};</code></pre>
+        </div>
+      </div>
+
+      <h3>Response Messages</h3>
+
+      <p>The server sends the following message types:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">json</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">// Subscription confirmed</span>
+{
+  <span class="token-string">"type"</span>: <span class="token-string">"subscribed"</span>,
+  <span class="token-string">"subscription_id"</span>: <span class="token-string">"sub_a1b2c3d4"</span>,
+  <span class="token-string">"sql"</span>: <span class="token-string">"SELECT host, AVG(usage) ..."</span>,
+  <span class="token-string">"interval_ms"</span>: <span class="token-number">5000</span>
+}
+
+<span class="token-comment">// Query result</span>
+{
+  <span class="token-string">"type"</span>: <span class="token-string">"result"</span>,
+  <span class="token-string">"subscription_id"</span>: <span class="token-string">"sub_a1b2c3d4"</span>,
+  <span class="token-string">"timestamp"</span>: <span class="token-number">1704067200000</span>,
+  <span class="token-string">"data"</span>: [
+    {<span class="token-string">"host"</span>: <span class="token-string">"server-01"</span>, <span class="token-string">"avg_cpu"</span>: <span class="token-number">45.2</span>},
+    {<span class="token-string">"host"</span>: <span class="token-string">"server-02"</span>, <span class="token-string">"avg_cpu"</span>: <span class="token-number">62.8</span>}
+  ],
+  <span class="token-string">"row_count"</span>: <span class="token-number">2</span>,
+  <span class="token-string">"execution_time_ms"</span>: <span class="token-number">12</span>
+}
+
+<span class="token-comment">// Heartbeat</span>
+{
+  <span class="token-string">"type"</span>: <span class="token-string">"heartbeat"</span>,
+  <span class="token-string">"timestamp"</span>: <span class="token-number">1704067230000</span>
+}
+
+<span class="token-comment">// Error</span>
+{
+  <span class="token-string">"type"</span>: <span class="token-string">"error"</span>,
+  <span class="token-string">"subscription_id"</span>: <span class="token-string">"sub_a1b2c3d4"</span>,
+  <span class="token-string">"message"</span>: <span class="token-string">"Table 'cpu' not found"</span>
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- Server-Sent Events -->
+      <h2 id="server-sent-events">Server-Sent Events (SSE)</h2>
+
+      <p>
+        Server-Sent Events provide a simpler, HTTP-based streaming mechanism. SSE is ideal for
+        browser clients that only need to receive data (one-way communication) and want automatic
+        reconnection built into the protocol.
+      </p>
+
+      <h3>Endpoint</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>URL</strong></td>
+              <td><code>GET /stream/query/:db?sql=...&amp;interval_ms=...</code></td>
+            </tr>
+            <tr>
+              <td><strong>Content-Type</strong></td>
+              <td><code>text/event-stream</code></td>
+            </tr>
+            <tr>
+              <td><strong>Method</strong></td>
+              <td>GET</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Type</th>
+              <th>Required</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>sql</code></td>
+              <td>string (query)</td>
+              <td>Yes</td>
+              <td>URL-encoded SQL query</td>
+            </tr>
+            <tr>
+              <td><code>interval_ms</code></td>
+              <td>integer (query)</td>
+              <td>No</td>
+              <td>Re-execution interval in milliseconds (default: 1000)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>curl Example</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Stream query results every 5 seconds</span>
+curl -N "http://localhost:7000/stream/query/mydb?sql=SELECT%20host%2C%20AVG(usage)%20as%20avg_cpu%20FROM%20cpu%20WHERE%20time%20%3E%20now()%20-%20interval%20'5%20minutes'%20GROUP%20BY%20host&interval_ms=5000"
+
+<span class="token-comment"># Output (Server-Sent Events format):</span>
+<span class="token-comment"># event: result</span>
+<span class="token-comment"># id: 1</span>
+<span class="token-comment"># data: {"data":[{"host":"server-01","avg_cpu":45.2}],"row_count":1,"execution_time_ms":8}</span>
+<span class="token-comment">#</span>
+<span class="token-comment"># event: result</span>
+<span class="token-comment"># id: 2</span>
+<span class="token-comment"># data: {"data":[{"host":"server-01","avg_cpu":47.1}],"row_count":1,"execution_time_ms":6}</span></code></pre>
+        </div>
+      </div>
+
+      <h3>JavaScript EventSource API</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">javascript</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">// Build the SSE URL with query parameters</span>
+<span class="token-keyword">const</span> sql = <span class="token-function">encodeURIComponent</span>(
+  <span class="token-string">"SELECT host, AVG(usage) as avg_cpu FROM cpu WHERE time &gt; now() - interval '5 minutes' GROUP BY host"</span>
+);
+<span class="token-keyword">const</span> url = <span class="token-string">`http://localhost:7000/stream/query/mydb?sql=${sql}&amp;interval_ms=5000`</span>;
+
+<span class="token-comment">// Create EventSource connection (auto-reconnects on failure)</span>
+<span class="token-keyword">const</span> source = <span class="token-keyword">new</span> EventSource(url);
+
+<span class="token-comment">// Listen for query results</span>
+source.addEventListener(<span class="token-string">"result"</span>, (event) => {
+  <span class="token-keyword">const</span> result = JSON.parse(event.data);
+  <span class="token-function">console.log</span>(<span class="token-string">`Received ${result.row_count} rows in ${result.execution_time_ms}ms`</span>);
+
+  result.data.forEach(row => {
+    <span class="token-function">console.log</span>(<span class="token-string">`  ${row.host}: ${row.avg_cpu.toFixed(2)}%`</span>);
+  });
+});
+
+<span class="token-comment">// Listen for heartbeats</span>
+source.addEventListener(<span class="token-string">"heartbeat"</span>, (event) => {
+  <span class="token-function">console.log</span>(<span class="token-string">"Heartbeat:"</span>, event.data);
+});
+
+<span class="token-comment">// Handle errors</span>
+source.onerror = (error) => {
+  <span class="token-function">console.error</span>(<span class="token-string">"SSE connection error:"</span>, error);
+  <span class="token-comment">// EventSource will automatically attempt to reconnect</span>
+};
+
+<span class="token-comment">// To stop streaming</span>
+<span class="token-comment">// source.close();</span></code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128260; WebSocket vs SSE</div>
+        <p><strong>WebSocket</strong> is best when you need bidirectional communication (e.g., dynamically changing queries, managing
+        multiple subscriptions on one connection). <strong>SSE</strong> is simpler for read-only streams and provides
+        built-in reconnection in browsers via the <code>EventSource</code> API.</p>
+      </div>
+
+      <!-- Subscription Management -->
+      <h2 id="subscription-management">Subscription Management</h2>
+
+      <p>
+        Active streaming subscriptions can be listed and canceled through the management API.
+        This is useful for monitoring resource usage and terminating runaway queries.
+      </p>
+
+      <h3>List Active Subscriptions</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># List all active streaming subscriptions</span>
+curl http://localhost:7000/stream/subscriptions
+
+<span class="token-comment"># Response:</span>
+<span class="token-comment"># {</span>
+<span class="token-comment">#   "subscriptions": [</span>
+<span class="token-comment">#     {</span>
+<span class="token-comment">#       "id": "sub_a1b2c3d4",</span>
+<span class="token-comment">#       "database": "mydb",</span>
+<span class="token-comment">#       "sql": "SELECT host, AVG(usage) ...",</span>
+<span class="token-comment">#       "interval_ms": 5000,</span>
+<span class="token-comment">#       "protocol": "websocket",</span>
+<span class="token-comment">#       "created_at": "2026-01-15T10:30:00Z",</span>
+<span class="token-comment">#       "last_execution": "2026-01-15T10:35:00Z",</span>
+<span class="token-comment">#       "execution_count": 60,</span>
+<span class="token-comment">#       "avg_execution_time_ms": 11</span>
+<span class="token-comment">#     }</span>
+<span class="token-comment">#   ],</span>
+<span class="token-comment">#   "count": 1</span>
+<span class="token-comment"># }</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Cancel a Subscription</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Cancel a specific subscription by ID</span>
+curl -X DELETE http://localhost:7000/stream/subscriptions/sub_a1b2c3d4
+
+<span class="token-comment"># Response:</span>
+<span class="token-comment"># {"status": "canceled", "subscription_id": "sub_a1b2c3d4"}</span>
+
+<span class="token-comment"># Cancel all subscriptions for a database</span>
+curl -X DELETE http://localhost:7000/stream/subscriptions?database=mydb
+
+<span class="token-comment"># Response:</span>
+<span class="token-comment"># {"status": "canceled", "count": 3}</span></code></pre>
+        </div>
+      </div>
+
+      <h3>WebSocket Subscription Control</h3>
+
+      <p>You can also manage subscriptions directly over an active WebSocket connection:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">javascript</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">// Cancel a specific subscription over the WebSocket</span>
+ws.send(JSON.stringify({
+  action: <span class="token-string">"cancel"</span>,
+  subscription_id: <span class="token-string">"sub_a1b2c3d4"</span>
+}));
+
+<span class="token-comment">// Pause a subscription (stop execution, keep connection)</span>
+ws.send(JSON.stringify({
+  action: <span class="token-string">"pause"</span>,
+  subscription_id: <span class="token-string">"sub_a1b2c3d4"</span>
+}));
+
+<span class="token-comment">// Resume a paused subscription</span>
+ws.send(JSON.stringify({
+  action: <span class="token-string">"resume"</span>,
+  subscription_id: <span class="token-string">"sub_a1b2c3d4"</span>
+}));
+
+<span class="token-comment">// List active subscriptions on this connection</span>
+ws.send(JSON.stringify({
+  action: <span class="token-string">"list"</span>
+}));</code></pre>
+        </div>
+      </div>
+
+      <!-- Configuration -->
+      <h2 id="configuration">Configuration</h2>
+
+      <p>
+        Streaming queries are configured in the <code>[streaming]</code> section of <code>config.toml</code>.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[streaming]
+<span class="token-comment"># Enable streaming query endpoints (WebSocket and SSE)</span>
+enabled = <span class="token-keyword">true</span>
+
+<span class="token-comment"># Maximum number of concurrent streaming subscriptions per server</span>
+max_subscriptions = <span class="token-number">100</span>
+
+<span class="token-comment"># Heartbeat interval in seconds (keeps connections alive)</span>
+heartbeat_interval_secs = <span class="token-number">30</span>
+
+<span class="token-comment"># Internal buffer size per subscription (number of result sets)</span>
+buffer_size = <span class="token-number">16</span></code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Default</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>enabled</code></td>
+              <td><code>true</code></td>
+              <td>Enable or disable the streaming query feature</td>
+            </tr>
+            <tr>
+              <td><code>max_subscriptions</code></td>
+              <td><code>100</code></td>
+              <td>Maximum number of concurrent streaming subscriptions across all clients. Prevents resource exhaustion from too many active queries.</td>
+            </tr>
+            <tr>
+              <td><code>heartbeat_interval_secs</code></td>
+              <td><code>30</code></td>
+              <td>Interval in seconds between heartbeat messages sent to connected clients. Helps detect stale connections and keeps firewalls from closing idle connections.</td>
+            </tr>
+            <tr>
+              <td><code>buffer_size</code></td>
+              <td><code>16</code></td>
+              <td>Number of result sets buffered per subscription. If a client is slow to consume results, older results are dropped when the buffer is full.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; Resource Considerations</div>
+        <p>Each streaming subscription maintains an active query execution loop. Be mindful of
+        <code>max_subscriptions</code> and <code>interval_ms</code> settings to avoid overloading the query engine.
+        For high-frequency subscriptions (interval &lt; 1s), consider using <a href="continuous-aggregates.html">Continuous Aggregates</a>
+        to pre-compute results.</p>
+      </div>
+
+      <!-- Use Cases -->
+      <h2 id="use-cases">Use Cases</h2>
+
+      <h3>Real-Time Dashboards</h3>
+
+      <p>
+        Build live monitoring dashboards that update automatically as new metrics arrive.
+        Streaming queries eliminate the need for client-side polling and reduce latency.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">javascript</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">// Dashboard: live CPU usage across all hosts</span>
+<span class="token-keyword">const</span> ws = <span class="token-keyword">new</span> WebSocket(<span class="token-string">"ws://localhost:7000/ws/query/mydb"</span>);
+
+ws.onopen = () => {
+  <span class="token-comment">// Subscribe to aggregated CPU metrics</span>
+  ws.send(JSON.stringify({
+    sql: <span class="token-string">`SELECT
+      host,
+      AVG(usage) as avg_cpu,
+      MAX(usage) as max_cpu,
+      MIN(usage) as min_cpu
+    FROM cpu
+    WHERE time &gt; now() - interval '1 minute'
+    GROUP BY host
+    ORDER BY avg_cpu DESC`</span>,
+    interval_ms: <span class="token-number">2000</span>
+  }));
+};
+
+ws.onmessage = (event) => {
+  <span class="token-keyword">const</span> msg = JSON.parse(event.data);
+  <span class="token-keyword">if</span> (msg.type === <span class="token-string">"result"</span>) {
+    <span class="token-function">updateDashboard</span>(msg.data);
+  }
+};</code></pre>
+        </div>
+      </div>
+
+      <h3>Alerting</h3>
+
+      <p>
+        Use streaming queries to detect anomalies and trigger alerts in real time.
+        When a threshold is crossed, immediately notify operators.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">javascript</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">// Alert: detect hosts with CPU usage &gt; 90%</span>
+<span class="token-keyword">const</span> ws = <span class="token-keyword">new</span> WebSocket(<span class="token-string">"ws://localhost:7000/ws/query/monitoring"</span>);
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({
+    sql: <span class="token-string">`SELECT host, AVG(usage) as avg_cpu
+      FROM cpu
+      WHERE time &gt; now() - interval '2 minutes'
+      GROUP BY host
+      HAVING AVG(usage) &gt; 90`</span>,
+    interval_ms: <span class="token-number">10000</span>
+  }));
+};
+
+ws.onmessage = (event) => {
+  <span class="token-keyword">const</span> msg = JSON.parse(event.data);
+  <span class="token-keyword">if</span> (msg.type === <span class="token-string">"result"</span> &amp;&amp; msg.data.length > <span class="token-number">0</span>) {
+    msg.data.forEach(row => {
+      <span class="token-function">sendAlert</span>({
+        severity: <span class="token-string">"critical"</span>,
+        host: row.host,
+        cpu: row.avg_cpu,
+        message: <span class="token-string">`CPU usage at ${row.avg_cpu.toFixed(1)}% on ${row.host}`</span>
+      });
+    });
+  }
+};</code></pre>
+        </div>
+      </div>
+
+      <h3>Live Data Feeds</h3>
+
+      <p>
+        Stream raw or lightly transformed data to downstream consumers such as
+        data pipelines, event processors, or external analytics systems.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">python</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-keyword">import</span> json
+<span class="token-keyword">import</span> requests
+
+<span class="token-comment"># Stream data via SSE using the requests library</span>
+url = <span class="token-string">"http://localhost:7000/stream/query/mydb"</span>
+params = {
+    <span class="token-string">"sql"</span>: <span class="token-string">"SELECT * FROM sensor_readings WHERE time &gt; now() - interval '10 seconds' ORDER BY time DESC LIMIT 50"</span>,
+    <span class="token-string">"interval_ms"</span>: <span class="token-number">1000</span>
+}
+
+response = requests.get(url, params=params, stream=<span class="token-keyword">True</span>)
+
+<span class="token-keyword">for</span> line <span class="token-keyword">in</span> response.iter_lines():
+    <span class="token-keyword">if</span> line:
+        decoded = line.decode(<span class="token-string">"utf-8"</span>)
+        <span class="token-keyword">if</span> decoded.startswith(<span class="token-string">"data: "</span>):
+            data = json.loads(decoded[<span class="token-number">6</span>:])
+            <span class="token-function">print</span>(<span class="token-string">f"Received {data['row_count']} rows"</span>)
+            <span class="token-comment"># Forward to downstream pipeline...</span>
+            <span class="token-function">process_batch</span>(data[<span class="token-string">"data"</span>])</code></pre>
+        </div>
+      </div>
+
+      <!-- Next Steps -->
+      <h2>Next Steps</h2>
+
+      <div class="cards-grid">
+        <a href="continuous-aggregates.html" class="card">
+          <div class="card-icon">&#128202;</div>
+          <h3>Continuous Aggregates</h3>
+          <p>Pre-compute query results for high-frequency streaming subscriptions.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="sql-queries.html" class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>SQL Reference</h3>
+          <p>Complete SQL syntax for building streaming query expressions.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="grafana.html" class="card">
+          <div class="card-icon">&#128200;</div>
+          <h3>Grafana Integration</h3>
+          <p>Connect Grafana to MynaDB for real-time visualization dashboards.</p>
+          <span class="card-link">Read more <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 MynaDB. The Voice of Your Machines.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Continuous Aggregates - TimescaleDB-style materialized views with automatic refresh and query rewriting">
+  <title>Continuous Aggregates - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Ingestion &amp; Protocols</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Query &amp; Analytics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html" class="active">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="testing.html">Testing</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <div style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">NEW</div>
+
+      <h1>Continuous Aggregates &amp; Downsampling</h1>
+
+      <p>
+        Continuous Aggregates bring TimescaleDB-style materialized views to MynaDB. Define a query once and MynaDB
+        automatically keeps the results up to date as new data arrives. The query engine transparently rewrites
+        incoming queries to read from the pre-computed aggregate whenever possible, dramatically reducing query
+        latency for dashboards and monitoring workloads.
+      </p>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#128161; Why Continuous Aggregates?</div>
+        <p>
+          Instead of running expensive <code>GROUP BY time_bucket(...)</code> queries on every dashboard refresh,
+          define the aggregation once and let MynaDB maintain the results incrementally. Typical speedups range
+          from 10x to 100x for time-bucketed queries over large datasets.
+        </p>
+      </div>
+
+      <!-- Creating Aggregates -->
+      <h2 id="creating-aggregates">Creating Aggregates</h2>
+
+      <p>
+        Use the SQL-like <code>CREATE CONTINUOUS AGGREGATE</code> syntax to define a materialized view over
+        your time series data. Each aggregate requires a <code>time_bucket()</code> call and at least one
+        aggregation function.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- Create a 5-minute rollup of CPU metrics</span>
+CREATE CONTINUOUS AGGREGATE cpu_5m
+  WITH (refresh_interval = '1m')
+AS
+  SELECT
+    time_bucket(time, 300000000000, 0) AS bucket,
+    host,
+    AVG(usage) AS avg_usage,
+    MAX(usage) AS max_usage,
+    MIN(usage) AS min_usage,
+    COUNT(*) AS sample_count
+  FROM cpu
+  GROUP BY time_bucket(time, 300000000000, 0), host;</code></pre>
+        </div>
+      </div>
+
+      <p>Key elements of the definition:</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Element</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>cpu_5m</code></td>
+              <td>Name of the continuous aggregate (must be unique within the database)</td>
+            </tr>
+            <tr>
+              <td><code>refresh_interval</code></td>
+              <td>How often to refresh the materialized data (e.g., <code>1m</code>, <code>5m</code>, <code>1h</code>)</td>
+            </tr>
+            <tr>
+              <td><code>time_bucket()</code></td>
+              <td>Required bucketing function that defines the output granularity</td>
+            </tr>
+            <tr>
+              <td>Aggregation functions</td>
+              <td><code>AVG</code>, <code>MAX</code>, <code>MIN</code>, <code>SUM</code>, <code>COUNT</code>, <code>first_value</code>, <code>last_value</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Using the API</h3>
+
+      <p>You can also create aggregates via the HTTP API:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Create a continuous aggregate via API</span>
+curl -X POST http://localhost:7000/aggregates/mydb \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "cpu_5m",
+    "query": "SELECT time_bucket(time, 300000000000, 0) AS bucket, host, AVG(usage) AS avg_usage, MAX(usage) AS max_usage, MIN(usage) AS min_usage, COUNT(*) AS sample_count FROM cpu GROUP BY time_bucket(time, 300000000000, 0), host",
+    "refresh_interval_secs": 60
+  }'</code></pre>
+        </div>
+      </div>
+
+      <!-- Automated Downsampling -->
+      <h2 id="automated-downsampling">Automated Downsampling</h2>
+
+      <p>
+        Continuous Aggregates enable automated downsampling policies that reduce data granularity over time.
+        This is essential for managing storage costs while retaining long-term visibility. Define multiple
+        aggregates at different granularities to build a tiered rollup pipeline.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- Tier 1: Raw data (kept for 7 days via retention policy)</span>
+<span class="token-comment">-- 1-minute resolution</span>
+
+<span class="token-comment">-- Tier 2: 5-minute rollup (kept for 30 days)</span>
+CREATE CONTINUOUS AGGREGATE cpu_5m
+  WITH (refresh_interval = '1m')
+AS
+  SELECT
+    time_bucket(time, 300000000000, 0) AS bucket,
+    host,
+    AVG(usage) AS avg_usage,
+    MAX(usage) AS max_usage,
+    MIN(usage) AS min_usage,
+    first_value(usage, time) AS first_usage,
+    last_value(usage, time) AS last_usage,
+    COUNT(*) AS sample_count
+  FROM cpu
+  GROUP BY time_bucket(time, 300000000000, 0), host;
+
+<span class="token-comment">-- Tier 3: 1-hour rollup (kept for 1 year)</span>
+CREATE CONTINUOUS AGGREGATE cpu_1h
+  WITH (refresh_interval = '5m')
+AS
+  SELECT
+    time_bucket(time, 3600000000000, 0) AS bucket,
+    host,
+    AVG(usage) AS avg_usage,
+    MAX(usage) AS max_usage,
+    MIN(usage) AS min_usage,
+    COUNT(*) AS sample_count
+  FROM cpu
+  GROUP BY time_bucket(time, 3600000000000, 0), host;</code></pre>
+        </div>
+      </div>
+
+      <p>The tiered approach follows a common pattern:</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Tier</th>
+              <th>Granularity</th>
+              <th>Retention</th>
+              <th>Use Case</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Raw data</td>
+              <td>Original (e.g., 1s)</td>
+              <td>7 days</td>
+              <td>Debugging, incident investigation</td>
+            </tr>
+            <tr>
+              <td>Tier 1 aggregate</td>
+              <td>5 minutes</td>
+              <td>30 days</td>
+              <td>Recent dashboards, alerting</td>
+            </tr>
+            <tr>
+              <td>Tier 2 aggregate</td>
+              <td>1 hour</td>
+              <td>1 year</td>
+              <td>Capacity planning, trend analysis</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="info-box" style="background: linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 100%); border-left: 4px solid #0284c7; padding: 1rem 1.5rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>Tip:</strong> Combine continuous aggregates with <a href="retention.html">retention policies</a>
+        to automatically expire raw data while preserving downsampled summaries indefinitely.
+      </div>
+
+      <!-- Query Rewriting -->
+      <h2 id="query-rewriting">Query Rewriting</h2>
+
+      <p>
+        When <code>query_rewriting_enabled</code> is set to <code>true</code>, the query engine automatically
+        detects when an incoming query can be satisfied by a continuous aggregate and rewrites the query plan
+        to read from the materialized view instead of scanning raw data.
+      </p>
+
+      <h3>How It Works</h3>
+
+      <ol>
+        <li>A query arrives that uses <code>time_bucket()</code> or <code>GROUP BY time()</code> on a source table.</li>
+        <li>The query rewriter checks if a continuous aggregate exists for that table with a matching or coarser bucket size.</li>
+        <li>If the aggregate's bucket size evenly divides the requested bucket size, the query is rewritten to read from the aggregate.</li>
+        <li>Aggregation functions in the original query are translated to operate on the pre-aggregated columns.</li>
+      </ol>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- Original query (user writes this)</span>
+SELECT
+  time_bucket(time, 3600000000000, 0) AS hour,
+  host,
+  AVG(usage) AS avg_cpu
+FROM cpu
+WHERE time >= NOW() - INTERVAL '24 hours'
+GROUP BY time_bucket(time, 3600000000000, 0), host;
+
+<span class="token-comment">-- Rewritten query (engine executes this internally)</span>
+<span class="token-comment">-- Reads from the 5-minute aggregate and re-aggregates to 1 hour</span>
+SELECT
+  time_bucket(bucket, 3600000000000, 0) AS hour,
+  host,
+  SUM(avg_usage * sample_count) / SUM(sample_count) AS avg_cpu
+FROM cpu_5m
+WHERE bucket >= NOW() - INTERVAL '24 hours'
+GROUP BY time_bucket(bucket, 3600000000000, 0), host;</code></pre>
+        </div>
+      </div>
+
+      <h3>Rewriting Rules</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Original Function</th>
+              <th>Rewritten To</th>
+              <th>Requirement</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>AVG(col)</code></td>
+              <td><code>SUM(avg_col * count) / SUM(count)</code></td>
+              <td>Aggregate must include <code>AVG</code> and <code>COUNT</code></td>
+            </tr>
+            <tr>
+              <td><code>SUM(col)</code></td>
+              <td><code>SUM(sum_col)</code></td>
+              <td>Aggregate must include <code>SUM</code></td>
+            </tr>
+            <tr>
+              <td><code>COUNT(*)</code></td>
+              <td><code>SUM(count_col)</code></td>
+              <td>Aggregate must include <code>COUNT</code></td>
+            </tr>
+            <tr>
+              <td><code>MIN(col)</code></td>
+              <td><code>MIN(min_col)</code></td>
+              <td>Aggregate must include <code>MIN</code></td>
+            </tr>
+            <tr>
+              <td><code>MAX(col)</code></td>
+              <td><code>MAX(max_col)</code></td>
+              <td>Aggregate must include <code>MAX</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        You can verify whether query rewriting is being applied by using the
+        <a href="api.html"><code>/explain</code></a> endpoint:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Check if the query uses a continuous aggregate</span>
+curl "http://localhost:7000/explain/mydb?sql=SELECT+time_bucket(time,3600000000000,0)+AS+hour,+host,+AVG(usage)+FROM+cpu+GROUP+BY+1,2&verbose=true"
+
+<span class="token-comment"># Look for "ContinuousAggregate: cpu_5m" in the logical plan</span></code></pre>
+        </div>
+      </div>
+
+      <!-- Configuration -->
+      <h2 id="configuration">Configuration</h2>
+
+      <p>
+        Enable and tune continuous aggregates in your <code>config.toml</code>:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[continuous_aggregates]
+<span class="token-comment"># Enable the continuous aggregates feature</span>
+enabled = true
+
+<span class="token-comment"># How often the background job checks for aggregates that need refreshing (seconds)</span>
+refresh_check_interval_secs = 60
+
+<span class="token-comment"># Maximum number of aggregates refreshed concurrently</span>
+max_concurrent_refreshes = 4
+
+<span class="token-comment"># Automatically rewrite queries to use aggregates when beneficial</span>
+query_rewriting_enabled = true</code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Default</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>enabled</code></td>
+              <td><code>false</code></td>
+              <td>Master switch for the continuous aggregates feature. When disabled, existing aggregates are not refreshed and query rewriting is inactive.</td>
+            </tr>
+            <tr>
+              <td><code>refresh_check_interval_secs</code></td>
+              <td><code>60</code></td>
+              <td>Interval in seconds between background refresh checks. Lower values increase freshness at the cost of higher CPU usage.</td>
+            </tr>
+            <tr>
+              <td><code>max_concurrent_refreshes</code></td>
+              <td><code>4</code></td>
+              <td>Maximum number of aggregate refresh jobs running in parallel. Increase for systems with many aggregates and available CPU cores.</td>
+            </tr>
+            <tr>
+              <td><code>query_rewriting_enabled</code></td>
+              <td><code>true</code></td>
+              <td>When enabled, the query engine automatically rewrites qualifying queries to use materialized views. Can be disabled to force queries against raw data.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="info-box" style="background: linear-gradient(135deg, #fef3c7 0%, #fffbeb 100%); border-left: 4px solid #f59e0b; padding: 1rem 1.5rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>Note:</strong> In cluster mode, only the elected leader node runs the background refresh job.
+        Query rewriting is active on all nodes. See <a href="cluster.html">Enterprise Cluster</a> for details.
+      </div>
+
+      <!-- API Endpoints -->
+      <h2 id="api-endpoints">API Endpoints</h2>
+
+      <p>
+        Manage continuous aggregates through the REST API:
+      </p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Endpoint</th>
+              <th>Method</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>/aggregates/:db</code></td>
+              <td>GET</td>
+              <td>List all continuous aggregates for a database</td>
+            </tr>
+            <tr>
+              <td><code>/aggregates/:db</code></td>
+              <td>POST</td>
+              <td>Create a new continuous aggregate</td>
+            </tr>
+            <tr>
+              <td><code>/aggregates/:db/:name</code></td>
+              <td>DELETE</td>
+              <td>Delete a continuous aggregate and its materialized data</td>
+            </tr>
+            <tr>
+              <td><code>/aggregates/:db/:name/refresh</code></td>
+              <td>POST</td>
+              <td>Manually trigger an immediate refresh</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>List Aggregates</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># List all continuous aggregates</span>
+curl http://localhost:7000/aggregates/mydb
+
+<span class="token-comment"># Response</span>
+{
+  "aggregates": [
+    {
+      "name": "cpu_5m",
+      "source_table": "cpu",
+      "bucket_interval_ns": 300000000000,
+      "refresh_interval_secs": 60,
+      "state": "active",
+      "last_refresh": "2026-02-13T10:15:00Z",
+      "watermark": 1739440500000000000
+    },
+    {
+      "name": "cpu_1h",
+      "source_table": "cpu",
+      "bucket_interval_ns": 3600000000000,
+      "refresh_interval_secs": 300,
+      "state": "active",
+      "last_refresh": "2026-02-13T10:10:00Z",
+      "watermark": 1739438400000000000
+    }
+  ],
+  "count": 2
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Create an Aggregate</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Create a 1-hour rollup of memory metrics</span>
+curl -X POST http://localhost:7000/aggregates/mydb \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "memory_1h",
+    "query": "SELECT time_bucket(time, 3600000000000, 0) AS bucket, host, AVG(used) AS avg_used, MAX(used) AS max_used, AVG(total) AS avg_total FROM memory GROUP BY time_bucket(time, 3600000000000, 0), host",
+    "refresh_interval_secs": 300
+  }'
+
+<span class="token-comment"># Response</span>
+{
+  "status": "created",
+  "name": "memory_1h",
+  "message": "Continuous aggregate created. First refresh will begin within 60 seconds."
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Delete an Aggregate</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Delete a continuous aggregate</span>
+curl -X DELETE http://localhost:7000/aggregates/mydb/cpu_5m
+
+<span class="token-comment"># Response</span>
+{
+  "status": "deleted",
+  "name": "cpu_5m",
+  "message": "Continuous aggregate and materialized data removed."
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Manual Refresh</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Trigger an immediate refresh</span>
+curl -X POST http://localhost:7000/aggregates/mydb/cpu_5m/refresh
+
+<span class="token-comment"># Response</span>
+{
+  "status": "refreshing",
+  "name": "cpu_5m",
+  "message": "Refresh started. New data will be available shortly."
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- Monitoring -->
+      <h2 id="monitoring">Monitoring</h2>
+
+      <p>
+        Track the health and performance of your continuous aggregates using the list endpoint
+        and server logs.
+      </p>
+
+      <h3>Aggregate States</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>State</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>active</code></td>
+              <td>Aggregate is healthy and being refreshed on schedule.</td>
+            </tr>
+            <tr>
+              <td><code>refreshing</code></td>
+              <td>A refresh is currently in progress.</td>
+            </tr>
+            <tr>
+              <td><code>error</code></td>
+              <td>The last refresh failed. Check logs for details. The system will retry on the next interval.</td>
+            </tr>
+            <tr>
+              <td><code>disabled</code></td>
+              <td>The aggregate exists but is not being refreshed (e.g., feature disabled in config).</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Key Metrics</h3>
+
+      <p>The list endpoint returns useful fields for monitoring each aggregate:</p>
+
+      <ul>
+        <li><strong>last_refresh</strong> - Timestamp of the most recent successful refresh. A stale timestamp may indicate a problem.</li>
+        <li><strong>watermark</strong> - The highest timestamp (in nanoseconds) that has been materialized. Data after this point is not yet in the aggregate.</li>
+        <li><strong>state</strong> - Current state of the aggregate (see table above).</li>
+      </ul>
+
+      <h3>Log Messages</h3>
+
+      <p>
+        The refresh job emits structured log entries at <code>info</code> level. Key messages to watch for:
+      </p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Successful refresh</span>
+INFO  continuous_aggregates::job: Refreshed aggregate name="cpu_5m" rows=1842 duration_ms=234 watermark=1739440500000000000
+
+<span class="token-comment"># Refresh error</span>
+ERROR continuous_aggregates::job: Failed to refresh aggregate name="cpu_5m" error="table not found: cpu" retries=3
+
+<span class="token-comment"># Query rewriting applied</span>
+DEBUG continuous_aggregates::query_rewriter: Rewrote query to use aggregate original_table="cpu" aggregate="cpu_5m"</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#128200; Dashboard Integration</div>
+        <p>
+          Use the <a href="grafana.html">Grafana integration</a> to visualize aggregate refresh latency
+          and watermark lag. See the <a href="monitoring.html">Monitoring</a> page for pre-built dashboard panels.
+        </p>
+      </div>
+
+      <div class="cards-grid">
+        <a href="sql-queries.html" class="card">
+          <div class="card-icon">&#128269;</div>
+          <h3>SQL Queries</h3>
+          <p>Full SQL reference including time series functions.</p>
+          <span class="card-link">View <span>&#8594;</span></span>
+        </a>
+
+        <a href="retention.html" class="card">
+          <div class="card-icon">&#128197;</div>
+          <h3>Retention Policies</h3>
+          <p>Configure automatic data expiration alongside aggregates.</p>
+          <span class="card-link">View <span>&#8594;</span></span>
+        </a>
+
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>Configuration</h3>
+          <p>All configuration options for MynaDB.</p>
+          <span class="card-link">View <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 MynaDB. The Voice of Your Machines.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

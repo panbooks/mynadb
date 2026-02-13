@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB OpenTelemetry OTLP ingestion - Native support for metrics, logs, and traces via gRPC and HTTP">
+  <title>OpenTelemetry (OTLP) - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Ingestion &amp; Protocols</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html" class="active">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Query &amp; Analytics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="testing.html">Testing</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <div class="docs-badge" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">
+        NEW IN v0.3.0
+      </div>
+
+      <h1>OpenTelemetry (OTLP) Ingestion</h1>
+
+      <p class="lead">
+        MynaDB natively supports OpenTelemetry Protocol (OTLP) for ingesting metrics, logs, and traces.
+        Send observability data directly from your applications, the OpenTelemetry Collector, or any
+        OTLP-compatible agent without any additional adapters or translation layers.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Standards Compliant</div>
+        <p>
+          MynaDB implements the <strong>OpenTelemetry Protocol (OTLP) v1.0</strong> specification,
+          supporting both gRPC and HTTP/protobuf transports. Any OpenTelemetry SDK or Collector
+          that speaks OTLP can send data to MynaDB out of the box.
+        </p>
+      </div>
+
+      <h2>Supported Endpoints</h2>
+
+      <p>MynaDB exposes the following OTLP endpoints for receiving telemetry data:</p>
+
+      <div class="table-wrapper">
+        <table class="docs-table">
+          <thead>
+            <tr>
+              <th>Protocol</th>
+              <th>Endpoint</th>
+              <th>Method</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>gRPC</td>
+              <td><code>:4317</code></td>
+              <td>-</td>
+              <td>Native gRPC OTLP receiver for all signal types (metrics, logs, traces)</td>
+            </tr>
+            <tr>
+              <td>HTTP</td>
+              <td><code>/v1/metrics</code></td>
+              <td>POST</td>
+              <td>HTTP/protobuf endpoint for metrics ingestion</td>
+            </tr>
+            <tr>
+              <td>HTTP</td>
+              <td><code>/v1/logs</code></td>
+              <td>POST</td>
+              <td>HTTP/protobuf endpoint for logs ingestion</td>
+            </tr>
+            <tr>
+              <td>HTTP</td>
+              <td><code>/v1/traces</code></td>
+              <td>POST</td>
+              <td>HTTP/protobuf endpoint for traces ingestion</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Configuration</h2>
+
+      <p>Enable and configure OTLP ingestion in your <code>config.toml</code>:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>[otlp]
+enabled = true
+database = "otel"                  # Target database for OTLP data
+grpc_port = 4317                   # gRPC receiver port
+http_enabled = true                # Enable HTTP/protobuf endpoints
+http_port = 4318                   # HTTP receiver port (on main HTTP server if 0)
+
+# Signal-specific configuration
+[otlp.metrics]
+enabled = true
+table_name = "otel_metrics"        # Table name for metrics data
+resource_attributes_as_tags = true # Map resource attributes to tags
+include_scope_info = true          # Include instrumentation scope
+
+[otlp.logs]
+enabled = true
+table_name = "otel_logs"           # Table name for log records
+body_field = "body"                # Field name for log body
+severity_as_tag = true             # Map severity level to a tag
+resource_attributes_as_tags = true
+
+[otlp.traces]
+enabled = true
+table_name = "otel_traces"         # Table name for trace spans
+span_attributes_as_fields = true   # Map span attributes to fields
+resource_attributes_as_tags = true
+include_events = true              # Store span events as nested data</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Default Database</div>
+        <p>
+          All OTLP data is written to the database specified by <code>otlp.database</code> (default: <code>otel</code>).
+          Within that database, each signal type is stored in its own table as configured by
+          <code>table_name</code> in the respective section.
+        </p>
+      </div>
+
+      <h2>Data Mapping</h2>
+
+      <p>
+        MynaDB automatically maps OTLP data structures into its time series storage model.
+        Resource attributes become tags, and data points become fields in the corresponding tables.
+      </p>
+
+      <h3>Metrics Mapping</h3>
+
+      <p>OTLP metrics are flattened into the <code>otel_metrics</code> table with the following schema:</p>
+
+      <div class="table-wrapper">
+        <table class="docs-table">
+          <thead>
+            <tr>
+              <th>Column</th>
+              <th>Type</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>time</code></td>
+              <td>TIMESTAMP</td>
+              <td>Data point timestamp</td>
+            </tr>
+            <tr>
+              <td><code>metric_name</code></td>
+              <td>STRING (tag)</td>
+              <td>OTLP metric name</td>
+            </tr>
+            <tr>
+              <td><code>metric_type</code></td>
+              <td>STRING (tag)</td>
+              <td>gauge, sum, histogram, summary</td>
+            </tr>
+            <tr>
+              <td><code>value</code></td>
+              <td>FLOAT</td>
+              <td>Metric value (gauge/sum)</td>
+            </tr>
+            <tr>
+              <td><code>count</code></td>
+              <td>INTEGER</td>
+              <td>Histogram/summary count</td>
+            </tr>
+            <tr>
+              <td><code>sum</code></td>
+              <td>FLOAT</td>
+              <td>Histogram/summary sum</td>
+            </tr>
+            <tr>
+              <td><code>service_name</code></td>
+              <td>STRING (tag)</td>
+              <td>Resource attribute: service.name</td>
+            </tr>
+            <tr>
+              <td><code>host_name</code></td>
+              <td>STRING (tag)</td>
+              <td>Resource attribute: host.name</td>
+            </tr>
+            <tr>
+              <td><code>{attribute}</code></td>
+              <td>STRING (tag)</td>
+              <td>Additional data point attributes</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Logs Mapping</h3>
+
+      <p>OTLP log records are stored in the <code>otel_logs</code> table:</p>
+
+      <div class="table-wrapper">
+        <table class="docs-table">
+          <thead>
+            <tr>
+              <th>Column</th>
+              <th>Type</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>time</code></td>
+              <td>TIMESTAMP</td>
+              <td>Log record timestamp</td>
+            </tr>
+            <tr>
+              <td><code>severity</code></td>
+              <td>STRING (tag)</td>
+              <td>Severity level (INFO, WARN, ERROR, etc.)</td>
+            </tr>
+            <tr>
+              <td><code>severity_number</code></td>
+              <td>INTEGER</td>
+              <td>Numeric severity (1-24)</td>
+            </tr>
+            <tr>
+              <td><code>body</code></td>
+              <td>STRING</td>
+              <td>Log message body</td>
+            </tr>
+            <tr>
+              <td><code>trace_id</code></td>
+              <td>STRING</td>
+              <td>Associated trace ID (if present)</td>
+            </tr>
+            <tr>
+              <td><code>span_id</code></td>
+              <td>STRING</td>
+              <td>Associated span ID (if present)</td>
+            </tr>
+            <tr>
+              <td><code>service_name</code></td>
+              <td>STRING (tag)</td>
+              <td>Resource attribute: service.name</td>
+            </tr>
+            <tr>
+              <td><code>{attribute}</code></td>
+              <td>STRING (tag)</td>
+              <td>Additional log attributes</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Traces Mapping</h3>
+
+      <p>OTLP trace spans are stored in the <code>otel_traces</code> table:</p>
+
+      <div class="table-wrapper">
+        <table class="docs-table">
+          <thead>
+            <tr>
+              <th>Column</th>
+              <th>Type</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>time</code></td>
+              <td>TIMESTAMP</td>
+              <td>Span start time</td>
+            </tr>
+            <tr>
+              <td><code>trace_id</code></td>
+              <td>STRING (tag)</td>
+              <td>Trace identifier</td>
+            </tr>
+            <tr>
+              <td><code>span_id</code></td>
+              <td>STRING</td>
+              <td>Span identifier</td>
+            </tr>
+            <tr>
+              <td><code>parent_span_id</code></td>
+              <td>STRING</td>
+              <td>Parent span identifier</td>
+            </tr>
+            <tr>
+              <td><code>span_name</code></td>
+              <td>STRING (tag)</td>
+              <td>Operation name</td>
+            </tr>
+            <tr>
+              <td><code>span_kind</code></td>
+              <td>STRING (tag)</td>
+              <td>INTERNAL, SERVER, CLIENT, PRODUCER, CONSUMER</td>
+            </tr>
+            <tr>
+              <td><code>duration_ns</code></td>
+              <td>INTEGER</td>
+              <td>Span duration in nanoseconds</td>
+            </tr>
+            <tr>
+              <td><code>status_code</code></td>
+              <td>STRING (tag)</td>
+              <td>OK, ERROR, UNSET</td>
+            </tr>
+            <tr>
+              <td><code>status_message</code></td>
+              <td>STRING</td>
+              <td>Status description (on error)</td>
+            </tr>
+            <tr>
+              <td><code>service_name</code></td>
+              <td>STRING (tag)</td>
+              <td>Resource attribute: service.name</td>
+            </tr>
+            <tr>
+              <td><code>{attribute}</code></td>
+              <td>STRING</td>
+              <td>Span attributes as fields</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>OpenTelemetry Collector</h2>
+
+      <p>
+        The recommended way to send OTLP data to MynaDB is through the
+        <a href="https://opentelemetry.io/docs/collector/" target="_blank">OpenTelemetry Collector</a>.
+        Configure MynaDB as an OTLP exporter in your collector pipeline:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">yaml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># otel-collector-config.yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # Example: scrape Prometheus metrics and forward as OTLP
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'node-exporter'
+          scrape_interval: 15s
+          static_configs:
+            - targets: ['localhost:9100']
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1000
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+  resource:
+    attributes:
+      - key: environment
+        value: production
+        action: upsert
+
+exporters:
+  otlp/mynadb:
+    endpoint: mynadb-host:4317
+    tls:
+      insecure: true            # Set to false in production with TLS
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 1000
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlp/mynadb]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlp/mynadb]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlp/mynadb]</code></pre>
+        </div>
+      </div>
+
+      <h3>Running the Collector</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Docker
+docker run -d --name otel-collector \
+  -v ./otel-collector-config.yaml:/etc/otelcol/config.yaml \
+  -p 4317:4317 \
+  -p 4318:4318 \
+  otel/opentelemetry-collector-contrib:latest
+
+# Binary
+otelcol-contrib --config otel-collector-config.yaml</code></pre>
+        </div>
+      </div>
+
+      <h3>Direct SDK Integration</h3>
+
+      <p>You can also send OTLP data directly from your application using any OpenTelemetry SDK:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">python</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code># Python example - sending metrics directly to MynaDB
+from opentelemetry import metrics
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+
+# Configure OTLP exporter pointing to MynaDB
+exporter = OTLPMetricExporter(
+    endpoint="mynadb-host:4317",
+    insecure=True,
+)
+
+reader = PeriodicExportingMetricReader(exporter, export_interval_millis=10000)
+provider = MeterProvider(metric_readers=[reader])
+metrics.set_meter_provider(provider)
+
+# Create and record metrics
+meter = metrics.get_meter("myapp")
+counter = meter.create_counter("http_requests", description="Total HTTP requests")
+histogram = meter.create_histogram("request_duration_ms", description="Request latency")
+
+counter.add(1, {"method": "GET", "path": "/api/users", "status": "200"})
+histogram.record(42.5, {"method": "GET", "path": "/api/users"})</code></pre>
+        </div>
+      </div>
+
+      <h2>Querying OTLP Data</h2>
+
+      <p>
+        Once ingested, OTLP data is stored as regular MynaDB tables and can be queried using
+        standard SQL. Here are common query patterns for each signal type.
+      </p>
+
+      <h3>Querying Metrics</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Average CPU usage per service over the last hour
+SELECT
+  service_name,
+  metric_name,
+  time_bucket('5 minutes', time) AS bucket,
+  AVG(value) AS avg_value,
+  MAX(value) AS max_value
+FROM otel.default.otel_metrics
+WHERE metric_name = 'system.cpu.utilization'
+  AND time &gt; now() - INTERVAL '1 hour'
+GROUP BY service_name, metric_name, bucket
+ORDER BY bucket DESC;
+
+-- Top 10 services by request count
+SELECT
+  service_name,
+  SUM(value) AS total_requests
+FROM otel.default.otel_metrics
+WHERE metric_name = 'http_requests'
+  AND time &gt; now() - INTERVAL '24 hours'
+GROUP BY service_name
+ORDER BY total_requests DESC
+LIMIT 10;</code></pre>
+        </div>
+      </div>
+
+      <h3>Querying Logs</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Recent error logs across all services
+SELECT
+  time,
+  service_name,
+  severity,
+  body
+FROM otel.default.otel_logs
+WHERE severity = 'ERROR'
+  AND time &gt; now() - INTERVAL '1 hour'
+ORDER BY time DESC
+LIMIT 50;
+
+-- Error rate by service over time
+SELECT
+  service_name,
+  time_bucket('15 minutes', time) AS bucket,
+  COUNT(*) FILTER (WHERE severity = 'ERROR') AS errors,
+  COUNT(*) AS total,
+  ROUND(100.0 * COUNT(*) FILTER (WHERE severity = 'ERROR') / COUNT(*), 2) AS error_pct
+FROM otel.default.otel_logs
+WHERE time &gt; now() - INTERVAL '6 hours'
+GROUP BY service_name, bucket
+ORDER BY bucket DESC;</code></pre>
+        </div>
+      </div>
+
+      <h3>Querying Traces</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Slowest endpoints in the last hour
+SELECT
+  service_name,
+  span_name,
+  COUNT(*) AS span_count,
+  AVG(duration_ns / 1000000.0) AS avg_ms,
+  MAX(duration_ns / 1000000.0) AS max_ms,
+  APPROX_PERCENTILE_CONT(duration_ns / 1000000.0, 0.99) AS p99_ms
+FROM otel.default.otel_traces
+WHERE span_kind = 'SERVER'
+  AND time &gt; now() - INTERVAL '1 hour'
+GROUP BY service_name, span_name
+ORDER BY p99_ms DESC
+LIMIT 20;
+
+-- Trace waterfall - all spans for a specific trace
+SELECT
+  span_name,
+  span_kind,
+  service_name,
+  duration_ns / 1000000.0 AS duration_ms,
+  status_code,
+  parent_span_id,
+  span_id
+FROM otel.default.otel_traces
+WHERE trace_id = '4bf92f3577b34da6a3ce929d0e0e4736'
+ORDER BY time ASC;
+
+-- Error spans by service
+SELECT
+  service_name,
+  span_name,
+  COUNT(*) AS error_count,
+  MIN(time) AS first_seen,
+  MAX(time) AS last_seen
+FROM otel.default.otel_traces
+WHERE status_code = 'ERROR'
+  AND time &gt; now() - INTERVAL '24 hours'
+GROUP BY service_name, span_name
+ORDER BY error_count DESC;</code></pre>
+        </div>
+      </div>
+
+      <h3>Cross-Signal Correlation</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Find error logs associated with slow traces
+SELECT
+  t.trace_id,
+  t.span_name,
+  t.duration_ns / 1000000.0 AS duration_ms,
+  l.severity,
+  l.body AS log_message
+FROM otel.default.otel_traces t
+JOIN otel.default.otel_logs l
+  ON t.trace_id = l.trace_id
+WHERE t.duration_ns &gt; 5000000000  -- spans longer than 5 seconds
+  AND l.severity IN ('ERROR', 'WARN')
+  AND t.time &gt; now() - INTERVAL '1 hour'
+ORDER BY t.duration_ns DESC
+LIMIT 25;</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; Performance Tip</div>
+        <p>
+          For best query performance on OTLP data, always include a time range filter
+          (<code>time &gt; now() - INTERVAL '...'</code>) to leverage date-based partition pruning.
+          Tag columns like <code>service_name</code> and <code>metric_name</code> are indexed and
+          efficient for filtering.
+        </p>
+      </div>
+
+      <div class="docs-nav">
+        <a href="line-protocol.html" class="docs-nav-prev">&larr; Line Protocol</a>
+        <a href="flight-api.html" class="docs-nav-next">Arrow Flight API &rarr;</a>
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 MynaDB. The Voice of Your Machines.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

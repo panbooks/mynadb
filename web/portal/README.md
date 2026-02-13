@@ -32,6 +32,15 @@ website/
     ├── caching.html        # Multi-level caching
     ├── mysql-protocol.html # MySQL protocol support
     ├── object-store.html   # S3/MinIO/OSS support
+    ├── otlp.html           # OpenTelemetry (OTLP) ingestion
+    ├── iceberg.html        # Apache Iceberg integration
+    ├── grafana.html        # Grafana integration
+    ├── continuous-aggregates.html # Continuous aggregates & downsampling
+    ├── streaming.html      # Streaming queries (WebSocket/SSE)
+    ├── security.html       # Authentication, RBAC & security
+    ├── forecasting.html    # Forecasting & geospatial functions
+    ├── admin-console.html  # Admin console
+    ├── monitoring.html     # Monitoring & observability
     ├── faq.html            # Frequently asked questions
     └── troubleshooting.html # Troubleshooting guide
 ```
@@ -112,6 +121,15 @@ Edit CSS variables in `css/style.css`:
 | Caching | Metadata, query, and file caching |
 | MySQL Protocol | MySQL wire protocol support |
 | Object Store | S3, MinIO, Aliyun OSS |
+| OpenTelemetry (OTLP) | Native OTLP ingestion for metrics, logs, traces |
+| Apache Iceberg | REST Catalog API for multi-engine analytics |
+| Grafana Integration | InfluxDB-compatible datasource and dashboard |
+| Continuous Aggregates | Materialized views with auto-refresh |
+| Streaming Queries | Real-time subscriptions via WebSocket/SSE |
+| Security & RBAC | Authentication, roles, TLS, audit logging |
+| Forecasting & Geospatial | Built-in forecasting and geospatial UDFs |
+| Admin Console | Web-based SQL editor and cluster management |
+| Monitoring | Prometheus metrics and observability |
 | FAQ | Frequently asked questions |
 | Troubleshooting | Common issues and solutions |
 

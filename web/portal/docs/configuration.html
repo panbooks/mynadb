@@ -56,32 +56,68 @@
           <li><a href="architecture.html">Architecture</a></li>
           <li><a href="data-model.html">Data Model</a></li>
           <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
         </ul>
       </div>
 
       <div class="sidebar-section">
-        <h4>Guides</h4>
+        <h4>Ingestion &amp; Protocols</h4>
         <ul class="sidebar-nav">
-          <li><a href="guides.html">All Guides</a></li>
-          <li><a href="sql-queries.html">SQL Queries</a></li>
           <li><a href="line-protocol.html">Line Protocol</a></li>
-          <li><a href="retention.html">Retention Policies</a></li>
-          <li><a href="compaction.html">Compaction</a></li>
-          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
         </ul>
       </div>
 
       <div class="sidebar-section">
-        <h4>API Reference</h4>
+        <h4>Query &amp; Analytics</h4>
         <ul class="sidebar-nav">
-          <li><a href="api.html">HTTP API</a></li>
-          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
         </ul>
       </div>
 
       <div class="sidebar-section">
         <h4>Resources</h4>
         <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
           <li><a href="examples.html">Examples</a></li>
           <li><a href="testing.html">Testing</a></li>
           <li><a href="troubleshooting.html">Troubleshooting</a></li>
@@ -447,6 +483,113 @@ exclude_tables = ["mydb.default.important"]  # Skip these tables</code></pre>
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <!-- OTLP Section -->
+      <h2 id="otlp">OpenTelemetry (OTLP)</h2>
+
+      <p>Native OpenTelemetry ingestion settings. See <a href="otlp.html">OTLP documentation</a>.</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[otlp]
+enabled = false                      # Enable OTLP ingestion
+grpc_port = 4317                     # OTLP gRPC port
+http_enabled = true                  # Enable OTLP HTTP endpoints
+metrics_database = "otel_metrics"    # Target database for metrics
+logs_database = "otel_logs"          # Target database for logs
+traces_database = "otel_traces"      # Target database for traces</code></pre>
+        </div>
+      </div>
+
+      <!-- Iceberg Section -->
+      <h2 id="iceberg">Apache Iceberg</h2>
+
+      <p>Iceberg REST Catalog API settings. See <a href="iceberg.html">Iceberg documentation</a>.</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[iceberg]
+enabled = false                      # Enable Iceberg REST Catalog
+catalog_name = "mynadb"              # Catalog name exposed to engines
+sync_interval_secs = 60             # Metadata sync interval
+metadata_location = "data/iceberg"   # Iceberg metadata directory</code></pre>
+        </div>
+      </div>
+
+      <!-- Streaming Section -->
+      <h2 id="streaming">Streaming Queries</h2>
+
+      <p>Real-time query subscription settings. See <a href="streaming.html">streaming documentation</a>.</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[streaming]
+enabled = false                      # Enable streaming queries
+max_subscriptions = 100              # Max concurrent subscriptions
+heartbeat_interval_secs = 30         # WebSocket heartbeat interval
+buffer_size = 1000                   # Event buffer size per subscription</code></pre>
+        </div>
+      </div>
+
+      <!-- Continuous Aggregates Section -->
+      <h2 id="continuous-aggregates">Continuous Aggregates</h2>
+
+      <p>Materialized view and downsampling settings. See <a href="continuous-aggregates.html">continuous aggregates documentation</a>.</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[continuous_aggregates]
+enabled = false                      # Enable continuous aggregates
+refresh_check_interval_secs = 60     # Check for refresh every 60s
+max_concurrent_refreshes = 4         # Parallel refresh jobs
+query_rewriting_enabled = true       # Auto-rewrite queries to use aggregates</code></pre>
+        </div>
+      </div>
+
+      <!-- TLS Section -->
+      <h2 id="tls">TLS / SSL</h2>
+
+      <p>Transport-layer security settings. See <a href="security.html">security documentation</a>.</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[tls]
+enabled = false                      # Enable TLS
+cert_file = "/etc/mynadb/tls/cert.pem"
+key_file = "/etc/mynadb/tls/key.pem"
+ca_file = "/etc/mynadb/tls/ca.pem"   # For mutual TLS (optional)
+mutual_auth = false                  # Require client certificates</code></pre>
+        </div>
+      </div>
+
+      <!-- Audit Section -->
+      <h2 id="audit">Audit Logging</h2>
+
+      <p>Audit trail settings for compliance. See <a href="security.html">security documentation</a>.</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[audit]
+enabled = false                      # Enable audit logging
+log_file = "/var/log/mynadb/audit.log"
+rotation = "daily"                   # "daily", "hourly", or "size"
+max_files = 30                       # Rotated files to keep</code></pre>
+        </div>
+      </div>
+
+      <!-- Admin Section -->
+      <h2 id="admin">Admin Console</h2>
+
+      <p>Web-based admin interface settings. See <a href="admin-console.html">admin console documentation</a>.</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[admin]
+enabled = false                      # Enable admin console
+port = 18080                         # Admin HTTP port
+meta_endpoints = ["localhost:6001"]  # Meta service endpoints for cluster mode</code></pre>
+        </div>
       </div>
 
       <h2>Environment Variables</h2>

@@ -81,8 +81,9 @@
         </p>
 
         <p class="hero-description">
-          A blazing-fast time series database built with Rust. Ingest data via InfluxDB Line Protocol,
-          store in columnar Parquet format, and query with SQL powered by Apache DataFusion.
+          A blazing-fast time series database built with Rust. Ingest via InfluxDB Line Protocol or OpenTelemetry,
+          store in columnar Parquet with Apache Iceberg support, and query with SQL powered by Apache DataFusion.
+          Multi-protocol ingestion, streaming queries, and Grafana-native dashboards.
         </p>
 
         <div class="hero-buttons">
@@ -135,47 +136,51 @@
   <section class="section" style="background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 50%, #f0f9ff 100%);">
     <div class="container">
       <div class="section-header">
-        <h2>What's New in v0.2.8</h2>
-        <p>Major performance improvements and new features for time series analytics.</p>
+        <h2>What's New</h2>
+        <p>Major new features expanding MynaDB into a full observability platform.</p>
       </div>
 
       <div class="features-grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
         <div class="feature-card" style="background: white; border: 2px solid #0284c7;">
-          <div class="feature-icon" style="background: linear-gradient(135deg, #0284c7, #06b6d4);">&#128200;</div>
-          <h3>Metadata Manager</h3>
-          <p>Memory-based metadata catalog with JSON persistence. Eliminates filesystem scans for <strong>10-100x faster</strong> query planning.</p>
-          <a href="docs/caching.html" style="color: #0284c7; text-decoration: none; font-weight: 500;">Learn more &rarr;</a>
+          <div class="feature-icon" style="background: linear-gradient(135deg, #0284c7, #06b6d4);">&#127899;</div>
+          <h3>OpenTelemetry (OTLP)</h3>
+          <p>Native OTLP ingestion via gRPC and HTTP. Receive metrics, logs, and traces from any OpenTelemetry-instrumented application.</p>
+          <a href="docs/otlp.html" style="color: #0284c7; text-decoration: none; font-weight: 500;">Learn more &rarr;</a>
         </div>
 
         <div class="feature-card" style="background: white; border: 2px solid #06b6d4;">
-          <div class="feature-icon" style="background: linear-gradient(135deg, #06b6d4, #22d3ee);">&#128190;</div>
-          <h3>Parquet Disk Cache</h3>
-          <p>Local SSD caching for Object Store files. Smart eviction prioritizes recent partitions for time series workloads.</p>
-          <a href="docs/caching.html#disk-cache" style="color: #06b6d4; text-decoration: none; font-weight: 500;">Learn more &rarr;</a>
+          <div class="feature-icon" style="background: linear-gradient(135deg, #06b6d4, #22d3ee);">&#129482;</div>
+          <h3>Apache Iceberg</h3>
+          <p>REST Catalog API enables multi-engine analytics. Query MynaDB data from Spark, Trino, DuckDB, and Flink.</p>
+          <a href="docs/iceberg.html" style="color: #06b6d4; text-decoration: none; font-weight: 500;">Learn more &rarr;</a>
         </div>
 
         <div class="feature-card" style="background: white; border: 2px solid #10b981;">
-          <div class="feature-icon" style="background: linear-gradient(135deg, #10b981, #34d399);">&#9889;</div>
-          <h3>Instant Query Visibility</h3>
-          <p>Memtable provides immediate query access to fresh writes. <strong>No more flush before query!</strong></p>
-          <a href="docs/caching.html#memtable" style="color: #10b981; text-decoration: none; font-weight: 500;">Learn more &rarr;</a>
+          <div class="feature-icon" style="background: linear-gradient(135deg, #10b981, #34d399);">&#128202;</div>
+          <h3>Grafana Integration</h3>
+          <p>Built-in Grafana-compatible endpoints and a comprehensive monitoring dashboard with system metrics.</p>
+          <a href="docs/grafana.html" style="color: #10b981; text-decoration: none; font-weight: 500;">Learn more &rarr;</a>
         </div>
 
         <div class="feature-card" style="background: white; border: 2px solid #8b5cf6;">
-          <div class="feature-icon" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa);">&#128202;</div>
-          <h3>first_value() / last_value()</h3>
-          <p>InfluxDB-compatible aggregate functions for time-ordered data. Essential for downsampling and monitoring.</p>
-          <a href="docs/sql-queries.html#time-series" style="color: #8b5cf6; text-decoration: none; font-weight: 500;">Learn more &rarr;</a>
+          <div class="feature-icon" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa);">&#128200;</div>
+          <h3>Continuous Aggregates</h3>
+          <p>TimescaleDB-style materialized views with automatic refresh. Transparent query rewriting for instant results.</p>
+          <a href="docs/continuous-aggregates.html" style="color: #8b5cf6; text-decoration: none; font-weight: 500;">Learn more &rarr;</a>
         </div>
-      </div>
 
-      <div class="text-center" style="margin-top: 2rem;">
-        <div style="display: inline-block; background: white; padding: 1rem 2rem; border-radius: 0.75rem; box-shadow: 0 4px 20px rgba(0,0,0,0.08);">
-          <code style="font-size: 1rem; color: #0f172a;">
-            <span style="color: #64748b;"># Try it now!</span><br>
-            curl -X POST localhost:7000/write/mydb -d 'cpu,host=srv1 usage=75.5'<br>
-            curl 'localhost:7000/query/mydb' -d 'SELECT * FROM cpu'  <span style="color: #10b981;"># Instant!</span>
-          </code>
+        <div class="feature-card" style="background: white; border: 2px solid #f59e0b;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #f59e0b, #fbbf24);">&#128290;</div>
+          <h3>Forecasting &amp; Geospatial</h3>
+          <p>Built-in forecast_linear, forecast_arima, geo_distance, and geo_within UDFs for advanced analytics.</p>
+          <a href="docs/forecasting.html" style="color: #f59e0b; text-decoration: none; font-weight: 500;">Learn more &rarr;</a>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #ec4899;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #ec4899, #f472b6);">&#9889;</div>
+          <h3>Streaming Queries</h3>
+          <p>Real-time query subscriptions via WebSocket and Server-Sent Events for live dashboards and alerting.</p>
+          <a href="docs/streaming.html" style="color: #ec4899; text-decoration: none; font-weight: 500;">Learn more &rarr;</a>
         </div>
       </div>
     </div>
@@ -359,6 +364,66 @@
           <h3>Battle-Tested</h3>
           <p>200+ tests including property-based, fuzz testing, and performance benchmarks.</p>
         </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #0284c7, #06b6d4);">&#127899;</div>
+          <h3>OpenTelemetry Native</h3>
+          <p>Native OTLP ingestion for metrics, logs, and traces via gRPC (port 4317) and HTTP endpoints.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #06b6d4, #22d3ee);">&#129482;</div>
+          <h3>Apache Iceberg</h3>
+          <p>REST Catalog API for multi-engine analytics with Spark, Trino, DuckDB, and Flink.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #10b981, #34d399);">&#128202;</div>
+          <h3>Grafana Dashboards</h3>
+          <p>InfluxDB-compatible datasource endpoints and built-in monitoring dashboard.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa);">&#128200;</div>
+          <h3>Continuous Aggregates</h3>
+          <p>TimescaleDB-style materialized views with automatic refresh and transparent query rewriting.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #ec4899, #f472b6);">&#9889;</div>
+          <h3>Streaming Queries</h3>
+          <p>Real-time subscriptions via WebSocket and SSE for live dashboards and alerting.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #dc2626, #f87171);">&#128274;</div>
+          <h3>RBAC Security</h3>
+          <p>Role-based access control with users, roles, permissions, TLS, and audit logging.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #f59e0b, #fbbf24);">&#128290;</div>
+          <h3>Forecasting UDFs</h3>
+          <p>Built-in forecast_linear, forecast_ema, forecast_arima for predictive analytics.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #14b8a6, #5eead4);">&#127758;</div>
+          <h3>Geospatial Functions</h3>
+          <p>geo_distance, geo_hash, geo_within, and geo_bounding_box for location-aware queries.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #7c3aed, #a78bfa);">&#128421;</div>
+          <h3>Admin Console</h3>
+          <p>Web-based SQL editor with Monaco, storage browser, and cluster management.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #ea580c, #fb923c);">&#128200;</div>
+          <h3>Prometheus Metrics</h3>
+          <p>Native /metrics endpoint for monitoring ingestion, query performance, and system health.</p>
+        </div>
       </div>
     </div>
   </section>
@@ -373,76 +438,69 @@
 
       <div class="architecture-diagram">
         <pre>
-                            +-----------------+
-                            |   HTTP Client   |
-                            +--------+--------+
-                                     |
-                    +----------------+----------------+
-                    |                                 |
-            +-------v-------+                 +-------v-------+
-            |  POST /write  |                 |  GET /query   |
-            |  (Line Proto) |                 |    (SQL)      |
-            +-------+-------+                 +-------+-------+
-                    |                                 |
-            +-------v-------+                 +-------v-------+
-            |   DataCache   |&lt;----------------|  QueryEngine  |
-            |  (In-Memory)  |   Memtable      |  (DataFusion) |
-            +-------+-------+   (instant!)    +-------+-------+
-                    |                                 |
-                    |    +------------------+         |
-                    +--->|  Parquet Files   |&lt;--------+
-                    |    |  (Columnar)      |
-                    |    +--------+---------+
-                    |             |
-            +-------v-------------v-------+
-            |      Metadata Manager       |
-            |  (Memory-based Catalog)     |
-            +-------------+---------------+
-                          |
-           +-------------+v---------+-------------+
-           |             Compactor                |
-           |          (LSM Multi-Level)           |
-           +--------------------------------------+
-           |                                      |
-   +-------v--------+   WAL Replication  +-------v--------+
-   |     MASTER     |------------------->|     SLAVE      |
-   |   (Active)     |    Real-time       |   (Standby)    |
-   +----------------+                    +----------------+
+  +----------------+  +----------------+  +----------------+
+  | Line Protocol  |  |  OTLP (gRPC/  |  | Arrow Flight / |
+  | POST /write/:db|  |  HTTP)        |  | MySQL Protocol |
+  +-------+--------+  +-------+--------+  +-------+--------+
+          |                    |                    |
+          +--------------------+--------------------+
+                               |
+                       +-------v-------+          +------------------+
+                       |   DataCache   |          |   QueryEngine    |
+                       |  (In-Memory)  |&lt;---------| (DataFusion SQL) |
+                       +-------+-------+ Memtable +--------+---------+
+                               |                           |
+                       +-------v---------------------------v--------+
+                       |            Parquet Files (Columnar)         |
+                       |         + Metadata Manager (Catalog)        |
+                       +-----+---------------------------+----------+
+                             |                           |
+                    +--------v--------+         +--------v---------+
+                    |    Compactor    |         | Iceberg REST API |
+                    | (LSM L0-L5)    |         | (Multi-Engine)   |
+                    +-----------------+         +------------------+
+                             |
+          +------------------+------------------+
+          |                                     |
+  +-------v--------+  Streaming  +-------v--------+
+  | Object Storage |  Queries   | WebSocket/SSE  |
+  | (S3/MinIO/OSS) |            | (Real-time)    |
+  +----------------+            +----------------+
         </pre>
       </div>
 
       <div class="architecture-cards">
         <div class="arch-card">
-          <h4>&#128229; Data Ingestion</h4>
-          <p>InfluxDB Line Protocol parser with high-throughput buffering and background flush to Parquet.</p>
+          <h4>&#128229; Multi-Protocol Ingestion</h4>
+          <p>InfluxDB Line Protocol, OpenTelemetry OTLP, and Arrow Flight for flexible data ingestion.</p>
         </div>
         <div class="arch-card">
           <h4>&#9889; Memtable</h4>
           <p>Query fresh writes instantly without waiting for flush. Automatic union of memory and Parquet data.</p>
         </div>
         <div class="arch-card">
-          <h4>&#128200; Metadata Manager</h4>
-          <p>Memory-based catalog with JSON persistence. 10-100x faster query planning.</p>
+          <h4>&#128200; Continuous Aggregates</h4>
+          <p>TimescaleDB-style materialized views with automatic refresh and transparent query rewriting.</p>
         </div>
         <div class="arch-card">
           <h4>&#128451; Storage Layer</h4>
-          <p>Columnar Parquet files with date partitioning and multi-level LSM compaction.</p>
+          <p>Columnar Parquet files with date partitioning, LSM compaction, and Iceberg metadata.</p>
         </div>
         <div class="arch-card">
           <h4>&#128270; Query Engine</h4>
-          <p>Apache DataFusion SQL engine with predicate pushdown and parallel execution.</p>
+          <p>Apache DataFusion with forecasting UDFs, geospatial functions, and predicate pushdown.</p>
         </div>
         <div class="arch-card">
-          <h4>&#128190; Disk Cache</h4>
-          <p>Local SSD cache for Object Store files. Smart eviction prioritizes recent data.</p>
+          <h4>&#128190; Streaming Queries</h4>
+          <p>Real-time query subscriptions via WebSocket and SSE for live dashboards.</p>
         </div>
         <div class="arch-card">
-          <h4>&#9992; Arrow Flight</h4>
-          <p>gRPC streaming interface for high-performance data transfer to clients.</p>
+          <h4>&#129482; Apache Iceberg</h4>
+          <p>REST Catalog API for multi-engine analytics with Spark, Trino, DuckDB, and Flink.</p>
         </div>
         <div class="arch-card">
-          <h4>&#128279; High Availability</h4>
-          <p>Master-slave replication with WAL streaming for fault tolerance and zero downtime failover.</p>
+          <h4>&#128274; Security &amp; RBAC</h4>
+          <p>Role-based access control, TLS/SSL mutual auth, and comprehensive audit logging.</p>
         </div>
       </div>
     </div>
@@ -639,6 +697,69 @@ memory,host=server01 used=16.5,total=32.0
           <p>200+ tests: unit, correctness, property-based, fuzz, and benchmarks.</p>
           <span class="card-link">Read more <span>&#8594;</span></span>
         </a>
+
+        <a href="docs/otlp.html" class="card" style="border: 2px solid #0284c7;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #0284c7, #06b6d4);">&#127899;</div>
+          <h3>OpenTelemetry (OTLP)</h3>
+          <p>Native OTLP ingestion for metrics, logs, and traces via gRPC and HTTP.</p>
+          <span class="card-link" style="color: #0284c7;">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/iceberg.html" class="card" style="border: 2px solid #06b6d4;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #06b6d4, #22d3ee);">&#129482;</div>
+          <h3>Apache Iceberg</h3>
+          <p>REST Catalog API for multi-engine analytics with Spark, Trino, and DuckDB.</p>
+          <span class="card-link" style="color: #06b6d4;">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/grafana.html" class="card" style="border: 2px solid #10b981;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #10b981, #34d399);">&#128202;</div>
+          <h3>Grafana Integration</h3>
+          <p>InfluxDB-compatible datasource and built-in monitoring dashboard.</p>
+          <span class="card-link" style="color: #10b981;">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/continuous-aggregates.html" class="card" style="border: 2px solid #8b5cf6;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa);">&#128200;</div>
+          <h3>Continuous Aggregates</h3>
+          <p>Materialized views with automatic refresh and query rewriting.</p>
+          <span class="card-link" style="color: #8b5cf6;">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/streaming.html" class="card" style="border: 2px solid #ec4899;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #ec4899, #f472b6);">&#9889;</div>
+          <h3>Streaming Queries</h3>
+          <p>Real-time subscriptions via WebSocket and Server-Sent Events.</p>
+          <span class="card-link" style="color: #ec4899;">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/security.html" class="card" style="border: 2px solid #dc2626;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #dc2626, #f87171);">&#128274;</div>
+          <h3>Security &amp; RBAC</h3>
+          <p>Authentication, role-based access control, TLS, and audit logging.</p>
+          <span class="card-link" style="color: #dc2626;">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/forecasting.html" class="card" style="border: 2px solid #f59e0b;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #f59e0b, #fbbf24);">&#128290;</div>
+          <h3>Forecasting &amp; Geospatial</h3>
+          <p>Built-in forecasting and geospatial UDFs for advanced analytics.</p>
+          <span class="card-link" style="color: #f59e0b;">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/admin-console.html" class="card" style="border: 2px solid #7c3aed;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #7c3aed, #a78bfa);">&#128421;</div>
+          <h3>Admin Console</h3>
+          <p>Web-based SQL editor, storage browser, and cluster management.</p>
+          <span class="card-link" style="color: #7c3aed;">Read more <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/monitoring.html" class="card" style="border: 2px solid #ea580c;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #ea580c, #fb923c);">&#128200;</div>
+          <h3>Monitoring</h3>
+          <p>Prometheus metrics, query tracing, and system health endpoints.</p>
+          <span class="card-link" style="color: #ea580c;">Read more <span>&#8594;</span></span>
+        </a>
       </div>
     </div>
   </section>
@@ -669,22 +790,23 @@ memory,host=server01 used=16.5,total=32.0
         <div class="footer-column">
           <h4>Features</h4>
           <ul>
+            <li><a href="docs/otlp.html">OpenTelemetry</a></li>
+            <li><a href="docs/iceberg.html">Apache Iceberg</a></li>
+            <li><a href="docs/grafana.html">Grafana</a></li>
+            <li><a href="docs/continuous-aggregates.html">Continuous Aggregates</a></li>
+            <li><a href="docs/streaming.html">Streaming Queries</a></li>
             <li><a href="docs/cluster.html">Enterprise Cluster</a></li>
-            <li><a href="docs/caching.html">Caching</a></li>
-            <li><a href="docs/mysql-protocol.html">MySQL Protocol</a></li>
-            <li><a href="docs/object-store.html">Object Store</a></li>
-            <li><a href="docs/compaction.html">Compaction</a></li>
           </ul>
         </div>
 
         <div class="footer-column">
           <h4>Resources</h4>
           <ul>
-            <li><a href="docs/examples.html">Examples</a></li>
-            <li><a href="docs/testing.html">Testing</a></li>
+            <li><a href="docs/security.html">Security &amp; RBAC</a></li>
+            <li><a href="docs/monitoring.html">Monitoring</a></li>
+            <li><a href="docs/admin-console.html">Admin Console</a></li>
             <li><a href="docs/configuration.html">Configuration</a></li>
             <li><a href="docs/troubleshooting.html">Troubleshooting</a></li>
-            <li><a href="docs/faq.html">FAQ</a></li>
           </ul>
         </div>
 
@@ -700,7 +822,7 @@ memory,host=server01 used=16.5,total=32.0
       </div>
 
       <div class="footer-bottom">
-        <p>&copy; 2025 MynaDB. The Voice of Your Machines. Listen. Store. Monitor.</p>
+        <p>&copy; 2026 MynaDB. The Voice of Your Machines. Listen. Store. Monitor.</p>
         <div class="footer-social">
           <a href="https://github.com/mynadb/mynadb" target="_blank" aria-label="GitHub">&#128736;</a>
         </div>

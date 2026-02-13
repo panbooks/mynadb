@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Security - Authentication, Role-Based Access Control (RBAC), TLS/SSL, and Audit Logging">
+  <title>Security - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Ingestion &amp; Protocols</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Query &amp; Analytics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html" class="active">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="testing.html">Testing</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <div class="docs-badge" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">
+        NEW IN v0.4.0
+      </div>
+
+      <h1>Authentication, RBAC &amp; Security</h1>
+
+      <p class="lead">
+        Comprehensive security features for production deployments. MynaDB provides
+        built-in authentication, role-based access control, TLS encryption, and audit logging
+        to protect your time series data at every layer.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128272; Defense in Depth</div>
+        <p>
+          MynaDB security follows a layered approach: authenticate users, authorize actions
+          via RBAC, encrypt data in transit with TLS, and record all operations with audit logging.
+          Each layer can be enabled independently to match your deployment requirements.
+        </p>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- Basic Authentication                                         -->
+      <!-- ============================================================ -->
+      <h2 id="basic-authentication">Basic Authentication</h2>
+
+      <p>
+        MynaDB supports basic username/password authentication for all API endpoints.
+        When authentication is enabled, every request must include valid credentials.
+      </p>
+
+      <h3>Configuration</h3>
+
+      <p>Enable authentication in <code>config.toml</code>:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[auth]
+<span class="token-comment"># Enable authentication (default: false)</span>
+enabled = true
+
+<span class="token-comment"># Admin user credentials</span>
+username = "admin"
+password = "your-secure-password"</code></pre>
+        </div>
+      </div>
+
+      <h3>Using Authentication with curl</h3>
+
+      <p>Pass credentials using the <code>-u</code> flag:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Write data with authentication</span>
+curl -u admin:your-secure-password \
+  -X POST http://localhost:7000/write/mydb \
+  -d 'cpu,host=server01 usage=45.2'
+
+<span class="token-comment"># Query data with authentication</span>
+curl -u admin:your-secure-password \
+  "http://localhost:7000/query/mydb?sql=SELECT+*+FROM+cpu+LIMIT+10"
+
+<span class="token-comment"># Health check (no authentication required)</span>
+curl http://localhost:7000/health</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; Important</div>
+        <p>
+          When authentication is disabled, all endpoints are open to unauthenticated access.
+          Always enable authentication in production environments. The <code>/health</code>
+          endpoint remains unauthenticated even when auth is enabled, to support load balancer
+          health checks.
+        </p>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- Role-Based Access Control (RBAC)                             -->
+      <!-- ============================================================ -->
+      <h2 id="rbac">Role-Based Access Control (RBAC)</h2>
+
+      <p>
+        RBAC extends basic authentication with fine-grained permissions. Users are assigned
+        roles that control what operations they can perform and on which databases.
+      </p>
+
+      <h3>Roles</h3>
+
+      <p>MynaDB defines three built-in roles with increasing levels of access:</p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Role</th>
+            <th>Description</th>
+            <th>Typical Use</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>admin</code></td>
+            <td>Full access to all operations and databases</td>
+            <td>Database administrators, DevOps engineers</td>
+          </tr>
+          <tr>
+            <td><code>writer</code></td>
+            <td>Read and write access to assigned databases</td>
+            <td>Application services, data pipelines, collectors</td>
+          </tr>
+          <tr>
+            <td><code>reader</code></td>
+            <td>Read-only access to assigned databases</td>
+            <td>Dashboard users, analysts, monitoring tools</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Permissions Matrix</h3>
+
+      <p>Each role grants specific permissions per database:</p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Permission</th>
+            <th>reader</th>
+            <th>writer</th>
+            <th>admin</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Read data (<code>SELECT</code>, <code>/query</code>)</td>
+            <td>&#10003;</td>
+            <td>&#10003;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>Write data (<code>/write</code>)</td>
+            <td>&#10007;</td>
+            <td>&#10003;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>List tables and schemas</td>
+            <td>&#10003;</td>
+            <td>&#10003;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>Trigger compaction</td>
+            <td>&#10007;</td>
+            <td>&#10007;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>Manage retention</td>
+            <td>&#10007;</td>
+            <td>&#10007;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>Delete partitions</td>
+            <td>&#10007;</td>
+            <td>&#10007;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>Manage users and roles</td>
+            <td>&#10007;</td>
+            <td>&#10007;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>Flush cache</td>
+            <td>&#10007;</td>
+            <td>&#10007;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>View system stats</td>
+            <td>&#10007;</td>
+            <td>&#10007;</td>
+            <td>&#10003;</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>User Management API</h3>
+
+      <p>Manage users and their roles through the REST API. All user management endpoints require <code>admin</code> role.</p>
+
+      <h4>Create a User</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Create a new user with the writer role</span>
+curl -u admin:your-secure-password \
+  -X POST http://localhost:7000/auth/users \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "app_writer",
+    "password": "writer-password-123",
+    "role": "writer",
+    "databases": ["mydb", "metrics"]
+  }'
+
+<span class="token-comment"># Response</span>
+{
+  "status": "ok",
+  "message": "User app_writer created with role writer"
+}</code></pre>
+        </div>
+      </div>
+
+      <h4>List Users</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># List all users</span>
+curl -u admin:your-secure-password \
+  http://localhost:7000/auth/users
+
+<span class="token-comment"># Response</span>
+{
+  "users": [
+    {
+      "username": "admin",
+      "role": "admin",
+      "databases": ["*"]
+    },
+    {
+      "username": "app_writer",
+      "role": "writer",
+      "databases": ["mydb", "metrics"]
+    },
+    {
+      "username": "dashboard",
+      "role": "reader",
+      "databases": ["mydb"]
+    }
+  ]
+}</code></pre>
+        </div>
+      </div>
+
+      <h4>Update User Role</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Promote a user to admin</span>
+curl -u admin:your-secure-password \
+  -X PUT http://localhost:7000/auth/users/app_writer/role \
+  -H "Content-Type: application/json" \
+  -d '{
+    "role": "admin",
+    "databases": ["*"]
+  }'
+
+<span class="token-comment"># Response</span>
+{
+  "status": "ok",
+  "message": "User app_writer role updated to admin"
+}</code></pre>
+        </div>
+      </div>
+
+      <h4>Delete a User</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Delete a user</span>
+curl -u admin:your-secure-password \
+  -X DELETE http://localhost:7000/auth/users/dashboard
+
+<span class="token-comment"># Response</span>
+{
+  "status": "ok",
+  "message": "User dashboard deleted"
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- TLS/SSL Configuration                                        -->
+      <!-- ============================================================ -->
+      <h2 id="tls">TLS/SSL Configuration</h2>
+
+      <p>
+        Encrypt all client-server communication using TLS. MynaDB supports both standard TLS
+        and mutual TLS (mTLS) for environments that require client certificate verification.
+      </p>
+
+      <h3>Configuration</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[tls]
+<span class="token-comment"># Enable TLS encryption (default: false)</span>
+enabled = true
+
+<span class="token-comment"># Path to the server certificate (PEM format)</span>
+cert_file = "/etc/mynadb/certs/server.crt"
+
+<span class="token-comment"># Path to the server private key (PEM format)</span>
+key_file = "/etc/mynadb/certs/server.key"
+
+<span class="token-comment"># Path to the Certificate Authority bundle (PEM format)</span>
+<span class="token-comment"># Required for mutual TLS (mTLS) client verification</span>
+ca_file = "/etc/mynadb/certs/ca.crt"
+
+<span class="token-comment"># Enable mutual TLS - clients must present a valid certificate</span>
+<span class="token-comment"># signed by the CA specified in ca_file (default: false)</span>
+mutual_auth = false</code></pre>
+        </div>
+      </div>
+
+      <h3>Connecting with TLS</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Connect using TLS with CA certificate verification</span>
+curl --cacert /etc/mynadb/certs/ca.crt \
+  -u admin:your-secure-password \
+  "https://localhost:7000/query/mydb?sql=SELECT+*+FROM+cpu+LIMIT+5"
+
+<span class="token-comment"># Connect with mutual TLS (mTLS) - client certificate required</span>
+curl --cacert /etc/mynadb/certs/ca.crt \
+  --cert /etc/mynadb/certs/client.crt \
+  --key /etc/mynadb/certs/client.key \
+  -u admin:your-secure-password \
+  "https://localhost:7000/query/mydb?sql=SELECT+*+FROM+cpu+LIMIT+5"
+
+<span class="token-comment"># Write data over TLS</span>
+curl --cacert /etc/mynadb/certs/ca.crt \
+  -u admin:your-secure-password \
+  -X POST https://localhost:7000/write/mydb \
+  -d 'cpu,host=server01 usage=45.2'</code></pre>
+        </div>
+      </div>
+
+      <h3>TLS Options</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Option</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>enabled</code></td>
+            <td>bool</td>
+            <td><code>false</code></td>
+            <td>Enable TLS encryption</td>
+          </tr>
+          <tr>
+            <td><code>cert_file</code></td>
+            <td>string</td>
+            <td>-</td>
+            <td>Path to server certificate (PEM)</td>
+          </tr>
+          <tr>
+            <td><code>key_file</code></td>
+            <td>string</td>
+            <td>-</td>
+            <td>Path to server private key (PEM)</td>
+          </tr>
+          <tr>
+            <td><code>ca_file</code></td>
+            <td>string</td>
+            <td>-</td>
+            <td>Path to CA certificate bundle (PEM)</td>
+          </tr>
+          <tr>
+            <td><code>mutual_auth</code></td>
+            <td>bool</td>
+            <td><code>false</code></td>
+            <td>Require client certificates (mTLS)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128273; Certificate Generation</div>
+        <p>
+          For development and testing, you can generate self-signed certificates with OpenSSL:
+        </p>
+        <pre><code>openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes -subj "/CN=localhost"</code></pre>
+        <p>
+          For production, use certificates issued by a trusted Certificate Authority or
+          an internal PKI such as HashiCorp Vault, cert-manager, or AWS ACM.
+        </p>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- Audit Logging                                                -->
+      <!-- ============================================================ -->
+      <h2 id="audit-logging">Audit Logging</h2>
+
+      <p>
+        Audit logging records all authenticated operations for compliance, forensics,
+        and security monitoring. Each entry captures the user, action, target resource,
+        timestamp, and outcome.
+      </p>
+
+      <h3>Configuration</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[audit]
+<span class="token-comment"># Enable audit logging (default: false)</span>
+enabled = true
+
+<span class="token-comment"># Path to the audit log file</span>
+log_file = "/var/log/mynadb/audit.log"
+
+<span class="token-comment"># Log rotation policy: "daily", "size", or "never"</span>
+rotation = "daily"
+
+<span class="token-comment"># Maximum number of rotated log files to retain</span>
+max_files = 90</code></pre>
+        </div>
+      </div>
+
+      <h3>Audit Log Options</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Option</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>enabled</code></td>
+            <td>bool</td>
+            <td><code>false</code></td>
+            <td>Enable audit logging</td>
+          </tr>
+          <tr>
+            <td><code>log_file</code></td>
+            <td>string</td>
+            <td><code>/var/log/mynadb/audit.log</code></td>
+            <td>Path to the audit log file</td>
+          </tr>
+          <tr>
+            <td><code>rotation</code></td>
+            <td>string</td>
+            <td><code>daily</code></td>
+            <td>Rotation policy (<code>daily</code>, <code>size</code>, <code>never</code>)</td>
+          </tr>
+          <tr>
+            <td><code>max_files</code></td>
+            <td>u32</td>
+            <td><code>90</code></td>
+            <td>Number of rotated files to keep</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Sample Audit Log Entry</h3>
+
+      <p>Each audit log entry is written as a single JSON line:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">json</span>
+        </div>
+        <div class="code-content">
+          <pre><code>{
+  "timestamp": "2026-02-13T10:32:15.847Z",
+  "user": "app_writer",
+  "role": "writer",
+  "action": "WRITE",
+  "resource": "/write/mydb",
+  "method": "POST",
+  "source_ip": "10.0.1.42",
+  "status": 200,
+  "duration_ms": 12,
+  "details": {
+    "database": "mydb",
+    "points": 1500,
+    "bytes": 48210
+  }
+}
+{
+  "timestamp": "2026-02-13T10:32:18.103Z",
+  "user": "dashboard",
+  "role": "reader",
+  "action": "QUERY",
+  "resource": "/query/mydb",
+  "method": "GET",
+  "source_ip": "10.0.2.15",
+  "status": 200,
+  "duration_ms": 45,
+  "details": {
+    "database": "mydb",
+    "sql": "SELECT time, usage FROM cpu WHERE host = 'server01' ORDER BY time DESC LIMIT 100",
+    "rows_returned": 100
+  }
+}
+{
+  "timestamp": "2026-02-13T10:35:02.991Z",
+  "user": "unknown",
+  "role": null,
+  "action": "AUTH_FAILURE",
+  "resource": "/write/mydb",
+  "method": "POST",
+  "source_ip": "192.168.1.99",
+  "status": 401,
+  "duration_ms": 1,
+  "details": {
+    "reason": "Invalid credentials"
+  }
+}</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128200; Audit Log Analysis</div>
+        <p>
+          Audit logs use structured JSON format (one entry per line), making them easy to
+          ingest into log aggregation tools such as Elasticsearch, Loki, or Splunk.
+          You can also query audit logs directly with standard tools:
+        </p>
+        <pre><code># Find all failed authentication attempts
+jq 'select(.action == "AUTH_FAILURE")' /var/log/mynadb/audit.log
+
+# Count operations per user
+jq -r '.user' /var/log/mynadb/audit.log | sort | uniq -c | sort -rn</code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- API Authentication                                           -->
+      <!-- ============================================================ -->
+      <h2 id="api-authentication">API Authentication</h2>
+
+      <p>
+        When authentication is enabled, clients must provide credentials with every request.
+        MynaDB supports two methods for passing authentication credentials.
+      </p>
+
+      <h3>Method 1: Basic Auth Header</h3>
+
+      <p>
+        Send credentials via the standard HTTP <code>Authorization</code> header with
+        Base64-encoded <code>username:password</code>:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Using curl -u (automatically sets Authorization header)</span>
+curl -u admin:your-secure-password \
+  "http://localhost:7000/query/mydb?sql=SELECT+1"
+
+<span class="token-comment"># Equivalent explicit header</span>
+curl -H "Authorization: Basic YWRtaW46eW91ci1zZWN1cmUtcGFzc3dvcmQ=" \
+  "http://localhost:7000/query/mydb?sql=SELECT+1"</code></pre>
+        </div>
+      </div>
+
+      <h3>Method 2: Token Query Parameter</h3>
+
+      <p>
+        For environments where setting headers is difficult (such as browser-based tools
+        or simple monitoring scripts), pass a token as a query parameter:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Pass token as a query parameter</span>
+curl "http://localhost:7000/query/mydb?sql=SELECT+1&amp;token=your-api-token"
+
+<span class="token-comment"># Write data with token parameter</span>
+curl -X POST "http://localhost:7000/write/mydb?token=your-api-token" \
+  -d 'cpu,host=server01 usage=72.5'</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; Token Security</div>
+        <p>
+          Query parameter tokens may appear in server access logs and browser history.
+          Prefer the <code>Authorization</code> header method for production use. If you
+          must use token parameters, ensure TLS is enabled to prevent tokens from being
+          transmitted in plain text.
+        </p>
+      </div>
+
+      <h3>Protocol-Specific Authentication</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Protocol</th>
+            <th>Authentication Method</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>HTTP REST API</td>
+            <td>Basic Auth header or token query parameter</td>
+          </tr>
+          <tr>
+            <td>Arrow Flight (gRPC)</td>
+            <td>gRPC metadata header <code>authorization: Basic ...</code></td>
+          </tr>
+          <tr>
+            <td>MySQL Wire Protocol</td>
+            <td>Native MySQL authentication handshake</td>
+          </tr>
+          <tr>
+            <td>OpenTelemetry (OTLP)</td>
+            <td>gRPC metadata header or HTTP Basic Auth</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- ============================================================ -->
+      <!-- Security Best Practices                                      -->
+      <!-- ============================================================ -->
+      <h2 id="best-practices">Security Best Practices</h2>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#9989; Recommended Practices</div>
+        <ul>
+          <li><strong>Always enable authentication in production.</strong> Running without authentication exposes all data and administrative operations to anyone with network access.</li>
+          <li><strong>Enable TLS for all connections.</strong> Without TLS, credentials and data are transmitted in plain text and can be intercepted on the network.</li>
+          <li><strong>Use mutual TLS (mTLS) in zero-trust environments.</strong> Require client certificates to verify both sides of the connection.</li>
+          <li><strong>Follow the principle of least privilege.</strong> Assign users the most restrictive role that allows them to do their job. Use <code>reader</code> for dashboards, <code>writer</code> for ingestion, and <code>admin</code> only for operators.</li>
+          <li><strong>Scope database access per user.</strong> Grant access only to the databases each user needs rather than using wildcard (<code>*</code>) access.</li>
+          <li><strong>Rotate credentials regularly.</strong> Update passwords on a scheduled basis and immediately revoke access for departing team members.</li>
+          <li><strong>Enable audit logging.</strong> Maintain a complete record of all operations for security monitoring, incident investigation, and compliance.</li>
+          <li><strong>Monitor authentication failures.</strong> Set up alerts on repeated <code>AUTH_FAILURE</code> events in the audit log to detect brute-force attempts.</li>
+          <li><strong>Restrict network access.</strong> Use firewalls and network policies to limit which hosts can reach MynaDB ports (7000, 7001, 7002).</li>
+          <li><strong>Secure the configuration file.</strong> The <code>config.toml</code> file contains passwords and should be readable only by the MynaDB service user (<code>chmod 600</code>).</li>
+          <li><strong>Use environment variables for secrets.</strong> Instead of storing passwords directly in config files, use environment variable references: <code>password = "${MYNADB_ADMIN_PASSWORD}"</code>.</li>
+          <li><strong>Keep audit logs on separate storage.</strong> Store audit logs on a different volume or ship them to a remote system so they cannot be tampered with if the data node is compromised.</li>
+        </ul>
+      </div>
+
+      <h3>Example: Production Security Configuration</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Production security configuration</span>
+
+[auth]
+enabled = true
+username = "admin"
+password = "${MYNADB_ADMIN_PASSWORD}"
+
+[tls]
+enabled = true
+cert_file = "/etc/mynadb/certs/server.crt"
+key_file = "/etc/mynadb/certs/server.key"
+ca_file = "/etc/mynadb/certs/ca.crt"
+mutual_auth = true
+
+[audit]
+enabled = true
+log_file = "/var/log/mynadb/audit.log"
+rotation = "daily"
+max_files = 90
+
+[logging]
+level = "info"
+log_dir = "/var/log/mynadb"</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128712; Related Documentation</div>
+        <p>
+          <a href="configuration.html">Configuration</a> - Full configuration reference<br>
+          <a href="high-availability.html">High Availability</a> - HA setup with TLS between nodes<br>
+          <a href="cluster.html">Enterprise Cluster</a> - Cluster security with etcd TLS<br>
+          <a href="api.html">API Reference</a> - Complete API endpoint documentation
+        </p>
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 MynaDB. The Voice of Your Machines. Listen. Store. Monitor.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

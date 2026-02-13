@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Grafana Integration - Visualize time series data with Grafana dashboards">
+  <title>Grafana Integration - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Ingestion &amp; Protocols</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Query &amp; Analytics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html" class="active">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="testing.html">Testing</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <span class="badge-new">NEW</span>
+      <h1>Grafana Integration</h1>
+
+      <p>Visualize your time series data with Grafana dashboards. MynaDB integrates seamlessly with Grafana through multiple datasource options, including InfluxDB-compatible endpoints, native SQL via the MySQL protocol, and a built-in monitoring dashboard for operational visibility.</p>
+
+      <h2>Datasource Setup</h2>
+
+      <p>Follow these steps to connect Grafana to MynaDB using the InfluxDB datasource plugin:</p>
+
+      <ol>
+        <li>
+          <strong>Open Grafana and navigate to datasources</strong><br>
+          Go to <strong>Configuration &rarr; Data Sources &rarr; Add data source</strong> in your Grafana instance.
+        </li>
+        <li>
+          <strong>Select the InfluxDB datasource type</strong><br>
+          Search for <em>InfluxDB</em> in the datasource list and select it. MynaDB exposes InfluxDB-compatible query endpoints.
+        </li>
+        <li>
+          <strong>Configure the connection URL</strong><br>
+          Set the URL to your MynaDB instance HTTP address:
+          <div class="code-block">
+            <div class="code-header">
+              <span class="lang">text</span>
+            </div>
+            <div class="code-content">
+              <pre><code>http://your-mynadb-host:7000</code></pre>
+            </div>
+          </div>
+        </li>
+        <li>
+          <strong>Set the database name</strong><br>
+          Enter your database (catalog) name in the <em>Database</em> field. This corresponds to the <code>:db</code> parameter used in MynaDB write and query endpoints (e.g., <code>mydb</code>).
+        </li>
+        <li>
+          <strong>Configure authentication (if enabled)</strong><br>
+          If MynaDB authentication is enabled, toggle <em>Basic Auth</em> and provide the username and password configured in your <code>config.toml</code> under <code>[auth]</code>.
+        </li>
+        <li>
+          <strong>Save and test</strong><br>
+          Click <strong>Save &amp; Test</strong>. Grafana will verify the connection to MynaDB.
+        </li>
+      </ol>
+
+      <h2>InfluxDB-Compatible Endpoints</h2>
+
+      <p>MynaDB exposes several query endpoints that Grafana can use depending on your preferred query language:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Endpoint</th>
+            <th>Protocol</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/api/v2/query</code></td>
+            <td>Flux</td>
+            <td>InfluxDB v2-compatible Flux query endpoint. Use this when Grafana is configured with the InfluxDB datasource in Flux mode.</td>
+          </tr>
+          <tr>
+            <td><code>/api/v1/query</code></td>
+            <td>InfluxQL</td>
+            <td>InfluxDB v1-compatible InfluxQL query endpoint. Suitable for legacy dashboards or simpler query syntax.</td>
+          </tr>
+          <tr>
+            <td><code>/query/:db</code></td>
+            <td>Native SQL</td>
+            <td>MynaDB native SQL endpoint powered by Apache DataFusion. Provides the full power of SQL including JOINs, window functions, and CTEs.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Built-in Dashboard</h2>
+
+      <p>MynaDB ships with a Grafana-style monitoring dashboard accessible from the Admin Console. This built-in dashboard provides real-time operational visibility without requiring a separate Grafana installation.</p>
+
+      <p>The dashboard includes the following panels:</p>
+
+      <ul>
+        <li><strong>Ingestion Rate</strong> &mdash; Tracks the number of points written per second, broken down by database and measurement. Helps identify write throughput bottlenecks and traffic spikes.</li>
+        <li><strong>Query Latency</strong> &mdash; Displays p50, p95, and p99 query execution times. Monitors query performance over time and highlights slow queries that may need optimization.</li>
+        <li><strong>Storage Size</strong> &mdash; Shows total disk usage across all catalogs and schemas, with a breakdown by compaction level (L0, L1, L2). Useful for capacity planning and tracking data growth.</li>
+        <li><strong>Compaction Progress</strong> &mdash; Visualizes active compaction jobs, files merged, bytes reclaimed, and compaction backlog. Ensures background maintenance is keeping up with write volume.</li>
+      </ul>
+
+      <p>Access the built-in dashboard at:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>http://your-mynadb-host:7000/admin/dashboard</code></pre>
+        </div>
+      </div>
+
+      <h2>Example Queries in Grafana</h2>
+
+      <p>When using Grafana with MynaDB's native SQL endpoint, you can use Grafana's built-in template variables to create dynamic, time-aware dashboards. Below are common query patterns.</p>
+
+      <h3>Time-filtered aggregation</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>SELECT
+  time_bucket('$__interval', time) AS time,
+  avg(cpu_usage) AS avg_cpu,
+  max(cpu_usage) AS max_cpu
+FROM mydb.default.system_metrics
+WHERE $__timeFilter(time)
+GROUP BY time_bucket('$__interval', time)
+ORDER BY time</code></pre>
+        </div>
+      </div>
+
+      <h3>Multi-host comparison</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>SELECT
+  time_bucket('$__interval', time) AS time,
+  host,
+  avg(memory_used_percent) AS avg_memory
+FROM mydb.default.system_metrics
+WHERE $__timeFilter(time)
+  AND host IN ($host)
+GROUP BY time_bucket('$__interval', time), host
+ORDER BY time</code></pre>
+        </div>
+      </div>
+
+      <h3>Ingestion rate monitoring</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>SELECT
+  time_bucket('$__interval', time) AS time,
+  count(*) / EXTRACT(EPOCH FROM INTERVAL '$__interval') AS points_per_second
+FROM mydb.default.measurements
+WHERE $__timeFilter(time)
+GROUP BY time_bucket('$__interval', time)
+ORDER BY time</code></pre>
+        </div>
+      </div>
+
+      <h3>Top-N query with variable</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>SELECT
+  host,
+  avg(cpu_usage) AS avg_cpu,
+  max(cpu_usage) AS peak_cpu
+FROM mydb.default.system_metrics
+WHERE $__timeFilter(time)
+GROUP BY host
+ORDER BY avg_cpu DESC
+LIMIT $topN</code></pre>
+        </div>
+      </div>
+
+      <p>The following Grafana macros are supported:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Macro</th>
+            <th>Description</th>
+            <th>Example Expansion</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>$__timeFilter(time)</code></td>
+            <td>Expands to a time range filter based on the dashboard's selected time range</td>
+            <td><code>time &gt;= 1704067200000000000 AND time &lt;= 1704153600000000000</code></td>
+          </tr>
+          <tr>
+            <td><code>$__interval</code></td>
+            <td>Auto-calculated aggregation interval based on the dashboard time range and panel width</td>
+            <td><code>1m</code>, <code>5m</code>, <code>1h</code></td>
+          </tr>
+          <tr>
+            <td><code>$__from</code> / <code>$__to</code></td>
+            <td>Start and end timestamps of the selected dashboard time range</td>
+            <td><code>1704067200000</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>MySQL Datasource Alternative</h2>
+
+      <p>As an alternative to the InfluxDB datasource, you can connect Grafana to MynaDB using the <strong>MySQL datasource</strong>. MynaDB implements the MySQL wire protocol on port 7002, allowing standard MySQL clients and tools (including Grafana) to execute SQL queries directly.</p>
+
+      <h3>Setup steps</h3>
+
+      <ol>
+        <li>
+          <strong>Enable MySQL protocol in MynaDB</strong><br>
+          Ensure the MySQL protocol is enabled in your <code>config.toml</code>:
+          <div class="code-block">
+            <div class="code-header">
+              <span class="lang">toml</span>
+            </div>
+            <div class="code-content">
+              <pre><code>[server]
+mysql_enabled = true
+mysql_port = 7002</code></pre>
+            </div>
+          </div>
+        </li>
+        <li>
+          <strong>Add a MySQL datasource in Grafana</strong><br>
+          Go to <strong>Configuration &rarr; Data Sources &rarr; Add data source</strong> and select <em>MySQL</em>.
+        </li>
+        <li>
+          <strong>Configure the connection</strong>
+          <div class="code-block">
+            <div class="code-header">
+              <span class="lang">text</span>
+            </div>
+            <div class="code-content">
+              <pre><code>Host:     your-mynadb-host:7002
+Database: mydb
+User:     admin      (if auth is enabled)
+Password: secret     (if auth is enabled)</code></pre>
+            </div>
+          </div>
+        </li>
+        <li>
+          <strong>Save and test the connection</strong><br>
+          Click <strong>Save &amp; Test</strong> to verify connectivity.
+        </li>
+      </ol>
+
+      <h3>Advantages of the MySQL datasource</h3>
+
+      <ul>
+        <li>Full SQL support including JOINs, subqueries, CTEs, and window functions</li>
+        <li>Native Grafana SQL query editor with autocomplete</li>
+        <li>Compatible with Grafana alerting rules</li>
+        <li>No additional plugin installation required</li>
+      </ul>
+
+      <h3>Example MySQL datasource query</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>SELECT
+  UNIX_TIMESTAMP(time) AS time_sec,
+  avg(value) AS avg_value,
+  measurement
+FROM cpu
+WHERE time BETWEEN FROM_UNIXTIME($__from / 1000) AND FROM_UNIXTIME($__to / 1000)
+GROUP BY time_bucket('$__interval', time), measurement
+ORDER BY time_sec</code></pre>
+        </div>
+      </div>
+
+      <div class="doc-nav">
+        <a href="forecasting.html" class="doc-nav-prev">
+          <span>&#8592;</span> Forecasting
+        </a>
+        <a href="iceberg.html" class="doc-nav-next">
+          Apache Iceberg <span>&#8594;</span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 MynaDB. The Voice of Your Machines.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

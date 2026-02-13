@@ -61,36 +61,63 @@
       </div>
 
       <div class="sidebar-section">
-        <h4>Features</h4>
+        <h4>Ingestion &amp; Protocols</h4>
         <ul class="sidebar-nav">
-          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
-          <li><a href="object-store.html">Object Store</a></li>
-          <li><a href="retention.html">Retention Policies</a></li>
-          <li><a href="compaction.html">Compaction</a></li>
-          <li><a href="high-availability.html">High Availability</a></li>
-        </ul>
-      </div>
-
-      <div class="sidebar-section">
-        <h4>Guides</h4>
-        <ul class="sidebar-nav">
-          <li><a href="guides.html">All Guides</a></li>
-          <li><a href="sql-queries.html">SQL Queries</a></li>
           <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
         </ul>
       </div>
 
       <div class="sidebar-section">
-        <h4>API Reference</h4>
+        <h4>Query &amp; Analytics</h4>
         <ul class="sidebar-nav">
-          <li><a href="api.html">HTTP API</a></li>
-          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
         </ul>
       </div>
 
       <div class="sidebar-section">
         <h4>Resources</h4>
         <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
           <li><a href="examples.html">Examples</a></li>
           <li><a href="testing.html">Testing</a></li>
           <li><a href="troubleshooting.html">Troubleshooting</a></li>
@@ -115,14 +142,17 @@
       </div>
 
       <div class="callout" style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 4px solid #10b981; padding: 1rem 1.5rem; border-radius: 0.5rem; margin: 1.5rem 0;">
-        <div class="callout-title" style="color: #10b981; font-weight: 600;">&#9889; What's New in v0.2.8</div>
+        <div class="callout-title" style="color: #10b981; font-weight: 600;">&#9889; What's New</div>
         <p style="margin: 0.5rem 0;">
-          <strong>Instant Query Visibility</strong> - Query fresh writes immediately without flushing!<br>
-          <strong>Metadata Manager</strong> - 10-100x faster query planning with memory-based catalog.<br>
-          <strong>Parquet Disk Cache</strong> - Local SSD caching for Object Store files.<br>
-          <strong>first_value() / last_value()</strong> - InfluxDB-compatible aggregate functions.
+          <strong>OpenTelemetry (OTLP)</strong> - Native ingestion for metrics, logs, and traces.<br>
+          <strong>Apache Iceberg</strong> - REST Catalog API for multi-engine analytics.<br>
+          <strong>Grafana Integration</strong> - Built-in monitoring dashboard and InfluxDB-compatible endpoints.<br>
+          <strong>Continuous Aggregates</strong> - Materialized views with automatic refresh.<br>
+          <strong>Streaming Queries</strong> - Real-time subscriptions via WebSocket and SSE.<br>
+          <strong>RBAC &amp; Security</strong> - Role-based access control, TLS, and audit logging.<br>
+          <strong>Forecasting &amp; Geospatial</strong> - Built-in UDFs for predictive and spatial analytics.
         </p>
-        <a href="caching.html" style="color: #10b981; text-decoration: none; font-weight: 500;">Learn more about caching &rarr;</a>
+        <a href="otlp.html" style="color: #10b981; text-decoration: none; font-weight: 500;">Explore new features &rarr;</a>
       </div>
 
       <h2>What is MynaDB?</h2>
@@ -135,10 +165,11 @@
       </p>
 
       <ul>
-        <li><strong>InfluxDB Line Protocol</strong> - Compatible write API for easy migration</li>
-        <li><strong>Apache Parquet</strong> - Columnar storage for excellent compression and query performance</li>
-        <li><strong>Apache DataFusion</strong> - Full SQL query support with advanced analytics</li>
+        <li><strong>InfluxDB Line Protocol &amp; OpenTelemetry</strong> - Multi-protocol ingestion for metrics, logs, and traces</li>
+        <li><strong>Apache Parquet &amp; Iceberg</strong> - Columnar storage with multi-engine catalog support</li>
+        <li><strong>Apache DataFusion</strong> - Full SQL with forecasting UDFs and geospatial functions</li>
         <li><strong>Apache Arrow Flight</strong> - High-performance gRPC streaming for data transfer</li>
+        <li><strong>Grafana &amp; Prometheus</strong> - Native monitoring integration and metrics export</li>
         <li><strong>Rust</strong> - Memory-safe, zero-cost abstractions for maximum performance</li>
       </ul>
 
@@ -285,36 +316,48 @@ curl 'http://localhost:7000/query/mydb' \
               <td>Deep dive into system design and components</td>
             </tr>
             <tr>
-              <td><a href="guides.html">Guides</a></td>
-              <td>Step-by-step tutorials for common tasks</td>
+              <td><a href="otlp.html">OpenTelemetry (OTLP)</a></td>
+              <td>Native OTLP ingestion for metrics, logs, and traces</td>
+            </tr>
+            <tr>
+              <td><a href="iceberg.html">Apache Iceberg</a></td>
+              <td>REST Catalog API for multi-engine analytics</td>
+            </tr>
+            <tr>
+              <td><a href="grafana.html">Grafana Integration</a></td>
+              <td>InfluxDB-compatible datasource and monitoring dashboard</td>
+            </tr>
+            <tr>
+              <td><a href="continuous-aggregates.html">Continuous Aggregates</a></td>
+              <td>Materialized views with automatic refresh and query rewriting</td>
+            </tr>
+            <tr>
+              <td><a href="streaming.html">Streaming Queries</a></td>
+              <td>Real-time subscriptions via WebSocket and SSE</td>
+            </tr>
+            <tr>
+              <td><a href="forecasting.html">Forecasting &amp; Geospatial</a></td>
+              <td>Built-in forecasting and geospatial UDFs</td>
+            </tr>
+            <tr>
+              <td><a href="security.html">Security &amp; RBAC</a></td>
+              <td>Authentication, roles, TLS, and audit logging</td>
+            </tr>
+            <tr>
+              <td><a href="monitoring.html">Monitoring</a></td>
+              <td>Prometheus metrics, query tracing, and health endpoints</td>
+            </tr>
+            <tr>
+              <td><a href="admin-console.html">Admin Console</a></td>
+              <td>Web-based SQL editor, storage browser, and cluster management</td>
             </tr>
             <tr>
               <td><a href="api.html">API Reference</a></td>
               <td>Complete HTTP and Flight API documentation</td>
             </tr>
             <tr>
-              <td><a href="examples.html">Examples</a></td>
-              <td>Ready-to-use query examples and patterns</td>
-            </tr>
-            <tr>
               <td><a href="configuration.html">Configuration</a></td>
               <td>All configuration options explained</td>
-            </tr>
-            <tr>
-              <td><a href="caching.html">Caching</a></td>
-              <td>Multi-level caching for metadata, queries, and files</td>
-            </tr>
-            <tr>
-              <td><a href="mysql-protocol.html">MySQL Protocol</a></td>
-              <td>Connect using MySQL clients, DBeaver, or Grafana</td>
-            </tr>
-            <tr>
-              <td><a href="object-store.html">Object Store</a></td>
-              <td>S3, MinIO, and Aliyun OSS configuration</td>
-            </tr>
-            <tr>
-              <td><a href="testing.html">Testing</a></td>
-              <td>Comprehensive testing strategy for reliability</td>
             </tr>
           </tbody>
         </table>

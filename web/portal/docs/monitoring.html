@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Monitoring &amp; Observability - Prometheus metrics, query tracing, health endpoints, and alerting">
+  <title>Monitoring - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Ingestion &amp; Protocols</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Query &amp; Analytics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html" class="active">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="testing.html">Testing</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <div class="docs-badge" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">
+        NEW IN v0.3.0
+      </div>
+
+      <h1>Monitoring &amp; Observability</h1>
+
+      <p class="lead">
+        Comprehensive monitoring with Prometheus metrics, query tracing, and system health endpoints.
+        Gain full visibility into MynaDB's performance, resource usage, and operational health
+        to keep your time series infrastructure running smoothly.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128200; Full Observability Stack</div>
+        <p>
+          MynaDB exposes Prometheus-compatible metrics, structured health endpoints, slow query tracing,
+          and self-reported system metrics. Pair with <a href="grafana.html">Grafana</a> for a
+          complete monitoring and visualization solution.
+        </p>
+      </div>
+
+      <!-- Prometheus Metrics -->
+      <h2 id="prometheus-metrics">Prometheus Metrics</h2>
+
+      <p>
+        MynaDB exposes a <code>/metrics</code> endpoint in the Prometheus exposition format.
+        Scrape this endpoint to collect detailed metrics about writes, queries, cache performance,
+        storage, and background operations.
+      </p>
+
+      <h3>Endpoint</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Fetch Prometheus metrics</span>
+curl http://localhost:7000/metrics</code></pre>
+        </div>
+      </div>
+
+      <h3>Prometheus Scrape Configuration</h3>
+
+      <p>Add MynaDB as a scrape target in your <code>prometheus.yml</code>:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">yaml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>scrape_configs:
+  - job_name: 'mynadb'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:7000']
+        labels:
+          instance: 'mynadb-prod-01'
+
+  <span class="token-comment"># For a cluster deployment, add all nodes</span>
+  - job_name: 'mynadb-cluster'
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - 'node1:7000'
+          - 'node2:7000'
+          - 'node3:7000'</code></pre>
+        </div>
+      </div>
+
+      <h3>Key Metrics</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>mynadb_writes_total</code></td>
+            <td>Counter</td>
+            <td>Total number of write requests received</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_write_bytes_total</code></td>
+            <td>Counter</td>
+            <td>Total bytes written (line protocol payload size)</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_queries_total</code></td>
+            <td>Counter</td>
+            <td>Total number of SQL queries executed</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_query_duration_seconds</code></td>
+            <td>Histogram</td>
+            <td>Query execution duration in seconds (buckets: 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cache_hits_total</code></td>
+            <td>Counter</td>
+            <td>Total number of cache hits (metadata + query cache)</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cache_misses_total</code></td>
+            <td>Counter</td>
+            <td>Total number of cache misses</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_storage_bytes</code></td>
+            <td>Gauge</td>
+            <td>Current total storage usage in bytes across all catalogs</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_compaction_runs_total</code></td>
+            <td>Counter</td>
+            <td>Total number of compaction runs completed</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_active_connections</code></td>
+            <td>Gauge</td>
+            <td>Number of currently active client connections (HTTP, Flight, MySQL)</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_flush_duration_seconds</code></td>
+            <td>Histogram</td>
+            <td>Duration of cache flush operations to Parquet (seconds)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Example Metric Output</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># HELP mynadb_writes_total Total number of write requests</span>
+<span class="token-comment"># TYPE mynadb_writes_total counter</span>
+mynadb_writes_total{catalog="mydb"} 158432
+
+<span class="token-comment"># HELP mynadb_query_duration_seconds Query execution duration</span>
+<span class="token-comment"># TYPE mynadb_query_duration_seconds histogram</span>
+mynadb_query_duration_seconds_bucket{le="0.01"} 12045
+mynadb_query_duration_seconds_bucket{le="0.05"} 34210
+mynadb_query_duration_seconds_bucket{le="0.1"} 45123
+mynadb_query_duration_seconds_bucket{le="0.25"} 48900
+mynadb_query_duration_seconds_bucket{le="0.5"} 49800
+mynadb_query_duration_seconds_bucket{le="1"} 49950
+mynadb_query_duration_seconds_bucket{le="+Inf"} 50000
+mynadb_query_duration_seconds_sum 1523.45
+mynadb_query_duration_seconds_count 50000
+
+<span class="token-comment"># HELP mynadb_storage_bytes Current storage usage in bytes</span>
+<span class="token-comment"># TYPE mynadb_storage_bytes gauge</span>
+mynadb_storage_bytes{catalog="mydb",schema="default"} 10737418240</code></pre>
+        </div>
+      </div>
+
+      <!-- Health Endpoints -->
+      <h2 id="health-endpoints">Health Endpoints</h2>
+
+      <p>
+        MynaDB provides several HTTP endpoints for health checks, load balancer integration,
+        and operational visibility. These endpoints return JSON responses and do not require
+        authentication.
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Endpoint</th>
+            <th>Method</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>GET /health</code></td>
+            <td>GET</td>
+            <td>Basic health check. Returns <code>200 OK</code> when the server is running. Use for load balancer probes.</td>
+          </tr>
+          <tr>
+            <td><code>GET /stats</code></td>
+            <td>GET</td>
+            <td>Write cache statistics: current size, entry count, flush status, and buffer utilization.</td>
+          </tr>
+          <tr>
+            <td><code>GET /memory</code></td>
+            <td>GET</td>
+            <td>Memory usage breakdown: heap allocated, RSS, cache sizes, and buffer pool usage.</td>
+          </tr>
+          <tr>
+            <td><code>GET /cache/stats</code></td>
+            <td>GET</td>
+            <td>Cache hit/miss rates for both metadata cache and query result cache.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Health Check</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Basic health check</span>
+curl http://localhost:7000/health
+
+<span class="token-comment"># Response:</span>
+<span class="token-comment"># {"status": "ok"}</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Write Cache Stats</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/stats
+
+<span class="token-comment"># Response:</span>
+{
+  "cache_size_bytes": 52428800,
+  "cache_entries": 1250,
+  "max_size_bytes": 4294967296,
+  "utilization_pct": 1.22,
+  "last_flush": "2026-02-13T10:30:00Z",
+  "flush_interval_secs": 60
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Memory Usage</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/memory
+
+<span class="token-comment"># Response:</span>
+{
+  "rss_bytes": 536870912,
+  "heap_allocated_bytes": 268435456,
+  "write_cache_bytes": 52428800,
+  "metadata_cache_bytes": 16777216,
+  "query_cache_bytes": 33554432
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Cache Hit Rates</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/cache/stats
+
+<span class="token-comment"># Response:</span>
+{
+  "metadata_cache": {
+    "hits": 45230,
+    "misses": 1280,
+    "hit_rate": 0.972,
+    "size_bytes": 16777216,
+    "entries": 342
+  },
+  "query_cache": {
+    "hits": 12450,
+    "misses": 8320,
+    "hit_rate": 0.599,
+    "size_bytes": 33554432,
+    "entries": 89,
+    "ttl_secs": 300
+  }
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- Query Tracing -->
+      <h2 id="query-tracing">Query Tracing</h2>
+
+      <p>
+        MynaDB supports slow query logging and trace ID propagation for debugging query
+        performance issues. Slow queries are automatically logged with execution details,
+        enabling you to identify and optimize problematic queries.
+      </p>
+
+      <h3>Slow Query Logging Configuration</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[logging]
+level = "info"
+log_dir = "/data0/mynadb/logs"
+
+<span class="token-comment"># Slow query threshold (milliseconds)</span>
+<span class="token-comment"># Queries exceeding this duration are logged at WARN level</span>
+slow_query_threshold_ms = 500
+
+<span class="token-comment"># Include execution plan in slow query logs</span>
+slow_query_log_plan = true</code></pre>
+        </div>
+      </div>
+
+      <h3>Slow Query Log Output</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>WARN  query: Slow query detected
+  catalog=mydb
+  sql="SELECT * FROM cpu WHERE time > now() - interval '1 hour' ORDER BY time DESC"
+  duration_ms=1523
+  rows_returned=48200
+  partitions_scanned=3
+  files_scanned=12
+  trace_id=abc123def456</code></pre>
+        </div>
+      </div>
+
+      <h3>Trace ID Propagation</h3>
+
+      <p>
+        Pass a trace ID via the <code>X-Trace-Id</code> header to correlate queries across your
+        observability stack. The trace ID is included in log entries, metric labels, and error
+        responses for end-to-end tracing.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Pass a trace ID with your query</span>
+curl -H "X-Trace-Id: req-abc123" \
+  "http://localhost:7000/query/mydb?sql=SELECT+count(*)+FROM+cpu"
+
+<span class="token-comment"># The trace ID appears in logs, allowing correlation</span>
+<span class="token-comment"># with upstream services and distributed tracing systems</span></code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128279; OpenTelemetry Integration</div>
+        <p>
+          MynaDB also supports <a href="otlp.html">OpenTelemetry (OTLP)</a> trace context propagation
+          via the <code>traceparent</code> header (W3C Trace Context). This enables seamless integration
+          with distributed tracing systems like Jaeger, Zipkin, and Grafana Tempo.
+        </p>
+      </div>
+
+      <!-- System Metrics Collection -->
+      <h2 id="system-metrics">System Metrics Collection</h2>
+
+      <p>
+        MynaDB self-reports key system-level metrics covering CPU, memory, disk, and network.
+        These metrics are included in the <code>/metrics</code> endpoint and provide visibility
+        into the host environment without requiring a separate node exporter.
+      </p>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">&#9889;</div>
+          <h4>CPU</h4>
+          <p>
+            Process CPU usage percentage, number of cores used, and system load averages.
+            Metric: <code>mynadb_process_cpu_usage</code>
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128187;</div>
+          <h4>Memory</h4>
+          <p>
+            Resident set size (RSS), heap allocation, and virtual memory.
+            Metric: <code>mynadb_process_memory_bytes</code>
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128190;</div>
+          <h4>Disk</h4>
+          <p>
+            Data directory disk usage, available space, and I/O throughput.
+            Metric: <code>mynadb_disk_usage_bytes</code>
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#127760;</div>
+          <h4>Network</h4>
+          <p>
+            Bytes sent/received, active connections per protocol (HTTP, Flight, MySQL).
+            Metric: <code>mynadb_network_bytes_total</code>
+          </p>
+        </div>
+      </div>
+
+      <h3>System Metrics Table</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Type</th>
+            <th>Labels</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>mynadb_process_cpu_usage</code></td>
+            <td>Gauge</td>
+            <td>-</td>
+            <td>Process CPU usage as a percentage (0-100)</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_process_memory_bytes</code></td>
+            <td>Gauge</td>
+            <td><code>type</code> (rss, heap, virtual)</td>
+            <td>Process memory usage in bytes</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_disk_usage_bytes</code></td>
+            <td>Gauge</td>
+            <td><code>state</code> (used, available)</td>
+            <td>Data directory disk usage</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_disk_io_bytes_total</code></td>
+            <td>Counter</td>
+            <td><code>direction</code> (read, write)</td>
+            <td>Cumulative disk I/O in bytes</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_network_bytes_total</code></td>
+            <td>Counter</td>
+            <td><code>direction</code> (rx, tx)</td>
+            <td>Cumulative network bytes transferred</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_open_file_descriptors</code></td>
+            <td>Gauge</td>
+            <td>-</td>
+            <td>Number of open file descriptors</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Alerting Rules -->
+      <h2 id="alerting-rules">Alerting Rules</h2>
+
+      <p>
+        Use Prometheus alerting rules to get notified about potential issues before they
+        affect your workloads. The following examples cover common scenarios for MynaDB
+        deployments.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">yaml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>groups:
+  - name: mynadb_alerts
+    rules:
+      <span class="token-comment"># Alert when query latency p99 exceeds 5 seconds</span>
+      - alert: MynaDBHighQueryLatency
+        expr: |
+          histogram_quantile(0.99,
+            rate(mynadb_query_duration_seconds_bucket[5m])
+          ) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High query latency on {{ $labels.instance }}"
+          description: "p99 query latency is {{ $value | humanizeDuration }} (threshold: 5s)"
+
+      <span class="token-comment"># Alert when cache hit rate drops below 80%</span>
+      - alert: MynaDBLowCacheHitRate
+        expr: |
+          rate(mynadb_cache_hits_total[5m])
+          / (rate(mynadb_cache_hits_total[5m]) + rate(mynadb_cache_misses_total[5m]))
+          < 0.8
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low cache hit rate on {{ $labels.instance }}"
+          description: "Cache hit rate is {{ $value | humanizePercentage }} (threshold: 80%)"
+
+      <span class="token-comment"># Alert when disk usage exceeds 85%</span>
+      - alert: MynaDBDiskUsageHigh
+        expr: |
+          mynadb_disk_usage_bytes{state="used"}
+          / (mynadb_disk_usage_bytes{state="used"} + mynadb_disk_usage_bytes{state="available"})
+          > 0.85
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk usage critical on {{ $labels.instance }}"
+          description: "Disk usage is {{ $value | humanizePercentage }}. Consider adjusting retention or adding storage."
+
+      <span class="token-comment"># Alert when no writes are received for 5 minutes</span>
+      - alert: MynaDBNoWrites
+        expr: |
+          rate(mynadb_writes_total[5m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No writes on {{ $labels.instance }}"
+          description: "MynaDB has not received any write requests in the last 5 minutes."
+
+      <span class="token-comment"># Alert when compaction is backed up</span>
+      - alert: MynaDBCompactionBacklog
+        expr: |
+          mynadb_storage_bytes > 50e9
+          and rate(mynadb_compaction_runs_total[1h]) == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Compaction stalled on {{ $labels.instance }}"
+          description: "No compaction runs in the last 30 minutes with >50GB storage."
+
+      <span class="token-comment"># Alert when instance is down</span>
+      - alert: MynaDBInstanceDown
+        expr: up{job="mynadb"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MynaDB instance {{ $labels.instance }} is down"
+          description: "The MynaDB instance has been unreachable for more than 1 minute."</code></pre>
+        </div>
+      </div>
+
+      <h3>Recording Rules</h3>
+
+      <p>
+        Pre-compute frequently used expressions as recording rules to improve dashboard performance:
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">yaml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>groups:
+  - name: mynadb_recording_rules
+    rules:
+      <span class="token-comment"># Write rate per second</span>
+      - record: mynadb:writes_per_second
+        expr: rate(mynadb_writes_total[5m])
+
+      <span class="token-comment"># Query rate per second</span>
+      - record: mynadb:queries_per_second
+        expr: rate(mynadb_queries_total[5m])
+
+      <span class="token-comment"># Cache hit rate</span>
+      - record: mynadb:cache_hit_rate
+        expr: |
+          rate(mynadb_cache_hits_total[5m])
+          / (rate(mynadb_cache_hits_total[5m]) + rate(mynadb_cache_misses_total[5m]))
+
+      <span class="token-comment"># p50 query latency</span>
+      - record: mynadb:query_latency_p50
+        expr: histogram_quantile(0.5, rate(mynadb_query_duration_seconds_bucket[5m]))
+
+      <span class="token-comment"># p99 query latency</span>
+      - record: mynadb:query_latency_p99
+        expr: histogram_quantile(0.99, rate(mynadb_query_duration_seconds_bucket[5m]))</code></pre>
+        </div>
+      </div>
+
+      <!-- Grafana Dashboard -->
+      <h2 id="grafana-dashboard">Grafana Dashboard</h2>
+
+      <p>
+        Visualize all of these metrics using pre-built Grafana dashboards. MynaDB provides a
+        comprehensive dashboard template that includes panels for write/query throughput, latency
+        distributions, cache performance, storage usage, and system resource utilization.
+      </p>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#9989; Ready-Made Dashboard</div>
+        <p>
+          See the <a href="grafana.html">Grafana Integration</a> guide for step-by-step instructions
+          on setting up data sources, importing the MynaDB dashboard, and configuring alerts within
+          Grafana.
+        </p>
+      </div>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">&#128202;</div>
+          <h4>Write Throughput</h4>
+          <p>Requests/sec and bytes/sec ingestion rate with trend lines</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#9201;</div>
+          <h4>Query Latency</h4>
+          <p>p50, p95, p99 latency histograms and percentile distributions</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128640;</div>
+          <h4>Cache Performance</h4>
+          <p>Hit/miss rates, eviction counts, and memory utilization</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128451;</div>
+          <h4>Storage Overview</h4>
+          <p>Disk usage trends, compaction progress, and partition counts</p>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128712; Related Guides</div>
+        <p>
+          <a href="grafana.html">Grafana Integration</a> - Dashboard setup and visualization<br>
+          <a href="configuration.html">Configuration</a> - Full configuration reference<br>
+          <a href="troubleshooting.html">Troubleshooting</a> - Diagnosing common issues<br>
+          <a href="admin-console.html">Admin Console</a> - Built-in web management UI
+        </p>
+      </div>
+
+      <div class="docs-nav-links">
+        <a href="retention.html" class="docs-nav-prev">&larr; Retention</a>
+        <a href="admin-console.html" class="docs-nav-next">Admin Console &rarr;</a>
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 MynaDB. The Voice of Your Machines.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

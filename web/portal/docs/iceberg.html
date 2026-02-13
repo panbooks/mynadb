@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Apache Iceberg Integration - Iceberg REST Catalog API for multi-engine analytics with Spark, Trino, DuckDB, and Flink">
+  <title>Apache Iceberg - MynaDB</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="index.html">Documentation</a></li>
+        <li><a href="quickstart.html">Quick Start</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="api.html">API Reference</a></li>
+        <li><a href="examples.html">Examples</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>Getting Started</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">Introduction</a></li>
+          <li><a href="quickstart.html">Quick Start</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="configuration.html">Configuration</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Core Concepts</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">Architecture</a></li>
+          <li><a href="data-model.html">Data Model</a></li>
+          <li><a href="storage.html">Storage</a></li>
+          <li><a href="caching.html">Caching</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Ingestion &amp; Protocols</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">NEW</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL Protocol</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Query &amp; Analytics</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL Queries</a></li>
+          <li><a href="continuous-aggregates.html">Continuous Aggregates <span class="badge-new">NEW</span></a></li>
+          <li><a href="streaming.html">Streaming Queries <span class="badge-new">NEW</span></a></li>
+          <li><a href="forecasting.html">Forecasting <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Integrations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">NEW</span></a></li>
+          <li><a href="iceberg.html" class="active">Apache Iceberg <span class="badge-new">NEW</span></a></li>
+          <li><a href="object-store.html">Object Store</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Operations</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">Compaction</a></li>
+          <li><a href="retention.html">Retention</a></li>
+          <li><a href="monitoring.html">Monitoring <span class="badge-new">NEW</span></a></li>
+          <li><a href="admin-console.html">Admin Console <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Security</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">Authentication &amp; RBAC <span class="badge-new">NEW</span></a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Deployment</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">High Availability</a></li>
+          <li><a href="cluster.html">Enterprise Cluster</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Resources</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="examples.html">Examples</a></li>
+          <li><a href="testing.html">Testing</a></li>
+          <li><a href="troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1><span class="badge-new">NEW</span> Apache Iceberg Integration</h1>
+
+      <p>
+        MynaDB exposes an <strong>Apache Iceberg REST Catalog</strong> interface, enabling multi-engine analytics
+        over your time series data. External engines such as Apache Spark, Trino, DuckDB, and Apache Flink can
+        discover and query MynaDB tables through the standard Iceberg REST Catalog API without any data copying or ETL.
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#9881; Multi-Engine Analytics</div>
+        <p>The Iceberg integration lets you keep ingesting data through MynaDB's optimized write path while
+        opening your data lake to the broader analytics ecosystem via the Iceberg table format.</p>
+      </div>
+
+      <!-- REST Catalog API -->
+      <h2 id="rest-catalog-api">REST Catalog API</h2>
+
+      <p>
+        MynaDB implements the <strong>Iceberg REST Catalog specification</strong>, providing a set of HTTP endpoints
+        that external engines use to discover namespaces, list tables, retrieve table metadata, and plan scans.
+      </p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Endpoint</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>GET</code></td>
+              <td><code>/iceberg/v1/namespaces</code></td>
+              <td>List all namespaces (catalogs/schemas)</td>
+            </tr>
+            <tr>
+              <td><code>GET</code></td>
+              <td><code>/iceberg/v1/namespaces/:ns/tables</code></td>
+              <td>List tables within a namespace</td>
+            </tr>
+            <tr>
+              <td><code>GET</code></td>
+              <td><code>/iceberg/v1/namespaces/:ns/tables/:table</code></td>
+              <td>Load table metadata (schema, partitioning, snapshots)</td>
+            </tr>
+            <tr>
+              <td><code>POST</code></td>
+              <td><code>/iceberg/v1/namespaces/:ns/tables/:table/scan</code></td>
+              <td>Plan a table scan with optional filters</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>List Namespaces</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># List all namespaces</span>
+curl http://localhost:7000/iceberg/v1/namespaces
+
+<span class="token-comment"># Response</span>
+{
+  "namespaces": [
+    ["mydb", "default"],
+    ["mydb", "service_1"],
+    ["metrics", "default"]
+  ]
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>List Tables</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># List tables in a namespace</span>
+curl http://localhost:7000/iceberg/v1/namespaces/mydb.default/tables
+
+<span class="token-comment"># Response</span>
+{
+  "identifiers": [
+    { "namespace": ["mydb", "default"], "name": "cpu" },
+    { "namespace": ["mydb", "default"], "name": "memory" },
+    { "namespace": ["mydb", "default"], "name": "disk" }
+  ]
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>Load Table Metadata</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Get table metadata including schema, partitioning, and snapshots</span>
+curl http://localhost:7000/iceberg/v1/namespaces/mydb.default/tables/cpu
+
+<span class="token-comment"># Response includes Iceberg table metadata:</span>
+<span class="token-comment"># - table-uuid, format-version, location</span>
+<span class="token-comment"># - schema (column names, types, field IDs)</span>
+<span class="token-comment"># - partition-spec (date partitioning)</span>
+<span class="token-comment"># - current-snapshot-id, snapshots list</span>
+<span class="token-comment"># - sort-order, properties</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Plan a Table Scan</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Plan a scan with filter pushdown</span>
+curl -X POST http://localhost:7000/iceberg/v1/namespaces/mydb.default/tables/cpu/scan \
+  -H "Content-Type: application/json" \
+  -d '{
+    "select": ["time", "host", "usage"],
+    "filter": {
+      "type": "and",
+      "left": { "type": "gte", "column": "date", "value": "2026-01-01" },
+      "right": { "type": "lt", "column": "date", "value": "2026-02-01" }
+    }
+  }'
+
+<span class="token-comment"># Response: list of data files to scan with statistics</span></code></pre>
+        </div>
+      </div>
+
+      <!-- Configuration -->
+      <h2 id="configuration">Configuration</h2>
+
+      <p>Enable and configure the Iceberg integration in your <code>config.toml</code>:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[iceberg]
+<span class="token-comment"># Enable the Iceberg REST Catalog API</span>
+enabled = true
+
+<span class="token-comment"># Catalog name exposed to external engines</span>
+catalog_name = "mynadb"
+
+<span class="token-comment"># How often to sync Parquet files to Iceberg metadata (seconds)</span>
+sync_interval_secs = 30
+
+<span class="token-comment"># Directory for Iceberg metadata files (manifests, snapshots)</span>
+metadata_location = "/data0/mynadb/iceberg-metadata"</code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Default</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>enabled</code></td>
+              <td><code>false</code></td>
+              <td>Enable or disable the Iceberg REST Catalog endpoints</td>
+            </tr>
+            <tr>
+              <td><code>catalog_name</code></td>
+              <td><code>"mynadb"</code></td>
+              <td>The catalog name reported to external engines</td>
+            </tr>
+            <tr>
+              <td><code>sync_interval_secs</code></td>
+              <td><code>30</code></td>
+              <td>Interval between automatic metadata synchronization cycles</td>
+            </tr>
+            <tr>
+              <td><code>metadata_location</code></td>
+              <td><code>"data/iceberg-metadata"</code></td>
+              <td>Path where Iceberg metadata files are stored</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; Object Store Metadata</div>
+        <p>When using S3/MinIO/OSS as your storage backend, set <code>metadata_location</code> to a path
+        within your object store bucket so that external engines can access both data and metadata files
+        from the same storage layer.</p>
+      </div>
+
+      <!-- Multi-Engine Support -->
+      <h2 id="multi-engine-support">Multi-Engine Support</h2>
+
+      <p>
+        Because MynaDB implements the Iceberg REST Catalog specification, any engine that supports
+        Iceberg REST catalogs can read MynaDB tables directly. Below are configuration examples for
+        popular analytics engines.
+      </p>
+
+      <h3>Apache Spark</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">python</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-keyword">from</span> pyspark.sql <span class="token-keyword">import</span> SparkSession
+
+spark = SparkSession.builder \
+    .appName(<span class="token-string">"MynaDB Iceberg"</span>) \
+    .config(<span class="token-string">"spark.sql.catalog.mynadb"</span>, <span class="token-string">"org.apache.iceberg.spark.SparkCatalog"</span>) \
+    .config(<span class="token-string">"spark.sql.catalog.mynadb.type"</span>, <span class="token-string">"rest"</span>) \
+    .config(<span class="token-string">"spark.sql.catalog.mynadb.uri"</span>, <span class="token-string">"http://localhost:7000/iceberg/v1"</span>) \
+    .getOrCreate()
+
+<span class="token-comment"># List namespaces</span>
+spark.sql(<span class="token-string">"SHOW NAMESPACES IN mynadb"</span>).show()
+
+<span class="token-comment"># List tables</span>
+spark.sql(<span class="token-string">"SHOW TABLES IN mynadb.default"</span>).show()
+
+<span class="token-comment"># Query time series data</span>
+df = spark.sql(<span class="token-string">"""
+    SELECT host, AVG(usage) as avg_cpu, MAX(usage) as max_cpu
+    FROM mynadb.default.cpu
+    WHERE date >= '2026-01-01'
+    GROUP BY host
+    ORDER BY avg_cpu DESC
+"""</span>)
+df.show()</code></pre>
+        </div>
+      </div>
+
+      <h3>Trino</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">properties</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># etc/catalog/mynadb.properties</span>
+connector.name=iceberg
+iceberg.catalog.type=rest
+iceberg.rest-catalog.uri=http://localhost:7000/iceberg/v1</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- Query MynaDB from Trino</span>
+<span class="token-keyword">SELECT</span> host, region,
+       <span class="token-function">AVG</span>(usage) <span class="token-keyword">AS</span> avg_cpu,
+       <span class="token-function">COUNT</span>(*) <span class="token-keyword">AS</span> sample_count
+<span class="token-keyword">FROM</span> mynadb.default.cpu
+<span class="token-keyword">WHERE</span> date >= DATE <span class="token-string">'2026-01-01'</span>
+<span class="token-keyword">GROUP BY</span> host, region
+<span class="token-keyword">ORDER BY</span> avg_cpu <span class="token-keyword">DESC</span>;</code></pre>
+        </div>
+      </div>
+
+      <h3>DuckDB</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- Install and load the Iceberg extension</span>
+INSTALL iceberg;
+LOAD iceberg;
+
+<span class="token-comment">-- Attach MynaDB as an Iceberg REST catalog</span>
+ATTACH <span class="token-string">'mynadb'</span> <span class="token-keyword">AS</span> mynadb (
+    TYPE ICEBERG,
+    ENDPOINT <span class="token-string">'http://localhost:7000/iceberg/v1'</span>
+);
+
+<span class="token-comment">-- Query tables</span>
+<span class="token-keyword">SELECT</span> host, <span class="token-function">AVG</span>(usage) <span class="token-keyword">AS</span> avg_cpu
+<span class="token-keyword">FROM</span> mynadb.default.cpu
+<span class="token-keyword">WHERE</span> date >= <span class="token-string">'2026-01-01'</span>
+<span class="token-keyword">GROUP BY</span> host
+<span class="token-keyword">ORDER BY</span> avg_cpu <span class="token-keyword">DESC</span>;</code></pre>
+        </div>
+      </div>
+
+      <h3>Apache Flink</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- Register MynaDB Iceberg catalog in Flink SQL</span>
+CREATE CATALOG mynadb WITH (
+    <span class="token-string">'type'</span> = <span class="token-string">'iceberg'</span>,
+    <span class="token-string">'catalog-type'</span> = <span class="token-string">'rest'</span>,
+    <span class="token-string">'uri'</span> = <span class="token-string">'http://localhost:7000/iceberg/v1'</span>
+);
+
+<span class="token-comment">-- Switch to the MynaDB catalog</span>
+USE CATALOG mynadb;
+USE <span class="token-string">`default`</span>;
+
+<span class="token-comment">-- Streaming read from MynaDB</span>
+<span class="token-keyword">SELECT</span> host, usage, <span class="token-string">`time`</span>
+<span class="token-keyword">FROM</span> cpu
+<span class="token-keyword">WHERE</span> date >= <span class="token-string">'2026-01-01'</span>;</code></pre>
+        </div>
+      </div>
+
+      <!-- Metadata Sync -->
+      <h2 id="metadata-sync">Metadata Sync</h2>
+
+      <p>
+        MynaDB automatically synchronizes its internal Parquet files with Iceberg metadata. This process
+        runs in the background so that external engines always see a consistent, up-to-date view of the data.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>┌─────────────────────────────────────────────────────────────────────┐
+│                          MynaDB                                    │
+│                                                                    │
+│  ┌──────────────┐    ┌──────────────┐    ┌───────────────────────┐ │
+│  │  Write Path  │    │  Compactor   │    │  Iceberg Sync Job     │ │
+│  │              │    │              │    │                       │ │
+│  │  Parquet     │───>│  Merged      │───>│  Manifest Files       │ │
+│  │  Files (L0)  │    │  Files (L1+) │    │  Snapshot Metadata    │ │
+│  └──────────────┘    └──────────────┘    │  Table Metadata       │ │
+│                                          └───────────┬───────────┘ │
+└──────────────────────────────────────────────────────┼─────────────┘
+                                                       │
+                            ┌──────────────────────────┼──────────┐
+                            │    Iceberg Metadata      │          │
+                            │                          ▼          │
+                            │    metadata/                        │
+                            │    ├── v1.metadata.json             │
+                            │    ├── v2.metadata.json             │
+                            │    ├── snap-*.avro                  │
+                            │    └── manifest-*.avro              │
+                            └─────────────────────────────────────┘
+                                                       │
+                     ┌─────────────────────────────────┼──────────┐
+                     │          External Engines        │          │
+                     │    ┌─────┐  ┌───────┐  ┌──────┐ │          │
+                     │    │Spark│  │ Trino │  │DuckDB│ │  ......  │
+                     │    └─────┘  └───────┘  └──────┘ │          │
+                     └─────────────────────────────────┴──────────┘</code></pre>
+        </div>
+      </div>
+
+      <h3>How It Works</h3>
+
+      <ol>
+        <li><strong>Parquet Discovery</strong> -- The sync job scans MynaDB's data directory for new or modified Parquet files at every <code>sync_interval_secs</code> interval.</li>
+        <li><strong>Schema Inference</strong> -- Column names, data types, and field IDs are extracted from Parquet file footers and mapped to the Iceberg schema format.</li>
+        <li><strong>Manifest Generation</strong> -- New Parquet files are grouped into Iceberg manifest files that record file paths, partition values, row counts, and column-level statistics.</li>
+        <li><strong>Snapshot Commit</strong> -- A new Iceberg snapshot is committed atomically, pointing to the updated set of manifest files. Previous snapshots are retained for time-travel queries.</li>
+        <li><strong>Metadata Update</strong> -- The table metadata JSON file is updated with the new current snapshot ID, ensuring external engines see the latest data on their next catalog refresh.</li>
+      </ol>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#128338; Near Real-Time</div>
+        <p>With the default <code>sync_interval_secs = 30</code>, new data written to MynaDB becomes visible
+        to external Iceberg engines within 30 seconds. Reduce this value for lower latency at the cost of
+        slightly higher metadata overhead.</p>
+      </div>
+
+      <h3>Manual Sync</h3>
+
+      <p>You can trigger an immediate metadata sync via the API:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Force an immediate Iceberg metadata sync</span>
+curl -X POST http://localhost:7000/iceberg/v1/sync
+
+<span class="token-comment"># Response</span>
+{
+  "status": "ok",
+  "tables_synced": 12,
+  "snapshots_created": 5,
+  "duration_ms": 230
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- Querying via Iceberg -->
+      <h2 id="querying-via-iceberg">Querying via Iceberg</h2>
+
+      <p>
+        Once the Iceberg integration is enabled, external engines can query MynaDB data using standard
+        Iceberg table scans. MynaDB's date-based partitioning maps directly to Iceberg partition specs,
+        enabling partition pruning in external engines.
+      </p>
+
+      <h3>Partition Pruning</h3>
+
+      <p>Iceberg metadata includes partition statistics, allowing engines to skip irrelevant date partitions:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- Only scans Parquet files in the date=2026-02-* partitions</span>
+<span class="token-keyword">SELECT</span> host, <span class="token-function">AVG</span>(usage) <span class="token-keyword">AS</span> avg_cpu
+<span class="token-keyword">FROM</span> mynadb.default.cpu
+<span class="token-keyword">WHERE</span> date >= <span class="token-string">'2026-02-01'</span> <span class="token-keyword">AND</span> date < <span class="token-string">'2026-03-01'</span>
+<span class="token-keyword">GROUP BY</span> host;</code></pre>
+        </div>
+      </div>
+
+      <h3>Time Travel</h3>
+
+      <p>Iceberg snapshots let you query data as it existed at a previous point in time:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- Spark: query a historical snapshot</span>
+<span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> mynadb.default.cpu VERSION <span class="token-keyword">AS OF</span> <span class="token-number">123456789</span>;
+
+<span class="token-comment">-- Spark: query as of a timestamp</span>
+<span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> mynadb.default.cpu TIMESTAMP <span class="token-keyword">AS OF</span> <span class="token-string">'2026-02-01 00:00:00'</span>;</code></pre>
+        </div>
+      </div>
+
+      <h3>Schema Evolution</h3>
+
+      <p>
+        When MynaDB detects new columns in incoming data, the Iceberg metadata is updated with the evolved
+        schema on the next sync cycle. External engines automatically pick up the new columns.
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- After adding a new "temperature" field via line protocol,</span>
+<span class="token-comment">-- the column appears automatically in Iceberg queries</span>
+<span class="token-keyword">SELECT</span> host, usage, temperature
+<span class="token-keyword">FROM</span> mynadb.default.cpu
+<span class="token-keyword">WHERE</span> date = <span class="token-string">'2026-02-13'</span>;</code></pre>
+        </div>
+      </div>
+
+      <h3>Cross-Engine Analytics Example</h3>
+
+      <p>Combine MynaDB time series data with external datasets in Spark:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">python</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; Copy</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Read time series from MynaDB via Iceberg</span>
+cpu_df = spark.sql(<span class="token-string">"""
+    SELECT host, date,
+           AVG(usage) as avg_cpu,
+           MAX(usage) as peak_cpu
+    FROM mynadb.default.cpu
+    WHERE date >= '2026-02-01'
+    GROUP BY host, date
+"""</span>)
+
+<span class="token-comment"># Read host metadata from a data lake</span>
+hosts_df = spark.read.parquet(<span class="token-string">"s3://data-lake/hosts/"</span>)
+
+<span class="token-comment"># Join time series with metadata for enriched analytics</span>
+enriched = cpu_df.join(hosts_df, <span class="token-string">"host"</span>) \
+    .select(<span class="token-string">"host"</span>, <span class="token-string">"region"</span>, <span class="token-string">"team"</span>, <span class="token-string">"avg_cpu"</span>, <span class="token-string">"peak_cpu"</span>)
+
+enriched.show()</code></pre>
+        </div>
+      </div>
+
+      <div class="doc-nav">
+        <a href="grafana.html" class="doc-nav-prev">
+          <span>&#8592;</span> Grafana
+        </a>
+        <a href="object-store.html" class="doc-nav-next">
+          Object Store <span>&#8594;</span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 MynaDB. The Voice of Your Machines.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>
