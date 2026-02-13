@@ -77,8 +77,8 @@ fn transpile_select(stmt: &SelectStatement, ctx: &TranspileContext) -> Result<St
         if let Some(ref gb) = stmt.group_by {
             if let Some(ref duration) = gb.time {
                 sql.push_str(&format!(
-                    ", time_bucket('{}', time) AS time",
-                    duration.to_interval_string()
+                    ", time_bucket(\"time\", {}, 0) AS time",
+                    duration.to_nanoseconds()
                 ));
             }
         }
@@ -106,8 +106,17 @@ fn transpile_select(stmt: &SelectStatement, ctx: &TranspileContext) -> Result<St
         // Tags
         for tag in &gb.tags {
             if tag == "*" {
-                // GROUP BY * means group by all tags - this needs special handling
-                // For now, we'll skip this
+                // GROUP BY * means group by all tags. Without schema access we
+                // approximate by extracting columns referenced in WHERE equality
+                // and regex conditions (excluding "time").
+                if let Some(ref cond) = stmt.condition {
+                    for col in extract_filter_columns(cond) {
+                        let quoted = quote_ident(&col);
+                        if !group_parts.contains(&quoted) {
+                            group_parts.push(quoted);
+                        }
+                    }
+                }
             } else {
                 group_parts.push(quote_ident(tag));
             }
@@ -266,9 +275,27 @@ fn transpile_select_with_cte(stmt: &SelectStatement, ctx: &TranspileContext) -> 
     let has_time_group = stmt.group_by.as_ref().map(|g| g.time.is_some()).unwrap_or(false);
     let time_duration = stmt.group_by.as_ref().and_then(|gb| gb.time.as_ref());
 
-    // Collect GROUP BY tags (excluding * and time)
+    // Collect GROUP BY tags (expanding * from WHERE filter columns)
     let group_tags: Vec<String> = stmt.group_by.as_ref()
-        .map(|gb| gb.tags.iter().filter(|t| *t != "*").cloned().collect())
+        .map(|gb| {
+            let mut tags = Vec::new();
+            for tag in &gb.tags {
+                if tag == "*" {
+                    if let Some(ref cond) = stmt.condition {
+                        for col in extract_filter_columns(cond) {
+                            if !tags.contains(&col) {
+                                tags.push(col);
+                            }
+                        }
+                    }
+                } else {
+                    if !tags.contains(tag) {
+                        tags.push(tag.clone());
+                    }
+                }
+            }
+            tags
+        })
         .unwrap_or_default();
 
     // Extract derivative fields
@@ -298,8 +325,8 @@ fn transpile_select_with_cte(stmt: &SelectStatement, ctx: &TranspileContext) -> 
     if has_time_group {
         if let Some(ref duration) = time_duration {
             cte.push_str(&format!(
-                "time_bucket('{}', time) AS time",
-                duration.to_interval_string()
+                "time_bucket(\"time\", {}, 0) AS time",
+                duration.to_nanoseconds()
             ));
         }
     } else {
@@ -444,7 +471,7 @@ fn transpile_select_simple(stmt: &SelectStatement, ctx: &TranspileContext) -> Re
     if has_time_group {
         if let Some(ref gb) = stmt.group_by {
             if let Some(ref duration) = gb.time {
-                sql.push_str(&format!(", time_bucket('{}', time) AS time", duration.to_interval_string()));
+                sql.push_str(&format!(", time_bucket(\"time\", {}, 0) AS time", duration.to_nanoseconds()));
             }
         }
     }
@@ -458,7 +485,18 @@ fn transpile_select_simple(stmt: &SelectStatement, ctx: &TranspileContext) -> Re
         let mut group_parts = Vec::new();
         if gb.time.is_some() { group_parts.push("time_bucket".to_string()); }
         for tag in &gb.tags {
-            if tag != "*" { group_parts.push(quote_ident(tag)); }
+            if tag == "*" {
+                if let Some(ref cond) = stmt.condition {
+                    for col in extract_filter_columns(cond) {
+                        let quoted = quote_ident(&col);
+                        if !group_parts.contains(&quoted) {
+                            group_parts.push(quoted);
+                        }
+                    }
+                }
+            } else {
+                group_parts.push(quote_ident(tag));
+            }
         }
         if !group_parts.is_empty() {
             sql.push_str(" GROUP BY ");
@@ -850,6 +888,47 @@ fn transpile_show_condition(expr: &Expr, column: &str) -> Result<String, Transpi
     }
 }
 
+/// Extract column names from WHERE conditions for GROUP BY * expansion.
+///
+/// Collects left-hand identifiers from equality (`=`), inequality (`<>`),
+/// and regex match (`=~`, `!~`) conditions, excluding `time`.
+fn extract_filter_columns(expr: &Expr) -> Vec<String> {
+    let mut columns = Vec::new();
+    collect_filter_columns(expr, &mut columns);
+    columns
+}
+
+fn collect_filter_columns(expr: &Expr, out: &mut Vec<String>) {
+    match expr {
+        Expr::BinaryOp { left, op, right } => {
+            match op {
+                BinaryOperator::Eq | BinaryOperator::Ne
+                | BinaryOperator::RegexMatch | BinaryOperator::RegexNotMatch => {
+                    if let Expr::Identifier(ref name) = **left {
+                        if name != "time" && !out.contains(name) {
+                            out.push(name.clone());
+                        }
+                    }
+                    // Also check right side (less common but possible)
+                    if let Expr::Identifier(ref name) = **right {
+                        if name != "time" && !out.contains(name) {
+                            out.push(name.clone());
+                        }
+                    }
+                }
+                BinaryOperator::And | BinaryOperator::Or => {
+                    collect_filter_columns(left, out);
+                    collect_filter_columns(right, out);
+                }
+                _ => {
+                    // Skip comparison operators like <, >, <=, >= (typically used for time ranges)
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn quote_ident(name: &str) -> String {
     // Always double-quote identifiers to avoid conflicts with SQL reserved words
     // (e.g., "user", "system", "time", "host")
@@ -901,7 +980,8 @@ mod tests {
         let stmt = parse("SELECT mean(value) FROM cpu GROUP BY time(5m)").unwrap();
         let sql = transpile(&stmt, &ctx()).unwrap();
         assert!(sql.contains("time_bucket"), "SQL was: {}", sql);
-        assert!(sql.contains("5 minute"), "SQL was: {}", sql);
+        // Should use nanoseconds (5m = 300_000_000_000 ns), not interval string
+        assert!(sql.contains("300000000000"), "SQL was: {}", sql);
         assert!(sql.contains("GROUP BY"), "SQL was: {}", sql);
     }
 
@@ -1012,12 +1092,57 @@ mod tests {
     }
 
     #[test]
-    fn test_group_by_star_ignored() {
-        // GROUP BY * should not break the query
+    fn test_group_by_star_extracts_where_columns() {
+        // GROUP BY * should extract columns from WHERE clause
+        let stmt = parse(
+            r#"SELECT mean("usage_user") FROM "cpu" WHERE "host" =~ /server1/ AND "cpu" = 'cpu-total' GROUP BY time(5m), *"#
+        ).unwrap();
+        let sql = transpile(&stmt, &ctx()).unwrap();
+        assert!(sql.contains("GROUP BY"), "SQL was: {}", sql);
+        // Should include host and cpu from WHERE conditions
+        assert!(sql.contains(r#""host""#), "Should GROUP BY host. SQL was: {}", sql);
+        assert!(sql.contains(r#""cpu""#), "Should GROUP BY cpu. SQL was: {}", sql);
+        // Should not contain literal *
+        assert!(!sql.contains(", *"), "Should not contain literal *. SQL was: {}", sql);
+    }
+
+    #[test]
+    fn test_group_by_star_without_where() {
+        // GROUP BY * without WHERE should produce GROUP BY with just time_bucket
         let stmt = parse(r#"SELECT mean("value") FROM "cpu" GROUP BY time(5m), *"#).unwrap();
         let sql = transpile(&stmt, &ctx()).unwrap();
         assert!(sql.contains("GROUP BY time_bucket"), "SQL was: {}", sql);
-        // * should be silently skipped
-        assert!(!sql.contains("GROUP BY time_bucket, *"), "SQL was: {}", sql);
+    }
+
+    #[test]
+    fn test_group_by_star_excludes_time_from_group() {
+        // time comparisons in WHERE should NOT be added to GROUP BY
+        let stmt = parse(
+            r#"SELECT mean("value") FROM "cpu" WHERE "host" = 'server1' AND time > 1000 GROUP BY time(5m), *"#
+        ).unwrap();
+        let sql = transpile(&stmt, &ctx()).unwrap();
+        // host should be in GROUP BY, but time should not be duplicated
+        assert!(sql.contains(r#""host""#), "Should GROUP BY host. SQL was: {}", sql);
+        // time is already covered by time_bucket; raw "time" should not appear after GROUP BY
+        let group_by_part = sql.split("GROUP BY").nth(1).unwrap_or("");
+        let time_in_group = group_by_part.matches(r#""time""#).count();
+        assert_eq!(time_in_group, 0, "time should not be in GROUP BY tags. SQL was: {}", sql);
+    }
+
+    #[test]
+    fn test_time_bucket_uses_nanoseconds() {
+        // Verify time_bucket uses Int64 nanoseconds, not interval string
+        let stmt = parse("SELECT mean(value) FROM cpu GROUP BY time(10s)").unwrap();
+        let sql = transpile(&stmt, &ctx()).unwrap();
+        // 10s = 10_000_000_000 nanoseconds
+        assert!(sql.contains("time_bucket(\"time\", 10000000000, 0)"), "SQL was: {}", sql);
+    }
+
+    #[test]
+    fn test_time_bucket_1h() {
+        let stmt = parse("SELECT mean(value) FROM cpu GROUP BY time(1h)").unwrap();
+        let sql = transpile(&stmt, &ctx()).unwrap();
+        // 1h = 3_600_000_000_000 nanoseconds
+        assert!(sql.contains("time_bucket(\"time\", 3600000000000, 0)"), "SQL was: {}", sql);
     }
 }
