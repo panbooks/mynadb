@@ -566,9 +566,16 @@ impl DataCache {
             return Ok(Vec::new());
         }
 
+        let size_str = if flushed_size >= 1024 * 1024 {
+            format!("{:.1} MB", flushed_size as f64 / 1024.0 / 1024.0)
+        } else if flushed_size >= 1024 {
+            format!("{:.1} KB", flushed_size as f64 / 1024.0)
+        } else {
+            format!("{} B", flushed_size)
+        };
         info!(
-            "Flushing cache to disk: {}MB in {} table(s)...",
-            flushed_size / 1024 / 1024,
+            "Flushing cache to disk: {} in {} table(s)...",
+            size_str,
             all_data.len()
         );
 
@@ -643,9 +650,9 @@ impl DataCache {
         }
 
         info!(
-            "Flush complete: {} file(s), {}MB written in {:?}",
+            "Flush complete: {} file(s), {} written in {:?}",
             written_files.len(),
-            flushed_size / 1024 / 1024,
+            size_str,
             elapsed
         );
 
