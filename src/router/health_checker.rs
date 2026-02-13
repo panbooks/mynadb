@@ -103,11 +103,12 @@ impl HealthChecker {
                 break;
             }
 
-            // Get all nodes from the shard cache
-            let nodes = shard_cache.get_active_data_nodes();
+            // Get ALL nodes from the shard cache (including Suspect)
+            // Suspect nodes MUST be health-checked so they can recover to Active
+            let nodes = shard_cache.get_all_registered_nodes();
 
             if nodes.is_empty() {
-                debug!("No active data nodes to health check");
+                debug!("No registered data nodes to health check");
                 continue;
             }
 

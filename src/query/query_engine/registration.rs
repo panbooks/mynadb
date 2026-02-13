@@ -109,17 +109,6 @@ impl QueryEngine {
             self.data_dir, catalog_name, schema_name, table_name
         );
 
-        // For object storage with memtable data, use memtable-only registration
-        if is_object_storage && has_memtable_data {
-            debug!(
-                "Object storage: using memtable for {}.{}.{}",
-                catalog_name, schema_name, table_name
-            );
-            return self
-                .register_memtable_only(catalog_name, schema_name, table_name)
-                .await;
-        }
-
         // For local storage, check if path exists
         let path_exists = if self.storage.is_none() || !is_object_storage {
             std::path::Path::new(&table_path).exists()

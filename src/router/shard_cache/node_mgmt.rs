@@ -36,6 +36,22 @@ impl ShardCache {
         nodes
     }
 
+    /// Get all registered data nodes (Active + Suspect)
+    ///
+    /// Used by the health checker to probe all nodes, including Suspect ones,
+    /// so they can recover to Active after a transient failure.
+    pub fn get_all_registered_nodes(&self) -> Vec<DataNodeInfo> {
+        let mut nodes: Vec<_> = self
+            .data_nodes
+            .read()
+            .values()
+            .filter(|n| n.state == NodeState::Active || n.state == NodeState::Suspect)
+            .cloned()
+            .collect();
+        nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+        nodes
+    }
+
     /// Get any active node (for metadata queries that any node can answer)
     ///
     /// Returns the first active node, or None if no nodes are available.
@@ -48,8 +64,9 @@ impl ShardCache {
             .cloned()
     }
 
-    /// Get all data nodes that can serve reads (Active or Retiring)
+    /// Get all data nodes that can serve reads (Active, Suspect, or Retiring)
     ///
+    /// Suspect nodes had recent write failures but may still serve reads.
     /// Retiring nodes still have data in memtable and should serve queries
     /// until the memtable is flushed and they transition to Drained.
     /// Returns nodes sorted by node_id for consistent routing.
@@ -58,7 +75,11 @@ impl ShardCache {
             .data_nodes
             .read()
             .values()
-            .filter(|n| n.state == NodeState::Active || n.state == NodeState::Retiring)
+            .filter(|n| {
+                n.state == NodeState::Active
+                    || n.state == NodeState::Suspect
+                    || n.state == NodeState::Retiring
+            })
             .cloned()
             .collect();
         nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
@@ -67,8 +88,9 @@ impl ShardCache {
 
     /// Get all queryable PRIMARY Data nodes (for query routing)
     ///
-    /// Includes Active and Retiring Primary nodes. Retiring nodes
-    /// may have unflushed memtable data that should still be queryable.
+    /// Includes Active, Suspect, and Retiring Primary nodes.
+    /// Suspect nodes had recent write failures but may still serve reads.
+    /// Retiring nodes may have unflushed memtable data that should still be queryable.
     /// Returns nodes sorted by node_id for consistent routing.
     pub fn get_queryable_primary_nodes(&self) -> Vec<DataNodeInfo> {
         let mut nodes: Vec<_> = self
@@ -76,7 +98,9 @@ impl ShardCache {
             .read()
             .values()
             .filter(|n| {
-                (n.state == NodeState::Active || n.state == NodeState::Retiring)
+                (n.state == NodeState::Active
+                    || n.state == NodeState::Suspect
+                    || n.state == NodeState::Retiring)
                     && n.mode == DataNodeMode::Primary
             })
             .cloned()

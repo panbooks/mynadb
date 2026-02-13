@@ -131,3 +131,10 @@ opt-level = 2                  # Optimize dependencies
 
 [profile.test]
 inherits = "dev"
+
+# Fast release: optimized but much faster to compile than full release.
+# Use with: cargo build --profile fast-release
+[profile.fast-release]
+inherits = "release"
+opt-level = 1
+codegen-units = 16

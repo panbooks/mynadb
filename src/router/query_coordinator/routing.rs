@@ -616,9 +616,14 @@ impl QueryCoordinator {
         count
     }
 
-    /// Check if a node is queryable (Active or Retiring)
+    /// Check if a node is queryable (Active, Suspect, or Retiring)
+    ///
+    /// Suspect nodes had recent write failures but may still serve read queries.
+    /// Excluding them from reads creates a deadlock where nodes can never recover.
     pub(super) fn is_queryable(node: &DataNodeInfo) -> bool {
-        node.state == NodeState::Active || node.state == NodeState::Retiring
+        node.state == NodeState::Active
+            || node.state == NodeState::Suspect
+            || node.state == NodeState::Retiring
     }
 
     /// Resolve distributed table from Meta
@@ -729,6 +734,10 @@ impl QueryCoordinator {
                 table_key.to_path(),
                 distribution_percent
             );
+            if all_primary_nodes.is_empty() {
+                warn!("No active primary nodes available for hash fallback");
+                return;
+            }
             let target_count = ((all_primary_nodes.len() as f64 * distribution_percent as f64
                 / 100.0)
                 .ceil() as usize)
