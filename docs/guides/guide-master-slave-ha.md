@@ -1,6 +1,6 @@
 # Master-Slave High Availability Guide
 
-This guide covers the configuration, deployment, and operation of Stats Service in Master-Slave HA mode.
+This guide covers the configuration, deployment, and operation of MynaDB in Master-Slave HA mode.
 
 ## Overview
 
@@ -418,7 +418,7 @@ Error: Handshake rejected: Unknown error
 
 **Solutions:**
 1. Check protocol version compatibility
-2. Verify both nodes are running same Stats Service version
+2. Verify both nodes are running same MynaDB version
 3. Check master logs for rejection reason
 
 ### High Replication Lag

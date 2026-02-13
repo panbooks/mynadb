@@ -284,7 +284,7 @@ sleep 35
 curl -X POST http://localhost:7000/write/mydb -d 'cpu,id=2 usage=60'
 
 # Crash (kill -9)
-killall -9 stats
+killall -9 mynadb
 
 # Restart
 cargo run --release
@@ -423,4 +423,4 @@ pub async fn flush(&self) -> Result<usize, String> {
 
 **Status**: Implemented ✅
 **Date**: 2025-12-29
-**Recommendation**: Use this approach for stats-service
+**Recommendation**: Use this approach for mynadb

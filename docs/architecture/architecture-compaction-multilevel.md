@@ -16,7 +16,7 @@ The compactor now supports a full multi-level compaction strategy similar to LSM
 ```
 data/
   benchmark/
-    svc_1/
+    service_1/
       cpu/
         date=2025-12-24/
           L0_1703251234567.parquet
@@ -83,7 +83,7 @@ fn has_partitions(table_path) -> bool {
 
 ### Examples
 
-**Partitioned Table** (`benchmark.svc_1.cpu`):
+**Partitioned Table** (`benchmark.service_1.cpu`):
 - Has subdirectories: `date=2025-12-24/`, `date=2025-12-25/`
 - Compacts each partition independently
 - Result label: `date=2025-12-24`
@@ -233,7 +233,7 @@ curl -X POST http://localhost:7000/compact/benchmark
   "results": [
     {
       "catalog": "benchmark",
-      "schema": "svc_1",
+      "schema": "service_1",
       "table": "cpu",
       "date_partition": "date=2025-12-24",
       "l0_files_before": 10,
@@ -357,12 +357,12 @@ fn group_files_by_size(files, config) {
 ### Log Messages
 
 ```
-INFO Compacting benchmark.svc_1.cpu/date=2025-12-24: 15 files (10 L0), 750.00 MB
+INFO Compacting benchmark.service_1.cpu/date=2025-12-24: 15 files (10 L0), 750.00 MB
 INFO Minor compaction: 10 L0 files → L1
 INFO Created L1 file: L1_1703251234567.parquet (250000 rows from 10 L0 files)
 INFO Major compaction: 4 L1 files → L2
 INFO Created L2 file: L2_1703251234890.parquet (1000000 rows from 4 L1 files)
-INFO Compaction complete: benchmark.svc_1.cpu/date=2025-12-24: 15 -> 7 files, 750.00 MB -> 735.00 MB
+INFO Compaction complete: benchmark.service_1.cpu/date=2025-12-24: 15 -> 7 files, 750.00 MB -> 735.00 MB
 ```
 
 ### Metrics in Response

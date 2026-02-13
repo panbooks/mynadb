@@ -305,16 +305,16 @@ SELECT time, temperature FROM sensor_data;
 
 ## Useful Queries
 
-### Table Size Analysis
+### Table Discovery
 ```sql
-SELECT
-  table_catalog,
-  table_schema,
-  table_name,
-  pg_size_pretty(pg_total_relation_size(table_name::text)) as size
+-- List all tables in a catalog
+SHOW TABLES;
+
+-- List tables across schemas
+SELECT table_catalog, table_schema, table_name
 FROM information_schema.tables
-WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-ORDER BY pg_total_relation_size(table_name::text) DESC;
+WHERE table_schema NOT IN ('information_schema')
+ORDER BY table_schema, table_name;
 ```
 
 ### Data Distribution by Day

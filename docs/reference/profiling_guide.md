@@ -1,6 +1,6 @@
 # Memory and CPU Profiling Guide
 
-This guide covers memory allocation and CPU profiling for Stats Service using pprof-compatible tools.
+This guide covers memory allocation and CPU profiling for MynaDB using pprof-compatible tools.
 
 ## Table of Contents
 
@@ -15,7 +15,7 @@ This guide covers memory allocation and CPU profiling for Stats Service using pp
 
 ## Overview
 
-Stats Service includes built-in profiling capabilities compatible with `go tool pprof`. This allows you to:
+MynaDB includes built-in profiling capabilities compatible with `go tool pprof`. This allows you to:
 
 - **Analyze memory allocations** - Find memory leaks and optimize allocation patterns
 - **Profile CPU usage** - Identify performance bottlenecks
@@ -571,7 +571,7 @@ echo "$(date): Profiling complete"
 # Profiling duration is limited to 300 seconds (5 minutes)
 
 # Or check service logs
-tail -f /data0/stats/logs/stats-service.*.log | grep -i profile
+tail -f /data0/mynadb/logs/mynadb.*.log | grep -i profile
 ```
 
 ### Issue: "Failed to start profiler"
@@ -587,7 +587,7 @@ ulimit -n
 ulimit -n 65536
 
 # Check process permissions
-ps aux | grep tsdb-stats
+ps aux | grep mynadb
 ```
 
 ### Issue: Empty or zero-sample profiles
@@ -711,7 +711,7 @@ curl -u admin:password "http://localhost:7000/debug/heap?duration=10&format=prot
 ```bash
 # Add to prometheus.yml
 scrape_configs:
-  - job_name: 'stats-service-profiles'
+  - job_name: 'mynadb-profiles'
     scrape_interval: 1h
     static_configs:
       - targets: ['localhost:7000']
@@ -746,7 +746,7 @@ performance_test:
 - [Go pprof Documentation](https://pkg.go.dev/runtime/pprof)
 - [go tool pprof Guide](https://github.com/google/pprof/blob/main/doc/README.md)
 - [Flamegraph Interpretation](http://www.brendangregg.com/flamegraphs.html)
-- [Stats Service Documentation](../CLAUDE.md)
+- [MynaDB Documentation](../CLAUDE.md)
 
 ## Summary
 

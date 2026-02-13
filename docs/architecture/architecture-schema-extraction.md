@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Stats Service supports flexible schema extraction from metric tags. This allows you to organize your metrics into different schemas (namespaces) based on custom tag values, supporting various naming patterns and hierarchical structures.
+MynaDB supports flexible schema extraction from metric tags. This allows you to organize your metrics into different schemas (namespaces) based on custom tag values, supporting various naming patterns and hierarchical structures.
 
 ## Configuration
 
@@ -10,32 +10,34 @@ Schema extraction is configured in the `[schema]` section of `config.toml`:
 
 ```toml
 [schema]
-# Tag key to extract schema from (default: "service")
-tag_key = "service"
+# Strategy: "service_as_schema" (default) or "service_as_table"
+strategy = "service_as_schema"
 
-# Default schema name when tag is not present
+# Tag keys to extract schema from (checked in order, first match wins)
+tag_keys = ["MONITOR.service", "hierarchy_2", "service"]
+
+# Default schema name when no matching tag is present
 default_name = "default"
 
 # Whether to prefix purely numeric schemas (e.g., "123" -> "service_123")
 prefix_numeric = true
-
-# Whether to extract the last part after dot separator
-extract_last_part = false
-
-# Custom separator for hierarchical schema names (default: ".")
-separator = "."
 ```
 
 ## Configuration Parameters
 
-### `tag_key` (string, default: "service")
-The tag key from which to extract the schema name. Common values:
-- `"service"` - Standard service identifier
-- `"hierarchy_1"`, `"hierarchy_2"` - Hierarchical organization
-- Any custom tag key in your metrics
+### `strategy` (string, default: "service_as_schema")
+How to map the extracted value:
+- `"service_as_schema"` - Tag value becomes the schema name, measurement becomes the table name
+- `"service_as_table"` - Tag value becomes the table name, schema is always "default"
+
+### `tag_keys` (array of strings, default: `["service"]`)
+An ordered list of tag keys to check for schema extraction. The first matching key in the metric is used. Common values:
+- `["service"]` - Standard service identifier
+- `["MONITOR.service", "hierarchy_2", "service"]` - Multiple fallback keys
+- Any custom tag keys in your metrics
 
 ### `default_name` (string, default: "default")
-The schema name to use when the specified tag key is not present in the metric.
+The schema name to use when none of the `tag_keys` are present in the metric.
 
 ### `prefix_numeric` (boolean, default: true)
 Whether to automatically prefix purely numeric schema names with "service_" to avoid SQL parser issues.
@@ -44,16 +46,6 @@ Whether to automatically prefix purely numeric schema names with "service_" to a
 - `true`: Tag `service="123"` → Schema `service_123`
 - `false`: Tag `service="123"` → Schema `123`
 
-### `extract_last_part` (boolean, default: false)
-Whether to extract only the last part of hierarchical values after the separator.
-
-**Examples:**
-- `false`: Tag `service="MONITOR.web"` → Schema `MONITOR.web`
-- `true`: Tag `service="MONITOR.web"` → Schema `web`
-
-### `separator` (string, default: ".")
-The separator character(s) used for hierarchical schema names. Only used when `extract_last_part = true`.
-
 ## Use Cases
 
 ### 1. Simple Service Tags
@@ -61,8 +53,7 @@ The separator character(s) used for hierarchical schema names. Only used when `e
 **Configuration:**
 ```toml
 [schema]
-tag_key = "service"
-extract_last_part = false
+tag_keys = ["service"]
 prefix_numeric = true
 ```
 
@@ -75,13 +66,12 @@ prefix_numeric = true
 
 **Use when:** You have simple, flat service identifiers.
 
-### 2. Hierarchical Service Tags (Full Path)
+### 2. Hierarchical Service Tags
 
 **Configuration:**
 ```toml
 [schema]
-tag_key = "service"
-extract_last_part = false
+tag_keys = ["service"]
 prefix_numeric = true
 ```
 
@@ -92,35 +82,31 @@ prefix_numeric = true
 | `service="PROD.api"` | `PROD.api` |
 | `service="DEV.web"` | `DEV.web` |
 
-**Use when:** You want to preserve the full hierarchical path as the schema name.
+**Use when:** You want to preserve the full tag value as the schema name.
 
-### 3. Hierarchical Service Tags (Extract Last Part)
+### 3. Multiple Fallback Tag Keys
 
 **Configuration:**
 ```toml
 [schema]
-tag_key = "service"
-extract_last_part = true
-separator = "."
+tag_keys = ["MONITOR.service", "hierarchy_2", "service"]
 prefix_numeric = true
 ```
 
 **Examples:**
-| Tag Value | Resulting Schema |
-|-----------|------------------|
-| `service="MONITOR.service"` | `service` |
-| `service="PROD.api"` | `api` |
-| `service="DEV.web"` | `web` |
+- Metric with `MONITOR.service="web"` → Schema `web` (first key matched)
+- Metric with `hierarchy_2="svc1"` → Schema `svc1` (second key matched)
+- Metric with `service="api"` → Schema `api` (third key matched)
+- Metric with no matching tags → Schema `default`
 
-**Use when:** Your metrics use hierarchical naming (e.g., environment.service) but you only want to organize by the service name.
+**Use when:** Your system has metrics with different tag naming conventions.
 
 ### 4. Custom Tag Keys
 
 **Configuration:**
 ```toml
 [schema]
-tag_key = "hierarchy_2"
-extract_last_part = false
+tag_keys = ["hierarchy_2"]
 prefix_numeric = true
 ```
 
@@ -133,23 +119,20 @@ prefix_numeric = true
 
 **Use when:** Your organization uses custom tag keys for service identification.
 
-### 5. Multiple Separators
+### 5. ServiceAsTable Strategy
 
 **Configuration:**
 ```toml
 [schema]
-tag_key = "service"
-extract_last_part = true
-separator = "/"
+strategy = "service_as_table"
+tag_keys = ["service"]
 ```
 
 **Examples:**
-| Tag Value | Resulting Schema |
-|-----------|------------------|
-| `service="prod/web"` | `web` |
-| `service="dev/api"` | `api` |
+- `service="web"` → Schema `default`, Table `web`
+- `service="api"` → Schema `default`, Table `api`
 
-**Use when:** Your service tags use a different separator (e.g., `/` or `-`).
+**Use when:** You want a flat table namespace instead of nested schemas.
 
 ## Data Organization
 
@@ -193,24 +176,23 @@ If you were using the default behavior before, no changes are needed. The defaul
 
 ```toml
 [schema]
-tag_key = "service"
+tag_keys = ["service"]
 default_name = "default"
 prefix_numeric = true
-extract_last_part = false
 ```
 
-### Changing to Hierarchical Extraction
+### Using Multiple Tag Keys
 
-To switch to hierarchical extraction (e.g., `MONITOR.service` → `service`):
+To support multiple naming conventions:
 
 1. Update config.toml:
 ```toml
 [schema]
-extract_last_part = true
+tag_keys = ["MONITOR.service", "hierarchy_2", "service"]
 ```
 
 2. Restart the service
-3. New data will be organized with extracted schema names
+3. Tags are checked in order; first match wins
 4. Old data remains in the original schema directories
 
 ### Using Custom Tag Keys
@@ -220,7 +202,7 @@ To use a different tag for schema extraction:
 1. Update config.toml:
 ```toml
 [schema]
-tag_key = "hierarchy_2"  # or your custom tag
+tag_keys = ["hierarchy_2"]  # or your custom tag
 ```
 
 2. Ensure your metrics include this tag
@@ -252,7 +234,7 @@ prefix_numeric = true  # "123" becomes "service_123"
 
 ### Wrong tag being used for schema
 
-Check that your metrics include the configured `tag_key`:
+Check that your metrics include one of the configured `tag_keys`:
 ```bash
 # View metrics to verify tags
 curl -X POST http://localhost:7000/write/test -d 'cpu,service=web,host=server1 value=0.5'
@@ -260,8 +242,8 @@ curl -X POST http://localhost:7000/write/test -d 'cpu,service=web,host=server1 v
 
 ### Data going to "default" schema
 
-This happens when the `tag_key` is missing from metrics. Either:
-1. Add the tag to your metrics
+This happens when none of the `tag_keys` are present in metrics. Either:
+1. Add one of the configured tags to your metrics
 2. Update `default_name` to a more appropriate value
 
 ## Examples
@@ -270,9 +252,7 @@ This happens when the `tag_key` is missing from metrics. Either:
 
 ```toml
 [schema]
-tag_key = "service"
-extract_last_part = true
-separator = "."
+tag_keys = ["service"]
 ```
 
 Write data:
@@ -293,8 +273,7 @@ data/dev/web/cpu/
 
 ```toml
 [schema]
-tag_key = "service"
-extract_last_part = false
+tag_keys = ["service"]
 ```
 
 Write data:

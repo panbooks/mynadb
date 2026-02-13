@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the implementation of a leveled compaction strategy (similar to LSM-tree) for the stats-service time-series database. This feature solves the "small file problem" by organizing files into multiple levels and prioritizing the compaction of raw (L0) files.
+This document describes the implementation of a leveled compaction strategy (similar to LSM-tree) for the MynaDB time-series database. This feature solves the "small file problem" by organizing files into multiple levels and prioritizing the compaction of raw (L0) files.
 
 ## Architecture
 

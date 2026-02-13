@@ -215,8 +215,8 @@ curl -X POST http://localhost:7000/compact/benchmark/web/cpu
 # If service="MONITOR.web" with extract_last_part=false
 curl -X POST http://localhost:7000/compact/benchmark/MONITOR.web/cpu
 
-# If hierarchy_2="svc_1"
-curl -X POST http://localhost:7000/compact/benchmark/svc_1/cpu
+# If hierarchy_2="service_1"
+curl -X POST http://localhost:7000/compact/benchmark/service_1/cpu
 ```
 
 ## 📖 Documentation Index

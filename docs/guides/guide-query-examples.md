@@ -5,7 +5,7 @@
 
 ## Overview
 
-The Stats TSDB now supports SQL queries powered by Apache DataFusion! You can query your time series data using standard SQL.
+MynaDB now supports SQL queries powered by Apache DataFusion! You can query your time series data using standard SQL.
 
 ## Query Endpoints
 
@@ -23,7 +23,7 @@ Get the schema for a specific table
 
 ## Table Naming Convention
 
-Stats Service uses a **catalog.schema.table** structure. The naming depends on the configured schema strategy:
+MynaDB uses a **catalog.schema.table** structure. The naming depends on the configured schema strategy:
 
 ### ServiceAsSchema (Default)
 - Catalog = Database name from URL `/write/{db}`

@@ -1,8 +1,8 @@
-# 🎯 Configurable Schema Extraction
+# Configurable Schema Extraction
 
 ## What's New
 
-The Stats Service now supports **fully configurable schema extraction** from metric tags! You can now customize how schemas (namespaces) are organized based on your tag structure.
+MynaDB supports **fully configurable schema extraction** from metric tags. You can customize how schemas (namespaces) are organized based on your tag structure.
 
 ## Quick Overview
 
@@ -15,9 +15,9 @@ schema = tags.get("service")  // Hardcoded "service" tag
 ### After (Configurable)
 ```toml
 [schema]
-tag_key = "service"           # Or "hierarchy_2", "app_name", etc.
-extract_last_part = true      # Handle "MONITOR.service" → "service"
-prefix_numeric = true         # "123" → "service_123"
+strategy = "service_as_schema"
+tag_keys = ["service", "hierarchy_2"]  # Multiple fallback keys
+prefix_numeric = true                   # "123" → "service_123"
 ```
 
 ## Supported Formats
@@ -27,7 +27,7 @@ prefix_numeric = true         # "123" → "service_123"
 | Simple | `service="web"` | Default | `web` |
 | Hierarchical | `service="MONITOR.web"` | `extract_last_part=true` | `web` |
 | Full Path | `service="MONITOR.web"` | `extract_last_part=false` | `MONITOR.web` |
-| Custom Tag | `hierarchy_2="svc1"` | `tag_key="hierarchy_2"` | `svc1` |
+| Custom Tag | `hierarchy_2="svc1"` | `tag_keys=["hierarchy_2"]` | `svc1` |
 | Numeric | `service="123"` | `prefix_numeric=true` | `service_123` |
 
 ## Configuration
@@ -36,22 +36,17 @@ Add to your `config.toml`:
 
 ```toml
 [schema]
-# Which tag to use for schema extraction
-tag_key = "service"
+# Strategy: "service_as_schema" (default) or "service_as_table"
+strategy = "service_as_schema"
 
-# Fallback when tag is missing
+# Tag keys to use for schema extraction (checked in order)
+tag_keys = ["MONITOR.service", "hierarchy_2", "service"]
+
+# Fallback when no matching tag is found
 default_name = "default"
 
 # Prefix numeric values to avoid SQL issues
 prefix_numeric = true
-
-# Extract last part of hierarchical values
-# false: "MONITOR.service" → "MONITOR.service"
-# true:  "MONITOR.service" → "service"
-extract_last_part = false
-
-# Separator for hierarchical extraction
-separator = "."
 ```
 
 ## Common Use Cases
@@ -59,23 +54,21 @@ separator = "."
 ### 1. Default (Simple Services)
 ```toml
 [schema]
-tag_key = "service"
-extract_last_part = false
+tag_keys = ["service"]
 ```
 Perfect for: Microservices, simple deployments
 
-### 2. Environment.Service Format
+### 2. Multiple Fallback Keys
 ```toml
 [schema]
-tag_key = "service"
-extract_last_part = true
+tag_keys = ["MONITOR.service", "hierarchy_2", "service"]
 ```
-Perfect for: Multi-environment setups, isolating by service
+Perfect for: Systems with multiple naming conventions
 
 ### 3. Custom Tag Keys
 ```toml
 [schema]
-tag_key = "hierarchy_2"
+tag_keys = ["hierarchy_2"]
 ```
 Perfect for: Legacy systems, custom naming conventions
 
@@ -157,7 +150,7 @@ extract_last_part = true  # Enable hierarchical extraction
 
 2. **Restart service:**
 ```bash
-./stats
+./mynadb
 ```
 
 3. **Test it:**
@@ -165,8 +158,8 @@ extract_last_part = true  # Enable hierarchical extraction
 curl -X POST http://localhost:7000/write/test \
   -d 'cpu,service=MONITOR.web,host=test value=0.5'
 
-curl http://localhost:7000/databases/test/schemas
-# Should show: ["web"]
+curl http://localhost:7000/schemas/test
+# Should show: {"database":"test","schemas":["MONITOR.web"],"count":1}
 ```
 
 ## Questions?

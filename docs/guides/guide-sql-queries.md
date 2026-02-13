@@ -1,6 +1,6 @@
 # SQL Query Guide
 
-This guide covers everything you need to know about querying Stats Service using SQL powered by Apache DataFusion.
+This guide covers everything you need to know about querying MynaDB using SQL powered by Apache DataFusion.
 
 ## Table of Contents
 
@@ -62,7 +62,7 @@ curl -X POST http://localhost:7000/query/mydb \
 
 ## Table Naming
 
-Stats Service uses a **catalog.schema.table** structure. Tables are automatically registered when you query.
+MynaDB uses a **catalog.schema.table** structure. Tables are automatically registered when you query.
 
 ### Supported Formats
 

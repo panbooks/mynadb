@@ -25,15 +25,15 @@ let merged_schema = Self::merge_schemas(&batches)?;
 
 **Root Cause**: DataFusion's SQL parser doesn't support numeric identifiers after dots (e.g., `mydb.1.cpu` is invalid).
 
-**Fix**: Modified `cache.rs` to prefix numeric service tags with `"svc_"`:
+**Fix**: Modified `cache.rs` to prefix numeric service tags with `"service_"`:
 
 ```rust
 pub fn extract_schema(tags: &HashMap<String, String>) -> String {
     tags.get("service")
         .map(|s| {
-            // If service value is purely numeric, prefix with "svc_"
+            // If service value is purely numeric, prefix with "service_"
             if s.chars().all(|c| c.is_numeric()) {
-                format!("svc_{}", s)
+                format!("service_{}", s)
             } else {
                 s.clone()
             }
@@ -43,8 +43,8 @@ pub fn extract_schema(tags: &HashMap<String, String>) -> String {
 ```
 
 **Schema Mapping**:
-- `service=1` → `svc_1` ✅
-- `service=2` → `svc_2` ✅
+- `service=1` → `service_1` ✅
+- `service=2` → `service_2` ✅
 - `service=production` → `production` ✅
 - No service tag → `default` ✅
 
@@ -55,8 +55,8 @@ pub fn extract_schema(tags: &HashMap<String, String>) -> String {
 
 **Fix**: Enhanced `prefix_table_names()` in `query_engine.rs` to support:
 1. Simple names: `cpu` → `mydb.default.cpu`
-2. Partially qualified: `svc_1.cpu` → `mydb.svc_1.cpu`
-3. Fully qualified: `mydb.svc_1.cpu` → unchanged
+2. Partially qualified: `service_1.cpu` → `mydb.service_1.cpu`
+3. Fully qualified: `mydb.service_1.cpu` → unchanged
 
 ```rust
 let dot_count = table_ref.matches('.').count();
@@ -81,7 +81,7 @@ let prefixed = if dot_count == 0 {
 - Updated `write_batches()` to use merged schema
 
 ### 2. `src/cache.rs`
-- Modified `extract_schema()` to prefix numeric service tags with "svc_"
+- Modified `extract_schema()` to prefix numeric service tags with "service_"
 
 ### 3. `src/query_engine.rs`
 - Enhanced `prefix_table_names()` to handle 3 qualification levels
@@ -96,10 +96,10 @@ let prefixed = if dot_count == 0 {
 ```
 data/
 └── mydb/
-    ├── svc_1/           # service=1 (numeric → prefixed)
+    ├── service_1/           # service=1 (numeric → prefixed)
     │   ├── cpu/
     │   └── disk/
-    ├── svc_2/           # service=2 (numeric → prefixed)
+    ├── service_2/           # service=2 (numeric → prefixed)
     │   └── cpu/
     ├── production/      # service=production (text → as-is)
     │   └── cpu/
@@ -111,13 +111,13 @@ data/
 
 ```sql
 -- Fully qualified
-SELECT * FROM mydb.svc_1.cpu
-SELECT * FROM mydb.svc_2.cpu
+SELECT * FROM mydb.service_1.cpu
+SELECT * FROM mydb.service_2.cpu
 SELECT * FROM mydb.production.cpu
 SELECT * FROM mydb.default.memory
 
 -- Partially qualified (auto-prefixed with catalog)
-SELECT * FROM svc_1.cpu
+SELECT * FROM service_1.cpu
 SELECT * FROM production.cpu
 
 -- Simple names (auto-prefixed with catalog.default)
@@ -125,7 +125,7 @@ SELECT * FROM cpu
 SELECT * FROM memory
 
 -- Cross-schema joins
-SELECT * FROM mydb.svc_1.cpu a JOIN mydb.svc_2.cpu b ON a.hostname = b.hostname
+SELECT * FROM mydb.service_1.cpu a JOIN mydb.service_2.cpu b ON a.hostname = b.hostname
 ```
 
 ## Testing

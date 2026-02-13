@@ -3,16 +3,17 @@
 ## Step 1: Build and Run
 
 ```bash
-cd stats
-cargo run
+cargo build --release
+./target/release/mynadb
 ```
 
 You should see:
 ```
-🚀 Time Series Database Server running on http://0.0.0.0:7000
-📊 Data directory: ./data
-⏱️  Flush interval: 30 seconds
-🔄 Background flush started: every 30 seconds
+MynaDB - The Voice of Your Machines
+  HTTP server listening on http://0.0.0.0:7000
+  Arrow Flight listening on grpc://0.0.0.0:7001
+  Data directory: ./data
+  Flush interval: 60 seconds
 ```
 
 ## Step 2: Write Some Data
@@ -25,19 +26,12 @@ curl -X POST http://localhost:7000/write/mydb \
   -d 'cpu,host=server01 usage=75.5'
 ```
 
-**Note**: Data is now cached in memory! It won't be written to disk immediately.
+**Note**: Data is now cached in memory and queryable immediately via Memtable. It will be flushed to Parquet files in the background.
 
 ## Step 3: Check Cache Statistics
 
 ```bash
 curl http://localhost:7000/stats
-```
-
-Output:
-```
-Cache Statistics:
-  Points: 1
-  Measurements: 1
 ```
 
 ## Step 4: Write More Data
@@ -50,35 +44,9 @@ memory,host=server01 used=16.5,total=32.0
 '
 ```
 
-Check stats again:
-```bash
-curl http://localhost:7000/stats
-```
+## Step 5: Query Your Data
 
-## Step 5: Manual Flush (Optional)
-
-To immediately write data to disk instead of waiting 30 seconds:
-
-```bash
-curl -X POST http://localhost:7000/flush
-```
-
-Output:
-```
-Flushed 2 file(s) to disk
-```
-
-## Step 6: Run Full Test Suite
-
-```bash
-./test_with_queries.sh
-```
-
-This will write data AND run SQL queries to demonstrate all features.
-
-## Step 7: Query Your Data
-
-Now that data is flushed to disk, you can query it with SQL!
+Data is queryable immediately (no flush needed thanks to Memtable):
 
 ### List available tables
 ```bash
@@ -87,63 +55,76 @@ curl http://localhost:7000/tables/mydb
 
 ### Simple query
 ```bash
-curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM mydb_cpu LIMIT 5'
+curl -X POST http://localhost:7000/query/mydb \
+  -d "SELECT * FROM cpu LIMIT 5"
 ```
 
 ### Aggregate query
 ```bash
-curl 'http://localhost:7000/query/mydb?sql=SELECT host, AVG(usage) as avg_usage FROM mydb_cpu GROUP BY host'
+curl -X POST http://localhost:7000/query/mydb \
+  -d "SELECT host, AVG(usage) as avg_usage FROM cpu GROUP BY host"
 ```
 
-### Complex query (using POST)
+### Time range query
 ```bash
 curl -X POST http://localhost:7000/query/mydb \
-  -d "SELECT * FROM mydb_cpu WHERE usage > 50 ORDER BY time DESC"
+  -d "SELECT * FROM cpu WHERE time > now() - INTERVAL '1 hour' ORDER BY time DESC"
 ```
 
-## Step 8: Verify the Data
+## Step 6: Manual Flush (Optional)
 
-After flushing (either manually or after 30 seconds):
+To immediately write data to Parquet files instead of waiting for the background flush:
 
 ```bash
-ls -lh ./data/mydb/
+curl -X POST http://localhost:7000/flush
 ```
 
-You should see Parquet files like:
+## Step 7: Verify Storage
+
+After flushing (either manually or after the background interval):
+
+```bash
+ls -lh ./data/mydb/default/cpu/
 ```
-cpu_1703251234567.parquet
-memory_1703251234890.parquet
+
+You should see date-partitioned directories:
+```
+date=2024-01-10/
+    L0_abc123.parquet
+    L0_def456.parquet
 ```
 
-**Key Difference from Before:**
-- Multiple write requests within 30 seconds → Combined into single Parquet file per measurement
-- Significantly reduces the number of files created
+**Key Points:**
+- Data is partitioned by date (`date=YYYY-MM-DD/`)
+- Files are prefixed with compaction level (`L0_`, `L1_`, `L2_`, ...)
+- Multiple writes within a flush interval are combined into a single Parquet file per measurement
 
-## Understanding the Caching Flow
+## Step 8: Explain a Query
 
-1. **Write Request** → Data is parsed and stored in memory (Arrow format)
-2. **Cache Accumulates** → Multiple writes within 30 seconds are buffered together
-3. **Background Flush** → Every 30 seconds, all cached data is written to Parquet
-4. **Result** → One Parquet file per measurement per 30-second window
+View the execution plan before running an expensive query:
+
+```bash
+curl 'http://localhost:7000/explain/mydb?sql=SELECT+*+FROM+cpu+WHERE+time+>+now()+-+INTERVAL+%271+hour%27'
+```
+
+## Understanding the Data Flow
+
+1. **Write Request** → Data is parsed (InfluxDB line protocol) and written to WAL
+2. **WAL + Cache** → Data stored in WAL for durability and in-memory cache for queries
+3. **Memtable** → Cached data is immediately queryable (no flush required!)
+4. **Background Flush** → Every 60 seconds, cached data is written to Parquet files
+5. **Compaction** → Background job merges small files (L0) into larger files (L1, L2, ...)
 
 ## Example Timeline
 
 ```
-00:00 - Write 10 CPU points → Cache: 10 points
+00:00 - Write 10 CPU points → Cache: 10 points (queryable immediately)
 00:05 - Write 20 CPU points → Cache: 30 points
 00:15 - Write 15 CPU points → Cache: 45 points
-00:30 - AUTO FLUSH → cpu_timestamp.parquet (45 points total)
-00:35 - Write 10 CPU points → Cache: 10 points
-01:00 - AUTO FLUSH → cpu_timestamp2.parquet (10 points total)
+01:00 - AUTO FLUSH → date=YYYY-MM-DD/L0_abc.parquet (45 points)
+01:05 - Write 10 CPU points → Cache: 10 points (queryable immediately)
+02:00 - AUTO FLUSH → date=YYYY-MM-DD/L0_def.parquet (10 points)
 ```
-
-## Manual Flush Use Cases
-
-Use `POST /flush` when you need to:
-- Ensure data is persisted before shutdown
-- Test data writing immediately
-- Flush important data that can't wait 30 seconds
-- Debug or verify data storage
 
 ## What's Next?
 
@@ -160,3 +141,10 @@ requests,service=api,method=POST count=50i,latency=128.7
 database,type=postgres queries=1000i,avg_time=23.5
 '
 ```
+
+## Next Steps
+
+1. Read `guide-configuration.md` for all configuration options
+2. Read `guide-sql-queries.md` for SQL query reference
+3. See `../architecture/architecture-overview.md` for system design
+4. See `../features/features-flight-usage.md` for Arrow Flight API details

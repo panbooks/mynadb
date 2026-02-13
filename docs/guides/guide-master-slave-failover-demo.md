@@ -78,7 +78,7 @@ services:
 
   # Master node
   master:
-    image: stats-service:latest
+    image: mynadb:latest
     container_name: master
     hostname: master
     ports:
@@ -101,7 +101,7 @@ services:
 
   # Slave node
   slave:
-    image: stats-service:latest
+    image: mynadb:latest
     container_name: slave
     hostname: slave
     ports:
@@ -152,7 +152,7 @@ volumes:
 
 ```
 #---------------------------------------------------------------------
-# HAProxy configuration for Stats Service HA
+# HAProxy configuration for MynaDB HA
 #---------------------------------------------------------------------
 
 global
@@ -380,7 +380,7 @@ ip addr add ${VIP}/24 dev ${INTERFACE}
 # 2. Send gratuitous ARP to update switches/routers
 arping -c 3 -A -I ${INTERFACE} ${VIP}
 
-# 3. Notify stats-service to accept writes
+# 3. Notify mynadb to accept writes
 curl -X POST http://localhost:7000/ha/promote
 
 echo "Failover complete. This node is now master with VIP ${VIP}"
@@ -424,7 +424,7 @@ version: '3.8'
 
 services:
   master:
-    image: stats-service:latest
+    image: mynadb:latest
     container_name: master
     ports:
       - "7000:7000"
@@ -438,7 +438,7 @@ services:
       - master-data:/data/stats
 
   slave:
-    image: stats-service:latest
+    image: mynadb:latest
     container_name: slave
     ports:
       - "7010:7000"

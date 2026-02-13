@@ -79,7 +79,7 @@ Step 3: Scan all partitions matching "date=2024-12-30"
     ├── mydb/default/cpu/date=2024-12-30/        ← MATCH
     ├── mydb/default/cpu/date=2024-12-31/        ← Skip (today)
     ├── mydb/default/memory/date=2024-12-30/     ← MATCH
-    └── mydb/svc_1/disk/date=2024-12-30/         ← MATCH
+    └── mydb/service_1/disk/date=2024-12-30/         ← MATCH
 
 Step 4: For each matched partition:
     IF files >= 2 AND total_size <= 200MB:
@@ -292,7 +292,7 @@ Total: 1 file ✅
 
 **Compaction check (2024-12-31 01:00):**
 ```
-DEBUG Partition mydb/svc_1/events/date=2024-12-30 size 450.00 MB exceeds target 200.00 MB, skipping full compaction
+DEBUG Partition mydb/service_1/events/date=2024-12-30 size 450.00 MB exceeds target 200.00 MB, skipping full compaction
 ```
 
 **Result:** Partition remains unchanged, traditional LSM continues to handle it
@@ -485,7 +485,7 @@ DEBUG Partition mydb/default/cpu/date=2024-12-30 has 1 file(s), skipping
 
 **Query logs:**
 ```bash
-grep "Full compaction complete for" logs/stats-service.log | grep "$(date -d yesterday +%Y-%m-%d)"
+grep "Full compaction complete for" logs/mynadb.log | grep "$(date -d yesterday +%Y-%m-%d)"
 ```
 
 **Expected:** 1 entry per day (at 01:00)
@@ -494,7 +494,7 @@ grep "Full compaction complete for" logs/stats-service.log | grep "$(date -d yes
 
 **Query logs:**
 ```bash
-grep "Full compaction complete for date=" logs/stats-service.log | tail -1 | grep -oP '\d+(?= partitions)'
+grep "Full compaction complete for date=" logs/mynadb.log | tail -1 | grep -oP '\d+(?= partitions)'
 ```
 
 **Typical:** 20-50 partitions per day (depends on write rate)
@@ -503,7 +503,7 @@ grep "Full compaction complete for date=" logs/stats-service.log | tail -1 | gre
 
 **Query logs:**
 ```bash
-grep "Full compaction complete:" logs/stats-service.log | grep -oP '\d+\.\d+(?=s)' | awk '{s+=$1} END {print s/NR "s avg"}'
+grep "Full compaction complete:" logs/mynadb.log | grep -oP '\d+\.\d+(?=s)' | awk '{s+=$1} END {print s/NR "s avg"}'
 ```
 
 **Expected:** 1-5 seconds per partition
@@ -512,7 +512,7 @@ grep "Full compaction complete:" logs/stats-service.log | grep -oP '\d+\.\d+(?=s
 
 **Query logs:**
 ```bash
-grep "skipping full compaction" logs/stats-service.log | wc -l
+grep "skipping full compaction" logs/mynadb.log | wc -l
 ```
 
 **Interpretation:**
@@ -568,13 +568,13 @@ Action: Consider raising full_compaction_target_size_mb (skip more large partiti
 
 3. **Check service logs:**
    ```bash
-   grep "Background compaction started" logs/stats-service.log
+   grep "Background compaction started" logs/mynadb.log
    ```
    Ensure background task is running
 
 **Solutions:**
 - Enable in config: `full_compaction_enabled = true`
-- Verify service running: `systemctl status stats-service`
+- Verify service running: `systemctl status mynadb`
 - Manual trigger: `curl -X POST http://localhost:7000/compact/mydb`
 
 ### Issue 2: Partitions Being Skipped
@@ -653,7 +653,7 @@ ERROR Failed to full compact: No space left on device
 
 **Diagnosis:**
 ```bash
-df -h /data0/stats
+df -h /data0/mynadb
 ```
 
 **Solutions:**
@@ -754,13 +754,13 @@ interval_secs = 3600                       # CHANGED from 60
 
 **Step 3:** Restart service
 ```bash
-systemctl restart stats-service
+systemctl restart mynadb
 ```
 
 **Step 4:** Verify
 ```bash
 # Watch for full compaction at 01:00 tomorrow
-tail -f logs/stats-service.log | grep "Full compaction"
+tail -f logs/mynadb.log | grep "Full compaction"
 ```
 
 ### Rollback (if needed)
@@ -843,5 +843,5 @@ interval_secs = 3600                        # Check every hour
 ---
 
 **Last Updated:** 2024-12-30
-**Author:** Stats Service Team
+**Author:** MynaDB Team
 **Status:** Production Ready ✅

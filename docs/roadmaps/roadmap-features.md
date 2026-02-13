@@ -1,8 +1,8 @@
-# Stats Service - Feature Roadmap
+# MynaDB - Feature Roadmap
 
 ## Current State
 
-Stats Service is a clean, functional time series database with **~9,150 lines** of Rust code across 17 modules.
+MynaDB is a clean, functional time series database with **~9,150 lines** of Rust code across 17 modules.
 
 ### Core Modules
 

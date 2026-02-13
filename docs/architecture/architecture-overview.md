@@ -1,41 +1,43 @@
-# Stats Service Architecture
+# MynaDB Architecture
 
 ## System Overview
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   Configuration Layer                    │
-├─────────────────────────────────────────────────────────┤
-│  config.toml → Config → Components (ports, paths, etc)  │
-└─────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────┐
-│                      Server Layer                        │
-├──────────────────────┬──────────────────────────────────┤
-│   HTTP REST API      │   Arrow Flight gRPC              │
-│   (Port: 7000)       │   (Port: 7001)                   │
-└──────────────────────┴──────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────┐
-│                     Processing Layer                     │
-├──────────────┬──────────────┬──────────────┬────────────┤
-│  DataCache   │ QueryEngine  │  Compactor   │  Series    │
-│  (30s flush) │ (DataFusion) │ (LSM-tree)   │  Tracker   │
-└──────────────┴──────────────┴──────────────┴────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────┐
-│                     Storage Layer                        │
-├─────────────────────────────────────────────────────────┤
-│  /data0/data/                                            │
-│  ├── database1/                                          │
-│  │   ├── measurement1/                                   │
-│  │   │   ├── L0_*.parquet   (recent writes)             │
-│  │   │   ├── L1_*.parquet   (compacted)                 │
-│  │   │   └── L2_*.parquet   (heavily compacted)         │
-│  └── _system/                                            │
-│      └── series_stats/                                   │
-│          └── database1.parquet                           │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                    Configuration Layer                            │
+├─────────────────────────────────────────────────────────────────┤
+│  config.toml → Config → Components (ports, paths, etc)           │
+│  CLI: mynadb [-c config.toml] [standalone|meta|data|router|admin]│
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                        Server Layer                              │
+├──────────────┬──────────────┬──────────────┬────────────────────┤
+│  HTTP REST   │ Arrow Flight │ MySQL Wire   │ OTLP (gRPC/HTTP)  │
+│  (Port 7000) │ (Port 7001)  │ (Port 7002)  │ (Port 4317/4318)  │
+└──────────────┴──────────────┴──────────────┴────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                      Processing Layer                            │
+├──────────────┬──────────────┬──────────────┬────────────────────┤
+│  DataCache   │ QueryEngine  │  Compactor   │  WAL               │
+│  (60s flush) │ (DataFusion) │ (LSM-tree)   │  (Write-ahead log) │
+└──────────────┴──────────────┴──────────────┴────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                      Storage Layer                               │
+├─────────────────────────────────────────────────────────────────┤
+│  Local filesystem, S3, MinIO, or Alibaba OSS                     │
+│  ├── {catalog}/                                                  │
+│  │   └── {schema}/                                               │
+│  │       └── {table}/                                            │
+│  │           └── date=YYYY-MM-DD/                                │
+│  │               ├── L0_*.parquet   (recent writes)              │
+│  │               ├── L1_*.parquet   (compacted)                  │
+│  │               └── L2_*.parquet   (heavily compacted)          │
+│  └── _system/                                                    │
+│      └── series_stats/                                           │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Component Details
@@ -44,31 +46,40 @@
 **Location**: `src/config.rs`
 
 **Responsibilities**:
-- Load TOML configuration files
-- Provide default values
+- Load TOML configuration files via `-c` flag (default: `config.toml`)
+- Provide default values for all settings
 - Validate settings
 - Expose typed configuration to components
 
 **Key Settings**:
-- Server ports (HTTP: 7000, Flight: 7001)
+- Server ports (HTTP: 7000, Flight: 7001, MySQL: 7002)
 - Data directory paths
+- Object store backend (local, S3, MinIO, OSS)
+- Schema extraction strategy (ServiceAsSchema, ServiceAsTable)
 - Cache/flush intervals
 - Compaction thresholds
 
 ### 2. HTTP REST API
-**Location**: `src/main.rs`
+**Location**: `src/services/api.rs` (routes defined in `src/main.rs`)
 **Port**: Configurable (default: 7000)
 
 **Endpoints**:
 - `POST /write/:db` - Write data (InfluxDB line protocol)
-- `GET /query/:db` - SQL queries
-- `POST /databases` - Create database
-- `GET /databases` - List databases
+- `GET/POST /query/:db` - SQL queries
+- `GET /explain/:db` - Query execution plan
+- `GET /analyze/:db` - Query analysis (partitions, files)
+- `GET /tables/:db` - List tables
+- `GET /schemas/:db` - List schemas
+- `GET /schema/:db/:schema/:table` - Table schema
+- `GET /partitions/:catalog/:schema/:table` - List partitions
+- `DELETE /partitions/:catalog/:schema/:table/:date` - Delete partition
 - `POST /compact/:db` - Trigger compaction
-- `GET /series_stats/:db` - Series cardinality stats
+- `POST /flush` - Manual cache flush
+- `GET /health` - Health check
+- `GET /stats` - Write cache statistics
 
 ### 3. Arrow Flight API
-**Location**: `src/flight_service.rs`
+**Location**: `src/services/flight_service.rs`
 **Port**: Configurable (default: 7001)
 
 **Features**:
@@ -77,104 +88,159 @@
 - Database context (`USE database`)
 - Schema introspection
 
-### 4. DataCache
-**Location**: `src/cache.rs`
+### 4. MySQL Wire Protocol
+**Location**: `src/services/mysql_service.rs`
+**Port**: Configurable (default: 7002)
+
+**Features**:
+- MySQL-compatible client connections
+- Standard SQL queries via MySQL clients
+- Enabled via `mysql_enabled = true` in config
+
+### 5. DataCache
+**Location**: `src/storage/cache/`
 
 **Responsibilities**:
 - In-memory buffering of writes
-- Background flushing to Parquet
+- Background flushing to Parquet (default: every 60 seconds)
 - Batch processing for efficiency
+- Memtable for immediate query access to unflushed data
 
 **Configuration**:
-- `cache.flush_interval_secs` - Flush frequency
-- `cache.max_size_mb` - Max memory usage
+- `cache.flush_interval_secs` - Flush frequency (default: 60)
+- `cache.max_size_mb` - Max memory usage (default: 4096)
 
-### 5. QueryEngine
-**Location**: `src/query_engine.rs`
+### 6. Write-Ahead Log (WAL)
+**Location**: `src/storage/wal.rs`
 
 **Responsibilities**:
-- SQL query execution via DataFusion
-- Automatic table registration
-- Schema discovery
+- Durability for in-memory data before flush
+- Crash recovery
+- Configurable sync behavior
+
+**Configuration**:
+- `wal.enabled` - Enable/disable WAL (default: true)
+- `wal.sync_on_write` - Sync to disk on every write (default: false)
+- `wal.rotate_size_mb` - WAL file rotation size (default: 128)
+
+### 7. QueryEngine
+**Location**: `src/query/query_engine/`
+
+**Responsibilities**:
+- SQL query execution via Apache DataFusion
+- Automatic table registration from Parquet files
+- Schema discovery from object storage
+- Custom UDFs (time_bucket, first_value, last_value, forecasting)
+- Predicate pushdown and partition pruning
 
 **Features**:
-- Supports standard SQL
-- Columnar execution
+- Standard SQL with time series extensions
+- Columnar execution with Arrow format
 - Parallel query processing
+- Query result caching
 
-### 6. Compactor
-**Location**: `src/compactor.rs`
-
-**Responsibilities**:
-- LSM-tree style compaction
-- Merge small files into larger ones
-- Multi-level compaction strategy
-
-**Configuration**:
-- `compaction.min_files` - Trigger threshold
-- `compaction.max_file_size_mb` - File size limit
-- `compaction.target_file_size_mb` - Target after compaction
-- `compaction.max_level` - Compaction depth
-
-### 7. Series Tracker
-**Location**: `src/series_tracker.rs`
+### 8. Compactor
+**Location**: `src/jobs/compactor/`
 
 **Responsibilities**:
-- Track unique time series
-- Monitor cardinality
-- Detect high-cardinality issues
+- LSM-tree style multi-level compaction
+- Merge small Parquet files into larger ones
+- Date-based full compaction for yesterday's partitions
 
 **Configuration**:
-- `series_tracker.flush_interval_secs` - Stats update frequency
-- `series_tracker.stats_dir` - Stats storage location
+- `compaction.min_files` - L0→L1 trigger threshold (default: 5)
+- `compaction.target_file_size_mb` - Target file size after compaction (default: 500)
+- `compaction.max_level` - Maximum compaction depth (default: 5)
+- `compaction.max_concurrent_compactions` - Parallel compaction limit (default: 8)
+
+### 9. Retention Manager
+**Location**: `src/jobs/retention_manager.rs`
+
+**Responsibilities**:
+- Automatic deletion of old date partitions
+- Configurable retention period per database/table
+
+**Configuration**:
+- `retention.enabled` - Enable/disable (default: true)
+- `retention.default_days` - Default retention period (default: 7)
+- `retention.interval_secs` - Check frequency (default: 3600)
 
 ## Data Flow
 
 ### Write Path
 ```
-Client → HTTP POST /write
+Client → HTTP POST /write/:db
     ↓
-Line Protocol Parser
+Line Protocol Parser (src/storage/line_protocol.rs)
     ↓
-Points → DataCache (in-memory)
+WAL (src/storage/wal.rs) → Write-ahead log for durability
     ↓
-Background Flush (30s) → Parquet Files (L0)
+DataCache (in-memory) → Immediately queryable via Memtable
     ↓
-Compactor (triggered by file count) → Merged Files (L1, L2, ...)
+Background Flush (60s) → Parquet Files (L0, date-partitioned)
+    ↓
+Compactor (background) → Merged Files (L1, L2, ...)
 ```
 
 ### Query Path
 ```
-Client → HTTP GET /query or Flight DoGet
+Client → HTTP POST /query or Flight DoGet or MySQL
     ↓
-QueryEngine (DataFusion)
+QueryEngine (DataFusion) with custom analyzers & optimizers
     ↓
-Scan Parquet Files (all levels)
+Union Provider (Memtable + Parquet files, all levels)
     ↓
-Columnar Processing
+Predicate Pushdown → Partition Pruning → Row Group Pruning
     ↓
-Results → Client (JSON or Arrow)
+Columnar Processing (Arrow format)
+    ↓
+Results → Client (JSON, Arrow, or MySQL wire protocol)
 ```
+
+## Storage Structure
+
+### Catalog/Schema/Table Organization
+
+```
+data/
+└── {catalog}/                  # Database name from URI /write/{db}
+    └── {schema}/               # From "service" tag (or "default")
+        └── {table}/            # Measurement name
+            └── date=YYYY-MM-DD/  # Date partition
+                ├── L0_*.parquet    # Recent writes
+                ├── L1_*.parquet    # First compaction level
+                └── L2_*.parquet    # Higher compaction levels
+```
+
+**Schema extraction** is configured via `[schema]` in config.toml:
+- `strategy` - `service_as_schema` (default) or `service_as_table`
+- `tag_keys` - Array of tag keys to extract schema from (e.g., `["service", "hierarchy_2"]`)
+- `prefix_numeric` - Prefix numeric schemas (e.g., `service=1` → `service_1`)
+- `default_name` - Default schema when tag is missing (default: `"default"`)
 
 ## Performance Characteristics
 
 ### Write Performance
 - **Buffered Writes**: In-memory cache before flush
-- **Batch Flush**: 30-second intervals (configurable)
+- **WAL Durability**: Optional sync-on-write for crash safety
+- **Batch Flush**: 60-second intervals (configurable)
 - **Parallel Compaction**: Background compaction doesn't block writes
 
 ### Read Performance
 - **Columnar Format**: Parquet for efficient scanning
-- **Predicate Pushdown**: Filter early in DataFusion
+- **Memtable**: Unflushed data is immediately queryable
+- **Predicate Pushdown**: Filter early in DataFusion (Parquet, page, bloom)
+- **Partition Pruning**: Skip irrelevant date partitions
+- **Query Cache**: Cache results of slow queries
 - **Level-Based Reading**: Recent data in L0, older in L1+
 
 ### Tuning Parameters
 
 | Workload | Cache Flush | Compaction | File Size |
 |----------|-------------|------------|-----------|
-| Write-Heavy | 60s | min_files=15 | 2GB |
-| Read-Heavy | 20s | min_files=5 | 512MB |
-| Balanced | 30s | min_files=10 | 1GB |
+| Write-Heavy | 120s | min_files=15 | 1GB |
+| Read-Heavy | 15s | min_files=5 | 200MB |
+| Balanced | 60s | min_files=10 | 500MB |
 
 ## Configuration Examples
 
@@ -184,37 +250,62 @@ Results → Client (JSON or Arrow)
 data_dir = "./data"
 
 [cache]
-flush_interval_secs = 30
-max_size_mb = 1024
+flush_interval_secs = 60
+max_size_mb = 4096
 ```
 
 ### Production (High Throughput)
 ```toml
 [storage]
-data_dir = "/data0/data"  # SSD/NVMe
+data_dir = "/data0/mynadb/data"  # SSD/NVMe
 
 [cache]
-flush_interval_secs = 60
-max_size_mb = 4096  # 4GB
+flush_interval_secs = 120
+max_size_mb = 8192  # 8GB
 
 [compaction]
-min_files = 20
-target_file_size_mb = 2048  # 2GB files
+min_files = 25
+target_file_size_mb = 1024
 ```
 
 ### Production (Low Latency)
 ```toml
 [storage]
-data_dir = "/data0/data"
+data_dir = "/data0/mynadb/data"
 
 [cache]
 flush_interval_secs = 15
-max_size_mb = 512
+max_size_mb = 2048
 
 [compaction]
 min_files = 5
-target_file_size_mb = 512
+target_file_size_mb = 200
 ```
+
+## Cluster Mode
+
+MynaDB supports a distributed cluster mode with the following node roles:
+
+```
+┌──────────┐     ┌──────────┐     ┌──────────┐
+│  Router  │────→│   Meta   │←────│  Admin   │
+│  Node    │     │  Cluster │     │  Console │
+└────┬─────┘     │ (Raft)   │     └──────────┘
+     │           └──────────┘
+     │                ↑
+     ↓                │
+┌──────────┐   ┌──────────┐
+│  Data    │   │  Data    │
+│  Node 1  │   │  Node 2  │
+└──────────┘   └──────────┘
+```
+
+- **Meta Nodes**: Raft consensus for metadata, node registry, leader election
+- **Data Nodes**: Storage engine, query execution, compaction
+- **Router Nodes**: Client protocols, query/write routing
+- **Admin Node**: Web UI for cluster management
+
+See `architecture-cluster.md` for full cluster architecture details.
 
 ## Monitoring
 
@@ -223,32 +314,14 @@ target_file_size_mb = 512
 2. **Flush Duration**: Time to write to disk
 3. **Compaction Frequency**: Files compacted per hour
 4. **Query Latency**: P50, P95, P99 response times
-5. **Series Cardinality**: Unique time series count
+5. **WAL Size**: Write-ahead log disk usage
 
-### Log Messages
-- `🔄 Cache flushed: X batches, Y points`
-- `🗜️  Compacted L0 files: X → Y`
-- `✅ Loaded configuration from: config.toml`
-
-## File Structure
-```
-stats-service/
-├── src/
-│   ├── main.rs              # Server & routing
-│   ├── config.rs            # Configuration system ⭐ NEW
-│   ├── cache.rs             # In-memory cache
-│   ├── query_engine.rs      # DataFusion integration
-│   ├── compactor.rs         # LSM compaction
-│   ├── series_tracker.rs    # Cardinality tracking
-│   ├── flight_service.rs    # Arrow Flight RPC
-│   ├── line_protocol.rs     # InfluxDB parser
-│   ├── parquet_writer.rs    # Parquet I/O
-│   └── database_manager.rs  # DB operations
-├── config.toml              # Default config ⭐ NEW
-├── config.production.toml   # Production config ⭐ NEW
-├── CONFIG.md                # Config documentation ⭐ NEW
-└── ARCHITECTURE.md          # This file ⭐ NEW
-```
+### Endpoints
+- `GET /health` - Health check
+- `GET /stats` - Write cache statistics
+- `GET /memory` - Memory usage stats
+- `GET /debug/heap` - Heap profile (pprof compatible)
+- `GET /debug/cpu` - CPU profile (pprof compatible)
 
 ## Dependencies
 
@@ -262,16 +335,9 @@ stats-service/
 - **parquet**: Parquet I/O
 - **datafusion**: SQL engine
 - **arrow-flight**: Arrow RPC
+- **object_store**: Storage abstraction (local, S3, MinIO, OSS)
 
-### Config ⭐ NEW
-- **config**: Configuration management
-- **toml**: TOML parsing
+### Infrastructure
 - **serde**: Serialization
-
-## Future Enhancements
-- [ ] Authentication & authorization
-- [ ] Distributed deployment
-- [ ] Replication & clustering
-- [ ] Hot config reload
-- [ ] Metrics endpoint (Prometheus)
-- [ ] Write-ahead log (WAL)
+- **clap**: CLI argument parsing
+- **tracing**: Structured logging

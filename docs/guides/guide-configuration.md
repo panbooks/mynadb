@@ -1,6 +1,6 @@
 # Configuration Guide
 
-The stats-service uses TOML configuration files for flexible deployment across different environments.
+MynaDB uses TOML configuration files for flexible deployment across different environments.
 
 ## Configuration Files
 
@@ -9,17 +9,26 @@ The stats-service uses TOML configuration files for flexible deployment across d
 
 ## Loading Configuration
 
-By default, the server loads `config.toml` from the current directory. You can specify a different config file using the `CONFIG_PATH` environment variable:
+By default, the server loads `config.toml` from the current directory. You can specify a different config file using the `-c` flag:
 
 ```bash
 # Use default config.toml
-./stats
+mynadb
 
 # Use production config
-CONFIG_PATH=config.production.toml ./stats
+mynadb -c config.production.toml
 
 # Use custom config
-CONFIG_PATH=/etc/stats-service/config.toml ./stats
+mynadb -c /etc/mynadb/config.toml
+
+# Standalone mode (default)
+mynadb standalone -c config.toml
+
+# Cluster mode (separate node roles)
+mynadb meta start -c config.meta.toml
+mynadb data start -c config.data.toml
+mynadb router start -c config.router.toml
+mynadb admin start -c config.admin.toml
 ```
 
 If the config file is not found, the server will use built-in defaults.
@@ -27,7 +36,7 @@ If the config file is not found, the server will use built-in defaults.
 ## Configuration Sections
 
 ### [server]
-HTTP and gRPC server settings
+HTTP, gRPC, and MySQL server settings
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -35,6 +44,9 @@ HTTP and gRPC server settings
 | `http_port` | u16 | `7000` | HTTP API port |
 | `flight_host` | string | `"0.0.0.0"` | Arrow Flight gRPC bind address |
 | `flight_port` | u16 | `7001` | Arrow Flight gRPC port |
+| `mysql_enabled` | bool | `false` | Enable MySQL wire protocol |
+| `mysql_host` | string | `"0.0.0.0"` | MySQL protocol bind address |
+| `mysql_port` | u16 | `7002` | MySQL protocol port |
 
 **Example:**
 ```toml
@@ -43,6 +55,8 @@ http_host = "0.0.0.0"
 http_port = 7000
 flight_host = "0.0.0.0"
 flight_port = 7001
+mysql_enabled = true
+mysql_port = 7002
 ```
 
 ### [storage]
@@ -51,13 +65,18 @@ Data storage settings
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `data_dir` | string | `"./data"` | Data directory path |
-| `system_dir` | string | `"_system"` | System metadata directory name |
+| `backend` | string | `"local"` | Storage backend: "local", "s3", "minio", "oss" |
 
 **Example:**
 ```toml
 [storage]
-data_dir = "/data0/data"  # Use absolute path in production
-system_dir = "_system"
+data_dir = "/data0/mynadb/data"  # Use absolute path in production
+
+[storage.object_store]
+backend = "local"
+# bucket = "my-bucket"     # For S3/MinIO/OSS
+# endpoint = "http://..."  # Custom endpoint
+# region = "us-east-1"     # S3 region
 ```
 
 **Recommended Production Settings:**
@@ -66,84 +85,100 @@ system_dir = "_system"
 - Use absolute paths
 
 ### [schema]
-Schema extraction configuration - determines how to extract schema names from metric tags
+Schema extraction configuration - determines how to map line protocol data to catalog/schema/table structure
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `tag_key` | string | `"service"` | Tag key to extract schema from |
-| `default_name` | string | `"default"` | Default schema when tag is absent |
-| `prefix_numeric` | bool | `true` | Prefix numeric schemas with "service_" |
-| `extract_last_part` | bool | `false` | Extract last part after separator |
-| `separator` | string | `"."` | Separator for hierarchical names |
+| `strategy` | string | `"service_as_schema"` | Naming strategy: `"service_as_schema"` or `"service_as_table"` |
+| `tag_keys` | array | `["service"]` | Tag keys to extract schema from (first match wins) |
+| `default_name` | string | `"default"` | Default schema when no matching tag is found |
+| `prefix_numeric` | bool | `true` | Prefix numeric schemas with "service_" (e.g., "1" → "service_1") |
 
 **Example:**
 ```toml
 [schema]
-tag_key = "service"
+strategy = "service_as_schema"
+tag_keys = ["MONITOR.service", "hierarchy_2", "service"]
 default_name = "default"
 prefix_numeric = true
-extract_last_part = false
-separator = "."
 ```
 
-**Use Cases:**
+**Strategy: ServiceAsSchema (default)**
+- Service tag value → schema name, measurement → table name
+- `service=production` → schema `production`, measurement `cpu` → table `cpu`
 
-**1. Simple Service Tags:**
-```toml
-[schema]
-tag_key = "service"
-extract_last_part = false
-```
-- Tag `service="web"` → Schema: `web`
-- Tag `service="api"` → Schema: `api`
+**Strategy: ServiceAsTable**
+- Schema is always `default`, service tag → table name
+- `service=web` → schema `default`, table `web`
 
-**2. Hierarchical Service Tags (Extract Last Part):**
-```toml
-[schema]
-tag_key = "service"
-extract_last_part = true
-separator = "."
-```
-- Tag `service="MONITOR.web"` → Schema: `web`
-- Tag `service="PROD.api"` → Schema: `api`
-
-**3. Custom Tag Keys:**
-```toml
-[schema]
-tag_key = "hierarchy_2"
-extract_last_part = false
-```
-- Tag `hierarchy_2="service_1"` → Schema: `service_1`
-- Tag `hierarchy_2="service_2"` → Schema: `service_2`
-
-**4. Numeric Service IDs:**
-```toml
-[schema]
-tag_key = "service"
-prefix_numeric = true
-```
+**Numeric Prefix Examples:**
 - Tag `service="123"` → Schema: `service_123` (avoids SQL parser issues)
-- Tag `service="web"` → Schema: `web`
+- Tag `service="web"` → Schema: `web` (text values unchanged)
+
+**Multiple Tag Keys:**
+```toml
+[schema]
+tag_keys = ["MONITOR.service", "hierarchy_2", "service"]
+```
+The first matching tag key in the list is used. This supports data sources that use different tag naming conventions.
 
 ### [cache]
-In-memory cache settings
+In-memory write cache settings
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `flush_interval_secs` | u64 | `30` | Background flush interval (seconds) |
-| `max_size_mb` | u64 | `1024` | Max cache size before forcing flush (MB) |
+| `flush_interval_secs` | u64 | `60` | Background flush interval (seconds) |
+| `max_size_mb` | u64 | `4096` | Max cache size before forcing flush (MB) |
+| `parquet_cache_mb` | usize | `None` | Local disk cache for Parquet files (cluster mode) |
 
 **Example:**
 ```toml
 [cache]
-flush_interval_secs = 30
-max_size_mb = 2048  # 2GB cache
+flush_interval_secs = 60
+max_size_mb = 4096  # 4GB cache
 ```
 
 **Tuning Guidelines:**
 - **Low Latency**: Smaller `flush_interval_secs` (10-20s), smaller cache
-- **High Throughput**: Larger `flush_interval_secs` (60-120s), larger cache (2-4GB)
+- **High Throughput**: Larger `flush_interval_secs` (60-120s), larger cache (4-8GB)
 - Monitor memory usage and adjust `max_size_mb` accordingly
+
+### [query_cache]
+Query result caching
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable query result caching |
+| `max_size_mb` | u64 | `256` | Maximum cache size in MB |
+| `max_entries` | usize | `1000` | Maximum number of cached entries |
+| `ttl_secs` | u64 | `300` | TTL for cached entries in seconds |
+| `min_query_time_ms` | u64 | `10` | Only cache queries slower than this |
+
+**Example:**
+```toml
+[query_cache]
+enabled = true
+max_size_mb = 256
+ttl_secs = 300
+min_query_time_ms = 10
+```
+
+### [wal]
+Write-ahead log for durability
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable WAL |
+| `sync_on_write` | bool | `false` | Sync to disk on every write (true=durable, false=faster) |
+| `rotate_size_mb` | u64 | `128` | Rotate WAL file when it reaches this size |
+
+**Example:**
+```toml
+[wal]
+enabled = true
+sync_on_write = false
+rotate_size_mb = 128
+```
 
 ### [compaction]
 Parquet file compaction settings
@@ -160,7 +195,7 @@ Parquet file compaction settings
 | `full_compaction_interval_secs` | u64 | `3600` | Full compaction check interval |
 | `full_compaction_target_size_mb` | u64 | `200` | Skip partitions larger than this in full compaction |
 | `max_concurrent_compactions` | usize | `8` | Max parallel LSM compaction operations |
-| `full_compaction_max_concurrent` | usize | `2` | Max parallel full compaction operations (lower to avoid OOM) |
+| `full_compaction_max_concurrent` | usize | `2` | Max parallel full compaction operations |
 | `read_rate_limit_mb_per_sec` | u64 | `0` | Read rate limit in MB/sec (0 = unlimited) |
 | `write_rate_limit_mb_per_sec` | u64 | `0` | Write rate limit in MB/sec (0 = unlimited) |
 
@@ -172,40 +207,115 @@ major_min_files = 3
 target_file_size_mb = 200
 max_level = 5
 interval_secs = 70
-
-# Full compaction (date-based consolidation)
 full_compaction_enabled = true
-full_compaction_hour = 3  # Run at 03:00
+full_compaction_hour = 3
 full_compaction_interval_secs = 3600
 full_compaction_target_size_mb = 200
-
-# Rate limiting
-max_concurrent_compactions = 8  # LSM compaction parallelism
-full_compaction_max_concurrent = 2  # Full compaction parallelism (lower to avoid OOM)
+max_concurrent_compactions = 8
+full_compaction_max_concurrent = 2
 read_rate_limit_mb_per_sec = 0
 write_rate_limit_mb_per_sec = 0
 ```
 
-**Tuning Guidelines:**
-- **Write-Heavy**: Higher `min_files` (10-20), larger `target_file_size_mb` (500MB-1GB)
-- **Read-Heavy**: Lower `min_files` (5-10), moderate `target_file_size_mb` (200-500MB)
-- **High Memory**: Increase `full_compaction_max_concurrent` (4-8) if you have >64GB RAM
-- **Low Memory**: Decrease `full_compaction_max_concurrent` (1-2) to avoid OOM during full compaction
-- **I/O Limited**: Set `read_rate_limit_mb_per_sec` and `write_rate_limit_mb_per_sec` to prevent saturation
-
-### [series_tracker]
-Series cardinality tracking settings
+### [retention]
+Automatic deletion of old date-partitioned data
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `flush_interval_secs` | u64 | `60` | Stats flush interval (seconds) |
-| `stats_dir` | string | `"series_stats"` | Stats directory name |
+| `enabled` | bool | `true` | Enable background retention checks |
+| `default_days` | u32 | `7` | Delete partitions older than this |
+| `interval_secs` | u64 | `3600` | Check interval in seconds |
+| `exclude_databases` | array | `["_system"]` | Databases to skip |
+| `exclude_tables` | array | `[]` | Tables to skip (fully qualified) |
 
 **Example:**
 ```toml
-[series_tracker]
-flush_interval_secs = 60
-stats_dir = "series_stats"
+[retention]
+enabled = true
+default_days = 7
+interval_secs = 3600
+exclude_databases = ["_system"]
+```
+
+### [auth]
+Authentication and authorization
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable authentication |
+| `username` | string | `"admin"` | Admin username |
+| `password` | string | `"secret"` | Admin password |
+
+**Example:**
+```toml
+[auth]
+enabled = true
+username = "admin"
+password = "secret"
+```
+
+### [logging]
+Log output configuration
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `level` | string | `"info"` | Log level: trace, debug, info, warn, error |
+| `log_dir` | string | `"logs"` | Log file directory |
+
+**Example:**
+```toml
+[logging]
+level = "info"
+log_dir = "/data0/mynadb/logs"
+```
+
+### [continuous_aggregates]
+Materialized views with automatic refresh
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable continuous aggregates |
+| `refresh_check_interval_secs` | u64 | `60` | Refresh check interval |
+| `max_concurrent_refreshes` | usize | `4` | Max parallel refreshes |
+| `query_rewriting_enabled` | bool | `true` | Auto-rewrite queries to use aggregates |
+
+### [otlp]
+OpenTelemetry Protocol native ingestion
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable OTLP ingestion |
+| `grpc_host` | string | `"0.0.0.0"` | OTLP gRPC bind address |
+| `grpc_port` | u16 | `4317` | OTLP gRPC port |
+| `database` | string | `"otel"` | Default database for OTLP data |
+
+### [iceberg]
+Apache Iceberg table format integration
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable Iceberg integration |
+| `rest_catalog_enabled` | bool | `true` | Enable REST catalog API |
+
+### [admin]
+Admin console configuration (cluster mode)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `http_host` | string | `"0.0.0.0"` | Admin HTTP bind address |
+| `http_port` | u16 | `18080` | Admin web interface port |
+| `meta_endpoints` | array | `[]` | Meta service URLs for cluster discovery |
+
+**Example:**
+```toml
+[admin]
+http_host = "0.0.0.0"
+http_port = 18080
+meta_endpoints = [
+    "http://127.0.0.1:6000",
+    "http://127.0.0.1:6100",
+    "http://127.0.0.1:6200"
+]
 ```
 
 ## Example Configurations
@@ -220,37 +330,29 @@ flight_port = 7001
 
 [storage]
 data_dir = "./data"
-system_dir = "_system"
 
 [schema]
-tag_key = "service"
+strategy = "service_as_schema"
+tag_keys = ["service"]
 default_name = "default"
 prefix_numeric = true
-extract_last_part = false
-separator = "."
 
 [cache]
-flush_interval_secs = 30
-max_size_mb = 1024
+flush_interval_secs = 60
+max_size_mb = 4096
 
 [compaction]
 min_files = 5
-major_min_files = 3
 target_file_size_mb = 200
 max_level = 5
 interval_secs = 70
-full_compaction_enabled = true
-full_compaction_hour = 3
-full_compaction_interval_secs = 3600
-full_compaction_target_size_mb = 200
 max_concurrent_compactions = 8
 full_compaction_max_concurrent = 2
-read_rate_limit_mb_per_sec = 0
-write_rate_limit_mb_per_sec = 0
 
-[series_tracker]
-flush_interval_secs = 60
-stats_dir = "series_stats"
+[wal]
+enabled = true
+sync_on_write = false
+rotate_size_mb = 128
 ```
 
 ### Production (config.production.toml)
@@ -260,21 +362,30 @@ http_host = "0.0.0.0"
 http_port = 7000
 flight_host = "0.0.0.0"
 flight_port = 7001
+mysql_enabled = true
+mysql_port = 7002
 
 [storage]
-data_dir = "/data0/data"  # SSD/NVMe mount
-system_dir = "_system"
+data_dir = "/data0/mynadb/data"
+
+[storage.object_store]
+backend = "local"
 
 [schema]
-tag_key = "service"
+strategy = "service_as_schema"
+tag_keys = ["service"]
 default_name = "default"
 prefix_numeric = true
-extract_last_part = false
-separator = "."
 
 [cache]
-flush_interval_secs = 30
-max_size_mb = 4096  # 4GB cache
+flush_interval_secs = 60
+max_size_mb = 4096
+
+[query_cache]
+enabled = true
+max_size_mb = 256
+ttl_secs = 300
+min_query_time_ms = 10
 
 [compaction]
 min_files = 10
@@ -284,22 +395,35 @@ max_level = 7
 interval_secs = 60
 full_compaction_enabled = true
 full_compaction_hour = 3
-full_compaction_interval_secs = 3600
-full_compaction_target_size_mb = 500
-max_concurrent_compactions = 16  # More parallelism on production
-full_compaction_max_concurrent = 4  # More concurrent full compaction with sufficient RAM
+max_concurrent_compactions = 16
+full_compaction_max_concurrent = 4
 read_rate_limit_mb_per_sec = 200
 write_rate_limit_mb_per_sec = 200
 
-[series_tracker]
-flush_interval_secs = 120  # 2 minutes
-stats_dir = "series_stats"
+[wal]
+enabled = true
+sync_on_write = true
+rotate_size_mb = 128
+
+[retention]
+enabled = true
+default_days = 7
+interval_secs = 3600
+
+[auth]
+enabled = true
+username = "admin"
+password = "change-me-in-production"
+
+[logging]
+level = "info"
+log_dir = "/data0/mynadb/logs"
 ```
 
 ### High-Throughput Ingest
 ```toml
 [cache]
-flush_interval_secs = 60  # Batch more writes
+flush_interval_secs = 120  # Batch more writes
 max_size_mb = 8192  # 8GB cache
 
 [compaction]
@@ -307,7 +431,7 @@ min_files = 20  # Less frequent compaction
 major_min_files = 5
 target_file_size_mb = 1024
 max_level = 7
-interval_secs = 120  # Less frequent compaction
+interval_secs = 120
 max_concurrent_compactions = 16
 full_compaction_max_concurrent = 4
 ```
@@ -316,10 +440,10 @@ full_compaction_max_concurrent = 4
 ```toml
 [cache]
 flush_interval_secs = 15  # Faster data availability
-max_size_mb = 512
+max_size_mb = 2048
 
 [compaction]
-min_files = 5  # Keep files small
+min_files = 5
 major_min_files = 3
 target_file_size_mb = 200
 max_level = 5
@@ -328,14 +452,16 @@ max_concurrent_compactions = 8
 full_compaction_max_concurrent = 2
 ```
 
-## Environment Variables
+## Command Line Options
 
-- **`CONFIG_PATH`**: Path to configuration file (default: `config.toml`)
-
-Example:
 ```bash
-export CONFIG_PATH=/etc/stats-service/config.toml
-./stats
+mynadb -c <config_file>        # Specify config file (default: config.toml)
+mynadb standalone              # Run in standalone mode (default)
+mynadb meta start              # Start meta node (cluster mode)
+mynadb data start              # Start data node (cluster mode)
+mynadb router start            # Start router node (cluster mode)
+mynadb admin start             # Start admin console (cluster mode)
+mynadb version                 # Show version information
 ```
 
 ## Validation

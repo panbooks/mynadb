@@ -3,7 +3,6 @@
 ## Installation
 
 ```bash
-cd stats-service
 cargo build --release
 ```
 
@@ -12,12 +11,12 @@ cargo build --release
 ### 1. Use Default Config
 ```bash
 # config.toml is loaded automatically
-./target/release/stats
+./target/release/mynadb
 ```
 
 ### 2. Use Production Config
 ```bash
-CONFIG_PATH=config.production.toml ./target/release/stats
+./target/release/mynadb -c config.production.toml
 ```
 
 ### 3. Create Custom Config
@@ -29,7 +28,7 @@ cp config.toml config.custom.toml
 nano config.custom.toml
 
 # Run with custom config
-CONFIG_PATH=config.custom.toml ./target/release/stats
+./target/release/mynadb -c config.custom.toml
 ```
 
 ## Key Configuration Settings
@@ -44,18 +43,18 @@ flight_port = 8001    # Change from 7001
 ### Change Data Directory
 ```toml
 [storage]
-data_dir = "/data0/data"  # Production SSD path
+data_dir = "/data0/mynadb/data"  # Production SSD path
 ```
 
 ### Tune Performance
 ```toml
 [cache]
-flush_interval_secs = 60   # Flush every minute
-max_size_mb = 4096         # 4GB cache
+flush_interval_secs = 60    # Flush every minute (default)
+max_size_mb = 4096           # 4GB cache (default)
 
 [compaction]
 min_files = 15
-target_file_size_mb = 2048  # 2GB target files
+target_file_size_mb = 500
 ```
 
 ## Usage Examples
@@ -69,49 +68,43 @@ curl -X POST http://localhost:7000/write/mydb \
 
 ### Query Data (HTTP)
 ```bash
-curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'
+# Using POST with body (recommended)
+curl -X POST http://localhost:7000/query/mydb \
+  -d "SELECT * FROM cpu LIMIT 10"
+
+# Using GET with query parameter
+curl 'http://localhost:7000/query/mydb?sql=SELECT+*+FROM+cpu+LIMIT+10'
 ```
 
 ### Query Data (Flight)
 ```bash
 datafusion-cli --host localhost --port 7001
-> USE mydb;
-> SELECT host, AVG(usage) FROM cpu GROUP BY host;
-```
-
-### Manage Databases
-```bash
-# Create database
-curl -X POST http://localhost:7000/databases \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"mydb"}'
-
-# List databases
-curl http://localhost:7000/databases
-
-# Delete database
-curl -X DELETE http://localhost:7000/databases/mydb
+> SELECT host, AVG(usage) FROM mydb.default.cpu GROUP BY host;
 ```
 
 ### Compact Data
 ```bash
-# Compact entire database
+# Compact entire catalog
 curl -X POST http://localhost:7000/compact/mydb
 
 # Compact specific measurement
 curl -X POST http://localhost:7000/compact/mydb/cpu
 ```
 
-### Monitor Cardinality
+### Check Health
 ```bash
-curl http://localhost:7000/series_stats/mydb
+curl http://localhost:7000/health
 ```
 
-## Environment Variables
+### View Cache Stats
+```bash
+curl http://localhost:7000/stats
+```
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `CONFIG_PATH` | Path to config file | `config.toml` |
+### Manual Flush
+```bash
+curl -X POST http://localhost:7000/flush
+```
 
 ## Common Tasks
 
@@ -125,7 +118,7 @@ flight_port = 8001
 
 **Run:**
 ```bash
-./target/release/stats
+./target/release/mynadb
 # HTTP: http://localhost:8000
 # Flight: grpc://localhost:8001
 ```
@@ -134,14 +127,14 @@ flight_port = 8001
 **config.production.toml:**
 ```toml
 [storage]
-data_dir = "/data0/data"
+data_dir = "/data0/mynadb/data"
 ```
 
 **Run:**
 ```bash
-sudo mkdir -p /data0/data
-sudo chown $USER:$USER /data0/data
-CONFIG_PATH=config.production.toml ./target/release/stats
+sudo mkdir -p /data0/mynadb/data
+sudo chown $USER:$USER /data0/mynadb/data
+./target/release/mynadb -c config.production.toml
 ```
 
 ### Optimize for High Write Throughput
@@ -153,7 +146,7 @@ max_size_mb = 8192         # 8GB cache
 
 [compaction]
 min_files = 25             # Less frequent compaction
-target_file_size_mb = 4096 # 4GB files
+target_file_size_mb = 1024
 ```
 
 ### Optimize for Low Query Latency
@@ -161,52 +154,89 @@ target_file_size_mb = 4096 # 4GB files
 ```toml
 [cache]
 flush_interval_secs = 15   # 15 seconds
-max_size_mb = 512          # Smaller cache
+max_size_mb = 2048
 
 [compaction]
 min_files = 5              # More frequent compaction
-target_file_size_mb = 512  # Smaller files
+target_file_size_mb = 200
+```
+
+## Understanding the Data Model
+
+### Write Path
+```
+HTTP POST /write/:db → Line Protocol Parser → WAL → Write Cache (in-memory)
+    → Background Flush (every 60s) → Parquet Files (date-partitioned)
+    → Compactor → Merged Files (L0 → L1 → L2 ...)
+```
+
+### Storage Structure
+```
+data/
+└── mydb/                          # catalog (from URI /write/mydb)
+    └── default/                   # schema (from service tag or "default")
+        └── cpu/                   # table (measurement name)
+            └── date=2024-01-10/   # date partition
+                ├── L0_*.parquet   # recent writes
+                ├── L1_*.parquet   # first compaction level
+                └── L2_*.parquet   # higher compaction levels
+```
+
+### Query Syntax
+```bash
+# Fully qualified: catalog.schema.table
+curl -X POST http://localhost:7000/query/mydb \
+  -d "SELECT * FROM mydb.default.cpu LIMIT 10"
+
+# Schema.table (auto-prefixes catalog)
+curl -X POST http://localhost:7000/query/mydb \
+  -d "SELECT * FROM default.cpu LIMIT 10"
+
+# Simple name (auto-prefixes catalog.default.)
+curl -X POST http://localhost:7000/query/mydb \
+  -d "SELECT * FROM cpu LIMIT 10"
 ```
 
 ## Troubleshooting
 
 ### Config File Not Found
-```bash
-⚠️  Could not load config file: No such file or directory
-⚠️  Using default configuration
 ```
-**Solution:** Create `config.toml` or specify `CONFIG_PATH`
+WARN Could not load config file: No such file or directory
+WARN Using default configuration
+```
+**Solution:** Create `config.toml` or use `-c` to specify the path.
 
 ### Port Already in Use
-```bash
+```
 Error: Address already in use (os error 98)
 ```
-**Solution:** Change port in config or stop conflicting service
+**Solution:** Change port in config or stop conflicting service.
 
 ### Permission Denied on Data Directory
-```bash
+```
 Error: Permission denied (os error 13)
 ```
-**Solution:** 
+**Solution:**
 ```bash
-sudo mkdir -p /data0/data
-sudo chown $USER:$USER /data0/data
+sudo mkdir -p /data0/mynadb/data
+sudo chown $USER:$USER /data0/mynadb/data
 ```
 
 ## Production Checklist
 
-- [ ] Copy `config.production.toml` to deployment location
+- [ ] Use `-c config.production.toml` with appropriate settings
 - [ ] Set `data_dir` to dedicated SSD/NVMe mount
 - [ ] Adjust cache size based on available RAM
-- [ ] Configure firewall for ports (7000, 7001)
+- [ ] Configure firewall for ports (7000, 7001, 7002)
+- [ ] Enable WAL with `sync_on_write = true` for durability
+- [ ] Enable authentication with `[auth] enabled = true`
 - [ ] Set up systemd service for auto-start
 - [ ] Configure log rotation
 - [ ] Monitor disk usage in data directory
-- [ ] Set up alerting for high cardinality
-- [ ] Test backup/restore procedures
+- [ ] Set up retention policies
 
 ## Next Steps
 
-1. Read `CONFIG.md` for detailed configuration guide
-2. Read `ARCHITECTURE.md` for system design
-3. See `FLIGHT_USAGE.md` for Arrow Flight details
+1. Read `guide-configuration.md` for detailed configuration options
+2. Read `guide-sql-queries.md` for SQL query examples
+3. See `../architecture/architecture-overview.md` for system design

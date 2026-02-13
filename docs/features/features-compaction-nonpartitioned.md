@@ -12,7 +12,7 @@ The compactor now supports **both partitioned and non-partitioned tables** with 
 ```
 data/
   benchmark/
-    svc_1/
+    service_1/
       cpu/
         date=2025-12-24/
           L0_1703251234567.parquet
@@ -98,7 +98,7 @@ Table Directory
 ```json
 {
   "catalog": "benchmark",
-  "schema": "svc_1",
+  "schema": "service_1",
   "table": "cpu",
   "date_partition": "date=2025-12-24",
   "l0_files_before": 10,
@@ -312,7 +312,7 @@ chmod +x test_non_partitioned_compaction.sh
 
 2. **Partitioned Table:**
    - 6 L0 files → compacted to 1-2 L1 files
-   - Files in `./data/benchmark/svc_1/cpu/date=2025-12-24/`
+   - Files in `./data/benchmark/service_1/cpu/date=2025-12-24/`
    - Result label: `date=2025-12-24`
 
 3. **Mixed Catalog:**
@@ -333,10 +333,10 @@ INFO Compaction complete: _system.default.series_stats: 8 -> 2 files, 120.00 MB 
 
 **Partitioned Table:**
 ```
-INFO Compacting benchmark.svc_1.cpu/date=2025-12-24: 10 files (10 L0), 750.00 MB
+INFO Compacting benchmark.service_1.cpu/date=2025-12-24: 10 files (10 L0), 750.00 MB
 INFO Minor compaction: 10 L0 files → L1
 INFO Created L1 file: L1_1703251234567.parquet (250000 rows from 10 L0 files)
-INFO Compaction complete: benchmark.svc_1.cpu/date=2025-12-24: 10 -> 2 files, 750.00 MB -> 735.00 MB
+INFO Compaction complete: benchmark.service_1.cpu/date=2025-12-24: 10 -> 2 files, 750.00 MB -> 735.00 MB
 ```
 
 ### Distinguishing Features

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The stats-service now supports **Apache Arrow Flight** protocol, allowing you to connect using `datafusion-cli` and other Arrow-based SQL clients.
+MynaDB supports **Apache Arrow Flight** protocol, allowing you to connect using `datafusion-cli` and other Arrow-based SQL clients.
 
 ## What Was Added
 

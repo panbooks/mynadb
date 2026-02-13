@@ -6,7 +6,7 @@ This document shows SQL query examples using the new **short table name** featur
 
 ## Schema Strategies
 
-Stats Service uses a **catalog.schema.table** structure. The naming depends on the configured strategy:
+MynaDB uses a **catalog.schema.table** structure. The naming depends on the configured strategy:
 
 - **ServiceAsSchema (Default):** Schema = service tag, Table = measurement name
 - **ServiceAsTable:** Schema = "default", Table = service tag, measurement stored as column

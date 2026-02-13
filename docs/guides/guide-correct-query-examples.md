@@ -98,7 +98,7 @@ ORDER BY avg_usage DESC
 
 ## How It Works
 
-Stats Service uses a **catalog.schema.table** structure. When you query via `/query/mydb`:
+MynaDB uses a **catalog.schema.table** structure. When you query via `/query/mydb`:
 
 1. **Auto-registers** the database tables (if not already registered)
 2. **Prefixes** unqualified table names with the catalog and schema

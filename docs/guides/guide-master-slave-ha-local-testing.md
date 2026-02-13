@@ -121,7 +121,7 @@ promotion_delay_secs = 5
 
 ```bash
 # Terminal 1
-cd /path/to/stats-service
+cd /path/to/mynadb
 ./target/release/tsdb-stats -c /tmp/ha-test/config-master.toml
 ```
 
@@ -135,7 +135,7 @@ Replication server listening on 127.0.0.1:7003
 
 ```bash
 # Terminal 2
-cd /path/to/stats-service
+cd /path/to/mynadb
 ./target/release/tsdb-stats -c /tmp/ha-test/config-slave.toml
 ```
 

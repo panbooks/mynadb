@@ -640,7 +640,7 @@ ORDER BY file_count DESC;
 
 **Track daily:**
 ```
-grep "Age-based consolidation complete" /var/log/stats-service/stats-service.log \
+grep "Age-based consolidation complete" /var/log/mynadb/mynadb.log \
     | grep "$(date +%Y-%m-%d)" \
     | wc -l
 ```
@@ -651,7 +651,7 @@ grep "Age-based consolidation complete" /var/log/stats-service/stats-service.log
 
 **P95 latency:**
 ```
-grep "Age-based consolidation complete" /var/log/stats-service/stats-service.log \
+grep "Age-based consolidation complete" /var/log/mynadb/mynadb.log \
     | grep -oP 'in \K[0-9.]+(?=s)' \
     | sort -n \
     | awk '{a[NR]=$1} END {print a[int(NR*0.95)]}'
@@ -663,7 +663,7 @@ grep "Age-based consolidation complete" /var/log/stats-service/stats-service.log
 
 **Track failures:**
 ```
-grep "Age-based consolidation failed" /var/log/stats-service/stats-service.log | wc -l
+grep "Age-based consolidation failed" /var/log/mynadb/mynadb.log | wc -l
 ```
 
 **Alert if:** > 5% of consolidations fail (systematic issue)
@@ -700,7 +700,7 @@ grep "Age-based consolidation failed" /var/log/stats-service/stats-service.log |
 
 4. **Check background compaction:**
    ```bash
-   grep "Background compaction started" logs/stats-service.log
+   grep "Background compaction started" logs/mynadb.log
    ```
    Ensure background task is running
 
@@ -724,7 +724,7 @@ grep "Age-based consolidation failed" /var/log/stats-service/stats-service.log |
 
 2. **Check concurrent operations:**
    ```bash
-   grep "Compacting" logs/stats-service.log | tail -20
+   grep "Compacting" logs/mynadb.log | tail -20
    ```
 
 3. **Check I/O utilization:**
@@ -766,7 +766,7 @@ curl -X POST http://localhost:7000/compact/mydb
 
 2. **Monitor memory during consolidation:**
    ```bash
-   watch -n 1 'ps aux | grep stats-service'
+   watch -n 1 'ps aux | grep mynadb'
    ```
 
 **Solutions:**
@@ -804,7 +804,7 @@ WARN  Age-based consolidation failed: schema error, falling back to LSM
 
 2. **Check for schema evolution:**
    ```bash
-   grep "schema conflict" logs/stats-service.log
+   grep "schema conflict" logs/mynadb.log
    ```
 
 **Solutions:**
@@ -830,7 +830,7 @@ WARN  Age-based consolidation failed: I/O error, falling back to LSM
 
 1. **Check disk space:**
    ```bash
-   df -h /data0/stats
+   df -h /data0/mynadb
    ```
 
 2. **Check file permissions:**
@@ -853,7 +853,7 @@ rm -rf data/mydb/default/cpu/date=2024-11-*
 
 **Option 2: Fix permissions**
 ```bash
-chown -R stats-user:stats-group data/mydb/
+chown -R mynadb:mynadb data/mydb/
 chmod -R 755 data/mydb/
 ```
 
@@ -894,23 +894,23 @@ max_single_file_size_mb = 2048     # NEW
 cargo build --release
 
 # Stop service
-systemctl stop stats-service
+systemctl stop mynadb
 
 # Backup current binary
-cp /usr/local/bin/stats-service /usr/local/bin/stats-service.backup
+cp /usr/local/bin/mynadb /usr/local/bin/mynadb.backup
 
 # Deploy new binary
-cp target/release/stats /usr/local/bin/stats-service
+cp target/release/mynadb /usr/local/bin/mynadb
 
 # Start service
-systemctl start stats-service
+systemctl start mynadb
 ```
 
 #### Step 3: Monitor Rollout
 
 **Watch logs for age-based consolidation:**
 ```bash
-tail -f logs/stats-service.log | grep "Age-based"
+tail -f logs/mynadb.log | grep "Age-based"
 ```
 
 **Expected:**
@@ -958,17 +958,17 @@ interval_secs = 30      # Check more frequently
 
 ```bash
 # Stop service
-systemctl stop stats-service
+systemctl stop mynadb
 
 # Restore old binary
-cp /usr/local/bin/stats-service.backup /usr/local/bin/stats-service
+cp /usr/local/bin/mynadb.backup /usr/local/bin/mynadb
 
 # Revert configuration
 # Option 1: Comment out age-based settings in config.toml
 # Option 2: Set stable_age_hours = 99999 (effectively disable)
 
 # Start service
-systemctl start stats-service
+systemctl start mynadb
 ```
 
 **Note:** Existing consolidated files (`L0_FINAL_*.parquet`) will continue to work. They'll be treated as L0 files by traditional LSM compaction.
@@ -1095,12 +1095,11 @@ This is optimal: consolidate recent-old data, delete ancient data.
 
 ## Support
 
-**Issues:** Report at https://github.com/your-org/stats-service/issues
+**Issues:** Report at project issue tracker
 **Questions:** Contact the data platform team
-**Documentation:** https://docs.your-org.com/stats-service
 
 ---
 
 **Last Updated:** 2024-12-30
-**Author:** Stats Service Team
+**Author:** MynaDB Team
 **Status:** Production Ready ✅

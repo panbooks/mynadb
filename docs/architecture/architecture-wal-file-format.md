@@ -643,4 +643,4 @@ wc -c data/_wal/data_1703001234.wal
 
 **Document Version**: 1.0
 **Last Updated**: 2025-12-29
-**Author**: Stats Service Team
+**Author**: MynaDB Team
