@@ -14,6 +14,7 @@
 
 use crate::jobs::database_manager::DatabaseManager;
 use crate::storage::compression::CompressionStrategy;
+use crate::storage::layout::STORE_DIR;
 use crate::storage::storage::Storage;
 use arrow::array::RecordBatch;
 use bytes::Bytes;
@@ -92,8 +93,8 @@ impl RecompressionJob {
         let semaphore = Arc::new(Semaphore::new(self.max_concurrent));
         let today = chrono::Utc::now().date_naive();
 
-        // Discover all catalogs
-        let catalogs = self.storage.list_prefixes("").await?;
+        // Discover all catalogs under store/
+        let catalogs = self.storage.list_prefixes(STORE_DIR).await?;
         let mut total_recompressed = 0u64;
         let mut total_bytes_saved = 0i64;
 
@@ -102,7 +103,8 @@ impl RecompressionJob {
                 continue;
             }
 
-            let schemas = match self.storage.list_prefixes(catalog).await {
+            let catalog_prefix = format!("{}/{}", STORE_DIR, catalog);
+            let schemas = match self.storage.list_prefixes(&catalog_prefix).await {
                 Ok(s) => s,
                 Err(_) => continue,
             };
@@ -112,14 +114,14 @@ impl RecompressionJob {
                     continue;
                 }
 
-                let schema_prefix = format!("{}/{}", catalog, schema);
+                let schema_prefix = format!("{}/{}/{}", STORE_DIR, catalog, schema);
                 let tables = match self.storage.list_prefixes(&schema_prefix).await {
                     Ok(t) => t,
                     Err(_) => continue,
                 };
 
                 for table in &tables {
-                    let table_prefix = format!("{}/{}/{}", catalog, schema, table);
+                    let table_prefix = format!("{}/{}/{}/{}", STORE_DIR, catalog, schema, table);
                     let partition_dirs =
                         match self.storage.list_prefixes(&table_prefix).await {
                             Ok(p) => p,
@@ -159,8 +161,8 @@ impl RecompressionJob {
                         }
 
                         let partition_prefix = format!(
-                            "{}/{}/{}/{}",
-                            catalog, schema, table, dir_name
+                            "{}/{}/{}/{}/{}",
+                            STORE_DIR, catalog, schema, table, dir_name
                         );
 
                         // Acquire semaphore

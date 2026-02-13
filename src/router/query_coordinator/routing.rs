@@ -40,6 +40,7 @@ use super::super::shard_cache::{DataNodeInfo, NodeState, ShardCache, TableKey};
 use super::types::{PartitionRoutingResult, TableRef, TimeRange};
 use super::QueryCoordinator;
 use crate::meta::client::MetaClient;
+use crate::storage::layout::STORE_DIR;
 use crate::storage::storage::Storage;
 use crate::utils::hash::hash_select_index;
 use chrono::NaiveDate;
@@ -420,8 +421,8 @@ impl QueryCoordinator {
         table: &str,
         date: &str,
     ) -> Vec<String> {
-        // Build the partition path: catalog/schema/table/date=YYYY-MM-DD
-        let partition_prefix = format!("{}/{}/{}/date={}", catalog, schema, table, date);
+        // Build the partition path: store/catalog/schema/table/date=YYYY-MM-DD
+        let partition_prefix = format!("{}/{}/{}/{}/date={}", STORE_DIR, catalog, schema, table, date);
 
         // List immediate subdirectories (should be node_id=* directories)
         match storage.list_prefixes(&partition_prefix).await {

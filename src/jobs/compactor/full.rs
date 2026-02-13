@@ -85,23 +85,53 @@ impl Compactor {
 
                 for table in tables {
                     // Check if yesterday's partition exists
-                    let partition_prefix =
+                    let date_prefix =
                         format!("{}/{}/{}/{}/{}", STORE_DIR, catalog, schema, table, yesterday_partition);
 
-                    // Check for any files in this partition (including node_id= subdirs)
-                    let files = match self.storage.list(&partition_prefix).await {
-                        Ok(f) => f,
-                        Err(_) => continue,
-                    };
+                    // Check for node_id= subdirectories
+                    let node_dirs = self
+                        .storage
+                        .list_prefixes(&date_prefix)
+                        .await
+                        .unwrap_or_default();
 
-                    // If there are parquet files, add to compaction queue
-                    if files.iter().any(|f| f.ends_with(".parquet")) {
-                        partitions_to_compact.push((
-                            catalog.clone(),
-                            schema.clone(),
-                            table.clone(),
-                            partition_prefix,
-                        ));
+                    if node_dirs.iter().any(|d| d.starts_with("node_id=")) {
+                        // New layout: add each node_id subdirectory separately
+                        for node_dir in &node_dirs {
+                            if node_dir.starts_with("node_id=") {
+                                let partition_prefix =
+                                    format!("{}/{}", date_prefix, node_dir);
+
+                                let files = match self.storage.list(&partition_prefix).await {
+                                    Ok(f) => f,
+                                    Err(_) => continue,
+                                };
+
+                                if files.iter().any(|f| f.ends_with(".parquet")) {
+                                    partitions_to_compact.push((
+                                        catalog.clone(),
+                                        schema.clone(),
+                                        table.clone(),
+                                        partition_prefix,
+                                    ));
+                                }
+                            }
+                        }
+                    } else {
+                        // Legacy layout: check for files directly at date level
+                        let files = match self.storage.list(&date_prefix).await {
+                            Ok(f) => f,
+                            Err(_) => continue,
+                        };
+
+                        if files.iter().any(|f| f.ends_with(".parquet")) {
+                            partitions_to_compact.push((
+                                catalog.clone(),
+                                schema.clone(),
+                                table.clone(),
+                                date_prefix,
+                            ));
+                        }
                     }
                 }
             }

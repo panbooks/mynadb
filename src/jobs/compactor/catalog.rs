@@ -124,19 +124,57 @@ impl Compactor {
             for partition_name in partitions {
                 // Check for Hive-style partition format: date=YYYY-MM-DD
                 if partition_name.starts_with("date=") {
-                    match self
-                        .compact_table_partition(catalog, schema, table, &partition_name, config)
+                    // Check for node_id= subdirectories under the date partition
+                    let date_prefix = format!("{}/{}", table_prefix, partition_name);
+                    let node_dirs = self
+                        .storage
+                        .list_prefixes(&date_prefix)
                         .await
-                    {
-                        Ok(Some(result)) => results.push(result),
-                        Ok(None) => {
-                            // No compaction needed for this partition
+                        .unwrap_or_default();
+
+                    if node_dirs.iter().any(|d| d.starts_with("node_id=")) {
+                        // New layout: compact each node_id subdirectory separately
+                        for node_dir in &node_dirs {
+                            if node_dir.starts_with("node_id=") {
+                                let sub_partition =
+                                    format!("{}/{}", partition_name, node_dir);
+                                match self
+                                    .compact_table_partition(
+                                        catalog,
+                                        schema,
+                                        table,
+                                        &sub_partition,
+                                        config,
+                                    )
+                                    .await
+                                {
+                                    Ok(Some(result)) => results.push(result),
+                                    Ok(None) => {}
+                                    Err(e) => {
+                                        warn!(
+                                            "Failed to compact partition {}/{}/{}/{}: {}",
+                                            catalog, schema, table, sub_partition, e
+                                        );
+                                    }
+                                }
+                            }
                         }
-                        Err(e) => {
-                            warn!(
-                                "Failed to compact partition {}/{}/{}/{}: {}",
-                                catalog, schema, table, partition_name, e
-                            );
+                    } else {
+                        // Legacy layout or no node_id: compact at date level
+                        match self
+                            .compact_table_partition(
+                                catalog, schema, table, &partition_name, config,
+                            )
+                            .await
+                        {
+                            Ok(Some(result)) => results.push(result),
+                            Ok(None) => {}
+                            Err(e) => {
+                                warn!(
+                                    "Failed to compact partition {}/{}/{}/{}: {}",
+                                    catalog, schema, table, partition_name, e
+                                );
+                            }
                         }
                     }
                 }

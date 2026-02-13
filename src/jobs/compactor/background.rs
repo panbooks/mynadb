@@ -3,6 +3,7 @@
 //! Handles background LSM and full compaction tasks.
 //! Uses Object Store abstraction for both local and S3/MinIO storage.
 
+use crate::storage::layout::STORE_DIR;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
@@ -35,7 +36,7 @@ impl Compactor {
 
     /// Run a single LSM compaction cycle across all catalogs
     async fn run_lsm_compaction_cycle(&self, config: &CompactionConfig) {
-        let catalogs = match self.storage.list_prefixes("").await {
+        let catalogs = match self.storage.list_prefixes(STORE_DIR).await {
             Ok(c) => c,
             Err(e) => {
                 warn!("Failed to list catalogs for compaction: {}", e);
