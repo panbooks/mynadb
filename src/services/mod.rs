@@ -1,5 +1,6 @@
 pub mod api;
 pub mod auth;
+pub mod dashboard;
 pub mod flight_service;
 pub mod grafana;
 pub mod mysql_service;

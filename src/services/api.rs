@@ -2610,6 +2610,8 @@ pub fn build_router(state: AppState, auth_middleware: Arc<auth::AuthMiddleware>)
         .route("/downsampling/policies", post(create_downsampling_policy_handler))
         .route("/downsampling/policies/:name", get(get_downsampling_policy_handler))
         .route("/downsampling/policies/:name", delete(delete_downsampling_policy_handler))
+        // Built-in monitoring dashboard
+        .route("/dashboard", get(super::dashboard::dashboard_handler))
         .fallback(log_request)
         .with_state(state)
         .layer(axum::extract::DefaultBodyLimit::max(250 * 1024 * 1024)) // 250MB

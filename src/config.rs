@@ -66,6 +66,9 @@ pub struct Config {
     /// TLS/SSL encryption configuration
     #[serde(default)]
     pub tls: TlsConfig,
+    /// Built-in system metrics collection (CPU, memory, disk, network)
+    #[serde(default)]
+    pub system_metrics: SystemMetricsConfig,
 }
 
 /// Admin console configuration
@@ -861,6 +864,61 @@ fn default_audit_rotation() -> String {
 
 fn default_audit_max_files() -> usize {
     90
+}
+
+/// Built-in system metrics collection configuration
+///
+/// Collects host CPU, memory, disk, and network metrics and writes them
+/// to an internal database for the built-in dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemMetricsConfig {
+    /// Enable system metrics collection (default: true)
+    #[serde(default = "default_system_metrics_enabled")]
+    pub enabled: bool,
+    /// Collection interval in seconds (default: 10)
+    #[serde(default = "default_system_metrics_interval")]
+    pub interval_secs: u64,
+    /// Database name for system metrics (default: "host_metrics")
+    #[serde(default = "default_system_metrics_database")]
+    pub database: String,
+    /// Retention period in days for system metrics (default: 7)
+    #[serde(default = "default_system_metrics_retention")]
+    pub retention_days: u32,
+    /// Collect disk metrics (default: true)
+    #[serde(default = "default_system_metrics_enabled")]
+    pub collect_disk: bool,
+    /// Collect network metrics (default: true)
+    #[serde(default = "default_system_metrics_enabled")]
+    pub collect_net: bool,
+}
+
+impl Default for SystemMetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_system_metrics_enabled(),
+            interval_secs: default_system_metrics_interval(),
+            database: default_system_metrics_database(),
+            retention_days: default_system_metrics_retention(),
+            collect_disk: default_system_metrics_enabled(),
+            collect_net: default_system_metrics_enabled(),
+        }
+    }
+}
+
+fn default_system_metrics_enabled() -> bool {
+    true
+}
+
+fn default_system_metrics_interval() -> u64 {
+    5
+}
+
+fn default_system_metrics_database() -> String {
+    "host_metrics".to_string()
+}
+
+fn default_system_metrics_retention() -> u32 {
+    7
 }
 
 /// TLS/SSL encryption configuration

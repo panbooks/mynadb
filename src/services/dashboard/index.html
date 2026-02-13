@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MynaDB Dashboard</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' fill='none'%3E%3Cpath d='M2 26C10 12 22 16 32 28c10-12 22-16 30-2' stroke='%235b8def' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M32 28l-8 26 8-8 8 8-8-26z' fill='%235b8def'/%3E%3Cpath d='M32 28l0 18 8 8-8-26z' fill='%233d6fd1'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #0b0d11; --card: #141720; --card-h: #181c28;
+  --bdr: #1e2230; --bdr-h: #2a3050;
+  --txt: #e8eaf0; --mut: #6b7394;
+  --acc: #5b8def; --grn: #34d399; --red: #f87171; --orn: #fb923c; --cyn: #22d3ee;
+  --sec-bg: #10121a;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--txt); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif; font-size:13px; -webkit-font-smoothing:antialiased; }
+
+header { background:var(--card); border-bottom:1px solid var(--bdr); padding:10px 24px; display:flex; align-items:center; gap:12px; position:sticky; top:0; z-index:10; flex-wrap:wrap; }
+.logo { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+.logo h1 { font-size:16px; font-weight:700; letter-spacing:-.3px; }
+.logo h1 b { color:var(--acc); }
+.tr-group { display:flex; align-items:center; gap:6px; flex-wrap:wrap; flex:1; }
+.tr-pills { display:flex; gap:4px; }
+.tr-pill { background:var(--bg); border:1px solid var(--bdr); color:var(--mut); padding:5px 14px; border-radius:16px; font-size:11px; font-weight:600; cursor:pointer; transition:all .15s; }
+.tr-pill:hover { border-color:var(--bdr-h); color:var(--txt); }
+.tr-pill.act { background:var(--acc); border-color:var(--acc); color:#fff; }
+.tr-cust-wrap { position:relative; }
+.tr-cust-btn { background:var(--bg); border:1px solid var(--bdr); color:var(--mut); padding:5px 12px; border-radius:16px; font-size:11px; font-weight:600; cursor:pointer; font-family:inherit; display:inline-flex; align-items:center; gap:5px; transition:all .15s; }
+.tr-cust-btn:hover { border-color:var(--bdr-h); color:var(--txt); }
+.tr-cust-btn.act { background:var(--acc); border-color:var(--acc); color:#fff; }
+.tr-cust-label { font-size:11px; color:var(--txt); margin-left:2px; }
+.tr-popup { display:none; position:absolute; top:calc(100% + 8px); left:0; background:var(--card); border:1px solid var(--bdr-h); border-radius:10px; box-shadow:0 12px 40px rgba(0,0,0,.5); z-index:20; padding:16px; flex-direction:column; gap:12px; }
+.tr-popup.open { display:flex; }
+.cal-row { display:flex; gap:16px; }
+.cal-pn { min-width:210px; }
+.cal-lbl { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.8px; color:var(--acc); margin-bottom:6px; }
+.cal-nav { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+.cal-arr { background:none; border:1px solid var(--bdr); color:var(--mut); cursor:pointer; font-size:10px; padding:3px 8px; border-radius:4px; font-family:inherit; transition:all .15s; }
+.cal-arr:hover { background:var(--bg); color:var(--txt); border-color:var(--bdr-h); }
+.cal-mo { font-size:12px; font-weight:600; color:var(--txt); }
+.cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:1px; }
+.cal-hd { font-size:9px; color:var(--mut); text-align:center; padding:4px 0; font-weight:600; }
+.cal-d { font-size:11px; text-align:center; padding:5px 2px; border-radius:4px; color:var(--txt); min-height:26px; }
+.cal-d.cd { cursor:pointer; transition:background .1s; }
+.cal-d.cd:hover { background:var(--bg); }
+.cal-d.sel { background:var(--acc); color:#fff; font-weight:600; }
+.cal-d.tod { box-shadow:inset 0 0 0 1px var(--acc); }
+.cal-sep { width:1px; background:var(--bdr); }
+.cal-time { display:flex; align-items:center; gap:8px; margin-top:8px; }
+.cal-time label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.5px; color:var(--mut); white-space:nowrap; }
+.tp { display:inline-flex; align-items:center; }
+.tp-col { display:flex; flex-direction:column; align-items:center; width:34px; cursor:ns-resize; user-select:none; }
+.tp-v { height:22px; line-height:22px; font-size:10px; color:var(--mut); text-align:center; opacity:.35; width:100%; border-radius:4px; transition:all .1s; }
+.tp-v:first-child { cursor:pointer; } .tp-v:last-child { cursor:pointer; }
+.tp-v:first-child:hover, .tp-v:last-child:hover { opacity:.6; }
+.tp-v.sel { font-size:13px; font-weight:600; color:var(--txt); opacity:1; background:var(--bg); cursor:default; }
+.tp-sep { color:var(--mut); font-weight:700; font-size:14px; padding:0 2px; }
+.tr-apply { background:var(--acc); color:#fff; border:none; border-radius:6px; padding:8px 0; font-size:12px; font-weight:600; cursor:pointer; font-family:inherit; transition:opacity .15s; width:100%; }
+.tr-apply:hover { opacity:.85; }
+.hdr-r { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+.hdr-sel { background:var(--bg); color:var(--txt); border:1px solid var(--bdr); border-radius:6px; padding:4px 8px; font-size:11px; font-family:inherit; cursor:pointer; }
+.hdr-lbl { font-size:10px; color:var(--mut); font-weight:600; text-transform:uppercase; letter-spacing:.5px; }
+.badge { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--mut); background:var(--bg); padding:4px 12px; border-radius:16px; border:1px solid var(--bdr); }
+.dot { width:7px; height:7px; border-radius:50%; background:var(--grn); flex-shrink:0; }
+.dot.err { background:var(--red); }
+.dot.load { background:var(--orn); animation:pulse 1s infinite; }
+@keyframes pulse { 50% { opacity:.4; } }
+
+.content { padding:16px 24px 24px; margin:0 auto; }
+.overview { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:10px; margin-bottom:16px; }
+.stat-card { background:var(--card); border:1px solid var(--bdr); border-radius:10px; padding:12px 14px; display:flex; flex-direction:column; transition:border-color .15s; }
+.stat-card:hover { border-color:var(--bdr-h); }
+.sc-label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.7px; color:var(--mut); margin-bottom:4px; }
+.sc-val { font-size:20px; font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:-.5px; margin-bottom:6px; }
+.sc-spark { height:24px; width:100%; display:block; }
+
+.section { margin-bottom:12px; }
+.sec-hdr { background:var(--sec-bg); border:1px solid var(--bdr); border-radius:8px; padding:10px 16px; display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; transition:background .15s; }
+.sec-hdr:hover { background:var(--card-h); }
+.sec-chev { font-size:10px; color:var(--mut); transition:transform .2s; width:12px; text-align:center; }
+.sec-hdr.open .sec-chev { transform:rotate(90deg); }
+.sec-title { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:1px; color:var(--mut); }
+.sec-ctrl { margin-left:auto; display:flex; align-items:center; gap:6px; font-size:11px; color:var(--mut); }
+.sec-ctrl label { font-weight:600; text-transform:uppercase; letter-spacing:.5px; font-size:10px; }
+.sec-ctrl select { background:var(--bg); color:var(--txt); border:1px solid var(--bdr); border-radius:4px; padding:3px 8px; font-size:11px; font-family:inherit; cursor:pointer; }
+.sec-body { display:none; padding-top:10px; }
+.sec-body.open { display:grid; grid-template-columns:repeat(auto-fill,minmax(420px,1fr)); gap:10px; }
+
+.card { background:var(--card); border:1px solid var(--bdr); border-radius:10px; padding:16px 18px; min-height:220px; display:flex; flex-direction:column; transition:border-color .15s; }
+.card:hover { border-color:var(--bdr-h); }
+.card.full { grid-column:1/-1; }
+.ch { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:10px; }
+.ct { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.7px; color:var(--mut); }
+.cv { font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:-.5px; }
+.cw { flex:1; position:relative; min-height:0; }
+.cw canvas { position:absolute; inset:0; width:100%!important; height:100%!important; }
+.legend { display:flex; gap:12px; padding-top:6px; flex-wrap:wrap; }
+.legend span { font-size:10px; color:var(--mut); display:flex; align-items:center; gap:4px; cursor:pointer; user-select:none; transition:opacity .15s; }
+.legend span.off { opacity:.3; }
+.legend i { display:inline-block; width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+
+.cpu-grid { grid-column:1/-1; display:grid; grid-template-columns:repeat(8,1fr); gap:8px; }
+.cpu-mini { background:var(--card); border:1px solid var(--bdr); border-radius:8px; padding:10px 12px; height:150px; display:flex; flex-direction:column; transition:border-color .15s; }
+.cpu-mini:hover { border-color:var(--bdr-h); }
+.cpu-mini .ch { margin-bottom:4px; }
+.cpu-mini .ct { font-size:10px; }
+.cpu-mini .cv { font-size:14px; }
+
+.gauge-row { display:flex; gap:24px; align-items:center; justify-content:center; flex:1; flex-wrap:wrap; }
+.gauge-box { display:flex; flex-direction:column; align-items:center; gap:6px; }
+.gauge-label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.7px; color:var(--mut); }
+
+.bar-list { flex:1; display:flex; flex-direction:column; gap:8px; overflow-y:auto; }
+.bar-row { display:flex; align-items:center; gap:10px; }
+.bar-lbl { font-size:11px; color:var(--mut); min-width:80px; text-align:right; flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.bar-track { flex:1; height:18px; background:#1a1e2a; border-radius:4px; overflow:hidden; position:relative; }
+.bar-fill { height:100%; border-radius:4px; transition:width .4s; }
+.bar-val { font-size:11px; font-weight:600; min-width:54px; font-variant-numeric:tabular-nums; }
+
+.ig { display:grid; grid-template-columns:1fr 1fr; gap:2px 16px; flex:1; align-content:start; }
+.ii { padding:7px 0; border-bottom:1px solid var(--bdr); }
+.ii:nth-last-child(-n+2) { border-bottom:none; }
+.ik { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.7px; color:var(--mut); margin-bottom:2px; }
+.iv { font-size:15px; font-weight:600; font-variant-numeric:tabular-nums; }
+
+.tip { position:fixed; background:#141720f0; border:1px solid var(--bdr-h); border-radius:6px; padding:6px 10px; font-size:11px; color:var(--txt); pointer-events:none; z-index:100; display:none; white-space:nowrap; }
+
+@media (max-width:960px) {
+  .overview { grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); }
+  .sec-body.open { grid-template-columns:1fr; }
+  .cpu-grid { grid-template-columns:repeat(4,1fr); }
+  .content { padding:8px; }
+  header { padding:10px 12px; }
+}
+@media (min-width:2200px) {
+  .overview { grid-template-columns:repeat(8,1fr); }
+  .sec-body.open { grid-template-columns:repeat(auto-fill,minmax(380px,1fr)); }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><svg width="28" height="28" viewBox="0 0 64 64" fill="none" style="flex-shrink:0"><path d="M2 26C10 12 22 16 32 28c10-12 22-16 30-2" stroke="#5b8def" stroke-width="5" stroke-linecap="round"/><path d="M32 28l-8 26 8-8 8 8-8-26z" fill="#5b8def"/><path d="M32 28l0 18 8 8-8-26z" fill="#3d6fd1"/></svg><h1>Myna<b>DB</b></h1></div>
+  <div class="tr-group">
+    <div class="tr-pills">
+      <div class="tr-pill act" data-m="5">5m</div>
+      <div class="tr-pill" data-m="15">15m</div>
+      <div class="tr-pill" data-m="60">1h</div>
+      <div class="tr-pill" data-m="360">6h</div>
+      <div class="tr-pill" data-m="1440">24h</div>
+    </div>
+    <div class="tr-cust-wrap">
+      <button class="tr-cust-btn" id="trCustBtn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Custom<span class="tr-cust-label" id="trCustLabel"></span></button>
+      <div class="tr-popup" id="trPopup">
+        <div class="cal-row">
+          <div class="cal-pn">
+            <div class="cal-lbl">Start</div>
+            <div class="cal-nav"><button class="cal-arr" id="calFP">&#9664;</button><span class="cal-mo" id="calFM"></span><button class="cal-arr" id="calFN">&#9654;</button></div>
+            <div class="cal-grid" id="calFG"></div>
+            <div class="cal-time"><label>Time</label><div class="tp" id="tpF"></div></div>
+          </div>
+          <div class="cal-sep"></div>
+          <div class="cal-pn">
+            <div class="cal-lbl">End</div>
+            <div class="cal-nav"><button class="cal-arr" id="calTP">&#9664;</button><span class="cal-mo" id="calTM"></span><button class="cal-arr" id="calTN">&#9654;</button></div>
+            <div class="cal-grid" id="calTG"></div>
+            <div class="cal-time"><label>Time</label><div class="tp" id="tpT"></div></div>
+          </div>
+        </div>
+        <button class="tr-apply" id="trApply">Apply</button>
+      </div>
+    </div>
+  </div>
+  <div class="hdr-r">
+    <span class="hdr-lbl">Refresh</span>
+    <select id="refSel" class="hdr-sel" title="Refresh interval">
+      <option value="0">Off</option>
+      <option value="5000">5s</option>
+      <option value="10000" selected>10s</option>
+      <option value="15000">15s</option>
+      <option value="30000">30s</option>
+      <option value="60000">60s</option>
+    </select>
+    <div class="badge"><div class="dot load" id="dot"></div><span id="st">Connecting...</span></div>
+  </div>
+</header>
+
+<div class="content">
+
+<div class="overview">
+  <div class="stat-card"><div class="sc-label">CPU %</div><div class="sc-val" id="oCpu">--</div><canvas class="sc-spark" id="spCpu"></canvas></div>
+  <div class="stat-card"><div class="sc-label">Memory %</div><div class="sc-val" id="oMem">--</div><canvas class="sc-spark" id="spMem"></canvas></div>
+  <div class="stat-card"><div class="sc-label">Load 1m</div><div class="sc-val" id="oLd">--</div><canvas class="sc-spark" id="spLd"></canvas></div>
+  <div class="stat-card"><div class="sc-label">Disk %</div><div class="sc-val" id="oDsk">--</div><canvas class="sc-spark" id="spDsk"></canvas></div>
+  <div class="stat-card"><div class="sc-label">Uptime</div><div class="sc-val" id="oUp">--</div><canvas class="sc-spark" id="spUp"></canvas></div>
+  <div class="stat-card"><div class="sc-label">Write Rate</div><div class="sc-val" id="oWr">--</div><canvas class="sc-spark" id="spWr"></canvas></div>
+  <div class="stat-card"><div class="sc-label">Query Rate</div><div class="sc-val" id="oQr">--</div><canvas class="sc-spark" id="spQr"></canvas></div>
+  <div class="stat-card"><div class="sc-label">Storage</div><div class="sc-val" id="oSt">--</div><canvas class="sc-spark" id="spSt"></canvas></div>
+</div>
+
+<!-- CPU -->
+<div class="section">
+  <div class="sec-hdr open" onclick="togSec(this)"><span class="sec-chev">&#9654;</span><span class="sec-title">CPU</span></div>
+  <div class="sec-body open">
+    <div class="card full"><div class="ch"><div class="ct">CPU Usage</div><div class="cv" id="cpuV">--</div></div><div class="cw"><canvas id="cpuC"></canvas></div><div class="legend" id="cpuLeg"></div></div>
+  </div>
+</div>
+
+<!-- Per-CPU -->
+<div class="section">
+  <div class="sec-hdr" onclick="togSec(this)"><span class="sec-chev">&#9654;</span><span class="sec-title">Per-CPU Cores</span></div>
+  <div class="sec-body">
+    <div class="cpu-grid" id="cpuGrid"></div>
+  </div>
+</div>
+
+<!-- Memory -->
+<div class="section">
+  <div class="sec-hdr open" onclick="togSec(this)"><span class="sec-chev">&#9654;</span><span class="sec-title">Memory</span></div>
+  <div class="sec-body open">
+    <div class="card"><div class="ch"><div class="ct">Memory Usage</div><div class="cv" id="memV">--</div></div><div class="cw"><canvas id="memC"></canvas></div><div class="legend" id="memLeg"></div></div>
+    <div class="card"><div class="ch"><div class="ct">Memory &amp; Swap</div></div><div class="gauge-row"><div class="gauge-box"><canvas id="gMem" width="120" height="120"></canvas><div class="gauge-label">Memory</div></div><div class="gauge-box"><canvas id="gSwp" width="120" height="120"></canvas><div class="gauge-label">Swap</div></div></div></div>
+    <div class="card"><div class="ch"><div class="ct">MynaDB Memory Breakdown</div></div><div class="bar-list" id="blMyna"></div></div>
+  </div>
+</div>
+
+<!-- Disk -->
+<div class="section">
+  <div class="sec-hdr open" onclick="togSec(this)">
+    <span class="sec-chev">&#9654;</span><span class="sec-title">Disk</span>
+    <span class="sec-ctrl" onclick="event.stopPropagation()"><label>Mount:</label><select id="dskSel"><option value="/">/</option></select></span>
+  </div>
+  <div class="sec-body open">
+    <div class="card"><div class="ch"><div class="ct">Disk Usage by Mount</div></div><div class="bar-list" id="blDsk"></div></div>
+    <div class="card"><div class="ch"><div class="ct">Disk Trend</div><div class="cv" id="dskV">--</div></div><div class="cw"><canvas id="dskC"></canvas></div></div>
+    <div class="card"><div class="ch"><div class="ct">Parquet Storage</div></div><div class="bar-list" id="blPq"></div></div>
+  </div>
+</div>
+
+<!-- Network -->
+<div class="section">
+  <div class="sec-hdr open" onclick="togSec(this)">
+    <span class="sec-chev">&#9654;</span><span class="sec-title">Network</span>
+    <span class="sec-ctrl" onclick="event.stopPropagation()"><label>Interface:</label><select id="netSel"><option value="*">All</option></select></span>
+  </div>
+  <div class="sec-body open">
+    <div class="card"><div class="ch"><div class="ct">Network Throughput</div><div class="cv" id="netV">--</div></div><div class="cw"><canvas id="netC"></canvas></div><div class="legend" id="netLeg"></div></div>
+    <div class="card"><div class="ch"><div class="ct">Per-Interface Traffic</div></div><div class="cw"><canvas id="netPC"></canvas></div><div class="legend" id="netPL"></div></div>
+  </div>
+</div>
+
+<!-- MynaDB Internals -->
+<div class="section">
+  <div class="sec-hdr open" onclick="togSec(this)"><span class="sec-chev">&#9654;</span><span class="sec-title">MynaDB Internals</span></div>
+  <div class="sec-body open">
+    <div class="card"><div class="ch"><div class="ct">Write Throughput</div><div class="cv" id="wrV">--</div></div><div class="cw"><canvas id="wrC"></canvas></div></div>
+    <div class="card"><div class="ch"><div class="ct">Write Latency</div></div><div class="cw"><canvas id="wlC"></canvas></div><div class="legend" id="wlLeg"></div></div>
+    <div class="card"><div class="ch"><div class="ct">Query Latency</div></div><div class="cw"><canvas id="qlC"></canvas></div><div class="legend" id="qlLeg"></div></div>
+    <div class="card"><div class="ch"><div class="ct">Queries / sec</div><div class="cv" id="qpsV">--</div></div><div class="cw"><canvas id="qpsC"></canvas></div></div>
+    <div class="card"><div class="ch"><div class="ct">Cache Hit Rates</div></div><div class="gauge-row"><div class="gauge-box"><canvas id="gMHit" width="120" height="120"></canvas><div class="gauge-label">Metadata</div></div><div class="gauge-box"><canvas id="gQHit" width="120" height="120"></canvas><div class="gauge-label">Query</div></div></div></div>
+    <div class="card"><div class="ch"><div class="ct">System Info</div></div><div class="ig">
+      <div class="ii"><div class="ik">Hostname</div><div class="iv" id="iHost">--</div></div>
+      <div class="ii"><div class="ik">Uptime</div><div class="iv" id="iUp">--</div></div>
+      <div class="ii"><div class="ik">CPUs</div><div class="iv" id="iCpu">--</div></div>
+      <div class="ii"><div class="ik">Total Memory</div><div class="iv" id="iMem">--</div></div>
+      <div class="ii"><div class="ik">Total Swap</div><div class="iv" id="iSwp">--</div></div>
+      <div class="ii"><div class="ik">MynaDB RSS</div><div class="iv" id="iRss">--</div></div>
+      <div class="ii"><div class="ik">WAL Size</div><div class="iv" id="iWal">--</div></div>
+      <div class="ii"><div class="ik">Total Writes</div><div class="iv" id="iWr">--</div></div>
+      <div class="ii"><div class="ik">Total Queries</div><div class="iv" id="iQr">--</div></div>
+      <div class="ii"><div class="ik">Failed Writes</div><div class="iv" id="iFw">--</div></div>
+      <div class="ii"><div class="ik">Failed Queries</div><div class="iv" id="iFq">--</div></div>
+      <div class="ii"><div class="ik">Compactions</div><div class="iv" id="iCo">--</div></div>
+    </div></div>
+  </div>
+</div>
+
+</div>
+<div class="tip" id="tip"></div>
+
+<script>
+'use strict';
+var DPR = window.devicePixelRatio || 1;
+var PALETTE = ['#5b8def','#34d399','#f87171','#fb923c','#22d3ee','#a78bfa','#f472b6','#fbbf24','#6ee7b7','#818cf8','#fb7185','#38bdf8'];
+
+// ── MiniChart ────────────────────────────────────────────────
+function MC(idOrEl, series, opts) {
+  this.el = typeof idOrEl === 'string' ? document.getElementById(idOrEl) : idOrEl;
+  if (!this.el) return;
+  this.ctx = this.el.getContext('2d');
+  this.s = series; this.o = opts || {};
+  this.d = series.map(function() { return []; });
+  this.lb = []; this.w = 0; this.h = 0;
+  var self = this;
+  new ResizeObserver(function() { self._rs(); }).observe(self.el.parentElement);
+  self._rs();
+}
+MC.prototype._rs = function() {
+  var p = this.el.parentElement;
+  this.w = p.clientWidth; this.h = p.clientHeight;
+  this.el.width = this.w * DPR; this.el.height = this.h * DPR;
+  this.draw();
+};
+MC.prototype.push = function(label, vals) {
+  if (!this.el) return;
+  this.lb.push(label);
+  for (var i = 0; i < vals.length; i++) if (this.d[i]) this.d[i].push(vals[i]);
+  var mx = this.o.maxPts || getLimit();
+  while (this.lb.length > mx) { this.lb.shift(); for (var j = 0; j < this.d.length; j++) this.d[j].shift(); }
+  this.draw();
+};
+MC.prototype.load = function(rows, tk, vk) {
+  if (!this.el) return;
+  this.lb = []; this.d = this.s.map(function() { return []; });
+  for (var r = 0; r < rows.length; r++) {
+    var t = rows[r][tk];
+    this.lb.push(t ? new Date(t / 1e6).toLocaleTimeString() : '');
+    for (var i = 0; i < vk.length; i++) if (this.d[i]) this.d[i].push(parseFloat(rows[r][vk[i]]) || 0);
+  }
+  this.draw();
+};
+MC.prototype.loadGrouped = function(rows, tk, gk, vk, legendEl) {
+  if (!this.el) return;
+  var groups = {}, order = [];
+  for (var r = 0; r < rows.length; r++) {
+    var g = rows[r][gk] || 'unknown';
+    if (!groups[g]) { groups[g] = {}; order.push(g); }
+    var t = rows[r][tk];
+    var key = t ? new Date(t / 1e6).toLocaleTimeString() : '';
+    groups[g][key] = parseFloat(rows[r][vk]) || 0;
+  }
+  var times = [], seen = {};
+  for (var r = 0; r < rows.length; r++) {
+    var t = rows[r][tk], key = t ? new Date(t / 1e6).toLocaleTimeString() : '';
+    if (!seen[key]) { seen[key] = 1; times.push(key); }
+  }
+  this.s = []; this.d = []; this.lb = times;
+  for (var i = 0; i < order.length; i++) {
+    var g = order[i], ci = i % PALETTE.length;
+    this.s.push({ label: g, color: PALETTE[ci], on: true });
+    var arr = [];
+    for (var j = 0; j < times.length; j++) arr.push(groups[g][times[j]] || 0);
+    this.d.push(arr);
+  }
+  if (legendEl) buildLegend(this, legendEl);
+  this.draw();
+};
+MC.prototype.clear = function() {
+  if (!this.el) return;
+  this.lb = []; this.d = this.s.map(function() { return []; }); this.draw();
+};
+MC.prototype.draw = function() {
+  if (!this.el) return;
+  var c = this.ctx, w = this.w, h = this.h;
+  c.setTransform(DPR, 0, 0, DPR, 0, 0);
+  c.clearRect(0, 0, w, h);
+  var n = this.lb.length; if (n < 2) return;
+  var yMax = this.o.max || 0;
+  if (!this.o.max) {
+    for (var si = 0; si < this.d.length; si++) {
+      if (this.s[si] && 'on' in this.s[si] && !this.s[si].on) continue;
+      for (var di = 0; di < this.d[si].length; di++)
+        if (this.d[si][di] > yMax) yMax = this.d[si][di];
+    }
+    yMax = yMax * 1.15 || 1;
+  }
+  var L = 44, R = 8, T = 4, B = 4, pw = w - L - R, ph = h - T - B;
+  c.font = '10px -apple-system,sans-serif'; c.textAlign = 'right'; c.textBaseline = 'middle';
+  for (var t = 0; t <= 4; t++) {
+    var frac = t / 4, y = T + ph - frac * ph, val = frac * yMax;
+    c.strokeStyle = '#1e223055'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(L, y); c.lineTo(w - R, y); c.stroke();
+    c.fillStyle = '#6b7394';
+    var lbl = this.o.yFmt ? this.o.yFmt(val) : (val >= 1e6 ? (val/1e6).toFixed(1)+'M' : val >= 1e3 ? (val/1e3).toFixed(1)+'k' : val.toFixed(val < 10 ? 1 : 0));
+    c.fillText(lbl, L - 6, y);
+  }
+  var sn = Math.min(this.d.length, this.s.length);
+  for (var si = 0; si < sn; si++) {
+    var ds = this.d[si], s = this.s[si]; if (!ds || !ds.length || !s) continue;
+    if ('on' in s && !s.on) continue;
+    c.beginPath();
+    for (var i = 0; i < n; i++) {
+      var x = L + (i / (n - 1)) * pw, y = T + ph - (Math.min(ds[i], yMax) / yMax) * ph;
+      i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
+    }
+    c.strokeStyle = s.color; c.lineWidth = 1.5; c.lineJoin = 'round'; c.stroke();
+    if (s.fill) { c.lineTo(L + pw, T + ph); c.lineTo(L, T + ph); c.closePath(); c.fillStyle = s.color + '18'; c.fill(); }
+  }
+  // Hover crosshair + dots
+  var hi = this._hoverIdx;
+  if (hi != null && hi >= 0 && hi < n) {
+    var hx = L + (hi / (n - 1)) * pw;
+    c.strokeStyle = '#ffffff30'; c.lineWidth = 1; c.setLineDash([3,3]);
+    c.beginPath(); c.moveTo(hx, T); c.lineTo(hx, T + ph); c.stroke();
+    c.setLineDash([]);
+    for (var si = 0; si < this.d.length; si++) {
+      var ds = this.d[si], s = this.s[si]; if (!ds.length || ds[hi] == null) continue;
+      if ('on' in s && !s.on) continue;
+      var hy = T + ph - (Math.min(ds[hi], yMax) / yMax) * ph;
+      c.beginPath(); c.arc(hx, hy, 4, 0, Math.PI * 2);
+      c.fillStyle = s.color; c.fill();
+      c.beginPath(); c.arc(hx, hy, 4, 0, Math.PI * 2);
+      c.strokeStyle = '#fff'; c.lineWidth = 1.5; c.stroke();
+    }
+  }
+};
+
+// ── Sparkline ────────────────────────────────────────────────
+function Spark(id) {
+  this.el = document.getElementById(id); if (!this.el) return;
+  this.ctx = this.el.getContext('2d'); this.d = []; this.w = 0; this.h = 0;
+  var self = this;
+  new ResizeObserver(function() { self._rs(); }).observe(self.el);
+  self._rs();
+}
+Spark.prototype._rs = function() {
+  this.w = this.el.clientWidth || 80; this.h = this.el.clientHeight || 24;
+  this.el.width = this.w * DPR; this.el.height = this.h * DPR;
+  this._draw();
+};
+Spark.prototype.push = function(v) { this.d.push(v); while (this.d.length > 40) this.d.shift(); this._draw(); };
+Spark.prototype.clear = function() { this.d = []; this._draw(); };
+Spark.prototype._draw = function() {
+  if (!this.el) return;
+  var c = this.ctx, w = this.w, h = this.h, d = this.d;
+  c.setTransform(DPR, 0, 0, DPR, 0, 0); c.clearRect(0, 0, w, h);
+  if (d.length < 2) return;
+  var mn = Infinity, mx = -Infinity;
+  for (var i = 0; i < d.length; i++) { if (d[i] < mn) mn = d[i]; if (d[i] > mx) mx = d[i]; }
+  var range = mx - mn || 1; c.beginPath();
+  for (var i = 0; i < d.length; i++) {
+    var x = (i / (d.length - 1)) * w, y = h - 2 - ((d[i] - mn) / range) * (h - 4);
+    i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
+  }
+  c.strokeStyle = '#5b8def'; c.lineWidth = 1.2; c.lineJoin = 'round'; c.stroke();
+};
+
+// ── GaugeRing ────────────────────────────────────────────────
+function drawGauge(canvasId, pct) {
+  var el = document.getElementById(canvasId); if (!el) return;
+  var c = el.getContext('2d'), sz = 120;
+  el.width = sz * DPR; el.height = sz * DPR;
+  c.setTransform(DPR, 0, 0, DPR, 0, 0); c.clearRect(0, 0, sz, sz);
+  var cx = sz/2, cy = sz/2, r = 46, lw = 10;
+  var startA = Math.PI * 0.75, totalA = Math.PI * 1.5;
+  var p = Math.max(0, Math.min(100, pct || 0));
+  var color = p < 60 ? '#34d399' : p < 85 ? '#fb923c' : '#f87171';
+  c.beginPath(); c.arc(cx, cy, r, startA, startA + totalA);
+  c.strokeStyle = '#1a1e2a'; c.lineWidth = lw; c.lineCap = 'round'; c.stroke();
+  if (p > 0) { c.beginPath(); c.arc(cx, cy, r, startA, startA + totalA * (p/100)); c.strokeStyle = color; c.lineWidth = lw; c.lineCap = 'round'; c.stroke(); }
+  c.fillStyle = '#e8eaf0'; c.font = 'bold 22px -apple-system,sans-serif';
+  c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(p.toFixed(1) + '%', cx, cy);
+}
+
+// ── BarGauge ─────────────────────────────────────────────────
+function drawBars(cid, items) {
+  var el = document.getElementById(cid); if (!el) return; el.innerHTML = '';
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i], pct = it.max > 0 ? Math.min(100, (it.value / it.max) * 100) : 0;
+    var color = pct < 60 ? '#34d399' : pct < 85 ? '#fb923c' : '#f87171';
+    var row = document.createElement('div'); row.className = 'bar-row';
+    row.innerHTML = '<div class="bar-lbl">' + esc(it.label) + '</div><div class="bar-track"><div class="bar-fill" style="width:' + pct.toFixed(1) + '%;background:' + color + '"></div></div><div class="bar-val">' + esc(it.display || pct.toFixed(1) + '%') + '</div>';
+    el.appendChild(row);
+  }
+}
+function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function escSql(s) { return String(s).replace(/'/g, "''"); }
+
+// ── Tooltip ──────────────────────────────────────────────────
+var tip = document.getElementById('tip'), allCharts = {}, lastHoverChart = null;
+document.addEventListener('mousemove', function(e) {
+  var cv = e.target;
+  if (cv.tagName !== 'CANVAS' || !allCharts[cv.id]) {
+    tip.style.display = 'none';
+    if (lastHoverChart) { lastHoverChart._hoverIdx = null; lastHoverChart.draw(); lastHoverChart = null; }
+    return;
+  }
+  var ch = allCharts[cv.id];
+  if (ch.lb.length < 2) { tip.style.display = 'none'; if (lastHoverChart) { lastHoverChart._hoverIdx = null; lastHoverChart.draw(); lastHoverChart = null; } return; }
+  if (lastHoverChart && lastHoverChart !== ch) { lastHoverChart._hoverIdx = null; lastHoverChart.draw(); }
+  var rect = cv.getBoundingClientRect(), px = e.clientX - rect.left, pw = rect.width - 52;
+  var idx = Math.round(((px - 44) / pw) * (ch.lb.length - 1));
+  if (idx < 0 || idx >= ch.lb.length) { tip.style.display = 'none'; ch._hoverIdx = null; ch.draw(); lastHoverChart = null; return; }
+  ch._hoverIdx = idx; ch.draw(); lastHoverChart = ch;
+  var html = '<div style="color:#6b7394;margin-bottom:2px">' + ch.lb[idx] + '</div>';
+  for (var i = 0; i < ch.s.length; i++) {
+    if ('on' in ch.s[i] && !ch.s[i].on) continue;
+    var v = ch.d[i] && ch.d[i][idx]; if (v == null) continue;
+    html += '<div><span style="color:' + ch.s[i].color + '">' + ch.s[i].label + ':</span> ' + (ch.o.tipFmt ? ch.o.tipFmt(v) : v.toFixed(1)) + '</div>';
+  }
+  tip.innerHTML = html; tip.style.display = 'block';
+  tip.style.left = Math.min(e.clientX + 12, window.innerWidth - 160) + 'px';
+  tip.style.top = (e.clientY - 10) + 'px';
+});
+document.addEventListener('mouseleave', function() {
+  tip.style.display = 'none';
+  if (lastHoverChart) { lastHoverChart._hoverIdx = null; lastHoverChart.draw(); lastHoverChart = null; }
+}, true);
+
+// ── Formatters ───────────────────────────────────────────────
+function fB(b) { if (b == null || isNaN(b)) return '--'; var u = ['B','KB','MB','GB','TB'], i = 0, v = Math.abs(b); while (v >= 1024 && i < 4) { v /= 1024; i++; } return v.toFixed(i ? 1 : 0) + ' ' + u[i]; }
+function fR(b) { return b == null ? '--' : fB(b) + '/s'; }
+function fN(n) { return n == null ? '--' : Number(n).toLocaleString(); }
+function fD(s) { if (s == null) return '--'; s = Math.floor(s); var d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60); return d > 0 ? d+'d '+h+'h' : h > 0 ? h+'h '+m+'m' : m+'m'; }
+var pctTip = function(v) { return v.toFixed(1) + '%'; };
+var msTip = function(v) { return v.toFixed(1) + ' ms'; };
+
+// ── Static chart instances ───────────────────────────────────
+var cpuAllSeries = [
+  {label:'Total',color:'#5b8def',fill:1,key:'usage_percent',on:true},
+  {label:'User',color:'#34d399',fill:0,key:'usage_user',on:false},
+  {label:'System',color:'#f87171',fill:0,key:'usage_system',on:false},
+  {label:'IOWait',color:'#fb923c',fill:0,key:'usage_iowait',on:false},
+  {label:'Idle',color:'#6b7394',fill:0,key:'usage_idle',on:false},
+  {label:'Nice',color:'#22d3ee',fill:0,key:'usage_nice',on:false},
+  {label:'IRQ',color:'#f472b6',fill:0,key:'usage_irq',on:false},
+  {label:'SoftIRQ',color:'#fbbf24',fill:0,key:'usage_softirq',on:false},
+  {label:'Steal',color:'#a78bfa',fill:0,key:'usage_steal',on:false},
+];
+var cpuC = new MC('cpuC', cpuAllSeries, {max:100, tipFmt:pctTip});
+function buildLegend(chart, el) {
+  if (typeof el === 'string') el = document.getElementById(el);
+  if (!el) return;
+  el.innerHTML = '';
+  for (var i = 0; i < chart.s.length; i++) {
+    (function(idx) {
+      var s = chart.s[idx];
+      var sp = document.createElement('span');
+      sp.innerHTML = '<i style="background:'+s.color+'"></i>'+s.label;
+      if ('on' in s && !s.on) sp.className = 'off';
+      sp.addEventListener('click', function() {
+        s.on = !s.on;
+        sp.className = s.on ? '' : 'off';
+        chart.draw();
+      });
+      el.appendChild(sp);
+    })(i);
+  }
+}
+buildLegend(cpuC, 'cpuLeg');
+var memC  = new MC('memC', [{label:'Used',color:'#f87171',fill:1,on:true},{label:'Avail',color:'#34d399',on:true}], {yFmt:fB, tipFmt:fB});
+var dskC  = new MC('dskC', [{label:'Disk %',color:'#fb923c',fill:1}], {max:100, tipFmt:pctTip});
+var netC  = new MC('netC', [{label:'RX',color:'#22d3ee',fill:1,on:true},{label:'TX',color:'#fb923c',fill:1,on:true}], {yFmt:fR, tipFmt:fR});
+var netPC = new MC('netPC', [], {yFmt:fR, tipFmt:fR});
+var wrC   = new MC('wrC', [{label:'lines/s',color:'#34d399',fill:1}], {tipFmt:function(v){return fN(Math.round(v));}});
+var wlC   = new MC('wlC', [{label:'p50',color:'#34d399',on:true},{label:'p95',color:'#fb923c',on:true},{label:'p99',color:'#f87171',on:true}], {tipFmt:msTip});
+var qlC   = new MC('qlC', [{label:'p50',color:'#5b8def',on:true},{label:'p95',color:'#fb923c',on:true},{label:'p99',color:'#f87171',on:true}], {tipFmt:msTip});
+var qpsC  = new MC('qpsC', [{label:'q/s',color:'#5b8def',fill:1}], {tipFmt:function(v){return v.toFixed(1);}});
+allCharts = {cpuC:cpuC,memC:memC,dskC:dskC,netC:netC,netPC:netPC,wrC:wrC,wlC:wlC,qlC:qlC,qpsC:qpsC};
+buildLegend(memC, 'memLeg');
+buildLegend(netC, 'netLeg');
+buildLegend(wlC, 'wlLeg');
+buildLegend(qlC, 'qlLeg');
+
+var spCpu = new Spark('spCpu'), spMem = new Spark('spMem'), spLd = new Spark('spLd'), spDsk = new Spark('spDsk');
+var spUp = new Spark('spUp'), spWr = new Spark('spWr'), spQr = new Spark('spQr'), spSt = new Spark('spSt');
+
+// ── Per-CPU dynamic charts ──────────────────────────────────
+var perCpuCharts = {}, knownCpus = [];
+function ensureCpuCharts(cpuNames) {
+  cpuNames.sort(function(a, b) {
+    var na = parseInt(a.replace(/\D/g, '')) || 0, nb = parseInt(b.replace(/\D/g, '')) || 0;
+    return na - nb;
+  });
+  var grid = document.getElementById('cpuGrid');
+  for (var i = 0; i < cpuNames.length; i++) {
+    var name = cpuNames[i];
+    if (perCpuCharts[name]) continue;
+    var cid = 'cpuP_' + name.replace(/[^a-zA-Z0-9]/g, '_');
+    var card = document.createElement('div'); card.className = 'cpu-mini';
+    card.innerHTML = '<div class="ch"><div class="ct">' + esc(name) + '</div><div class="cv" id="v_' + cid + '">--</div></div><div class="cw"><canvas id="' + cid + '"></canvas></div>';
+    grid.appendChild(card);
+    var chart = new MC(cid, [{label: name, color: PALETTE[i % PALETTE.length], fill: 1}], {max: 100, tipFmt: pctTip});
+    perCpuCharts[name] = chart;
+    allCharts[cid] = chart;
+  }
+  knownCpus = cpuNames;
+}
+
+// ── Tag selectors ────────────────────────────────────────────
+var knownMounts = [], knownIfaces = [];
+function updateMountSelector(mounts) {
+  var sel = document.getElementById('dskSel'), cur = sel.value;
+  if (mounts.join(',') === knownMounts.join(',')) return;
+  knownMounts = mounts; sel.innerHTML = '';
+  for (var i = 0; i < mounts.length; i++) {
+    var o = document.createElement('option'); o.value = mounts[i]; o.textContent = mounts[i]; sel.appendChild(o);
+  }
+  if (mounts.indexOf(cur) >= 0) sel.value = cur;
+}
+function updateIfaceSelector(ifaces) {
+  var sel = document.getElementById('netSel'), cur = sel.value;
+  var sorted = ifaces.slice().sort();
+  if (sorted.join(',') === knownIfaces.join(',')) return;
+  knownIfaces = sorted; sel.innerHTML = '<option value="*">All</option>';
+  for (var i = 0; i < sorted.length; i++) {
+    var o = document.createElement('option'); o.value = sorted[i]; o.textContent = sorted[i]; sel.appendChild(o);
+  }
+  if (cur === '*' || sorted.indexOf(cur) >= 0) sel.value = cur;
+}
+function reloadDiskTrend() {
+  document.getElementById('dot').className = 'dot load';
+  var mount = document.getElementById('dskSel').value, tc = getTimeClause(), L = getLimit();
+  sql("SELECT time,usage_percent FROM disk WHERE mount='" + escSql(mount) + "' AND " + tc + " ORDER BY time DESC LIMIT " + L)
+    .then(function(rows) {
+      if (rows.length) dskC.load(rows.reverse(), 'time', ['usage_percent']); else dskC.clear();
+      document.getElementById('dot').className = 'dot';
+    });
+}
+function reloadNetChart() {
+  document.getElementById('dot').className = 'dot load';
+  var iface = document.getElementById('netSel').value, tc = getTimeClause(), L = getLimit();
+  sql("SELECT time,interface,bytes_recv_rate,bytes_sent_rate FROM net WHERE interface!='lo' AND " + tc + " ORDER BY time DESC LIMIT " + (L * 8))
+    .then(function(rows) {
+      rows = rows.reverse();
+      if (iface === '*') {
+        var byT = {};
+        for (var i = 0; i < rows.length; i++) {
+          var t = rows[i].time;
+          if (!byT[t]) byT[t] = {time: t, bytes_recv_rate: 0, bytes_sent_rate: 0};
+          byT[t].bytes_recv_rate += parseFloat(rows[i].bytes_recv_rate) || 0;
+          byT[t].bytes_sent_rate += parseFloat(rows[i].bytes_sent_rate) || 0;
+        }
+        var agg = []; for (var k in byT) agg.push(byT[k]);
+        agg.sort(function(a, b) { return a.time < b.time ? -1 : 1; });
+        if (agg.length) netC.load(agg, 'time', ['bytes_recv_rate', 'bytes_sent_rate']);
+      } else {
+        var filt = rows.filter(function(r) { return r.interface === iface; });
+        if (filt.length) netC.load(filt, 'time', ['bytes_recv_rate', 'bytes_sent_rate']);
+        else netC.clear();
+      }
+      document.getElementById('dot').className = 'dot';
+    });
+}
+document.getElementById('dskSel').addEventListener('change', reloadDiskTrend);
+document.getElementById('netSel').addEventListener('change', reloadNetChart);
+
+// ── Time range ───────────────────────────────────────────────
+var TR = 15, customMode = false, customFromNs = 0, customToNs = 0;
+var refreshMs = 10000, refreshTimer = null;
+
+function tsNs(ns) { return "arrow_cast(" + ns + ",'Timestamp(Nanosecond,None)')"; }
+function getTimeClause() {
+  if (customMode) {
+    var c = "time > " + tsNs(customFromNs);
+    if (customToNs) c += " AND time < " + tsNs(customToNs);
+    return c;
+  }
+  return "time > " + tsNs((Date.now() - TR * 60000) * 1e6);
+}
+function getLimit() {
+  // 12 points/min = 1 every 5s (matches default collection interval)
+  var pts;
+  if (customMode) {
+    pts = Math.ceil((customToNs - customFromNs) / 1e6 / 60000 * 12) + 10;
+  } else {
+    pts = Math.ceil(TR * 12) + 10;
+  }
+  return Math.min(pts, 20000);
+}
+var loadGen = 0; // generation counter — ignores stale responses on rapid clicks
+function clearSparklines() {
+  [spCpu, spMem, spLd, spDsk, spUp, spWr, spQr, spSt].forEach(function(sp) { if (sp && sp.clear) sp.clear(); });
+}
+function clearAllCharts() {
+  clearSparklines();
+  for (var k in allCharts) if (allCharts[k] && allCharts[k].clear) allCharts[k].clear();
+  for (var nm in perCpuCharts) if (perCpuCharts[nm] && perCpuCharts[nm].clear) perCpuCharts[nm].clear();
+}
+function startRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshMs = parseInt(document.getElementById('refSel').value);
+  if (refreshMs > 0 && !customMode) refreshTimer = setInterval(function() {
+    if (cpuC.lb.length < 2) { boot().then(refresh); } else { refresh(); }
+  }, refreshMs);
+}
+
+function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+function fmtDT(d) { var mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return mo[d.getMonth()] + ' ' + d.getDate() + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+function toISO(d) { return d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate()) + 'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+// ── Time scroll picker ───────────────────────────────────────
+function makeTimeCol(max, initVal) {
+  var val = initVal, el = document.createElement('div');
+  el.className = 'tp-col';
+  function render() {
+    var p = (val - 1 + max + 1) % (max + 1), n = (val + 1) % (max + 1);
+    el.innerHTML = '<div class="tp-v">' + pad2(p) + '</div><div class="tp-v sel">' + pad2(val) + '</div><div class="tp-v">' + pad2(n) + '</div>';
+  }
+  function change(d) { val = (val + d + max + 1) % (max + 1); render(); }
+  el.addEventListener('wheel', function(e) { e.preventDefault(); change(e.deltaY > 0 ? 1 : -1); }, {passive:false});
+  el.addEventListener('click', function(e) { var r = el.getBoundingClientRect(), y = e.clientY - r.top; change(y < r.height / 3 ? -1 : y > r.height * 2 / 3 ? 1 : 0); });
+  render();
+  return { el: el, get: function() { return val; }, set: function(v) { val = v; render(); } };
+}
+function initTimePick(container, h, m) {
+  var hc = makeTimeCol(23, h), mc = makeTimeCol(59, m);
+  var sep = document.createElement('span');
+  sep.className = 'tp-sep'; sep.textContent = ':';
+  container.innerHTML = '';
+  container.appendChild(hc.el); container.appendChild(sep); container.appendChild(mc.el);
+  container._getTime = function() { return pad2(hc.get()) + ':' + pad2(mc.get()); };
+  container._setTime = function(hh, mm) { hc.set(hh); mc.set(mm); };
+}
+
+// ── Calendar picker ──────────────────────────────────────────
+var MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+var cfY, cfM, cfD, ctY, ctM, ctD; // from/to calendar state
+
+function renderCal(el, yr, mo, selDay) {
+  var first = (new Date(yr, mo, 1).getDay() + 6) % 7;
+  var days = new Date(yr, mo + 1, 0).getDate();
+  var now = new Date(), tY = now.getFullYear(), tM = now.getMonth(), tD = now.getDate();
+  var h = '';
+  ['Mo','Tu','We','Th','Fr','Sa','Su'].forEach(function(d) { h += '<div class="cal-hd">' + d + '</div>'; });
+  for (var i = 0; i < first; i++) h += '<div class="cal-d"></div>';
+  for (var d = 1; d <= days; d++) {
+    var cls = 'cal-d cd';
+    if (d === selDay) cls += ' sel';
+    if (yr === tY && mo === tM && d === tD) cls += ' tod';
+    h += '<div class="' + cls + '" data-d="' + d + '">' + d + '</div>';
+  }
+  el.innerHTML = h;
+}
+function drawFromCal() {
+  document.getElementById('calFM').textContent = MONTHS[cfM] + ' ' + cfY;
+  renderCal(document.getElementById('calFG'), cfY, cfM, cfD);
+  document.getElementById('calFG').querySelectorAll('.cd').forEach(function(el) {
+    el.addEventListener('click', function() { cfD = parseInt(el.dataset.d); drawFromCal(); });
+  });
+}
+function drawToCal() {
+  document.getElementById('calTM').textContent = MONTHS[ctM] + ' ' + ctY;
+  renderCal(document.getElementById('calTG'), ctY, ctM, ctD);
+  document.getElementById('calTG').querySelectorAll('.cd').forEach(function(el) {
+    el.addEventListener('click', function() { ctD = parseInt(el.dataset.d); drawToCal(); });
+  });
+}
+function calNav(dir, side) {
+  if (side === 'f') { cfM += dir; if (cfM > 11) { cfM = 0; cfY++; } else if (cfM < 0) { cfM = 11; cfY--; } var mx = new Date(cfY, cfM + 1, 0).getDate(); if (cfD > mx) cfD = mx; drawFromCal(); }
+  else { ctM += dir; if (ctM > 11) { ctM = 0; ctY++; } else if (ctM < 0) { ctM = 11; ctY--; } var mx = new Date(ctY, ctM + 1, 0).getDate(); if (ctD > mx) ctD = mx; drawToCal(); }
+}
+document.getElementById('calFP').addEventListener('click', function() { calNav(-1, 'f'); });
+document.getElementById('calFN').addEventListener('click', function() { calNav(1, 'f'); });
+document.getElementById('calTP').addEventListener('click', function() { calNav(-1, 't'); });
+document.getElementById('calTN').addEventListener('click', function() { calNav(1, 't'); });
+
+function closeTrPopup() { document.getElementById('trPopup').classList.remove('open'); }
+function updateCustLabel() {
+  var lb = document.getElementById('trCustLabel'), btn = document.getElementById('trCustBtn');
+  if (customMode) { lb.textContent = fmtDT(new Date(customFromNs / 1e6)) + ' \u2014 ' + fmtDT(new Date(customToNs / 1e6)); btn.classList.add('act'); }
+  else { lb.textContent = ''; btn.classList.remove('act'); }
+}
+document.getElementById('trCustBtn').addEventListener('click', function(e) {
+  e.stopPropagation();
+  var pop = document.getElementById('trPopup'), open = pop.classList.toggle('open');
+  if (open) {
+    var now = new Date(), ago = new Date(now.getTime() - TR * 60000);
+    if (customMode) { ago = new Date(customFromNs / 1e6); now = new Date(customToNs / 1e6); }
+    cfY = ago.getFullYear(); cfM = ago.getMonth(); cfD = ago.getDate();
+    ctY = now.getFullYear(); ctM = now.getMonth(); ctD = now.getDate();
+    initTimePick(document.getElementById('tpF'), ago.getHours(), ago.getMinutes());
+    initTimePick(document.getElementById('tpT'), now.getHours(), now.getMinutes());
+    drawFromCal(); drawToCal();
+  }
+});
+document.addEventListener('click', function(e) { var pop = document.getElementById('trPopup'), btn = document.getElementById('trCustBtn'); if (pop.classList.contains('open') && !pop.contains(e.target) && !btn.contains(e.target)) closeTrPopup(); });
+
+function setRange(m) {
+  var gen = ++loadGen;
+  TR = m; customMode = false;
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  document.querySelectorAll('.tr-pill').forEach(function(el) { el.classList.toggle('act', parseInt(el.dataset.m) === m); });
+  updateCustLabel(); closeTrPopup();
+  document.getElementById('dot').className = 'dot load';
+  clearAllCharts();
+  Promise.all([boot(), refresh()]).then(function() { if (gen === loadGen) startRefresh(); });
+}
+function applyCustomRange() {
+  if (!cfD || !ctD) return;
+  var tpF = document.getElementById('tpF'), tpT = document.getElementById('tpT');
+  var ft = (tpF._getTime ? tpF._getTime() : '00:00').split(':');
+  var tt = (tpT._getTime ? tpT._getTime() : '23:59').split(':');
+  var fd = new Date(cfY, cfM, cfD, parseInt(ft[0]) || 0, parseInt(ft[1]) || 0);
+  var td = new Date(ctY, ctM, ctD, parseInt(tt[0]) || 0, parseInt(tt[1]) || 0);
+  if (fd >= td) return;
+  var gen = ++loadGen;
+  customMode = true; customFromNs = fd.getTime() * 1e6; customToNs = td.getTime() * 1e6;
+  if (refreshTimer) clearInterval(refreshTimer);
+  document.querySelectorAll('.tr-pill').forEach(function(el) { el.classList.remove('act'); });
+  updateCustLabel(); closeTrPopup();
+  document.getElementById('dot').className = 'dot load';
+  clearAllCharts();
+  Promise.all([boot(), refresh()]);
+}
+
+document.querySelectorAll('.tr-pill').forEach(function(el) {
+  el.addEventListener('click', function() { setRange(parseInt(el.dataset.m)); });
+});
+document.getElementById('trApply').addEventListener('click', applyCustomRange);
+document.getElementById('refSel').addEventListener('change', function() { startRefresh(); refresh(); });
+function togSec(hdr) { hdr.classList.toggle('open'); hdr.nextElementSibling.classList.toggle('open'); }
+
+// ── Data fetching ────────────────────────────────────────────
+var DB = 'host_metrics';
+function sql(q) {
+  return fetch('/query/' + DB + '?sql=' + encodeURIComponent(q))
+    .then(function(r) { return r.ok ? r.json() : []; })
+    .then(function(d) { return Array.isArray(d) ? d : []; })
+    .catch(function() { return []; });
+}
+function mj() { return fetch('/metrics.json').then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }); }
+
+function boot() {
+  var L = getLimit(), tc = getTimeClause();
+  var mount = document.getElementById('dskSel').value;
+  var iface = document.getElementById('netSel').value;
+
+  return Promise.all([
+    sql("SELECT time," + cpuAllSeries.map(function(s){return s.key;}).join(',') + " FROM cpu WHERE cpu='cpu-total' AND " + tc + " ORDER BY time DESC LIMIT " + L),
+    sql("SELECT time,cpu,usage_percent FROM cpu WHERE cpu!='cpu-total' AND " + tc + " ORDER BY time DESC LIMIT " + Math.min(L * 16, 10000)),
+    sql("SELECT time,used,available,usage_percent FROM mem WHERE " + tc + " ORDER BY time DESC LIMIT " + L),
+    sql("SELECT time,usage_percent FROM disk WHERE mount='" + escSql(mount) + "' AND " + tc + " ORDER BY time DESC LIMIT " + L),
+    sql("SELECT time,interface,bytes_recv_rate,bytes_sent_rate FROM net WHERE interface!='lo' AND " + tc + " ORDER BY time DESC LIMIT " + Math.min(L * 8, 10000)),
+  ]).then(function(r) {
+    // CPU total + breakdown (unified chart — all fields loaded, visibility controlled by draw)
+    var cpuRows = r[0].length ? r[0].reverse() : [];
+    if (cpuRows.length) {
+      cpuC.load(cpuRows, 'time', cpuAllSeries.map(function(s){return s.key;}));
+      // Seed sparkline from historical data
+      spCpu.d = []; for (var i = 0; i < cpuRows.length; i++) spCpu.d.push(parseFloat(cpuRows[i].usage_percent) || 0);
+      if (spCpu.d.length > 40) spCpu.d = spCpu.d.slice(-40);
+      spCpu._draw();
+    }
+
+    // Per-CPU individual charts
+    if (r[1].length) {
+      var byCpu = {}, names = [], rows = r[1].reverse();
+      for (var i = 0; i < rows.length; i++) {
+        var nm = rows[i].cpu;
+        if (!byCpu[nm]) { byCpu[nm] = []; names.push(nm); }
+        byCpu[nm].push(rows[i]);
+      }
+      ensureCpuCharts(names);
+      for (var nm in byCpu) if (perCpuCharts[nm]) perCpuCharts[nm].load(byCpu[nm], 'time', ['usage_percent']);
+    }
+
+    // Memory
+    var memRows = r[2].length ? r[2].reverse() : [];
+    if (memRows.length) {
+      memC.load(memRows, 'time', ['used', 'available']);
+      spMem.d = []; for (var i = 0; i < memRows.length; i++) spMem.d.push(parseFloat(memRows[i].usage_percent) || 0);
+      if (spMem.d.length > 40) spMem.d = spMem.d.slice(-40);
+      spMem._draw();
+    }
+
+    // Disk trend
+    var dskRows = r[3].length ? r[3].reverse() : [];
+    if (dskRows.length) {
+      dskC.load(dskRows, 'time', ['usage_percent']);
+      spDsk.d = []; for (var i = 0; i < dskRows.length; i++) spDsk.d.push(parseFloat(dskRows[i].usage_percent) || 0);
+      if (spDsk.d.length > 40) spDsk.d = spDsk.d.slice(-40);
+      spDsk._draw();
+    }
+
+    // Network
+    if (r[4].length) {
+      var rows = r[4].reverse();
+      // Main chart: aggregate or selected interface
+      if (iface === '*') {
+        var byT = {};
+        for (var i = 0; i < rows.length; i++) {
+          var t = rows[i].time;
+          if (!byT[t]) byT[t] = {time: t, bytes_recv_rate: 0, bytes_sent_rate: 0};
+          byT[t].bytes_recv_rate += parseFloat(rows[i].bytes_recv_rate) || 0;
+          byT[t].bytes_sent_rate += parseFloat(rows[i].bytes_sent_rate) || 0;
+        }
+        var agg = []; for (var k in byT) agg.push(byT[k]);
+        agg.sort(function(a, b) { return a.time < b.time ? -1 : 1; });
+        if (agg.length) netC.load(agg, 'time', ['bytes_recv_rate', 'bytes_sent_rate']);
+      } else {
+        var filt = rows.filter(function(r) { return r.interface === iface; });
+        if (filt.length) netC.load(filt, 'time', ['bytes_recv_rate', 'bytes_sent_rate']);
+      }
+      // Per-interface comparison
+      netPC.loadGrouped(rows, 'time', 'interface', 'bytes_recv_rate', document.getElementById('netPL'));
+    }
+  }).catch(function(e) { console.warn('Boot:', e); });
+}
+
+function refresh() {
+  var dot = document.getElementById('dot'), stEl = document.getElementById('st');
+  dot.className = 'dot load';
+  var live = !customMode;
+
+  return Promise.all([
+    sql("SELECT " + cpuAllSeries.map(function(s){return s.key;}).join(',') + " FROM cpu WHERE cpu='cpu-total' ORDER BY time DESC LIMIT 1"),
+    sql("SELECT cpu,usage_percent FROM cpu WHERE cpu!='cpu-total' ORDER BY time DESC LIMIT 100"),
+    sql("SELECT used,available,total,swap_total,swap_used,usage_percent FROM mem ORDER BY time DESC LIMIT 1"),
+    sql("SELECT load1,load5,load15,uptime,n_cpus,host FROM system ORDER BY time DESC LIMIT 1"),
+    sql("SELECT mount,usage_percent,used,total FROM disk ORDER BY time DESC LIMIT 20"),
+    sql("SELECT interface,bytes_recv_rate,bytes_sent_rate FROM net ORDER BY time DESC LIMIT 30"),
+    mj(),
+  ]).then(function(res) {
+    var now = new Date().toLocaleTimeString();
+    var cpuT = res[0], cpuP = res[1], mem = res[2], sys = res[3], dsk = res[4], net = res[5], m = res[6];
+
+    // CPU total + breakdown (unified chart)
+    if (cpuT.length) {
+      var c0 = cpuT[0], p = parseFloat(c0.usage_percent) || 0;
+      document.getElementById('cpuV').textContent = p.toFixed(1) + '%';
+      document.getElementById('oCpu').textContent = p.toFixed(1) + '%';
+      if (live) {
+        var vals = cpuAllSeries.map(function(s){ return parseFloat(c0[s.key]) || 0; });
+        if (vals.length === cpuC.d.length) cpuC.push(now, vals);
+        spCpu.push(p);
+      }
+    }
+
+    // Per-CPU
+    if (cpuP.length) {
+      var latest = {}, names = [];
+      for (var i = 0; i < cpuP.length; i++) {
+        var nm = cpuP[i].cpu;
+        if (!latest[nm]) { latest[nm] = cpuP[i]; names.push(nm); }
+      }
+      if (names.length > knownCpus.length) ensureCpuCharts(names);
+      for (var nm in latest) {
+        var p = parseFloat(latest[nm].usage_percent) || 0;
+        var cid = 'cpuP_' + nm.replace(/[^a-zA-Z0-9]/g, '_');
+        if (perCpuCharts[nm] && live) perCpuCharts[nm].push(now, [p]);
+        var vel = document.getElementById('v_' + cid);
+        if (vel) vel.textContent = p.toFixed(1) + '%';
+      }
+    }
+
+    // Memory
+    if (mem.length) {
+      var r = mem[0], p = parseFloat(r.usage_percent) || 0;
+      document.getElementById('memV').textContent = p.toFixed(1) + '% of ' + fB(r.total);
+      document.getElementById('oMem').textContent = p.toFixed(1) + '%';
+      if (live) { memC.push(now, [parseFloat(r.used) || 0, parseFloat(r.available) || 0]); spMem.push(p); }
+      document.getElementById('iMem').textContent = fB(r.total);
+      document.getElementById('iSwp').textContent = fB(r.swap_total);
+      drawGauge('gMem', p);
+      var swpPct = (r.swap_total && parseFloat(r.swap_total) > 0) ? (parseFloat(r.swap_used) / parseFloat(r.swap_total)) * 100 : 0;
+      drawGauge('gSwp', swpPct);
+    }
+
+    // System
+    if (sys.length) {
+      var r = sys[0], l1 = parseFloat(r.load1) || 0;
+      document.getElementById('oLd').textContent = l1.toFixed(2);
+      document.getElementById('iUp').textContent = fD(r.uptime);
+      document.getElementById('oUp').textContent = fD(r.uptime);
+      document.getElementById('iCpu').textContent = r.n_cpus || '--';
+      if (r.host) document.getElementById('iHost').textContent = r.host;
+      if (live) { spLd.push(l1); spUp.push(parseFloat(r.uptime) || 0); }
+    }
+
+    // Disk
+    if (dsk.length) {
+      var selMount = document.getElementById('dskSel').value;
+      var selRow = dsk.find(function(x) { return x.mount === selMount; }) || dsk[0];
+      var p = parseFloat(selRow.usage_percent) || 0;
+      document.getElementById('dskV').textContent = p.toFixed(1) + '%';
+      var rootRow = dsk.find(function(x) { return x.mount === '/'; }) || dsk[0];
+      document.getElementById('oDsk').textContent = (parseFloat(rootRow.usage_percent) || 0).toFixed(1) + '%';
+      if (live) { dskC.push(now, [p]); spDsk.push(parseFloat(rootRow.usage_percent) || 0); }
+      var seen = {}, mounts = [], bars = [];
+      for (var i = 0; i < dsk.length; i++) {
+        var d = dsk[i], mt = d.mount || '?';
+        if (seen[mt]) continue; seen[mt] = 1; mounts.push(mt);
+        var up = parseFloat(d.usage_percent) || 0, used = parseFloat(d.used) || 0, tot = parseFloat(d.total) || 0;
+        bars.push({ label: mt, value: up, max: 100, display: up.toFixed(1) + '% (' + fB(used) + ' / ' + fB(tot) + ')' });
+      }
+      updateMountSelector(mounts);
+      drawBars('blDsk', bars);
+    }
+
+    // Network
+    if (net.length) {
+      var selIf = document.getElementById('netSel').value;
+      var rx = 0, tx = 0, seen = {}, ifaces = [];
+      for (var i = 0; i < net.length; i++) {
+        var f = net[i].interface || '';
+        if (!seen[f]) { seen[f] = 1; if (f !== 'lo') ifaces.push(f); }
+      }
+      updateIfaceSelector(ifaces);
+      // Compute values for display and chart push
+      seen = {};
+      for (var i = 0; i < net.length; i++) {
+        var f = net[i].interface || '';
+        if (seen[f]) continue; seen[f] = 1;
+        if (selIf === '*') {
+          if (f !== 'lo') { rx += parseFloat(net[i].bytes_recv_rate) || 0; tx += parseFloat(net[i].bytes_sent_rate) || 0; }
+        } else if (f === selIf) {
+          rx = parseFloat(net[i].bytes_recv_rate) || 0; tx = parseFloat(net[i].bytes_sent_rate) || 0;
+        }
+      }
+      document.getElementById('netV').textContent = fR(rx) + ' in / ' + fR(tx) + ' out';
+      if (live) netC.push(now, [rx, tx]);
+    }
+
+    // Metrics JSON
+    if (m) {
+      var lps = m.write && m.write.lines_per_sec || 0;
+      document.getElementById('wrV').textContent = fN(Math.round(lps)) + ' lines/s';
+      document.getElementById('oWr').textContent = fN(Math.round(lps)) + '/s';
+      if (live) { wrC.push(now, [lps]); spWr.push(lps); }
+
+      var wl = m.write && m.write.write_latency_ms;
+      if (wl && live) wlC.push(now, [wl.p50 || 0, wl.p95 || 0, wl.p99 || 0]);
+
+      var ql = m.query && m.query.latency_ms;
+      if (ql && live) qlC.push(now, [ql.p50 || 0, ql.p95 || 0, ql.p99 || 0]);
+
+      var qps = m.query && m.query.queries_per_sec || 0;
+      document.getElementById('qpsV').textContent = qps.toFixed(1) + '/s';
+      document.getElementById('oQr').textContent = qps.toFixed(1) + '/s';
+      if (live) { qpsC.push(now, [qps]); spQr.push(qps); }
+
+      var stBytes = m.storage && m.storage.parquet_total_size_bytes || 0;
+      document.getElementById('oSt').textContent = fB(stBytes);
+      if (live) spSt.push(stBytes);
+
+      drawGauge('gMHit', (m.cache && m.cache.metadata_hit_rate || 0) * 100);
+      drawGauge('gQHit', (m.cache && m.cache.query_cache_hit_rate || 0) * 100);
+
+      document.getElementById('iRss').textContent = fB(m.memory && m.memory.rss_bytes);
+      document.getElementById('iWal').textContent = fB(m.storage && m.storage.wal_size_bytes);
+      document.getElementById('iWr').textContent = fN(m.write && m.write.total_lines);
+      document.getElementById('iQr').textContent = fN(m.query && m.query.total_queries);
+      document.getElementById('iFw').textContent = fN(m.write && m.write.failed_writes);
+      document.getElementById('iFq').textContent = fN(m.query && m.query.failed_queries);
+      document.getElementById('iCo').textContent = (m.storage && m.storage.compactions_running || 0) + ' running / ' + fN(m.storage && m.storage.compactions_total) + ' total';
+
+      var mem_items = [];
+      if (m.memory) {
+        var mb = m.memory;
+        mem_items.push({ label: 'Cache', value: mb.cache_bytes || 0, max: mb.total_allocated_bytes || 1, display: fB(mb.cache_bytes) });
+        mem_items.push({ label: 'WAL', value: mb.wal_bytes || 0, max: mb.total_allocated_bytes || 1, display: fB(mb.wal_bytes) });
+        mem_items.push({ label: 'Query Engine', value: mb.query_engine_bytes || 0, max: mb.total_allocated_bytes || 1, display: fB(mb.query_engine_bytes) });
+        mem_items.push({ label: 'RSS Total', value: mb.rss_bytes || 0, max: mb.rss_bytes || 1, display: fB(mb.rss_bytes) });
+      }
+      drawBars('blMyna', mem_items);
+
+      var pq_items = [];
+      if (m.storage) {
+        var st = m.storage;
+        for (var l = 0; l <= 5; l++) {
+          var cnt = st['parquet_files_l' + l] || 0;
+          if (cnt > 0 || l <= 2) pq_items.push({ label: 'L' + l, value: cnt, max: Math.max(cnt, 1), display: fN(cnt) + ' files' });
+        }
+        pq_items.push({ label: 'Total Size', value: st.parquet_total_size_bytes || 0, max: st.parquet_total_size_bytes || 1, display: fB(st.parquet_total_size_bytes) });
+      }
+      drawBars('blPq', pq_items);
+    }
+
+    dot.className = 'dot'; stEl.textContent = 'Updated ' + now;
+  }).catch(function(e) { dot.className = 'dot err'; stEl.textContent = 'Error'; console.error(e); });
+}
+
+// ── Init ─────────────────────────────────────────────────────
+// Run boot (history) and refresh (current values) in parallel for fast first paint
+Promise.all([boot(), refresh()]).then(function() {
+  startRefresh();
+  // If no data loaded yet (server might still be starting), retry boot after 3s
+  if (cpuC.lb.length === 0) setTimeout(function() { Promise.all([boot(), refresh()]); }, 3000);
+});
+</script>
+</body>
+</html>

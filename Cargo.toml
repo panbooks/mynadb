@@ -76,6 +76,9 @@ axum-server = { version = "0.7", features = ["tls-rustls"] }
 rustls-pemfile = "2.0"
 rustls = "0.20"
 
+# System metrics collection
+sysinfo = "0.38"
+
 # Geospatial UDFs
 geo = "0.28"
 geohash = "0.13"

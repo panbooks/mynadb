@@ -1,5 +1,6 @@
 pub mod collector;
 pub mod prometheus;
+pub mod system_collector;
 pub mod types;
 pub mod updater;
 

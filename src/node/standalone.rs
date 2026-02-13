@@ -180,6 +180,16 @@ pub async fn run(config_path: &str) {
         crate::metrics::start_metrics_updater(metrics_config, metrics_cache, metrics_wal).await;
     });
 
+    // Start system metrics collector
+    if config.system_metrics.enabled {
+        let sys_cache = Arc::clone(&cache_arc);
+        let sys_config = Arc::clone(&config);
+        tokio::spawn(crate::metrics::system_collector::start(sys_cache, sys_config));
+        info!("System metrics: ENABLED (db: {}, interval: {}s)", config.system_metrics.database, config.system_metrics.interval_secs);
+    } else {
+        debug!("System metrics: DISABLED");
+    }
+
     // Start background WAL tasks
     if let Some(ref wal_arc) = wal {
         wal_arc.start_background_flush();
