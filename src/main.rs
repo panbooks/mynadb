@@ -18,6 +18,7 @@ mod auth;
 mod config;
 mod data;
 mod flight_protocol;
+mod iceberg;
 mod jobs;
 mod meta;
 mod metrics;

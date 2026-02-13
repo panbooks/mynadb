@@ -27,6 +27,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+use super::otlp;
 use super::prometheus;
 use super::shared;
 use crate::config;
@@ -1719,6 +1720,226 @@ pub async fn prometheus_read_handler(
     prometheus::remote_read_handler(Path(db), State(prom_state), body).await
 }
 
+// ===== OTLP HTTP Handlers =====
+
+/// Handle OTLP metrics HTTP endpoint
+/// POST /v1/metrics
+pub async fn otlp_metrics_http_handler(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let otlp_state = Arc::new(otlp::http_handlers::OtlpHttpState {
+        cache: state.cache.clone(),
+        config: state.config.otlp.clone(),
+    });
+    otlp::http_handlers::metrics_http_handler(State(otlp_state), headers, body).await
+}
+
+/// Handle OTLP logs HTTP endpoint
+/// POST /v1/logs
+pub async fn otlp_logs_http_handler(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let otlp_state = Arc::new(otlp::http_handlers::OtlpHttpState {
+        cache: state.cache.clone(),
+        config: state.config.otlp.clone(),
+    });
+    otlp::http_handlers::logs_http_handler(State(otlp_state), headers, body).await
+}
+
+/// Handle OTLP traces HTTP endpoint
+/// POST /v1/traces
+pub async fn otlp_traces_http_handler(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let otlp_state = Arc::new(otlp::http_handlers::OtlpHttpState {
+        cache: state.cache.clone(),
+        config: state.config.otlp.clone(),
+    });
+    otlp::http_handlers::traces_http_handler(State(otlp_state), headers, body).await
+}
+
+// ===== Iceberg REST Catalog Handlers =====
+
+/// GET /iceberg/v1/config
+pub async fn iceberg_config_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let mut defaults = std::collections::HashMap::new();
+    // Use first available catalog as warehouse
+    let store_dir = crate::storage::layout::DataLayout::new(&state.config.storage.data_dir).store_dir();
+    if let Ok(entries) = std::fs::read_dir(&store_dir) {
+        for entry in entries.flatten() {
+            if entry.file_type().map_or(false, |t| t.is_dir()) {
+                if let Some(name) = entry.file_name().to_str() {
+                    if !name.starts_with('_') && !name.starts_with('.') {
+                        defaults.insert("warehouse".to_string(), name.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Json(serde_json::json!({
+        "defaults": defaults,
+        "overrides": {}
+    }))
+}
+
+/// GET /iceberg/v1/namespaces
+pub async fn iceberg_list_namespaces_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let catalog = crate::iceberg::catalog::mynadb_catalog::MynaDbIcebergCatalog::new(
+        &state.config.storage.data_dir,
+    );
+    // List all catalogs, then for each list schemas
+    let store_dir = crate::storage::layout::DataLayout::new(&state.config.storage.data_dir).store_dir();
+    let mut namespaces: Vec<Vec<String>> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&store_dir) {
+        for entry in entries.flatten() {
+            if entry.file_type().map_or(false, |t| t.is_dir()) {
+                if let Some(cat_name) = entry.file_name().to_str() {
+                    if !cat_name.starts_with('_') && !cat_name.starts_with('.') {
+                        for ns in catalog.list_namespaces(cat_name) {
+                            namespaces.push(vec![cat_name.to_string(), ns]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Json(serde_json::json!({ "namespaces": namespaces }))
+}
+
+/// GET /iceberg/v1/namespaces/:namespace
+pub async fn iceberg_get_namespace_handler(
+    State(_state): State<AppState>,
+    Path(namespace): Path<String>,
+) -> impl IntoResponse {
+    Json(serde_json::json!({
+        "namespace": [namespace],
+        "properties": { "owner": "mynadb" }
+    }))
+}
+
+/// GET /iceberg/v1/namespaces/:namespace/tables
+pub async fn iceberg_list_tables_handler(
+    State(state): State<AppState>,
+    Path(namespace): Path<String>,
+) -> impl IntoResponse {
+    let catalog = crate::iceberg::catalog::mynadb_catalog::MynaDbIcebergCatalog::new(
+        &state.config.storage.data_dir,
+    );
+    // Namespace can be "catalog.schema" or just "schema"
+    let (cat, schema) = if namespace.contains('.') {
+        let parts: Vec<&str> = namespace.splitn(2, '.').collect();
+        (parts[0].to_string(), parts[1].to_string())
+    } else {
+        // Try to find which catalog contains this schema
+        let store_dir = crate::storage::layout::DataLayout::new(&state.config.storage.data_dir).store_dir();
+        let mut found = (String::new(), namespace.clone());
+        if let Ok(entries) = std::fs::read_dir(&store_dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().map_or(false, |t| t.is_dir()) {
+                    if let Some(name) = entry.file_name().to_str() {
+                        if catalog.list_namespaces(name).contains(&namespace) {
+                            found = (name.to_string(), namespace.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        found
+    };
+
+    let tables = catalog.list_tables(&cat, &schema);
+    let identifiers: Vec<serde_json::Value> = tables
+        .into_iter()
+        .map(|t| {
+            serde_json::json!({
+                "namespace": [namespace],
+                "name": t,
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({ "identifiers": identifiers }))
+}
+
+/// GET /iceberg/v1/namespaces/:namespace/tables/:table
+pub async fn iceberg_load_table_handler(
+    State(state): State<AppState>,
+    Path((namespace, table)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let catalog = crate::iceberg::catalog::mynadb_catalog::MynaDbIcebergCatalog::new(
+        &state.config.storage.data_dir,
+    );
+
+    // Parse namespace
+    let (cat, schema) = if namespace.contains('.') {
+        let parts: Vec<&str> = namespace.splitn(2, '.').collect();
+        (parts[0].to_string(), parts[1].to_string())
+    } else {
+        // Find catalog
+        let store_dir = crate::storage::layout::DataLayout::new(&state.config.storage.data_dir).store_dir();
+        let mut found = (String::new(), namespace.clone());
+        if let Ok(entries) = std::fs::read_dir(&store_dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().map_or(false, |t| t.is_dir()) {
+                    if let Some(name) = entry.file_name().to_str() {
+                        if catalog.table_exists(name, &namespace, &table) {
+                            found = (name.to_string(), namespace.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        found
+    };
+
+    match catalog.get_table_metadata(&cat, &schema, &table) {
+        Some(metadata) => {
+            let metadata_value = serde_json::to_value(&metadata).unwrap_or_default();
+            Json(serde_json::json!({
+                "metadata-location": format!("iceberg/{}/{}/{}/metadata/v1.metadata.json", cat, schema, table),
+                "metadata": metadata_value,
+            }))
+            .into_response()
+        }
+        None => {
+            if catalog.table_exists(&cat, &schema, &table) {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": {
+                            "message": format!("Table '{}.{}' exists but Iceberg metadata not yet generated", schema, table),
+                            "type": "NoSuchTableException",
+                            "code": 404
+                        }
+                    })),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": {
+                            "message": format!("Table '{}.{}' not found", schema, table),
+                            "type": "NoSuchTableException",
+                            "code": 404
+                        }
+                    })),
+                )
+                    .into_response()
+            }
+        }
+    }
+}
+
 // ===== User Management Handlers =====
 
 #[derive(Deserialize)]
@@ -2612,6 +2833,16 @@ pub fn build_router(state: AppState, auth_middleware: Arc<auth::AuthMiddleware>)
         .route("/downsampling/policies/:name", delete(delete_downsampling_policy_handler))
         // Built-in monitoring dashboard
         .route("/dashboard", get(super::dashboard::dashboard_handler))
+        // OpenTelemetry Protocol (OTLP) HTTP endpoints
+        .route("/v1/metrics", post(otlp_metrics_http_handler))
+        .route("/v1/logs", post(otlp_logs_http_handler))
+        .route("/v1/traces", post(otlp_traces_http_handler))
+        // Iceberg REST Catalog API
+        .route("/iceberg/v1/config", get(iceberg_config_handler))
+        .route("/iceberg/v1/namespaces", get(iceberg_list_namespaces_handler))
+        .route("/iceberg/v1/namespaces/:namespace", get(iceberg_get_namespace_handler))
+        .route("/iceberg/v1/namespaces/:namespace/tables", get(iceberg_list_tables_handler))
+        .route("/iceberg/v1/namespaces/:namespace/tables/:table", get(iceberg_load_table_handler))
         .fallback(log_request)
         .with_state(state)
         .layer(axum::extract::DefaultBodyLimit::max(250 * 1024 * 1024)) // 250MB

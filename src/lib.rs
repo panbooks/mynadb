@@ -10,6 +10,7 @@ pub mod auth;
 pub mod config;
 pub mod data;
 pub mod flight_protocol;
+pub mod iceberg;
 pub mod jobs;
 pub mod meta;
 pub mod metrics;

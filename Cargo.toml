@@ -90,6 +90,12 @@ arima = "0.2"
 snap = "1.1"  # Snappy compression for Prometheus remote write
 flate2 = "1"  # Gzip decompression for InfluxDB line protocol writes
 
+# OpenTelemetry Protocol (OTLP) native ingestion
+opentelemetry-proto = { version = "0.25", features = ["gen-tonic-messages", "metrics", "logs", "trace", "with-serde"] }
+
+# Apache Iceberg table format
+apache-avro = { version = "0.17", features = ["snappy"] }
+
 # Admin Console
 futures-util = "0.3"
 axum-extra = { version = "0.9", features = ["typed-header"] }

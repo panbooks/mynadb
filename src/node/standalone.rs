@@ -381,6 +381,45 @@ pub async fn run(config_path: &str) {
         None
     };
 
+    // Start OTLP gRPC server (OpenTelemetry Protocol)
+    let otlp_handle = if config.otlp.enabled {
+        let handle = common::start_otlp_grpc_server(
+            &config.otlp.grpc_addr(),
+            state.cache.clone(),
+            config.otlp.clone(),
+            tls_opt,
+        )
+        .await;
+        welcome!("  OTLP gRPC server started on {}!", config.otlp.grpc_addr());
+        Some(handle)
+    } else {
+        None
+    };
+
+    // Initialize Iceberg metadata sync
+    let _iceberg_sync = if config.iceberg.enabled {
+        let iceberg_catalog = Arc::new(
+            crate::iceberg::catalog::mynadb_catalog::MynaDbIcebergCatalog::new(
+                &config.storage.data_dir,
+            ),
+        );
+        let iceberg_sync = Arc::new(
+            crate::iceberg::sync::metadata_sync::MetadataSyncJob::new(
+                config.iceberg.clone(),
+                iceberg_catalog.clone(),
+                &config.storage.data_dir,
+            ),
+        );
+        Arc::clone(&iceberg_sync).start_background();
+        welcome!("  Iceberg metadata sync: ENABLED (interval: {}s)", config.iceberg.sync_interval_secs);
+
+        // Mount Iceberg REST Catalog routes on the main HTTP router
+        // Note: Routes are added separately via nest() below
+        Some((iceberg_catalog, iceberg_sync))
+    } else {
+        None
+    };
+
     // Start HTTP server (with TLS)
     let http_handle =
         common::start_http_server_with_tls(&config.http_addr(), app, tls_opt).await;
@@ -403,6 +442,15 @@ pub async fn run(config_path: &str) {
             }
         } => {
             error!("MySQL server stopped unexpectedly");
+        },
+        _ = async {
+            if let Some(otlp) = otlp_handle {
+                otlp.await.ok();
+            } else {
+                std::future::pending::<()>().await
+            }
+        } => {
+            error!("OTLP gRPC server stopped unexpectedly");
         },
         _ = tokio::signal::ctrl_c() => {
             println!("\nShutting down MynaDB...");

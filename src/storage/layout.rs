@@ -36,6 +36,8 @@ pub const SYSTEM_DIR: &str = "system";
 pub const RUN_DIR: &str = "run";
 /// Reserved index directory name
 pub const INDEX_DIR: &str = "index";
+/// Iceberg metadata directory name
+pub const ICEBERG_DIR: &str = "iceberg";
 
 /// Subdirectory under cache for parquet file cache
 pub const PARQUET_CACHE_SUBDIR: &str = "parquet";
@@ -97,6 +99,25 @@ impl DataLayout {
     /// Future index support: `{root}/index`
     pub fn index_dir(&self) -> PathBuf {
         self.root.join(INDEX_DIR)
+    }
+
+    /// Iceberg metadata: `{root}/iceberg`
+    pub fn iceberg_dir(&self) -> PathBuf {
+        self.root.join(ICEBERG_DIR)
+    }
+
+    /// Iceberg table metadata: `{root}/iceberg/{catalog}/{schema}/{table}/metadata/`
+    pub fn iceberg_table_metadata_dir(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> PathBuf {
+        self.iceberg_dir()
+            .join(catalog)
+            .join(schema)
+            .join(table)
+            .join("metadata")
     }
 
     // ========================================================================

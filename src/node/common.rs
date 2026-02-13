@@ -1,10 +1,10 @@
 //! Common initialization routines shared across node types
 
-use crate::config::{Config, TlsConfig};
+use crate::config::{Config, OtlpConfig, TlsConfig};
 use crate::jobs::logger;
 use crate::query::cache::{hot_partition_cache, query_cache};
 use crate::query::{catalog, query_engine};
-use crate::services::{api, flight_service, mysql_service, tls};
+use crate::services::{api, flight_service, mysql_service, otlp, tls};
 use crate::storage::layout::DataLayout;
 use crate::storage::{cache, file_cache, parquet_writer, storage as storage_mod, wal};
 use std::collections::{HashMap, HashSet};
@@ -559,6 +559,55 @@ pub async fn start_http_server_with_tls(
                 .expect("HTTP server failed");
         })
     }
+}
+
+/// Start OTLP gRPC server (OpenTelemetry Collector protocol)
+pub async fn start_otlp_grpc_server(
+    addr: &str,
+    data_cache: cache::DataCache,
+    otlp_config: OtlpConfig,
+    tls_config: Option<&TlsConfig>,
+) -> tokio::task::JoinHandle<()> {
+    use opentelemetry_proto::tonic::collector::logs::v1::logs_service_server::LogsServiceServer;
+    use opentelemetry_proto::tonic::collector::metrics::v1::metrics_service_server::MetricsServiceServer;
+    use opentelemetry_proto::tonic::collector::trace::v1::trace_service_server::TraceServiceServer;
+
+    let state = Arc::new(otlp::grpc_service::OtlpGrpcState {
+        cache: data_cache,
+        config: otlp_config,
+    });
+
+    let metrics_service = otlp::grpc_service::OtlpMetricsService::new(state.clone());
+    let logs_service = otlp::grpc_service::OtlpLogsService::new(state.clone());
+    let trace_service = otlp::grpc_service::OtlpTraceService::new(state);
+
+    let addr: SocketAddr = addr.parse().expect("Invalid OTLP gRPC address");
+
+    let tonic_tls = tls_config
+        .filter(|c| c.enabled)
+        .map(|c| tls::tonic_tls_config(c).expect("Failed to build OTLP TLS config"));
+
+    let tls_enabled = tonic_tls.is_some();
+
+    tokio::spawn(async move {
+        info!(
+            "OTLP gRPC server starting on {} (tls={})",
+            addr, tls_enabled
+        );
+        let mut builder = Server::builder();
+        if let Some(tls) = tonic_tls {
+            builder = builder
+                .tls_config(tls)
+                .expect("Failed to apply OTLP TLS config");
+        }
+        builder
+            .add_service(MetricsServiceServer::new(metrics_service))
+            .add_service(LogsServiceServer::new(logs_service))
+            .add_service(TraceServiceServer::new(trace_service))
+            .serve(addr)
+            .await
+            .expect("OTLP gRPC server failed");
+    })
 }
 
 // ============================================================================

@@ -69,6 +69,12 @@ pub struct Config {
     /// Built-in system metrics collection (CPU, memory, disk, network)
     #[serde(default)]
     pub system_metrics: SystemMetricsConfig,
+    /// OpenTelemetry Protocol (OTLP) native ingestion
+    #[serde(default)]
+    pub otlp: OtlpConfig,
+    /// Apache Iceberg table format integration
+    #[serde(default)]
+    pub iceberg: IcebergConfig,
 }
 
 /// Admin console configuration
@@ -985,6 +991,115 @@ impl TlsConfig {
 fn default_tls_enabled() -> bool {
     false
 }
+
+/// OpenTelemetry Protocol (OTLP) native ingestion configuration
+///
+/// Enables MynaDB to receive metrics, logs, and traces directly from
+/// OpenTelemetry-instrumented applications via gRPC (port 4317) and HTTP.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OtlpConfig {
+    /// Enable OTLP ingestion
+    #[serde(default = "default_otlp_enabled")]
+    pub enabled: bool,
+    /// gRPC listen host
+    #[serde(default = "default_otlp_grpc_host")]
+    pub grpc_host: String,
+    /// gRPC listen port (default: 4317 per OTel spec)
+    #[serde(default = "default_otlp_grpc_port")]
+    pub grpc_port: u16,
+    /// Enable HTTP endpoints on main HTTP server (/v1/metrics, /v1/logs, /v1/traces)
+    #[serde(default = "default_otlp_http_enabled")]
+    pub http_enabled: bool,
+    /// Target database for OTLP data
+    #[serde(default = "default_otlp_database")]
+    pub database: String,
+    /// Target schema for OTLP data
+    #[serde(default = "default_otlp_schema")]
+    pub schema: String,
+    /// Store resource attributes as tags
+    #[serde(default = "default_otlp_resource_as_tags")]
+    pub resource_as_tags: bool,
+    /// Flatten nested attributes into dot-separated tag names
+    #[serde(default = "default_otlp_flatten_attributes")]
+    pub flatten_attributes: bool,
+}
+
+impl Default for OtlpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_otlp_enabled(),
+            grpc_host: default_otlp_grpc_host(),
+            grpc_port: default_otlp_grpc_port(),
+            http_enabled: default_otlp_http_enabled(),
+            database: default_otlp_database(),
+            schema: default_otlp_schema(),
+            resource_as_tags: default_otlp_resource_as_tags(),
+            flatten_attributes: default_otlp_flatten_attributes(),
+        }
+    }
+}
+
+fn default_otlp_enabled() -> bool { false }
+fn default_otlp_grpc_host() -> String { "0.0.0.0".to_string() }
+fn default_otlp_grpc_port() -> u16 { 4317 }
+fn default_otlp_http_enabled() -> bool { true }
+fn default_otlp_database() -> String { "otel".to_string() }
+fn default_otlp_schema() -> String { "default".to_string() }
+fn default_otlp_resource_as_tags() -> bool { true }
+fn default_otlp_flatten_attributes() -> bool { true }
+
+impl OtlpConfig {
+    /// Get the gRPC server address
+    pub fn grpc_addr(&self) -> String {
+        format!("{}:{}", self.grpc_host, self.grpc_port)
+    }
+}
+
+/// Apache Iceberg table format integration
+///
+/// Exposes MynaDB data as Iceberg tables via REST Catalog API,
+/// enabling Spark, Trino, DuckDB, and Flink to query MynaDB data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IcebergConfig {
+    /// Enable Iceberg integration
+    #[serde(default = "default_iceberg_enabled")]
+    pub enabled: bool,
+    /// Enable REST Catalog API endpoints
+    #[serde(default = "default_iceberg_rest_catalog_enabled")]
+    pub rest_catalog_enabled: bool,
+    /// URL prefix for REST Catalog API (default: "/iceberg")
+    #[serde(default = "default_iceberg_rest_prefix")]
+    pub rest_catalog_prefix: String,
+    /// Directory name for Iceberg metadata under data_dir
+    #[serde(default = "default_iceberg_metadata_dir")]
+    pub metadata_dir: String,
+    /// Interval between metadata sync runs (seconds)
+    #[serde(default = "default_iceberg_sync_interval")]
+    pub sync_interval_secs: u64,
+    /// Sync metadata on every flush
+    #[serde(default = "default_iceberg_sync_on_flush")]
+    pub sync_on_flush: bool,
+}
+
+impl Default for IcebergConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_iceberg_enabled(),
+            rest_catalog_enabled: default_iceberg_rest_catalog_enabled(),
+            rest_catalog_prefix: default_iceberg_rest_prefix(),
+            metadata_dir: default_iceberg_metadata_dir(),
+            sync_interval_secs: default_iceberg_sync_interval(),
+            sync_on_flush: default_iceberg_sync_on_flush(),
+        }
+    }
+}
+
+fn default_iceberg_enabled() -> bool { false }
+fn default_iceberg_rest_catalog_enabled() -> bool { true }
+fn default_iceberg_rest_prefix() -> String { "/iceberg".to_string() }
+fn default_iceberg_metadata_dir() -> String { "iceberg".to_string() }
+fn default_iceberg_sync_interval() -> u64 { 300 }
+fn default_iceberg_sync_on_flush() -> bool { true }
 
 // Default value functions
 fn default_http_host() -> String {
