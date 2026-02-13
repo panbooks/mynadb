@@ -388,11 +388,13 @@ pub async fn query_handler_post(
     State(state): State<RouterAppState>,
     body: String,
 ) -> impl IntoResponse {
-    // Try to parse as JSON first, then fall back to treating body as raw SQL
+    // Try to parse as JSON first, then form-encoded, then raw SQL
     let sql = if let Ok(request) = serde_json::from_str::<QueryRequestBody>(&body) {
         request.sql
+    } else if let Some(sql_value) = body.strip_prefix("sql=") {
+        // URL-encoded form body: sql=SELECT...
+        urlencoding::decode(sql_value).unwrap_or(sql_value.into()).into_owned()
     } else {
-        // Treat body as raw SQL
         body
     };
     execute_query(&state, &db, &sql).await

@@ -814,10 +814,14 @@ impl FlightService for DataNodeFlightService {
             .await
         {
             Ok(batches) => batches,
-            Err(e) if e.contains("not found") => {
-                // Table doesn't exist on this data node — return empty results.
-                // In a cluster, not all tables exist on all nodes; this is normal.
-                debug!("Table not found on this node, returning empty: {}", e);
+            Err(e) if e.contains("not found")
+                || e.contains("No field named")
+                || e.contains("Schema error") =>
+            {
+                // Table or field doesn't exist on this data node — return empty results.
+                // In a cluster, not all tables/columns exist on all nodes; this is normal
+                // when tables are sharded across data nodes or have heterogeneous schemas.
+                debug!("Query not satisfiable on this node, returning empty: {}", e);
                 let output = stream::empty();
                 return Ok(Response::new(Box::pin(output)));
             }

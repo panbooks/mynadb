@@ -586,8 +586,24 @@ fn transpile_field(field: &Field, _has_time_group: bool) -> Result<String, Trans
 
     if let Some(ref alias) = field.alias {
         Ok(format!("{} AS \"{}\"", expr_sql, alias.replace('"', "\"\"")))
+    } else if let Some(auto_alias) = influxql_auto_alias(&field.expr) {
+        // InfluxDB names columns after the aggregate function (e.g., mean, count, last)
+        // when no explicit alias is provided. Generate the same aliases so Grafana
+        // dashboards using $col work correctly.
+        Ok(format!("{} AS \"{}\"", expr_sql, auto_alias))
     } else {
         Ok(expr_sql)
+    }
+}
+
+/// Derive the automatic column alias for an InfluxQL field expression.
+///
+/// InfluxDB convention: `SELECT mean("field") FROM m` → column named `mean`.
+/// This returns the InfluxQL function name (lowercase) for function expressions.
+fn influxql_auto_alias(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Function(func) => Some(func.name.to_lowercase()),
+        _ => None,
     }
 }
 

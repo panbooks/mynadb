@@ -16,6 +16,7 @@
 
 use super::types::DistributedQueryPlan;
 use super::QueryCoordinator;
+use crate::query::functions::time_bucket::create_time_bucket_udf;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
@@ -51,7 +52,9 @@ impl QueryCoordinator {
             .map_err(|e| format!("Failed to create memory table: {}", e))?;
 
         // Create a session context for the final aggregation
+        // Register custom UDFs so expressions like time_bucket() in GROUP BY work
         let ctx = SessionContext::new();
+        ctx.register_udf(create_time_bucket_udf());
         ctx.register_table("partial_results", Arc::new(mem_table))
             .map_err(|e| format!("Failed to register table: {}", e))?;
 
@@ -88,6 +91,21 @@ impl QueryCoordinator {
     /// For global aggregates (COUNT/SUM without GROUP BY), we re-aggregate properly.
     pub(super) fn build_final_aggregation_sql(&self, original_sql: &str, schema: &SchemaRef) -> String {
         let sql_upper = original_sql.to_uppercase();
+
+        // CTE queries (e.g., derivative with WITH _derivative_sub AS) already produce
+        // final results on each node. Don't try to re-aggregate — just concatenate,
+        // sort by time, and apply LIMIT.
+        if sql_upper.trim_start().starts_with("WITH ") {
+            let mut final_sql = "SELECT * FROM partial_results ORDER BY time ASC".to_string();
+            if let Some(limit_pos) = sql_upper.rfind("LIMIT") {
+                // Extract LIMIT from the outermost query (last occurrence)
+                let limit_clause = &original_sql[limit_pos..];
+                final_sql.push(' ');
+                final_sql.push_str(limit_clause.trim());
+            }
+            debug!("CTE query detected, skipping re-aggregation: {}", final_sql);
+            return final_sql;
+        }
 
         // Check query characteristics
         let has_group_by = sql_upper.contains("GROUP BY");
@@ -191,50 +209,77 @@ impl QueryCoordinator {
     ///
     /// For GROUP BY queries, each node returns partial aggregates per group.
     /// We need to re-aggregate across nodes for each group.
+    ///
+    /// Key insight: data nodes return results with SELECT aliases applied.
+    /// GROUP BY `time_bucket("time", 10000000000, 0)` produces a column
+    /// named `time` (the AS alias). The re-aggregation must use these
+    /// schema column names, not the raw GROUP BY expressions.
     fn build_group_by_reaggregate_sql(&self, sql_upper: &str, original_sql: &str, schema: &SchemaRef) -> String {
-        // Extract GROUP BY columns
-        let group_by_cols = self.extract_group_by_columns(sql_upper, original_sql);
+        // Resolve GROUP BY expressions to their output column names in the schema.
+        // e.g., GROUP BY time_bucket("time", 10s) → schema column "time" (from AS alias)
+        let group_col_names = self.resolve_group_by_to_schema(sql_upper, original_sql, schema);
 
-        // Extract aggregate columns from schema (excludes GROUP BY columns)
-        let agg_cols = self.extract_aggregate_columns_from_schema(schema, &group_by_cols);
+        // Everything else in the schema is an aggregate column
+        let group_set: std::collections::HashSet<&str> = group_col_names.iter().map(|s| s.as_str()).collect();
+        let mut agg_cols: Vec<(String, String)> = Vec::new();
 
-        if group_by_cols.is_empty() || agg_cols.is_empty() {
+        for field in schema.fields() {
+            let col_name = field.name();
+            if group_set.contains(col_name.as_str()) {
+                continue;
+            }
+            // Determine re-aggregation function based on column name
+            let col_lower = col_name.to_lowercase();
+            let reagg_func = if col_lower.contains("count") {
+                "SUM"
+            } else if col_lower.contains("sum") {
+                "SUM"
+            } else if col_lower.contains("min") {
+                "MIN"
+            } else if col_lower.contains("max") {
+                "MAX"
+            } else {
+                // Default: AVG for numeric aggregates (AVG of AVGs is an approximation,
+                // but correct when each node has the same number of rows per group)
+                "AVG"
+            };
+            agg_cols.push((col_name.clone(), reagg_func.to_string()));
+        }
+
+        if group_col_names.is_empty() || agg_cols.is_empty() {
             // Fallback: just concatenate with ORDER BY/LIMIT
             let mut final_sql = "SELECT * FROM partial_results".to_string();
-
-            if let Some(order_pos) = sql_upper.find("ORDER BY") {
-                let order_clause = &original_sql[order_pos..];
-                let end_pos = order_clause
-                    .to_uppercase()
-                    .find("LIMIT")
-                    .unwrap_or(order_clause.len());
-                final_sql.push(' ');
-                final_sql.push_str(order_clause[..end_pos].trim());
-            }
-
-            if let Some(limit_pos) = sql_upper.find("LIMIT") {
-                let limit_clause = &original_sql[limit_pos..];
-                final_sql.push(' ');
-                final_sql.push_str(limit_clause.trim());
-            }
-
+            self.append_order_by_limit(&mut final_sql, sql_upper, original_sql);
             return final_sql;
         }
 
-        // Build SELECT clause with proper re-aggregation
-        let mut select_parts: Vec<String> = group_by_cols.iter().map(|c| c.to_string()).collect();
+        // Build SELECT clause using schema column names
+        let mut select_parts: Vec<String> = group_col_names.iter()
+            .map(|c| format!("\"{}\"", c))
+            .collect();
 
         for (col_name, reagg_func) in &agg_cols {
             select_parts.push(format!("{}(\"{}\") as \"{}\"", reagg_func, col_name, col_name));
         }
 
+        let group_by_clause: Vec<String> = group_col_names.iter()
+            .map(|c| format!("\"{}\"", c))
+            .collect();
+
         let mut final_sql = format!(
             "SELECT {} FROM partial_results GROUP BY {}",
             select_parts.join(", "),
-            group_by_cols.join(", ")
+            group_by_clause.join(", ")
         );
 
-        // Add ORDER BY if present
+        self.append_order_by_limit(&mut final_sql, sql_upper, original_sql);
+
+        debug!("GROUP BY re-aggregation SQL: {}", final_sql);
+        final_sql
+    }
+
+    /// Append ORDER BY and LIMIT clauses from the original SQL
+    fn append_order_by_limit(&self, final_sql: &mut String, sql_upper: &str, original_sql: &str) {
         if let Some(order_pos) = sql_upper.find("ORDER BY") {
             let order_clause = &original_sql[order_pos..];
             let end_pos = order_clause
@@ -245,18 +290,111 @@ impl QueryCoordinator {
             final_sql.push_str(order_clause[..end_pos].trim());
         }
 
-        // Add LIMIT if present
         if let Some(limit_pos) = sql_upper.find("LIMIT") {
             let limit_clause = &original_sql[limit_pos..];
             final_sql.push(' ');
             final_sql.push_str(limit_clause.trim());
         }
-
-        debug!("GROUP BY re-aggregation SQL: {}", final_sql);
-        final_sql
     }
 
-    /// Extract GROUP BY column names from SQL
+    /// Resolve GROUP BY expressions to schema column names.
+    ///
+    /// GROUP BY may contain raw expressions like `time_bucket("time", 10000000000, 0)`
+    /// but the schema has the alias `time` (from SELECT ... AS time).
+    /// This resolves each GROUP BY expression to its corresponding schema column.
+    fn resolve_group_by_to_schema(&self, sql_upper: &str, original_sql: &str, schema: &SchemaRef) -> Vec<String> {
+        let raw_group_cols = self.extract_group_by_columns(sql_upper, original_sql);
+        if raw_group_cols.is_empty() {
+            return Vec::new();
+        }
+
+        // Build a map of SELECT expression → alias from the original SQL
+        let select_aliases = Self::extract_select_aliases(original_sql);
+
+        let schema_names: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
+        let mut resolved = Vec::new();
+
+        for raw_col in &raw_group_cols {
+            let trimmed = raw_col.trim().trim_matches('"');
+
+            // Direct match: GROUP BY column name exists in schema
+            if schema_names.iter().any(|s| s.eq_ignore_ascii_case(trimmed)) {
+                resolved.push(
+                    schema_names.iter().find(|s| s.eq_ignore_ascii_case(trimmed)).unwrap().clone()
+                );
+                continue;
+            }
+
+            // Alias match: GROUP BY expression has a SELECT alias
+            let raw_normalized = raw_col.trim().to_lowercase().replace(' ', "");
+            if let Some(alias) = select_aliases.get(&raw_normalized) {
+                if schema_names.iter().any(|s| s == alias) {
+                    resolved.push(alias.clone());
+                    continue;
+                }
+            }
+
+            // Last resort: use the raw expression (may produce extra columns)
+            debug!("Could not resolve GROUP BY expression to schema column: {}", raw_col);
+            resolved.push(raw_col.clone());
+        }
+
+        resolved
+    }
+
+    /// Extract SELECT expression → alias mapping.
+    /// Parses "expr AS alias" patterns from the SELECT clause.
+    fn extract_select_aliases(original_sql: &str) -> std::collections::HashMap<String, String> {
+        let mut aliases = std::collections::HashMap::new();
+        let sql_upper = original_sql.to_uppercase();
+
+        // Find SELECT ... FROM boundaries
+        let select_start = sql_upper.find("SELECT").map(|p| p + 6).unwrap_or(0);
+        let from_pos = sql_upper.find(" FROM ").unwrap_or(original_sql.len());
+        let select_clause = &original_sql[select_start..from_pos];
+
+        // Split by comma, respecting parentheses depth
+        let items = Self::split_select_items(select_clause);
+
+        for item in items {
+            let item = item.trim();
+            // Look for " AS " (case-insensitive) to find alias
+            let item_upper = item.to_uppercase();
+            if let Some(as_pos) = item_upper.rfind(" AS ") {
+                let expr = item[..as_pos].trim();
+                let alias = item[as_pos + 4..].trim().trim_matches('"');
+                let expr_normalized = expr.to_lowercase().replace(' ', "");
+                aliases.insert(expr_normalized, alias.to_string());
+            }
+        }
+
+        aliases
+    }
+
+    /// Split SELECT items by comma, respecting parentheses depth
+    fn split_select_items(select_clause: &str) -> Vec<String> {
+        let mut items = Vec::new();
+        let mut current = String::new();
+        let mut depth = 0;
+
+        for ch in select_clause.chars() {
+            match ch {
+                '(' => { depth += 1; current.push(ch); }
+                ')' => { depth -= 1; current.push(ch); }
+                ',' if depth == 0 => {
+                    items.push(current.trim().to_string());
+                    current.clear();
+                }
+                _ => current.push(ch),
+            }
+        }
+        if !current.trim().is_empty() {
+            items.push(current.trim().to_string());
+        }
+        items
+    }
+
+    /// Extract raw GROUP BY column expressions from SQL
     fn extract_group_by_columns(&self, sql_upper: &str, original_sql: &str) -> Vec<String> {
         if let Some(group_by_pos) = sql_upper.find("GROUP BY") {
             let after_group_by = &original_sql[group_by_pos + 9..]; // Skip "GROUP BY "
@@ -270,53 +408,10 @@ impl QueryCoordinator {
                 }
             }
 
-            let group_cols = &after_group_by[..end_pos];
-            return group_cols
-                .split(',')
-                .map(|c| c.trim().to_string())
-                .filter(|c| !c.is_empty())
-                .collect();
+            let group_clause = &after_group_by[..end_pos];
+            // Split by comma respecting parentheses (for function calls in GROUP BY)
+            return Self::split_select_items(group_clause);
         }
         Vec::new()
-    }
-
-    /// Extract aggregate columns from schema, excluding GROUP BY columns
-    /// Returns: Vec<(column_name, reagg_function)>
-    fn extract_aggregate_columns_from_schema(&self, schema: &SchemaRef, group_by_cols: &[String]) -> Vec<(String, String)> {
-        let mut results = Vec::new();
-
-        // Normalize group by column names for comparison
-        let group_cols_lower: Vec<String> = group_by_cols.iter()
-            .map(|c| c.trim_matches('"').to_lowercase())
-            .collect();
-
-        for field in schema.fields() {
-            let col_name = field.name();
-            let col_lower = col_name.to_lowercase();
-
-            // Skip GROUP BY columns
-            if group_cols_lower.contains(&col_lower) {
-                continue;
-            }
-
-            // Determine re-aggregation function based on column name
-            let reagg_func = if col_lower.contains("count") {
-                "SUM"
-            } else if col_lower.contains("sum") {
-                "SUM"
-            } else if col_lower.contains("min") {
-                "MIN"
-            } else if col_lower.contains("max") {
-                "MAX"
-            } else if col_lower.contains("avg") {
-                "AVG"
-            } else {
-                "SUM"
-            };
-
-            results.push((col_name.clone(), reagg_func.to_string()));
-        }
-
-        results
     }
 }
