@@ -420,9 +420,9 @@ fn transpile_select_with_cte(stmt: &SelectStatement, ctx: &TranspileContext) -> 
             )
         };
 
-        // Apply non-negative clamp
+        // Apply non-negative clamp (use CASE instead of GREATEST for DataFusion compat)
         let clamped = if df.func_name == "non_negative_derivative" {
-            format!("GREATEST(0, {})", deriv_expr)
+            format!("CASE WHEN ({deriv}) < 0 THEN 0 ELSE ({deriv}) END", deriv = deriv_expr)
         } else {
             deriv_expr
         };
@@ -552,8 +552,16 @@ fn transpile_expr(expr: &Expr) -> Result<String, TranspileError> {
         Expr::Literal(lit) => transpile_literal(lit),
         Expr::Function(func) => transpile_function(func),
         Expr::BinaryOp { left, op, right } => {
+            // Special handling: when Duration is used in arithmetic with now()
+            // (e.g., `now() - 1h`), emit it as INTERVAL for Timestamp arithmetic.
+            // When Duration is used in comparison with time (e.g., `time >= 1770ms`),
+            // it's an epoch timestamp — emit as nanoseconds Int64.
+            let right_sql = if matches!(right.as_ref(), Expr::Duration(_)) && expr_involves_now(left) {
+                transpile_expr_as_interval(right)?
+            } else {
+                transpile_expr(right)?
+            };
             let left_sql = transpile_expr(left)?;
-            let right_sql = transpile_expr(right)?;
             Ok(format!("({} {} {})", left_sql, transpile_binary_op(op), right_sql))
         }
         Expr::UnaryOp { op, expr } => {
@@ -568,10 +576,30 @@ fn transpile_expr(expr: &Expr) -> Result<String, TranspileError> {
             Ok(format!("'{}'", escape_string(pattern)))
         }
         Expr::Duration(d) => {
-            // Convert to interval
-            Ok(format!("INTERVAL '{}'", d.to_interval_string()))
+            // Standalone duration in a comparison (e.g., time >= 1770474693254ms)
+            // represents an epoch timestamp — convert to nanoseconds.
+            Ok(d.to_nanoseconds().to_string())
         }
         Expr::Now => Ok("now()".to_string()),
+    }
+}
+
+/// Check whether an expression involves `now()` (possibly nested in arithmetic).
+fn expr_involves_now(expr: &Expr) -> bool {
+    match expr {
+        Expr::Now => true,
+        Expr::BinaryOp { left, right, .. } => {
+            expr_involves_now(left) || expr_involves_now(right)
+        }
+        _ => false,
+    }
+}
+
+/// Transpile an expression as a SQL INTERVAL (for Timestamp arithmetic).
+fn transpile_expr_as_interval(expr: &Expr) -> Result<String, TranspileError> {
+    match expr {
+        Expr::Duration(d) => Ok(format!("INTERVAL '{}'", d.to_interval_string())),
+        other => transpile_expr(other),
     }
 }
 
@@ -1054,7 +1082,7 @@ mod tests {
         assert!(sql.contains("WITH _derivative_sub AS"), "SQL was: {}", sql);
         assert!(sql.contains(r#"AVG("bytes_recv")"#), "SQL was: {}", sql);
         assert!(sql.contains("LAG"), "SQL was: {}", sql);
-        assert!(sql.contains("GREATEST(0,"), "SQL was: {}", sql);
+        assert!(sql.contains("CASE WHEN"), "Should use CASE for non-negative clamp. SQL was: {}", sql);
         assert!(sql.contains("/ 300.0"), "SQL was: {}", sql); // 5m bucket / 1s interval = 300
     }
 
@@ -1067,7 +1095,7 @@ mod tests {
         let sql = transpile(&stmt, &ctx()).unwrap();
         assert!(sql.contains("WITH _derivative_sub AS"), "SQL was: {}", sql);
         assert!(sql.contains("* 8"), "SQL was: {}", sql);
-        assert!(sql.contains("GREATEST(0,"), "SQL was: {}", sql);
+        assert!(sql.contains("CASE WHEN"), "Should use CASE for non-negative clamp. SQL was: {}", sql);
     }
 
     #[test]
@@ -1091,7 +1119,7 @@ mod tests {
         let sql = transpile(&stmt, &ctx()).unwrap();
         assert!(sql.contains("WITH _derivative_sub AS"), "SQL was: {}", sql);
         assert!(sql.contains("LAG"), "SQL was: {}", sql);
-        assert!(!sql.contains("GREATEST"), "SQL was: {}", sql);
+        assert!(!sql.contains("CASE WHEN"), "Plain derivative should not clamp. SQL was: {}", sql);
     }
 
     #[test]

@@ -284,8 +284,8 @@ pub fn qualify_table_names(sql: &str, catalog_name: &str) -> String {
 
             let table_ref = remaining[..end_pos].trim();
 
-            // Skip empty refs or subqueries
-            if table_ref.is_empty() || table_ref.starts_with('(') {
+            // Skip empty refs, subqueries, and CTE references (e.g., _derivative_sub)
+            if table_ref.is_empty() || table_ref.starts_with('(') || table_ref.starts_with('_') {
                 search_pos = abs_pos + end_pos;
                 continue;
             }
