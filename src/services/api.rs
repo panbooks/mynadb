@@ -76,7 +76,8 @@ pub struct QueryParams {
 /// InfluxDB-compatible query parameters
 #[derive(Deserialize)]
 pub struct InfluxQueryParams {
-    /// The InfluxQL query
+    /// The InfluxQL query (optional for POST where q is in body)
+    #[serde(default)]
     pub q: String,
     /// Database name (optional, can be specified in path)
     #[serde(default)]

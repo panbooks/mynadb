@@ -561,7 +561,10 @@ impl Parser {
 
     fn parse_order_by(&mut self) -> Result<OrderBy, ParseError> {
         // ORDER BY time [ASC|DESC]
-        self.expect(&Token::Time)?;
+        // InfluxQL also allows ORDER BY ASC|DESC (time is implicit)
+        if self.check(&Token::Time) {
+            self.advance();
+        }
 
         let time_desc = if self.check(&Token::Desc) {
             self.advance();
@@ -1177,6 +1180,29 @@ mod tests {
         let stmt = parse(r#"SELECT mean("usage_user") AS "user" FROM "cpu""#).unwrap();
         if let Statement::Select(s) = stmt {
             assert_eq!(s.fields[0].alias, Some("user".to_string()));
+        } else {
+            panic!("Expected SELECT statement");
+        }
+    }
+
+    #[test]
+    fn test_order_by_asc_without_time() {
+        // Grafana sends ORDER BY asc (without explicit "time")
+        let stmt = parse(r#"SELECT mean("value") FROM "cpu" WHERE time > now() - 1h GROUP BY time(10s) ORDER BY asc"#).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(s.order_by.is_some());
+            assert_eq!(s.order_by.unwrap().time_desc, false);
+        } else {
+            panic!("Expected SELECT statement");
+        }
+    }
+
+    #[test]
+    fn test_order_by_desc_without_time() {
+        let stmt = parse(r#"SELECT mean("value") FROM "cpu" WHERE time > now() - 1h GROUP BY time(10s) ORDER BY desc"#).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(s.order_by.is_some());
+            assert_eq!(s.order_by.unwrap().time_desc, true);
         } else {
             panic!("Expected SELECT statement");
         }

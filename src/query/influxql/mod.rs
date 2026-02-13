@@ -188,7 +188,11 @@ pub fn format_result(
 pub fn extract_query_from_body(body: &str, fallback_q: Option<&str>) -> Option<String> {
     if body.starts_with("q=") {
         body.strip_prefix("q=")
-            .map(|s| urlencoding::decode(s).unwrap_or_default().into_owned())
+            .map(|s| {
+                // Form-urlencoded uses + for spaces; replace before percent-decoding
+                let with_spaces = s.replace('+', " ");
+                urlencoding::decode(&with_spaces).unwrap_or_default().into_owned()
+            })
     } else if !body.is_empty() {
         Some(body.to_string())
     } else {
