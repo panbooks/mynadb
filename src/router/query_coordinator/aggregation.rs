@@ -17,7 +17,7 @@
 use super::types::DistributedQueryPlan;
 use super::QueryCoordinator;
 use crate::query::functions::time_bucket::create_time_bucket_udf;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::*;
@@ -179,8 +179,17 @@ impl QueryCoordinator {
             let col_name = field.name();
             let col_lower = col_name.to_lowercase();
 
+            let is_numeric = matches!(
+                field.data_type(),
+                DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+                | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
+                | DataType::Float16 | DataType::Float32 | DataType::Float64
+            );
+
             // Determine re-aggregation function based on column name
-            let reagg_func = if col_lower.contains("count") {
+            let reagg_func = if !is_numeric {
+                "MIN" // Non-numeric: pick representative value
+            } else if col_lower.contains("count") {
                 "SUM" // SUM of partial counts
             } else if col_lower.contains("sum") {
                 "SUM" // SUM of partial sums
@@ -228,9 +237,22 @@ impl QueryCoordinator {
             if group_set.contains(col_name.as_str()) {
                 continue;
             }
+
+            // Non-numeric types (strings, booleans) cannot use AVG/SUM —
+            // use MIN to pick a representative value (correct for constants
+            // and tag columns which are the same within each group).
+            let is_numeric = matches!(
+                field.data_type(),
+                DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+                | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
+                | DataType::Float16 | DataType::Float32 | DataType::Float64
+            );
+
             // Determine re-aggregation function based on column name
             let col_lower = col_name.to_lowercase();
-            let reagg_func = if col_lower.contains("count") {
+            let reagg_func = if !is_numeric {
+                "MIN"
+            } else if col_lower.contains("count") {
                 "SUM"
             } else if col_lower.contains("sum") {
                 "SUM"
