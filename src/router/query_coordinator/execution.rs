@@ -41,6 +41,7 @@ struct QueryContext {
 impl QueryCoordinator {
     /// Execute a distributed query
     pub async fn execute_query(&self, catalog: &str, sql: &str) -> QueryResult {
+        info!("Query: db={} sql={}", catalog, sql);
         let start = Instant::now();
 
         let plan = match self.plan_distributed_query(catalog, sql).await {
@@ -78,6 +79,14 @@ impl QueryCoordinator {
         };
 
         let total_rows: u64 = final_batches.iter().map(|b| b.num_rows() as u64).sum();
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        info!(
+            "Query completed: db={} rows={} nodes={} cost={}ms",
+            catalog,
+            total_rows,
+            plan.target_nodes.len(),
+            elapsed_ms
+        );
 
         QueryResult {
             success: true,
@@ -85,7 +94,7 @@ impl QueryCoordinator {
             total_rows,
             bytes_scanned: 0,
             nodes_queried: plan.target_nodes.len(),
-            elapsed_ms: start.elapsed().as_millis() as u64,
+            elapsed_ms,
             error: None,
         }
     }

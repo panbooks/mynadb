@@ -13,7 +13,7 @@ use crate::query::types::{QueryAnalysis, QueryExplainResult};
 use datafusion::arrow::array::{Array, RecordBatch};
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::auth::AuthContext;
 
@@ -86,7 +86,7 @@ impl QueryEngine {
 
         let final_sql = &transformed.sql;
 
-        debug!("SQL: {}", sql);
+        info!("Query: db={} sql={}", db_name, sql);
         if qualified_sql != sql {
             debug!("Qualified: {}", qualified_sql);
         }
@@ -100,6 +100,11 @@ impl QueryEngine {
         let start_time = Instant::now();
         let mut result = self.execute_query(final_sql).await?;
         let query_time_ms = start_time.elapsed().as_millis() as u64;
+        let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
+        info!(
+            "Query completed: db={} rows={} cost={}ms",
+            db_name, total_rows, query_time_ms
+        );
 
         if transformed.was_transformed && !matches!(transformed.fill_option, FillOption::None) {
             if let Some(interval_nanos) = transformed.interval_nanos {
