@@ -388,6 +388,100 @@ mod tests {
         }
     }
 
+    /// Test that schema inference merges fields from files with different column sets.
+    /// Simulates Telegraf behavior where e.g. `swap` sends `free,total,used` in one
+    /// batch and `in,out` in another, resulting in parquet files with disjoint schemas.
+    #[tokio::test]
+    async fn test_schema_merges_heterogeneous_parquet_files() {
+        use datafusion::arrow::array::Float64Array;
+
+        let temp_dir = TempDir::new().unwrap();
+        let part = temp_dir.path().join("date=2024-01-01").join("node_id=standalone");
+        std::fs::create_dir_all(&part).unwrap();
+
+        // File 1: fields {time, host, free, total, used}
+        {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("time", DataType::Int64, false),
+                Field::new("host", DataType::Utf8, true),
+                Field::new("free", DataType::Float64, true),
+                Field::new("total", DataType::Float64, true),
+                Field::new("used", DataType::Float64, true),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(vec![1000])),
+                    Arc::new(StringArray::from(vec!["host1"])),
+                    Arc::new(Float64Array::from(vec![100.0])),
+                    Arc::new(Float64Array::from(vec![200.0])),
+                    Arc::new(Float64Array::from(vec![100.0])),
+                ],
+            )
+            .unwrap();
+            let path = part.join("L0_aaa.parquet");
+            let file = File::create(&path).unwrap();
+            let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        }
+
+        // File 2: fields {time, host, swap_in, swap_out} (different field set)
+        {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("time", DataType::Int64, false),
+                Field::new("host", DataType::Utf8, true),
+                Field::new("swap_in", DataType::Float64, true),
+                Field::new("swap_out", DataType::Float64, true),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(vec![1000])),
+                    Arc::new(StringArray::from(vec!["host1"])),
+                    Arc::new(Float64Array::from(vec![512.0])),
+                    Arc::new(Float64Array::from(vec![256.0])),
+                ],
+            )
+            .unwrap();
+            let path = part.join("L0_bbb.parquet");
+            let file = File::create(&path).unwrap();
+            let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        }
+
+        let object_store = create_local_object_store(temp_dir.path());
+        let config = ParquetTableConfig::new("test_swap");
+        let provider = ParquetTableProvider::try_new(object_store, "", "testdb", "default", config)
+            .await
+            .unwrap();
+
+        let schema = provider.schema();
+
+        // Should have ALL fields from both files + partition columns
+        // time, host, free, total, used, swap_in, swap_out, date, node_id = 9
+        assert_eq!(schema.fields().len(), 9, "schema fields: {:?}", schema);
+        assert!(schema.field_with_name("time").is_ok());
+        assert!(schema.field_with_name("host").is_ok());
+        assert!(schema.field_with_name("free").is_ok());
+        assert!(schema.field_with_name("total").is_ok());
+        assert!(schema.field_with_name("used").is_ok());
+        assert!(schema.field_with_name("swap_in").is_ok());
+        assert!(schema.field_with_name("swap_out").is_ok());
+        assert!(schema.field_with_name("date").is_ok());
+        assert!(schema.field_with_name("node_id").is_ok());
+
+        // Query should return rows from both files with NULLs for missing columns
+        let ctx = SessionContext::new();
+        ctx.register_table("swap", Arc::new(provider)).unwrap();
+
+        let df = ctx.sql("SELECT * FROM swap ORDER BY free DESC NULLS LAST").await.unwrap();
+        let results = df.collect().await.unwrap();
+        let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 2, "should have 2 rows (1 from each file)");
+    }
+
     #[tokio::test]
     async fn test_query_with_projection() {
         let temp_dir = TempDir::new().unwrap();

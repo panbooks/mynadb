@@ -212,7 +212,7 @@ impl ExecutionPlan for ParquetExecPlan {
     ) -> Result<SendableRecordBatchStream> {
         // For single partition, read all files
         // For multiple partitions, each partition reads one file
-        let files_to_read = if self.files.len() <= 1 || partition == 0 {
+        let files_to_read = if self.files.len() <= 1 {
             self.files.clone()
         } else if partition < self.files.len() {
             vec![self.files[partition].clone()]

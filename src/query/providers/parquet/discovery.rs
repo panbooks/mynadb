@@ -139,40 +139,74 @@ pub async fn discover_files(
     Ok(files)
 }
 
-/// Infer schema by finding ONE parquet file under the prefix
+/// Infer schema by merging schemas from ALL parquet files under the prefix
 ///
-/// This is used during table provider construction to get the schema
-/// without listing all files.
+/// Different parquet files for the same table may have different column sets
+/// (e.g., Telegraf sends separate points with different field sets for the same
+/// measurement like `swap`: one batch has `free,total,used,used_percent` and
+/// another has `in,out`). Reading only one file would miss fields from other
+/// files, causing NULL-only rows in query results.
+///
+/// This function reads schemas from multiple files (up to MAX_FILES_FOR_SCHEMA)
+/// and merges them into a unified schema containing all fields.
 pub async fn infer_schema_from_prefix(
     object_store: &Arc<dyn ObjectStore>,
     base_path: &str,
     config: &ParquetTableConfig,
 ) -> Result<Schema> {
     use futures::StreamExt;
+    use std::collections::HashSet;
 
     let prefix = ObjectPath::from(base_path.trim_start_matches('/'));
 
-    // Stream through files until we find one .parquet file
+    // Read schemas from multiple files and merge them to capture all field sets.
+    // Cap at MAX_FILES_FOR_SCHEMA to bound I/O cost; also stop early if the last
+    // several files added no new fields (schema has converged).
+    const MAX_FILES_FOR_SCHEMA: usize = 20;
+    const CONVERGENCE_THRESHOLD: usize = 3;
+
     let mut list_stream = object_store.list(Some(&prefix));
+    let mut merged_fields: Vec<Field> = Vec::new();
+    let mut seen_names: HashSet<String> = HashSet::new();
+    let mut files_read = 0;
+    let mut files_without_new_fields = 0;
 
     while let Some(result) = list_stream.next().await {
         match result {
             Ok(meta) => {
                 let path_str = meta.location.to_string();
-                if path_str.ends_with(".parquet") {
-                    // Found a parquet file, infer schema from it
-                    let schema = infer_schema_from_path(object_store, &meta.location).await?;
+                if !path_str.ends_with(".parquet") {
+                    continue;
+                }
 
-                    // Add partition columns to schema (date, node_id)
-                    let mut fields: Vec<Field> =
-                        schema.fields().iter().map(|f| f.as_ref().clone()).collect();
-                    if !fields.iter().any(|f| f.name() == &config.partition_column) {
-                        fields.push(Field::new(&config.partition_column, DataType::Utf8, true));
+                match infer_schema_from_path(object_store, &meta.location).await {
+                    Ok(schema) => {
+                        let mut found_new = false;
+                        for field in schema.fields() {
+                            if seen_names.insert(field.name().clone()) {
+                                merged_fields.push(field.as_ref().clone());
+                                found_new = true;
+                            }
+                        }
+                        files_read += 1;
+
+                        if found_new {
+                            files_without_new_fields = 0;
+                        } else {
+                            files_without_new_fields += 1;
+                        }
+
+                        // Stop if we've read enough files or schema has converged
+                        if files_read >= MAX_FILES_FOR_SCHEMA
+                            || (files_read > 1
+                                && files_without_new_fields >= CONVERGENCE_THRESHOLD)
+                        {
+                            break;
+                        }
                     }
-                    if !fields.iter().any(|f| f.name() == &config.node_id_column) {
-                        fields.push(Field::new(&config.node_id_column, DataType::Utf8, true));
+                    Err(e) => {
+                        debug!("Failed to read schema from {}: {}", path_str, e);
                     }
-                    return Ok(Schema::new(fields));
                 }
             }
             Err(e) => {
@@ -181,11 +215,29 @@ pub async fn infer_schema_from_prefix(
         }
     }
 
-    // No parquet files found - return minimal schema with partition columns
-    Ok(Schema::new(vec![
-        Field::new(&config.partition_column, DataType::Utf8, true),
-        Field::new(&config.node_id_column, DataType::Utf8, true),
-    ]))
+    if merged_fields.is_empty() {
+        // No parquet files found - return minimal schema with partition columns
+        return Ok(Schema::new(vec![
+            Field::new(&config.partition_column, DataType::Utf8, true),
+            Field::new(&config.node_id_column, DataType::Utf8, true),
+        ]));
+    }
+
+    debug!(
+        "Inferred merged schema from {} parquet files: {} fields",
+        files_read,
+        merged_fields.len()
+    );
+
+    // Add partition columns if not already present
+    if !seen_names.contains(&config.partition_column) {
+        merged_fields.push(Field::new(&config.partition_column, DataType::Utf8, true));
+    }
+    if !seen_names.contains(&config.node_id_column) {
+        merged_fields.push(Field::new(&config.node_id_column, DataType::Utf8, true));
+    }
+
+    Ok(Schema::new(merged_fields))
 }
 
 /// Infer schema from a specific parquet file path
