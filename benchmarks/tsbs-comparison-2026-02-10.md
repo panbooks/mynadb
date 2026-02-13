@@ -28,27 +28,39 @@
 
 ## Write (Bulk Load) Performance
 
-| Metric | MynaDB | InfluxDB 3 | Ratio |
-|---|---|---|---|
-| **Total time** | **20.35s** | 107.49s | **5.3x faster** |
-| **Metrics/sec** | **4,245,636** | 803,803 | **5.3x faster** |
-| **Rows/sec** | **424,564** | 80,380 | **5.3x faster** |
-| Workers | 8 | 8 | |
-| Batch size | 10,000 | 10,000 | |
-| Gzip | yes | yes | |
+3-day dataset (8.64M rows, 86.4M metrics, ~2.8 GiB), 8 workers, batch 10K, gzip enabled.
 
-MynaDB config: 4 GiB cache, 5s flush interval, WAL disabled.
+| Configuration | Metrics/sec | Rows/sec | Total time |
+|---|---|---|---|
+| **MynaDB** WAL on, `sync_on_write=true` | **3,838,782** | **383,878** | **22.51s** |
+| **MynaDB** WAL on, `sync_on_write=false` | **3,755,761** | **375,576** | **23.01s** |
+| **MynaDB** WAL disabled | 3,606,848 | 360,685 | 23.95s |
+| **InfluxDB 3** `--wal-flush-interval=100ms` | 4,132,202 | 413,220 | 20.91s |
+| **InfluxDB 3** `--wal-flush-interval=200ms` | 3,914,462 | 391,446 | 22.07s |
+| **InfluxDB 3** `--wal-flush-interval=500ms` | 1,596,746 | 159,675 | 54.11s |
+| **InfluxDB 3** default (`--wal-flush-interval=1s`) | 800,389 | 80,039 | 107.95s |
+| **InfluxDB 3** default + `no_sync=true` | 799,201 | 79,920 | 108.11s |
+
+**MynaDB config:** 4 GiB cache, 5s flush interval.
+**InfluxDB 3 config:** Core v3.8.0, default settings unless noted.
+
+### Analysis
+
+- **Default configs:** MynaDB (WAL+sync) delivers **4.8x higher throughput** than InfluxDB 3 (default 1s flush): 3.84M vs 0.80M metrics/sec.
+- **Tuned InfluxDB 3:** With `--wal-flush-interval=100ms`, InfluxDB 3 reaches 4.13M metrics/sec, **matching MynaDB**. The default 1s flush interval is the primary bottleneck, not fsync.
+- **MynaDB WAL overhead is near-zero:** WAL disabled vs WAL+sync=true are within noise (~3.6-3.8M metrics/sec). The WAL is fully asynchronous and does not block the write path.
+- **InfluxDB 3 `no_sync=true` has no effect:** The `no_sync` query parameter (which skips waiting for WAL persistence before responding) made no measurable difference, confirming that InfluxDB 3's WAL does not do synchronous fsync — the bottleneck is the flush interval batching.
 
 ### Large Dataset (12-day, 34.56M rows, ~11 GiB)
 
-Tested with the full 12-day dataset (8 workers):
+Tested with the full 12-day dataset (8 workers), default configs:
 
 | Metric | MynaDB | InfluxDB 3 |
 |---|---|---|
 | **Metrics/sec** | **4,183,522** | 800,273 |
 | **Total time** | 82.6s | 431.9s |
 
-MynaDB sustained >4M metrics/sec with an 8 GiB cache. InfluxDB 3 held steady at ~800K metrics/sec.
+MynaDB sustained >4M metrics/sec with an 8 GiB cache. InfluxDB 3 held steady at ~800K metrics/sec (default 1s flush).
 
 ## Query Performance
 
@@ -131,7 +143,7 @@ Dataset: 10K hosts, 6 hours, 5min interval (720K rows). Query cache disabled on 
 ## Summary
 
 ### Writes
-MynaDB delivers **5.3x higher write throughput** than InfluxDB 3 Core, sustaining over 4 million metrics/sec (424K rows/sec) on the same hardware.
+With default configurations, MynaDB (WAL+sync enabled) delivers **4.8x higher write throughput** than InfluxDB 3 Core: 3.84M vs 0.80M metrics/sec. However, with InfluxDB 3 tuned to `--wal-flush-interval=100ms`, throughput is essentially **equivalent** (~3.8M vs ~4.1M metrics/sec). The performance gap at default settings is due to InfluxDB 3's conservative 1-second WAL flush interval, not fsync overhead.
 
 ### Queries
 Mixed results:
@@ -140,10 +152,11 @@ Mixed results:
 - **cpu-max-all-1** (1 host, all metrics): MynaDB is 2.9x faster. With 8 hosts, InfluxDB 3 is 2.3x faster, suggesting MynaDB's multi-host query path has room for optimization.
 
 ### Key Observations
-1. MynaDB's write path is highly optimized for bulk ingestion with its in-memory cache architecture.
-2. InfluxDB 3's query engine (based on DataFusion/Apache Arrow, same as MynaDB) shows better performance on narrow-host queries, likely due to its native tag indexing.
-3. MynaDB's InfluxQL transpiler handles all TSBS query types. The `lastpoint` query (`GROUP BY tag ORDER BY time DESC LIMIT 1`) is transpiled to a `ROW_NUMBER()` window function and is 21.3x faster than InfluxDB 3.
-4. Memory usage is a concern for MynaDB on large datasets - the cache + query engine can exceed available RAM on resource-constrained systems.
+1. MynaDB's WAL has near-zero overhead on write throughput. WAL disabled vs WAL+sync=true shows no measurable difference (~3.6-3.8M metrics/sec), meaning the WAL is fully asynchronous.
+2. InfluxDB 3's write bottleneck at default settings is the `--wal-flush-interval=1s` batching, not disk sync. Reducing to 100ms closes the gap entirely. The `no_sync` write parameter has no effect.
+3. InfluxDB 3's query engine (based on DataFusion/Apache Arrow, same as MynaDB) shows better performance on narrow-host queries, likely due to its native tag indexing.
+4. MynaDB's InfluxQL transpiler handles all TSBS query types. The `lastpoint` query (`GROUP BY tag ORDER BY time DESC LIMIT 1`) is transpiled to a `ROW_NUMBER()` window function and is 21.3x faster than InfluxDB 3.
+5. Memory usage is a concern for MynaDB on large datasets - the cache + query engine can exceed available RAM on resource-constrained systems.
 
 ## Reproduction
 
