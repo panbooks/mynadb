@@ -107,7 +107,8 @@ pub fn batches_to_response_with_epoch(
 
             for col_idx in 0..batch.num_columns() {
                 let col = batch.column(col_idx);
-                let value = extract_value_with_epoch(col, row_idx, epoch);
+                let col_name = columns[col_idx].as_str();
+                let value = extract_value_with_epoch(col, row_idx, epoch, col_name);
                 row.push(value);
             }
 
@@ -191,7 +192,7 @@ pub fn batches_to_grouped_response_with_epoch(
             // Extract value columns
             let row: Vec<serde_json::Value> = value_columns
                 .iter()
-                .map(|(idx, _)| extract_value_with_epoch(batch.column(*idx), row_idx, epoch))
+                .map(|(idx, name)| extract_value_with_epoch(batch.column(*idx), row_idx, epoch, name))
                 .collect();
 
             groups.entry(group_key).or_default().push(row);
@@ -225,16 +226,18 @@ pub fn batches_to_grouped_response_with_epoch(
 }
 
 fn extract_value(array: &dyn Array, row_idx: usize) -> serde_json::Value {
-    extract_value_with_epoch(array, row_idx, None)
+    extract_value_with_epoch(array, row_idx, None, "")
 }
 
 /// Extract a value from an Arrow array, with optional epoch timestamp formatting.
 /// epoch: None = RFC3339, "ns" = nanoseconds, "us"/"u" = microseconds,
 ///        "ms" = milliseconds, "s" = seconds
+/// col_name: column name, used to identify Int64 time columns for epoch conversion
 fn extract_value_with_epoch(
     array: &dyn Array,
     row_idx: usize,
     epoch: Option<&str>,
+    col_name: &str,
 ) -> serde_json::Value {
     if array.is_null(row_idx) {
         return serde_json::Value::Null;
@@ -248,7 +251,12 @@ fn extract_value_with_epoch(
         DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
             let arr = array.as_any().downcast_ref::<Int64Array>();
             if let Some(arr) = arr {
-                serde_json::json!(arr.value(row_idx))
+                let val = arr.value(row_idx);
+                // time_bucket() returns Int64 nanoseconds — apply epoch conversion
+                if col_name == "time" {
+                    return convert_nanos_to_epoch(val, epoch);
+                }
+                serde_json::json!(val)
             } else {
                 // Try other int types
                 serde_json::Value::Null
@@ -285,24 +293,7 @@ fn extract_value_with_epoch(
                 .downcast_ref::<TimestampNanosecondArray>();
             if let Some(arr) = arr {
                 let nanos = arr.value(row_idx);
-                match epoch {
-                    Some("ns" | "n") => serde_json::json!(nanos),
-                    Some("us" | "u") => serde_json::json!(nanos / 1_000),
-                    Some("ms") => serde_json::json!(nanos / 1_000_000),
-                    Some("s") => serde_json::json!(nanos / 1_000_000_000),
-                    _ => {
-                        // Default: RFC3339 string
-                        let secs = nanos / 1_000_000_000;
-                        let nsecs = (nanos % 1_000_000_000) as u32;
-                        if let Some(dt) = chrono::DateTime::from_timestamp(secs, nsecs) {
-                            serde_json::Value::String(
-                                dt.format("%Y-%m-%dT%H:%M:%S%.9fZ").to_string(),
-                            )
-                        } else {
-                            serde_json::json!(nanos)
-                        }
-                    }
-                }
+                convert_nanos_to_epoch(nanos, epoch)
             } else {
                 serde_json::Value::Null
             }
@@ -312,6 +303,29 @@ fn extract_value_with_epoch(
             serde_json::Value::Null
         }
         _ => serde_json::Value::Null,
+    }
+}
+
+/// Convert nanosecond timestamp to the requested epoch precision.
+/// epoch: None = RFC3339 string, "ns" = nanos, "ms" = millis, "us" = micros, "s" = seconds
+fn convert_nanos_to_epoch(nanos: i64, epoch: Option<&str>) -> serde_json::Value {
+    match epoch {
+        Some("ns" | "n") => serde_json::json!(nanos),
+        Some("us" | "u") => serde_json::json!(nanos / 1_000),
+        Some("ms") => serde_json::json!(nanos / 1_000_000),
+        Some("s") => serde_json::json!(nanos / 1_000_000_000),
+        _ => {
+            // Default: RFC3339 string
+            let secs = nanos / 1_000_000_000;
+            let nsecs = (nanos % 1_000_000_000) as u32;
+            if let Some(dt) = chrono::DateTime::from_timestamp(secs, nsecs) {
+                serde_json::Value::String(
+                    dt.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                )
+            } else {
+                serde_json::json!(nanos)
+            }
+        }
     }
 }
 
