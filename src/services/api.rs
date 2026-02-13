@@ -1040,6 +1040,7 @@ async fn execute_influxql_query(
     auth_ctx: crate::auth::AuthContext,
 ) -> impl IntoResponse {
     use crate::metrics::METRICS;
+    use crate::query::influxql::Statement;
 
     let query_handle = METRICS.record_query_start();
 
@@ -1048,6 +1049,34 @@ async fn execute_influxql_query(
         query_handle.finish(false);
         let response = InfluxResponse::error(0, format!("Access denied to database: {}", db));
         return (StatusCode::FORBIDDEN, Json(response));
+    }
+
+    // Handle metadata queries directly (without going through DataFusion SQL)
+    // DataFusion's information_schema only knows about lazily-registered tables,
+    // so we scan the filesystem/cache directly for accurate results.
+    if let Ok(stmt) = influxql::parse(&query) {
+        match stmt {
+            Statement::ShowDatabases => {
+                query_handle.finish(true);
+                let databases = state.query_engine.list_databases().await;
+                let response = influxql::build_show_databases_response(databases);
+                return (StatusCode::OK, Json(response));
+            }
+            Statement::ShowMeasurements(ref s) => {
+                query_handle.finish(true);
+                let target_db = s.database.as_deref().unwrap_or(&db);
+                let schema = &state.config.schema.default_name;
+                let tables = state.query_engine.list_tables_in_schema(target_db, schema).await.unwrap_or_default();
+                let response = influxql::build_show_measurements_response(tables);
+                return (StatusCode::OK, Json(response));
+            }
+            Statement::ShowRetentionPolicies(_) => {
+                query_handle.finish(true);
+                let response = influxql::build_show_retention_policies_response();
+                return (StatusCode::OK, Json(response));
+            }
+            _ => {}
+        }
     }
 
     // Parse and transpile InfluxQL to SQL

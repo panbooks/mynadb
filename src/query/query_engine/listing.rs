@@ -12,6 +12,41 @@ impl QueryEngine {
     // Schema & Table Listing
     // ========================================================================
 
+    /// List all databases (catalogs) from DataFusion, filesystem, and registered catalogs
+    pub async fn list_databases(&self) -> Vec<String> {
+        let mut databases = HashSet::new();
+
+        // Get from DataFusion registered catalogs
+        for name in self.ctx.catalog_names() {
+            if name != "datafusion" {
+                databases.insert(name);
+            }
+        }
+
+        // Get from filesystem (data_dir = store/)
+        if let Ok(entries) = std::fs::read_dir(&self.data_dir) {
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        if !name.starts_with('.') && !name.starts_with('_') {
+                            databases.insert(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Get from registered_catalogs cache
+        let catalogs = self.registered_catalogs.read().await;
+        for name in catalogs.keys() {
+            databases.insert(name.clone());
+        }
+
+        let mut result: Vec<String> = databases.into_iter().collect();
+        result.sort();
+        result
+    }
+
     /// List all registered tables across all catalogs
     /// Note: This includes tables registered by queries even if they have no data
     pub async fn list_tables(&self) -> Vec<String> {

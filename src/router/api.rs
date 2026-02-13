@@ -229,6 +229,45 @@ async fn execute_influxql_query(
     query: String,
     epoch: Option<&str>,
 ) -> (StatusCode, Json<InfluxResponse>) {
+    use crate::query::influxql::Statement;
+
+    // Handle metadata queries directly (without going through query coordinator)
+    if let Ok(stmt) = influxql::parse(&query) {
+        match stmt {
+            Statement::ShowDatabases => {
+                // Router doesn't have local filesystem; return the requested db
+                let response = influxql::build_show_databases_response(vec![db]);
+                return (StatusCode::OK, Json(response));
+            }
+            Statement::ShowMeasurements(ref s) => {
+                // Collect tables from data nodes (same approach as list_tables_handler)
+                let target_db = s.database.as_deref().unwrap_or(&db);
+                let nodes = state.shard_cache.get_active_primary_nodes();
+                let mut all_tables = std::collections::HashSet::new();
+                for node in &nodes {
+                    if let Ok(result) = state.data_node_pool.list_tables(&node.node_id, target_db).await {
+                        if let Some(tables) = result["tables"].as_array() {
+                            for table in tables {
+                                if let Some(t) = table.as_str() {
+                                    all_tables.insert(t.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut tables: Vec<String> = all_tables.into_iter().collect();
+                tables.sort();
+                let response = influxql::build_show_measurements_response(tables);
+                return (StatusCode::OK, Json(response));
+            }
+            Statement::ShowRetentionPolicies(_) => {
+                let response = influxql::build_show_retention_policies_response();
+                return (StatusCode::OK, Json(response));
+            }
+            _ => {}
+        }
+    }
+
     // Parse and transpile InfluxQL to SQL
     let prepared = match influxql::prepare_query(&query, &db, &state.config.schema.default_name) {
         Ok(p) => p,

@@ -231,6 +231,79 @@ pub fn has_tag_grouping(stmt: &Statement) -> Option<Vec<String>> {
     None
 }
 
+/// Build an InfluxDB-compatible response for SHOW DATABASES
+pub fn build_show_databases_response(databases: Vec<String>) -> InfluxResponse {
+    let values: Vec<Vec<serde_json::Value>> = databases
+        .into_iter()
+        .map(|db| vec![serde_json::Value::String(db)])
+        .collect();
+
+    InfluxResponse::with_result(StatementResult {
+        statement_id: 0,
+        series: Some(vec![Series {
+            name: "databases".to_string(),
+            tags: None,
+            columns: vec!["name".to_string()],
+            values,
+        }]),
+        error: None,
+    })
+}
+
+/// Build an InfluxDB-compatible response for SHOW MEASUREMENTS
+pub fn build_show_measurements_response(measurements: Vec<String>) -> InfluxResponse {
+    if measurements.is_empty() {
+        return InfluxResponse::with_result(StatementResult {
+            statement_id: 0,
+            series: None,
+            error: None,
+        });
+    }
+
+    let values: Vec<Vec<serde_json::Value>> = measurements
+        .into_iter()
+        .map(|m| vec![serde_json::Value::String(m)])
+        .collect();
+
+    InfluxResponse::with_result(StatementResult {
+        statement_id: 0,
+        series: Some(vec![Series {
+            name: "measurements".to_string(),
+            tags: None,
+            columns: vec!["name".to_string()],
+            values,
+        }]),
+        error: None,
+    })
+}
+
+/// Build an InfluxDB-compatible response for SHOW RETENTION POLICIES
+/// Returns a synthetic "autogen" retention policy (MynaDB doesn't have InfluxDB-style RPs)
+pub fn build_show_retention_policies_response() -> InfluxResponse {
+    InfluxResponse::with_result(StatementResult {
+        statement_id: 0,
+        series: Some(vec![Series {
+            name: "results".to_string(),
+            tags: None,
+            columns: vec![
+                "name".to_string(),
+                "duration".to_string(),
+                "shardGroupDuration".to_string(),
+                "replicaN".to_string(),
+                "default".to_string(),
+            ],
+            values: vec![vec![
+                serde_json::Value::String("autogen".to_string()),
+                serde_json::Value::String("0s".to_string()),
+                serde_json::Value::String("168h0m0s".to_string()),
+                serde_json::json!(1),
+                serde_json::Value::Bool(true),
+            ]],
+        }]),
+        error: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

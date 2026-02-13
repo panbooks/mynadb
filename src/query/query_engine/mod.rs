@@ -117,7 +117,8 @@ impl QueryEngine {
         config.optimizer.top_down_join_key_reordering = true;
 
         // Create session config
-        let session_config = SessionConfig::from(config);
+        let session_config = SessionConfig::from(config)
+            .with_information_schema(true);
 
         // ===== Memory Management =====
         // Configure RuntimeEnv with memory limits and disk spilling
