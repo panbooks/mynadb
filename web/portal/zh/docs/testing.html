@@ -1,0 +1,1219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 测试 - 全面的多层测试策略，确保可靠性和正确性">
+  <title>测试 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/testing.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html" class="active">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>测试</h1>
+
+      <p>
+        MynaDB 采用全面的多层测试策略，灵感来自 InfluxDB、TimescaleDB、ClickHouse 和 QuestDB 等业界领先的时序数据库。这确保了数据完整性、查询正确性和性能可靠性。
+      </p>
+
+      <div class="callout callout-success" style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 4px solid #10b981; padding: 1rem 1.5rem; border-radius: 0.5rem;">
+        <div class="callout-title" style="color: #10b981; font-weight: 600;">&#128737; 生产就绪的测试</div>
+        <p style="margin-top: 0.5rem;">MynaDB 包含 <strong>200+ 测试</strong>，涵盖单元测试、集成测试、基于属性的测试、模糊测试和性能基准测试。</p>
+      </div>
+
+      <h2>测试概览</h2>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>测试类别</th>
+              <th>框架</th>
+              <th>覆盖范围</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>单元测试</strong></td>
+              <td>Rust 内置</td>
+              <td>146+ 测试</td>
+              <td>核心模块功能</td>
+            </tr>
+            <tr>
+              <td><strong>正确性测试</strong></td>
+              <td>Rust 测试</td>
+              <td>50+ 边界情况</td>
+              <td>查询结果准确性</td>
+            </tr>
+            <tr>
+              <td><strong>属性测试</strong></td>
+              <td>proptest</td>
+              <td>20+ 属性</td>
+              <td>不变式验证</td>
+            </tr>
+            <tr>
+              <td><strong>模糊测试</strong></td>
+              <td>cargo-fuzz / libfuzzer</td>
+              <td>3 个目标</td>
+              <td>输入健壮性</td>
+            </tr>
+            <tr>
+              <td><strong>基准测试</strong></td>
+              <td>Criterion</td>
+              <td>50+ 基准</td>
+              <td>性能回归检测</td>
+            </tr>
+            <tr>
+              <td><strong>集成测试</strong></td>
+              <td>Bash 脚本</td>
+              <td>22 个脚本</td>
+              <td>端到端验证</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="unit-tests">单元测试</h2>
+
+      <p>单元测试验证各个模块的功能。MynaDB 有 <strong>146+ 单元测试</strong>覆盖核心组件：</p>
+
+      <div class="cards-grid">
+        <div class="card">
+          <h3>存储层</h3>
+          <ul>
+            <li>Line Protocol 解析</li>
+            <li>Parquet 读/写</li>
+            <li>WAL 操作</li>
+            <li>数据缓存</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>查询引擎</h3>
+          <ul>
+            <li>时间桶函数</li>
+            <li>first_value / last_value</li>
+            <li>填充操作</li>
+            <li>查询缓存</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>后台任务</h3>
+          <ul>
+            <li>压缩合并策略</li>
+            <li>数据保留策略</li>
+            <li>元数据管理</li>
+            <li>文件操作</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Run all unit tests</span>
+cargo test
+
+<span class="token-comment"># Run tests for a specific module</span>
+cargo test --lib cache
+cargo test --lib compactor
+cargo test --lib wal
+cargo test --lib line_protocol
+
+<span class="token-comment"># Run tests with output</span>
+cargo test -- --nocapture</code></pre>
+        </div>
+      </div>
+
+      <h2 id="correctness-tests">正确性测试</h2>
+
+      <p>正确性测试验证查询结果与预期值一致。这些测试覆盖聚合、边界情况和数据完整性：</p>
+
+      <h3>聚合准确性</h3>
+
+      <p>测试验证 SQL 聚合返回数学上正确的结果：</p>
+
+      <ul>
+        <li><strong>SUM</strong> - 数值的精确求和</li>
+        <li><strong>AVG</strong> - 浮点精度的平均值计算</li>
+        <li><strong>COUNT</strong> - 行计数，包括 NULL 处理</li>
+        <li><strong>MIN/MAX</strong> - 极值检测</li>
+        <li><strong>DISTINCT</strong> - 唯一值计数</li>
+      </ul>
+
+      <h3>边界情况</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>类别</th>
+              <th>测试用例</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>浮点数</strong></td>
+              <td>零值、负数、科学计数法、精度限制、NaN/Infinity 处理</td>
+            </tr>
+            <tr>
+              <td><strong>整数</strong></td>
+              <td>大值（i64 最大值）、负整数、零</td>
+            </tr>
+            <tr>
+              <td><strong>字符串</strong></td>
+              <td>空字符串、Unicode、特殊字符、引号、转义序列</td>
+            </tr>
+            <tr>
+              <td><strong>时间戳</strong></td>
+              <td>Epoch 边界、遥远未来日期、毫秒/纳秒精度</td>
+            </tr>
+            <tr>
+              <td><strong>标签</strong></td>
+              <td>多标签（10+）、数值、连字符、下划线</td>
+            </tr>
+            <tr>
+              <td><strong>查询</strong></td>
+              <td>空结果、单行、LIMIT/OFFSET、ORDER BY、GROUP BY 与 HAVING</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Run correctness tests</span>
+cargo test --test correctness
+
+<span class="token-comment"># Run specific correctness test</span>
+cargo test --test correctness test_floating_point_precision</code></pre>
+        </div>
+      </div>
+
+      <h2 id="property-tests">基于属性的测试</h2>
+
+      <p>基于属性的测试使用 <a href="https://github.com/proptest-rs/proptest" target="_blank">proptest</a> 生成随机输入并验证不变式在所有情况下都成立。</p>
+
+      <h3>解析器属性</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">rust</span>
+        </div>
+        <div class="code-content">
+          <pre><code>proptest! {
+    <span class="token-comment">// Line protocol roundtrip: parse → serialize → parse = same result</span>
+    #[test]
+    fn line_protocol_roundtrip(
+        measurement in "[a-z]+",
+        tag_key in "[a-z]+",
+        tag_value in "[a-z0-9]+",
+        field_key in "[a-z]+",
+        field_value in any::&lt;f64&gt;().prop_filter("finite", |v| v.is_finite()),
+    ) {
+        let line = format!("{},{}={} {}={}",
+            measurement, tag_key, tag_value, field_key, field_value);
+        let parsed = parse_line_protocol(&line)?;
+        // Verify parsed values match inputs
+    }
+
+    <span class="token-comment">// Tag order independence</span>
+    #[test]
+    fn tag_order_independent(tags in prop::collection::vec("[a-z]+", 2..5)) {
+        // Tags in any order should produce equivalent results
+    }
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>查询属性</h3>
+
+      <ul>
+        <li><strong>COUNT 等于插入行数</strong> - 插入 N 行，COUNT(*) = N</li>
+        <li><strong>SUM 满足交换律</strong> - 插入顺序不影响求和结果</li>
+        <li><strong>MIN &le; AVG &le; MAX</strong> - 聚合排序不变式</li>
+        <li><strong>不匹配过滤器返回空结果</strong> - 使用不可能的谓词查询返回 0 行</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Run property tests</span>
+cargo test --test property
+
+<span class="token-comment"># Run with more test cases (slower but more thorough)</span>
+PROPTEST_CASES=1000 cargo test --test property</code></pre>
+        </div>
+      </div>
+
+      <h2 id="fuzz-testing">模糊测试</h2>
+
+      <p>模糊测试使用 <a href="https://rust-fuzz.github.io/book/cargo-fuzz.html" target="_blank">cargo-fuzz</a> 和 libFuzzer 来发现解析器中的边界情况和潜在崩溃。</p>
+
+      <h3>模糊测试目标</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>目标</th>
+              <th>说明</th>
+              <th>测试的输入</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>fuzz_line_protocol</code></td>
+              <td>InfluxDB Line Protocol 解析器</td>
+              <td>格式错误的行、特殊字符、边界情况</td>
+            </tr>
+            <tr>
+              <td><code>fuzz_time_interval</code></td>
+              <td>持续时间字符串解析器（1h、5m、30s）</td>
+              <td>无效格式、边界值、溢出</td>
+            </tr>
+            <tr>
+              <td><code>fuzz_field_value</code></td>
+              <td>字段值解析器（浮点数、整数、字符串、布尔值）</td>
+              <td>类型混淆、转义序列、引号</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Install cargo-fuzz (requires nightly)</span>
+cargo +nightly install cargo-fuzz
+
+<span class="token-comment"># Run fuzz tests (runs indefinitely, Ctrl+C to stop)</span>
+cargo +nightly fuzz run fuzz_line_protocol
+
+<span class="token-comment"># Run for a specific duration</span>
+cargo +nightly fuzz run fuzz_line_protocol -- -max_total_time=60
+
+<span class="token-comment"># List all fuzz targets</span>
+cargo +nightly fuzz list</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 模糊测试最佳实践</div>
+        <p>长时间运行模糊测试（数小时或过夜）以发现罕见的边界情况。崩溃会自动保存到 <code>fuzz/artifacts/</code> 以便复现。</p>
+      </div>
+
+      <h2 id="benchmarks">性能基准测试</h2>
+
+      <p>性能基准测试使用 <a href="https://bheisler.github.io/criterion.rs/book/" target="_blank">Criterion</a> 进行统计分析和回归检测。</p>
+
+      <h3>基准测试类别</h3>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>Line Protocol</h3>
+          <ul>
+            <li>单行解析</li>
+            <li>批量解析（100-10000 行）</li>
+            <li>复杂行（多标签/字段）</li>
+            <li>并行解析吞吐量</li>
+            <li>错误路径性能</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>查询执行</h3>
+          <ul>
+            <li>简单 SELECT 查询</li>
+            <li>聚合（SUM、AVG、COUNT）</li>
+            <li>过滤谓词</li>
+            <li>GROUP BY 操作</li>
+            <li>时间范围查询</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128339;</div>
+          <h3>时间函数</h3>
+          <ul>
+            <li>TimeInterval 解析</li>
+            <li>time_bucket 计算</li>
+            <li>填充选项解析</li>
+            <li>边界条件</li>
+            <li>大数据集处理</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>边界情况基准</h3>
+
+      <p>基准测试包含边界情况，以确保所有输入下的一致性能：</p>
+
+      <ul>
+        <li><strong>数值极端</strong> - 非常大/小的浮点数、科学计数法</li>
+        <li><strong>长字符串</strong> - 1000+ 字符的字段值</li>
+        <li><strong>多字段/标签</strong> - 10+ 标签或字段的行</li>
+        <li><strong>错误路径</strong> - 格式错误输入的处理开销</li>
+        <li><strong>空结果</strong> - 不匹配任何数据的查询</li>
+        <li><strong>稀疏数据</strong> - 带有间隙的时序数据</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Run all benchmarks</span>
+cargo bench
+
+<span class="token-comment"># Run specific benchmark suite</span>
+cargo bench --bench line_protocol_bench
+cargo bench --bench query_bench
+cargo bench --bench time_functions_bench
+
+<span class="token-comment"># Generate HTML report</span>
+cargo bench -- --save-baseline main
+<span class="token-comment"># Open target/criterion/report/index.html</span></code></pre>
+        </div>
+      </div>
+
+      <h3>基准测试输出</h3>
+
+      <p>Criterion 提供详细的统计分析：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>line_protocol/parse_single_line
+                        time:   [1.2341 µs 1.2456 µs 1.2589 µs]
+                        change: [-2.1234% -0.8765% +0.4321%] (p = 0.19 > 0.05)
+                        No change in performance detected.
+
+line_protocol/batch_1000_lines
+                        time:   [1.1234 ms 1.1456 ms 1.1789 ms]
+                        thrpt:  [848.23 Klines/s 872.89 Klines/s 890.12 Klines/s]</code></pre>
+        </div>
+      </div>
+
+      <h2 id="integration-tests">集成测试</h2>
+
+      <p>集成测试使用 bash 脚本与运行中的 MynaDB 实例交互，验证端到端功能。</p>
+
+      <h3>测试脚本</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>脚本</th>
+              <th>类别</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_write.sh</code></td>
+              <td>写入路径</td>
+              <td>Catalog.schema.table 结构</td>
+            </tr>
+            <tr>
+              <td><code>test_schemas.sh</code></td>
+              <td>Schema</td>
+              <td>Schema 和表列表 API</td>
+            </tr>
+            <tr>
+              <td><code>test_partitions.sh</code></td>
+              <td>分区</td>
+              <td>分区管理</td>
+            </tr>
+            <tr>
+              <td><code>test_compaction.sh</code></td>
+              <td>压缩合并</td>
+              <td>基本分层压缩合并</td>
+            </tr>
+            <tr>
+              <td><code>test_compaction_multilevel.sh</code></td>
+              <td>压缩合并</td>
+              <td>多级 L0→L1→L2</td>
+            </tr>
+            <tr>
+              <td><code>test_auth.sh</code></td>
+              <td>认证</td>
+              <td>基本认证</td>
+            </tr>
+            <tr>
+              <td><code>test_mysql.sh</code></td>
+              <td>协议</td>
+              <td>MySQL 线协议</td>
+            </tr>
+            <tr>
+              <td><code>test_group_by_time.sh</code></td>
+              <td>查询</td>
+              <td>时间桶聚合</td>
+            </tr>
+            <tr>
+              <td><code>test_comprehensive.sh</code></td>
+              <td>端到端</td>
+              <td>完整集成测试</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Run integration tests</span>
+cd scripts
+
+<span class="token-comment"># Run individual test</span>
+./test_write.sh
+./test_compaction.sh
+
+<span class="token-comment"># Run comprehensive test suite</span>
+./test_comprehensive.sh</code></pre>
+        </div>
+      </div>
+
+      <h2 id="chaos-testing">混沌测试</h2>
+
+      <p>混沌测试模拟故障场景以验证数据持久性和恢复能力：</p>
+
+      <ul>
+        <li><strong>写入期间进程崩溃</strong> - 验证 WAL 恢复未刷新的数据</li>
+        <li><strong>压缩合并期间崩溃</strong> - 验证无数据丢失或损坏</li>
+        <li><strong>磁盘满模拟</strong> - 优雅的错误处理</li>
+        <li><strong>并发操作</strong> - 压缩合并期间读取、查询期间写入</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Run chaos tests</span>
+./scripts/test_chaos.sh
+
+<span class="token-comment"># Test WAL recovery</span>
+./scripts/test_wal_recovery.sh</code></pre>
+        </div>
+      </div>
+
+      <h2 id="running-tests">运行所有测试</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Quick validation (unit + correctness + property tests)</span>
+cargo test
+
+<span class="token-comment"># Full test suite</span>
+cargo test --all-targets
+
+<span class="token-comment"># Include benchmarks (compile only, don't run)</span>
+cargo test --all-targets --benches
+
+<span class="token-comment"># Run benchmarks</span>
+cargo bench
+
+<span class="token-comment"># Fuzz testing (requires nightly)</span>
+cargo +nightly fuzz run fuzz_line_protocol -- -max_total_time=60
+
+<span class="token-comment"># Integration tests</span>
+./scripts/test_comprehensive.sh</code></pre>
+        </div>
+      </div>
+
+      <h2 id="data-integrity">阶段 A：数据完整性测试</h2>
+
+      <p>
+        数据完整性测试验证 MynaDB 在整个数据生命周期中正确处理数据：写入、刷新、压缩合并、恢复和查询。这些测试确保在所有条件下实现<strong>零数据丢失</strong>和<strong>精确值保留</strong>。
+      </p>
+
+      <div class="callout" style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-left: 4px solid #f59e0b; padding: 1rem 1.5rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <div class="callout-title" style="color: #d97706; font-weight: 600;">&#128274; 29 项数据完整性测试</div>
+        <p style="margin-top: 0.5rem;">全面覆盖写入/读取往返、WAL 恢复、压缩合并保持和数据一致性。</p>
+      </div>
+
+      <h3>写入/读取往返测试（11 项测试）</h3>
+
+      <p>这些测试验证写入 MynaDB 的数据可以以<strong>精确精度</strong>读回：</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>测试</th>
+              <th>说明</th>
+              <th>验证方式</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_roundtrip_basic_float</code></td>
+              <td>浮点字段值（23.456、19.876 等）</td>
+              <td>SUM 与预期值匹配，容差 &lt;0.001</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_integer_fields</code></td>
+              <td>整数字段值（100i、250i、75i）</td>
+              <td>精确 SUM 匹配</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_boolean_fields</code></td>
+              <td>布尔字段值（true/false）</td>
+              <td>true 值计数保留</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_string_fields</code></td>
+              <td>带引号的字符串字段值</td>
+              <td>行数保留</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_mixed_types</code></td>
+              <td>单次写入中的浮点 + 整数 + 布尔 + 字符串</td>
+              <td>所有字段类型保留</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_large_batch</code></td>
+              <td>单次写入 1000 行</td>
+              <td>COUNT=1000，SUM 匹配</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_special_characters</code></td>
+              <td>带 /api/v1、连字符、下划线的标签</td>
+              <td>所有行可查询</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_many_tags</code></td>
+              <td>每个数据点 7 个标签</td>
+              <td>所有标签保留</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_many_fields</code></td>
+              <td>每个数据点 10 个字段</td>
+              <td>所有字段值保留</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_precision_floats</code></td>
+              <td>科学计数法（1e-15、1e15）</td>
+              <td>极端值保留</td>
+            </tr>
+            <tr>
+              <td><code>test_roundtrip_timestamp_preservation</code></td>
+              <td>显式纳秒时间戳</td>
+              <td>时间排序保留</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>WAL 恢复测试（4 项测试）</h3>
+
+      <p>
+        WAL 恢复测试验证崩溃后<strong>未刷新的数据永不丢失</strong>。这些测试模拟崩溃并验证完整的数据恢复。
+      </p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>测试</th>
+              <th>场景</th>
+              <th>验证方式</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_wal_recovery_basic</code></td>
+              <td>写入 3 行 → 崩溃 → 重启</td>
+              <td>所有 3 行以精确值恢复</td>
+            </tr>
+            <tr>
+              <td><code>test_wal_recovery_multiple_writes</code></td>
+              <td>5 次独立写入操作 → 崩溃</td>
+              <td>所有 5 次写入恢复</td>
+            </tr>
+            <tr>
+              <td><code>test_wal_recovery_after_partial_flush</code></td>
+              <td>刷新批次 1 → 写入批次 2 → 崩溃</td>
+              <td>已刷新和未刷新的数据都存在</td>
+            </tr>
+            <tr>
+              <td><code>test_wal_recovery_large_batch</code></td>
+              <td>写入 500 行 → 崩溃 → 重启</td>
+              <td>COUNT=500，SUM 精确匹配</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>压缩合并保持测试（5 项测试）</h3>
+
+      <p>
+        压缩合并测试验证 LSM-tree 压缩合并过程<strong>永不丢失或损坏数据</strong>。数据通过多次刷新写入，然后进行压缩合并，在前后进行验证。
+      </p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>测试</th>
+              <th>场景</th>
+              <th>验证方式</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_compaction_preserves_count</code></td>
+              <td>4 批次 x 100 行 → 压缩合并</td>
+              <td>压缩前后 COUNT=400</td>
+            </tr>
+            <tr>
+              <td><code>test_compaction_preserves_values</code></td>
+              <td>3 批次中的已知值</td>
+              <td>SUM、MIN、MAX 不变</td>
+            </tr>
+            <tr>
+              <td><code>test_compaction_preserves_all_field_types</code></td>
+              <td>浮点、整数、布尔、字符串字段</td>
+              <td>压缩合并后所有类型保留</td>
+            </tr>
+            <tr>
+              <td><code>test_compaction_preserves_tags</code></td>
+              <td>3 主机 x 3 区域 x 3 批次</td>
+              <td>标签过滤查询返回相同结果</td>
+            </tr>
+            <tr>
+              <td><code>test_compaction_multilevel</code></td>
+              <td>10 批次触发 L0→L1→L2</td>
+              <td>所有级别中 COUNT=500，SUM 不变</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>运行数据完整性测试</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Run all data integrity tests (requires sequential execution)</span>
+cargo test --test data_integrity -- --test-threads=1
+
+<span class="token-comment"># Run only roundtrip tests</span>
+cargo test --test data_integrity test_roundtrip -- --test-threads=1
+
+<span class="token-comment"># Run only WAL recovery tests</span>
+cargo test --test data_integrity test_wal -- --test-threads=1
+
+<span class="token-comment"># Run only compaction tests</span>
+cargo test --test data_integrity test_compaction -- --test-threads=1
+
+<span class="token-comment"># Run with verbose output</span>
+cargo test --test data_integrity -- --test-threads=1 --nocapture</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 重要：顺序执行</div>
+        <p>数据完整性测试必须使用 <code>--test-threads=1</code> 运行，因为每个测试会启动自己的 MynaDB 服务器实例。并行执行会导致端口冲突。</p>
+      </div>
+
+      <h2 id="concurrency">阶段 B：并发与压力测试</h2>
+
+      <p>
+        并发测试验证 MynaDB 在并发负载下维持<strong>数据一致性</strong>。这些测试模拟真实场景，包括多个写入者、读取者和后台操作同时进行。
+      </p>
+
+      <div class="callout" style="background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%); border-left: 4px solid #8b5cf6; padding: 1rem 1.5rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <div class="callout-title" style="color: #7c3aed; font-weight: 600;">&#9889; 13 项并发测试</div>
+        <p style="margin-top: 0.5rem;">多线程写入、操作期间的读取一致性，以及 <strong>8000+ 写入/秒</strong>的压力测试。</p>
+      </div>
+
+      <h3>并发写入测试（4 项测试）</h3>
+
+      <p>这些测试验证多线程同时写入时<strong>不会丢失任何写入</strong>：</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>测试</th>
+              <th>场景</th>
+              <th>验证方式</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_concurrent_writes_single_table</code></td>
+              <td>4 线程 x 100 次写入同一表</td>
+              <td>COUNT=400，无错误</td>
+            </tr>
+            <tr>
+              <td><code>test_concurrent_writes_multiple_tables</code></td>
+              <td>4 线程 x 50 次写入不同表</td>
+              <td>每个表恰好有 50 行</td>
+            </tr>
+            <tr>
+              <td><code>test_concurrent_writes_no_duplicates</code></td>
+              <td>4 线程使用唯一 ID</td>
+              <td>COUNT(DISTINCT id) = 总写入数</td>
+            </tr>
+            <tr>
+              <td><code>test_concurrent_writes_with_flush</code></td>
+              <td>3 个写入者 + 1 个刷新者并发运行</td>
+              <td>刷新期间无写入丢失</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>读取一致性测试（3 项测试）</h3>
+
+      <p>这些测试验证后台操作期间<strong>读取永不看到不一致或损坏的数据</strong>：</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>测试</th>
+              <th>场景</th>
+              <th>验证方式</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_read_during_write</code></td>
+              <td>写入 100 行期间持续读取</td>
+              <td>计数永不低于初始值</td>
+            </tr>
+            <tr>
+              <td><code>test_read_during_compaction</code></td>
+              <td>L0→L1 压缩合并期间查询</td>
+              <td>全程计数保持不变</td>
+            </tr>
+            <tr>
+              <td><code>test_query_isolation</code></td>
+              <td>批量写入期间的聚合查询</td>
+              <td>无查询失败或结果损坏</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>压力测试（3 项测试）</h3>
+
+      <p>这些测试将 MynaDB 推向极限，验证在<strong>极端负载</strong>下的行为：</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>测试</th>
+              <th>场景</th>
+              <th>性能</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_stress_high_throughput_writes</code></td>
+              <td>8 线程 x 250 次写入</td>
+              <td><strong>8000+ 写入/秒</strong></td>
+            </tr>
+            <tr>
+              <td><code>test_stress_mixed_read_write</code></td>
+              <td>2 个写入者 + 4 个读取者</td>
+              <td>无不一致读取</td>
+            </tr>
+            <tr>
+              <td><code>test_stress_burst_writes</code></td>
+              <td>5 次突发，每次 200 次写入</td>
+              <td>所有突发保留</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>数据一致性测试（3 项测试）</h3>
+
+      <p>这些测试验证并发修改期间的<strong>聚合一致性</strong>：</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>测试</th>
+              <th>场景</th>
+              <th>验证方式</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>test_consistency_aggregation_during_writes</code></td>
+              <td>插入期间的 SUM 查询</td>
+              <td>总和永不减少</td>
+            </tr>
+            <tr>
+              <td><code>test_consistency_count_monotonic</code></td>
+              <td>插入期间的 COUNT 查询</td>
+              <td>计数单调非递减</td>
+            </tr>
+            <tr>
+              <td><code>test_no_data_loss_under_load</code></td>
+              <td>6 线程 + 定期刷新</td>
+              <td>每个已写入的 ID 都出现在最终结果中</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>运行并发测试</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Run all concurrency tests (requires sequential execution)</span>
+cargo test --test concurrency -- --test-threads=1
+
+<span class="token-comment"># Run only concurrent write tests</span>
+cargo test --test concurrency test_concurrent -- --test-threads=1
+
+<span class="token-comment"># Run only stress tests</span>
+cargo test --test concurrency test_stress -- --test-threads=1
+
+<span class="token-comment"># Run only consistency tests</span>
+cargo test --test concurrency test_consistency -- --test-threads=1
+
+<span class="token-comment"># Run with verbose output to see throughput metrics</span>
+cargo test --test concurrency test_stress_high_throughput -- --test-threads=1 --nocapture</code></pre>
+        </div>
+      </div>
+
+      <h2 id="test-quick-reference">快速参考：运行测试</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+<span class="token-comment"># COMPLETE TEST SUITE</span>
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+
+<span class="token-comment"># Run all unit tests (fast, ~10 seconds)</span>
+cargo test
+
+<span class="token-comment"># Run all integration tests</span>
+cargo test --test data_integrity -- --test-threads=1
+cargo test --test concurrency -- --test-threads=1
+cargo test --test correctness -- --test-threads=1
+cargo test --test property
+
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+<span class="token-comment"># PHASE A: DATA INTEGRITY</span>
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+
+<span class="token-comment"># All data integrity tests (29 tests, ~4 minutes)</span>
+cargo test --test data_integrity -- --test-threads=1
+
+<span class="token-comment"># Roundtrip tests only (11 tests)</span>
+cargo test --test data_integrity test_roundtrip -- --test-threads=1
+
+<span class="token-comment"># WAL recovery tests only (4 tests)</span>
+cargo test --test data_integrity test_wal -- --test-threads=1
+
+<span class="token-comment"># Compaction tests only (5 tests)</span>
+cargo test --test data_integrity test_compaction -- --test-threads=1
+
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+<span class="token-comment"># PHASE B: CONCURRENCY & STRESS</span>
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+
+<span class="token-comment"># All concurrency tests (13 tests, ~2 minutes)</span>
+cargo test --test concurrency -- --test-threads=1
+
+<span class="token-comment"># Concurrent write tests only</span>
+cargo test --test concurrency test_concurrent -- --test-threads=1
+
+<span class="token-comment"># Stress tests only (includes throughput metrics)</span>
+cargo test --test concurrency test_stress -- --test-threads=1 --nocapture
+
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+<span class="token-comment"># PERFORMANCE BENCHMARKS</span>
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+
+<span class="token-comment"># Run all benchmarks</span>
+cargo bench
+
+<span class="token-comment"># Run specific benchmark</span>
+cargo bench --bench line_protocol_bench
+
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+<span class="token-comment"># FUZZ TESTING (requires nightly)</span>
+<span class="token-comment"># ═══════════════════════════════════════════════════════════════════</span>
+
+<span class="token-comment"># Run for 60 seconds</span>
+cargo +nightly fuzz run fuzz_line_protocol -- -max_total_time=60</code></pre>
+        </div>
+      </div>
+
+      <h2>CI/CD 集成</h2>
+
+      <p>所有测试在 CI/CD 流水线中自动运行：</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>阶段</th>
+              <th>测试</th>
+              <th>触发时机</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>预提交</td>
+              <td>单元测试、正确性测试</td>
+              <td>每次提交</td>
+            </tr>
+            <tr>
+              <td>Pull Request</td>
+              <td>所有测试 + 基准测试（不检查回归）</td>
+              <td>PR 创建/更新</td>
+            </tr>
+            <tr>
+              <td>合并到 main</td>
+              <td>完整套件 + 基准基线更新</td>
+              <td>合并</td>
+            </tr>
+            <tr>
+              <td>每晚</td>
+              <td>扩展模糊测试、压力测试</td>
+              <td>每天</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>下一步</h2>
+
+      <div class="cards-grid">
+        <a href="troubleshooting.html" class="card">
+          <div class="card-icon">&#128295;</div>
+          <h3>故障排除</h3>
+          <p>调试常见问题和错误。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="architecture.html" class="card">
+          <div class="card-icon">&#127959;</div>
+          <h3>架构</h3>
+          <p>了解系统设计。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="https://github.com/mynadb/mynadb" class="card" target="_blank">
+          <div class="card-icon">&#9733;</div>
+          <h3>参与贡献</h3>
+          <p>在 GitHub 上帮助改进 MynaDB。</p>
+          <span class="card-link">访问 GitHub <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

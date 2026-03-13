@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 安全 - 认证、基于角色的访问控制（RBAC）、TLS/SSL 和审计日志">
+  <title>安全 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/security.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html" class="active">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <div class="docs-badge" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">
+        v0.4.0 新功能
+      </div>
+
+      <h1>认证、RBAC 与安全</h1>
+
+      <p class="lead">
+        面向生产部署的全面安全功能。MynaDB 提供内置认证、基于角色的访问控制、TLS 加密和审计日志，
+        在每一层保护您的时序数据。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128272; 纵深防御</div>
+        <p>
+          MynaDB 的安全策略采用分层方法：通过认证验证用户身份，通过 RBAC 授权操作，
+          通过 TLS 加密传输中的数据，通过审计日志记录所有操作。
+          每一层都可以独立启用，以匹配您的部署需求。
+        </p>
+      </div>
+
+      <h2 id="basic-authentication">基本认证</h2>
+
+      <p>
+        MynaDB 支持对所有 API 端点进行基本用户名/密码认证。
+        启用认证后，每个请求都必须包含有效的凭据。
+      </p>
+
+      <h3>配置</h3>
+
+      <p>在 <code>config.toml</code> 中启用认证：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[auth]
+<span class="token-comment"># Enable authentication (default: false)</span>
+enabled = true
+
+<span class="token-comment"># Admin user credentials</span>
+username = "admin"
+password = "your-secure-password"</code></pre>
+        </div>
+      </div>
+
+      <h3>使用 curl 进行认证</h3>
+
+      <p>通过 <code>-u</code> 参数传递凭据：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Write data with authentication</span>
+curl -u admin:your-secure-password \
+  -X POST http://localhost:7000/write/mydb \
+  -d 'cpu,host=server01 usage=45.2'
+
+<span class="token-comment"># Query data with authentication</span>
+curl -u admin:your-secure-password \
+  "http://localhost:7000/query/mydb?sql=SELECT+*+FROM+cpu+LIMIT+10"
+
+<span class="token-comment"># Health check (no authentication required)</span>
+curl http://localhost:7000/health</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; 重要提示</div>
+        <p>
+          禁用认证时，所有端点对未经认证的访问开放。
+          在生产环境中务必启用认证。即使启用了认证，<code>/health</code>
+          端点仍保持无需认证，以支持负载均衡器的健康检查。
+        </p>
+      </div>
+
+      <h2 id="rbac">基于角色的访问控制（RBAC）</h2>
+
+      <p>
+        RBAC 在基本认证的基础上扩展了细粒度权限控制。用户被分配角色，
+        角色控制他们可以执行哪些操作以及可以访问哪些数据库。
+      </p>
+
+      <h3>角色</h3>
+
+      <p>MynaDB 定义了三个内置角色，权限级别递增：</p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>角色</th>
+            <th>描述</th>
+            <th>典型用途</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>admin</code></td>
+            <td>对所有操作和数据库拥有完全访问权限</td>
+            <td>数据库管理员、DevOps 工程师</td>
+          </tr>
+          <tr>
+            <td><code>writer</code></td>
+            <td>对分配的数据库拥有读写访问权限</td>
+            <td>应用服务、数据管道、采集器</td>
+          </tr>
+          <tr>
+            <td><code>reader</code></td>
+            <td>对分配的数据库拥有只读访问权限</td>
+            <td>仪表盘用户、分析师、监控工具</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>权限矩阵</h3>
+
+      <p>每个角色授予特定的数据库级权限：</p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>权限</th>
+            <th>reader</th>
+            <th>writer</th>
+            <th>admin</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>读取数据（<code>SELECT</code>、<code>/query</code>）</td>
+            <td>&#10003;</td>
+            <td>&#10003;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>写入数据（<code>/write</code>）</td>
+            <td>&#10007;</td>
+            <td>&#10003;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>列出表和 Schema</td>
+            <td>&#10003;</td>
+            <td>&#10003;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>触发压缩合并</td>
+            <td>&#10007;</td>
+            <td>&#10007;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>管理数据保留策略</td>
+            <td>&#10007;</td>
+            <td>&#10007;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>删除分区</td>
+            <td>&#10007;</td>
+            <td>&#10007;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>管理用户和角色</td>
+            <td>&#10007;</td>
+            <td>&#10007;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>刷新缓存</td>
+            <td>&#10007;</td>
+            <td>&#10007;</td>
+            <td>&#10003;</td>
+          </tr>
+          <tr>
+            <td>查看系统统计信息</td>
+            <td>&#10007;</td>
+            <td>&#10007;</td>
+            <td>&#10003;</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>用户管理 API</h3>
+
+      <p>通过 REST API 管理用户及其角色。所有用户管理端点需要 <code>admin</code> 角色。</p>
+
+      <h4>创建用户</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Create a new user with the writer role</span>
+curl -u admin:your-secure-password \
+  -X POST http://localhost:7000/auth/users \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "app_writer",
+    "password": "writer-password-123",
+    "role": "writer",
+    "databases": ["mydb", "metrics"]
+  }'
+
+<span class="token-comment"># Response</span>
+{
+  "status": "ok",
+  "message": "User app_writer created with role writer"
+}</code></pre>
+        </div>
+      </div>
+
+      <h4>列出用户</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># List all users</span>
+curl -u admin:your-secure-password \
+  http://localhost:7000/auth/users
+
+<span class="token-comment"># Response</span>
+{
+  "users": [
+    {
+      "username": "admin",
+      "role": "admin",
+      "databases": ["*"]
+    },
+    {
+      "username": "app_writer",
+      "role": "writer",
+      "databases": ["mydb", "metrics"]
+    },
+    {
+      "username": "dashboard",
+      "role": "reader",
+      "databases": ["mydb"]
+    }
+  ]
+}</code></pre>
+        </div>
+      </div>
+
+      <h4>更新用户角色</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Promote a user to admin</span>
+curl -u admin:your-secure-password \
+  -X PUT http://localhost:7000/auth/users/app_writer/role \
+  -H "Content-Type: application/json" \
+  -d '{
+    "role": "admin",
+    "databases": ["*"]
+  }'
+
+<span class="token-comment"># Response</span>
+{
+  "status": "ok",
+  "message": "User app_writer role updated to admin"
+}</code></pre>
+        </div>
+      </div>
+
+      <h4>删除用户</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Delete a user</span>
+curl -u admin:your-secure-password \
+  -X DELETE http://localhost:7000/auth/users/dashboard
+
+<span class="token-comment"># Response</span>
+{
+  "status": "ok",
+  "message": "User dashboard deleted"
+}</code></pre>
+        </div>
+      </div>
+
+      <h2 id="tls">TLS/SSL 配置</h2>
+
+      <p>
+        使用 TLS 加密所有客户端-服务器通信。MynaDB 支持标准 TLS
+        和双向 TLS（mTLS），适用于需要客户端证书验证的环境。
+      </p>
+
+      <h3>配置</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[tls]
+<span class="token-comment"># Enable TLS encryption (default: false)</span>
+enabled = true
+
+<span class="token-comment"># Path to the server certificate (PEM format)</span>
+cert_file = "/etc/mynadb/certs/server.crt"
+
+<span class="token-comment"># Path to the server private key (PEM format)</span>
+key_file = "/etc/mynadb/certs/server.key"
+
+<span class="token-comment"># Path to the Certificate Authority bundle (PEM format)</span>
+<span class="token-comment"># Required for mutual TLS (mTLS) client verification</span>
+ca_file = "/etc/mynadb/certs/ca.crt"
+
+<span class="token-comment"># Enable mutual TLS - clients must present a valid certificate</span>
+<span class="token-comment"># signed by the CA specified in ca_file (default: false)</span>
+mutual_auth = false</code></pre>
+        </div>
+      </div>
+
+      <h3>使用 TLS 连接</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Connect using TLS with CA certificate verification</span>
+curl --cacert /etc/mynadb/certs/ca.crt \
+  -u admin:your-secure-password \
+  "https://localhost:7000/query/mydb?sql=SELECT+*+FROM+cpu+LIMIT+5"
+
+<span class="token-comment"># Connect with mutual TLS (mTLS) - client certificate required</span>
+curl --cacert /etc/mynadb/certs/ca.crt \
+  --cert /etc/mynadb/certs/client.crt \
+  --key /etc/mynadb/certs/client.key \
+  -u admin:your-secure-password \
+  "https://localhost:7000/query/mydb?sql=SELECT+*+FROM+cpu+LIMIT+5"
+
+<span class="token-comment"># Write data over TLS</span>
+curl --cacert /etc/mynadb/certs/ca.crt \
+  -u admin:your-secure-password \
+  -X POST https://localhost:7000/write/mydb \
+  -d 'cpu,host=server01 usage=45.2'</code></pre>
+        </div>
+      </div>
+
+      <h3>TLS 选项</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>选项</th>
+            <th>类型</th>
+            <th>默认值</th>
+            <th>描述</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>enabled</code></td>
+            <td>bool</td>
+            <td><code>false</code></td>
+            <td>启用 TLS 加密</td>
+          </tr>
+          <tr>
+            <td><code>cert_file</code></td>
+            <td>string</td>
+            <td>-</td>
+            <td>服务器证书路径（PEM 格式）</td>
+          </tr>
+          <tr>
+            <td><code>key_file</code></td>
+            <td>string</td>
+            <td>-</td>
+            <td>服务器私钥路径（PEM 格式）</td>
+          </tr>
+          <tr>
+            <td><code>ca_file</code></td>
+            <td>string</td>
+            <td>-</td>
+            <td>CA 证书包路径（PEM 格式）</td>
+          </tr>
+          <tr>
+            <td><code>mutual_auth</code></td>
+            <td>bool</td>
+            <td><code>false</code></td>
+            <td>要求客户端证书（mTLS）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128273; 证书生成</div>
+        <p>
+          用于开发和测试，可以使用 OpenSSL 生成自签名证书：
+        </p>
+        <pre><code>openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes -subj "/CN=localhost"</code></pre>
+        <p>
+          生产环境建议使用受信任的证书颁发机构或内部 PKI（如 HashiCorp Vault、cert-manager 或 AWS ACM）签发的证书。
+        </p>
+      </div>
+
+      <h2 id="audit-logging">审计日志</h2>
+
+      <p>
+        审计日志记录所有经过认证的操作，用于合规、取证和安全监控。
+        每条记录捕获用户、操作、目标资源、时间戳和结果。
+      </p>
+
+      <h3>配置</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[audit]
+<span class="token-comment"># Enable audit logging (default: false)</span>
+enabled = true
+
+<span class="token-comment"># Path to the audit log file</span>
+log_file = "/var/log/mynadb/audit.log"
+
+<span class="token-comment"># Log rotation policy: "daily", "size", or "never"</span>
+rotation = "daily"
+
+<span class="token-comment"># Maximum number of rotated log files to retain</span>
+max_files = 90</code></pre>
+        </div>
+      </div>
+
+      <h3>审计日志选项</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>选项</th>
+            <th>类型</th>
+            <th>默认值</th>
+            <th>描述</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>enabled</code></td>
+            <td>bool</td>
+            <td><code>false</code></td>
+            <td>启用审计日志</td>
+          </tr>
+          <tr>
+            <td><code>log_file</code></td>
+            <td>string</td>
+            <td><code>/var/log/mynadb/audit.log</code></td>
+            <td>审计日志文件路径</td>
+          </tr>
+          <tr>
+            <td><code>rotation</code></td>
+            <td>string</td>
+            <td><code>daily</code></td>
+            <td>轮转策略（<code>daily</code>、<code>size</code>、<code>never</code>）</td>
+          </tr>
+          <tr>
+            <td><code>max_files</code></td>
+            <td>u32</td>
+            <td><code>90</code></td>
+            <td>保留的轮转文件数量</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>审计日志示例</h3>
+
+      <p>每条审计日志以单行 JSON 格式写入：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">json</span>
+        </div>
+        <div class="code-content">
+          <pre><code>{
+  "timestamp": "2026-02-13T10:32:15.847Z",
+  "user": "app_writer",
+  "role": "writer",
+  "action": "WRITE",
+  "resource": "/write/mydb",
+  "method": "POST",
+  "source_ip": "10.0.1.42",
+  "status": 200,
+  "duration_ms": 12,
+  "details": {
+    "database": "mydb",
+    "points": 1500,
+    "bytes": 48210
+  }
+}
+{
+  "timestamp": "2026-02-13T10:32:18.103Z",
+  "user": "dashboard",
+  "role": "reader",
+  "action": "QUERY",
+  "resource": "/query/mydb",
+  "method": "GET",
+  "source_ip": "10.0.2.15",
+  "status": 200,
+  "duration_ms": 45,
+  "details": {
+    "database": "mydb",
+    "sql": "SELECT time, usage FROM cpu WHERE host = 'server01' ORDER BY time DESC LIMIT 100",
+    "rows_returned": 100
+  }
+}
+{
+  "timestamp": "2026-02-13T10:35:02.991Z",
+  "user": "unknown",
+  "role": null,
+  "action": "AUTH_FAILURE",
+  "resource": "/write/mydb",
+  "method": "POST",
+  "source_ip": "192.168.1.99",
+  "status": 401,
+  "duration_ms": 1,
+  "details": {
+    "reason": "Invalid credentials"
+  }
+}</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128200; 审计日志分析</div>
+        <p>
+          审计日志使用结构化 JSON 格式（每行一条记录），便于导入 Elasticsearch、Loki 或 Splunk 等日志聚合工具。
+          也可以使用标准工具直接查询审计日志：
+        </p>
+        <pre><code># Find all failed authentication attempts
+jq 'select(.action == "AUTH_FAILURE")' /var/log/mynadb/audit.log
+
+# Count operations per user
+jq -r '.user' /var/log/mynadb/audit.log | sort | uniq -c | sort -rn</code></pre>
+      </div>
+
+      <h2 id="api-authentication">API 认证</h2>
+
+      <p>
+        启用认证后，客户端必须在每个请求中提供凭据。
+        MynaDB 支持两种传递认证凭据的方式。
+      </p>
+
+      <h3>方式一：Basic Auth 请求头</h3>
+
+      <p>
+        通过标准 HTTP <code>Authorization</code> 请求头发送凭据，使用
+        Base64 编码的 <code>username:password</code>：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Using curl -u (automatically sets Authorization header)</span>
+curl -u admin:your-secure-password \
+  "http://localhost:7000/query/mydb?sql=SELECT+1"
+
+<span class="token-comment"># Equivalent explicit header</span>
+curl -H "Authorization: Basic YWRtaW46eW91ci1zZWN1cmUtcGFzc3dvcmQ=" \
+  "http://localhost:7000/query/mydb?sql=SELECT+1"</code></pre>
+        </div>
+      </div>
+
+      <h3>方式二：Token 查询参数</h3>
+
+      <p>
+        对于设置请求头不便的环境（如浏览器工具或简单监控脚本），
+        可以通过查询参数传递 Token：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Pass token as a query parameter</span>
+curl "http://localhost:7000/query/mydb?sql=SELECT+1&amp;token=your-api-token"
+
+<span class="token-comment"># Write data with token parameter</span>
+curl -X POST "http://localhost:7000/write/mydb?token=your-api-token" \
+  -d 'cpu,host=server01 usage=72.5'</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; Token 安全</div>
+        <p>
+          查询参数中的 Token 可能出现在服务器访问日志和浏览器历史记录中。
+          生产环境建议使用 <code>Authorization</code> 请求头方式。如果必须使用 Token 参数，
+          请确保启用 TLS 以防止 Token 以明文传输。
+        </p>
+      </div>
+
+      <h3>协议级认证</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>协议</th>
+            <th>认证方式</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>HTTP REST API</td>
+            <td>Basic Auth 请求头或 Token 查询参数</td>
+          </tr>
+          <tr>
+            <td>Arrow Flight (gRPC)</td>
+            <td>gRPC metadata 请求头 <code>authorization: Basic ...</code></td>
+          </tr>
+          <tr>
+            <td>MySQL 线协议</td>
+            <td>原生 MySQL 认证握手</td>
+          </tr>
+          <tr>
+            <td>OpenTelemetry (OTLP)</td>
+            <td>gRPC metadata 请求头或 HTTP Basic Auth</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2 id="best-practices">安全最佳实践</h2>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#9989; 推荐做法</div>
+        <ul>
+          <li><strong>在生产环境中始终启用认证。</strong>不启用认证会将所有数据和管理操作暴露给任何具有网络访问权限的人。</li>
+          <li><strong>为所有连接启用 TLS。</strong>没有 TLS，凭据和数据将以明文传输，可能在网络上被截获。</li>
+          <li><strong>在零信任环境中使用双向 TLS（mTLS）。</strong>要求客户端证书以验证连接的双方。</li>
+          <li><strong>遵循最小权限原则。</strong>为用户分配允许其完成工作的最低限制角色。仪表盘使用 <code>reader</code>，数据采集使用 <code>writer</code>，只有运维人员使用 <code>admin</code>。</li>
+          <li><strong>按用户限定数据库访问范围。</strong>仅授予每个用户所需的数据库访问权限，而不是使用通配符（<code>*</code>）访问。</li>
+          <li><strong>定期轮换凭据。</strong>按计划更新密码，并在团队成员离职时立即撤销访问权限。</li>
+          <li><strong>启用审计日志。</strong>维护所有操作的完整记录，用于安全监控、事件调查和合规。</li>
+          <li><strong>监控认证失败。</strong>对审计日志中重复的 <code>AUTH_FAILURE</code> 事件设置告警，以检测暴力破解尝试。</li>
+          <li><strong>限制网络访问。</strong>使用防火墙和网络策略限制哪些主机可以访问 MynaDB 端口（7000、7001、7002）。</li>
+          <li><strong>保护配置文件。</strong><code>config.toml</code> 文件包含密码，应仅允许 MynaDB 服务用户读取（<code>chmod 600</code>）。</li>
+          <li><strong>使用环境变量存储密钥。</strong>不要将密码直接存储在配置文件中，使用环境变量引用：<code>password = "${MYNADB_ADMIN_PASSWORD}"</code>。</li>
+          <li><strong>将审计日志存储在独立存储上。</strong>将审计日志存储在不同的卷上或传输到远程系统，以防数据节点被入侵时日志被篡改。</li>
+        </ul>
+      </div>
+
+      <h3>示例：生产环境安全配置</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Production security configuration</span>
+
+[auth]
+enabled = true
+username = "admin"
+password = "${MYNADB_ADMIN_PASSWORD}"
+
+[tls]
+enabled = true
+cert_file = "/etc/mynadb/certs/server.crt"
+key_file = "/etc/mynadb/certs/server.key"
+ca_file = "/etc/mynadb/certs/ca.crt"
+mutual_auth = true
+
+[audit]
+enabled = true
+log_file = "/var/log/mynadb/audit.log"
+rotation = "daily"
+max_files = 90
+
+[logging]
+level = "info"
+log_dir = "/var/log/mynadb"</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128712; 相关文档</div>
+        <p>
+          <a href="configuration.html">配置</a> - 完整配置参考<br>
+          <a href="high-availability.html">高可用</a> - 节点间 TLS 的高可用配置<br>
+          <a href="cluster.html">企业版集群</a> - 使用 etcd TLS 的集群安全<br>
+          <a href="api.html">API 参考</a> - 完整 API 端点文档
+        </p>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

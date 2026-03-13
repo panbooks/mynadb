@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB SQL 查询指南 - 完整的 SQL 参考手册">
+  <title>SQL 查询 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/sql-queries.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html" class="active">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>SQL 查询指南</h1>
+
+      <p>
+        MynaDB 使用 Apache DataFusion 执行 SQL 查询，支持标准 SQL 语法，
+        包括 JOIN、聚合、窗口函数、CTE 和子查询。
+      </p>
+
+      <h2 id="quick-start">快速开始</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 简单查询（短表名）</span>
+curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu LIMIT 10'
+
+<span class="token-comment"># 完全限定表名</span>
+curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM mydb.default.cpu LIMIT 10'
+
+<span class="token-comment"># GET 请求（适用于简单查询）</span>
+curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'</code></pre>
+        </div>
+      </div>
+
+      <h2 id="table-names">表命名</h2>
+
+      <p>MynaDB 使用 <code>catalog.schema.table</code> 结构：</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>格式</th>
+              <th>示例</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>短名称</td>
+              <td><code>cpu</code></td>
+              <td>自动添加前缀（推荐）</td>
+            </tr>
+            <tr>
+              <td>Schema.table</td>
+              <td><code>default.cpu</code></td>
+              <td>显式指定 schema</td>
+            </tr>
+            <tr>
+              <td>完整路径</td>
+              <td><code>mydb.default.cpu</code></td>
+              <td>完全限定名称</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="select">SELECT 语句</h2>
+
+      <h3>所有列</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu LIMIT 10</code></pre>
+        </div>
+      </div>
+
+      <h3>指定列</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, usage, time FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>列别名</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, usage AS cpu_usage, time AS ts FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>DISTINCT</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT DISTINCT host FROM cpu
+SELECT COUNT(DISTINCT host) AS unique_hosts FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h2 id="filtering">过滤 (WHERE)</h2>
+
+      <h3>比较运算符</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu WHERE usage > 80
+SELECT * FROM cpu WHERE usage >= 50 AND usage <= 90
+SELECT * FROM cpu WHERE host = 'server01'
+SELECT * FROM cpu WHERE host != 'server01'</code></pre>
+        </div>
+      </div>
+
+      <h3>逻辑运算符</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu WHERE usage > 80 AND region = 'us-west'
+SELECT * FROM cpu WHERE region = 'us-west' OR region = 'us-east'
+SELECT * FROM cpu WHERE NOT (usage < 50)</code></pre>
+        </div>
+      </div>
+
+      <h3>IN / NOT IN</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu WHERE host IN ('server01', 'server02', 'server03')
+SELECT * FROM cpu WHERE region NOT IN ('eu-west')</code></pre>
+        </div>
+      </div>
+
+      <h3>BETWEEN</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu WHERE usage BETWEEN 50 AND 80
+SELECT * FROM cpu WHERE time BETWEEN 1703251234567000000 AND 1703251300000000000</code></pre>
+        </div>
+      </div>
+
+      <h3>LIKE 模式匹配</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu WHERE host LIKE 'server%'
+SELECT * FROM cpu WHERE host LIKE '%01'
+SELECT * FROM cpu WHERE host LIKE 'web_server_'</code></pre>
+        </div>
+      </div>
+
+      <h3>NULL 处理</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu WHERE region IS NULL
+SELECT * FROM cpu WHERE region IS NOT NULL</code></pre>
+        </div>
+      </div>
+
+      <h2 id="aggregations">聚合</h2>
+
+      <h3>基本函数</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT COUNT(*) FROM cpu
+SELECT AVG(usage) FROM cpu
+SELECT SUM(usage) FROM cpu
+SELECT MIN(usage), MAX(usage) FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>GROUP BY</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, AVG(usage) AS avg_cpu
+FROM cpu
+GROUP BY host
+
+SELECT host, region, COUNT(*) AS samples
+FROM cpu
+GROUP BY host, region</code></pre>
+        </div>
+      </div>
+
+      <h3>HAVING</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, AVG(usage) AS avg_cpu
+FROM cpu
+GROUP BY host
+HAVING AVG(usage) > 50</code></pre>
+        </div>
+      </div>
+
+      <h3>ORDER BY</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu ORDER BY usage DESC
+SELECT * FROM cpu ORDER BY time ASC
+SELECT * FROM cpu ORDER BY host ASC, usage DESC</code></pre>
+        </div>
+      </div>
+
+      <h2 id="joins">JOIN 连接</h2>
+
+      <h3>INNER JOIN</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT c.host, c.usage AS cpu, m.used AS memory
+FROM cpu c
+JOIN memory m ON c.host = m.host</code></pre>
+        </div>
+      </div>
+
+      <h3>LEFT JOIN</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT c.host, c.usage, m.used
+FROM cpu c
+LEFT JOIN memory m ON c.host = m.host</code></pre>
+        </div>
+      </div>
+
+      <h3>多表 JOIN</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT c.host, c.usage, m.used, d.free
+FROM cpu c
+LEFT JOIN memory m ON c.host = m.host
+LEFT JOIN disk d ON c.host = d.host</code></pre>
+        </div>
+      </div>
+
+      <h2 id="window">窗口函数</h2>
+
+      <h3>ROW_NUMBER / RANK</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, usage,
+  ROW_NUMBER() OVER (ORDER BY usage DESC) AS row_num,
+  RANK() OVER (ORDER BY usage DESC) AS rnk
+FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>移动平均</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT time, usage,
+  AVG(usage) OVER (
+    ORDER BY time
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+  ) AS moving_avg
+FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>LAG / LEAD</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT time, usage,
+  LAG(usage, 1) OVER (ORDER BY time) AS prev_usage,
+  LEAD(usage, 1) OVER (ORDER BY time) AS next_usage
+FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>Partition By</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, time, usage,
+  AVG(usage) OVER (PARTITION BY host ORDER BY time) AS host_avg
+FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h2 id="advanced">高级查询</h2>
+
+      <h3>公用表表达式 (CTE)</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>WITH host_stats AS (
+  SELECT host, AVG(usage) AS avg_usage
+  FROM cpu
+  GROUP BY host
+)
+SELECT * FROM host_stats
+WHERE avg_usage > 50</code></pre>
+        </div>
+      </div>
+
+      <h3>子查询</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT * FROM cpu
+WHERE usage > (SELECT AVG(usage) FROM cpu)</code></pre>
+        </div>
+      </div>
+
+      <h3>CASE 语句</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, usage,
+  CASE
+    WHEN usage < 30 THEN 'low'
+    WHEN usage < 70 THEN 'medium'
+    ELSE 'high'
+  END AS level
+FROM cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>UNION</h3>
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>SELECT host, 'cpu' AS metric, usage AS value FROM cpu
+UNION ALL
+SELECT host, 'memory' AS metric, used AS value FROM memory</code></pre>
+        </div>
+      </div>
+
+      <h2 id="time-series">时间序列函数</h2>
+
+      <div class="info-box" style="background: linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 100%); border-left: 4px solid #0284c7; padding: 1rem 1.5rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>新功能：</strong> MynaDB 现已支持与 InfluxDB 兼容的时间序列函数，包括 <code>GROUP BY time()</code>、<code>first_value()</code>、<code>last_value()</code> 和 <code>time_bucket()</code>。
+      </div>
+
+      <h3>GROUP BY time() - 时间分桶</h3>
+
+      <p>使用 InfluxDB 风格的语法将数据按时间间隔分组。支持的时间单位：<code>ns</code>、<code>u/us</code>、<code>ms</code>、<code>s</code>、<code>m</code>、<code>h</code>、<code>d</code>、<code>w</code>。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>-- 每台主机 5 分钟平均 CPU 使用率
+SELECT host, AVG(usage) AS avg_cpu
+FROM cpu
+WHERE time >= 1704067200000000000
+GROUP BY time(5m), host
+
+-- 每小时请求数
+SELECT COUNT(*) AS requests
+FROM api_logs
+WHERE time >= NOW() - INTERVAL '24 hours'
+GROUP BY time(1h)
+
+-- 30 秒间隔，带偏移量
+SELECT AVG(temperature) AS avg_temp
+FROM sensors
+GROUP BY time(30s, 10s)  -- 30 秒分桶，10 秒偏移</code></pre>
+        </div>
+      </div>
+
+      <h3>time_bucket() 函数</h3>
+
+      <p>时间分桶的底层 UDF。如需更精细的控制，可直接使用：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>-- time_bucket(time_col, interval_nanos, offset_nanos)
+SELECT
+  time_bucket(time, 300000000000, 0) AS bucket,  -- 5 分钟 = 300B 纳秒
+  AVG(usage) AS avg_usage
+FROM cpu
+GROUP BY time_bucket(time, 300000000000, 0)
+ORDER BY bucket</code></pre>
+        </div>
+      </div>
+
+      <h3>first_value() 和 last_value()</h3>
+
+      <p>获取按时间排序的分组中的第一个或最后一个值。对于时间序列数据的降采样至关重要。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>-- first_value(value_column, time_column)
+-- 返回每个分组中最小时间对应的值
+
+-- last_value(value_column, time_column)
+-- 返回每个分组中最大时间对应的值
+
+-- 示例：每 5 分钟桶的首尾 CPU 读数
+SELECT
+  time_bucket(time, 300000000000, 0) AS bucket,
+  host,
+  first_value(usage, time) AS first_cpu,
+  last_value(usage, time) AS last_cpu,
+  AVG(usage) AS avg_cpu,
+  MAX(usage) - MIN(usage) AS spread
+FROM cpu
+GROUP BY time_bucket(time, 300000000000, 0), host
+ORDER BY bucket, host</code></pre>
+        </div>
+      </div>
+
+      <h3>填充选项（间隙填充）</h3>
+
+      <p>处理结果中缺失的时间桶：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>-- fill(null) - 默认，不包含缺失的桶
+SELECT AVG(usage) FROM cpu
+WHERE time >= 1704067200000000000
+GROUP BY time(5m)
+fill(null)
+
+-- fill(none) - 与 null 相同，省略空桶
+-- fill(previous) - 使用前一个桶的值
+-- fill(linear) - 值之间的线性插值
+-- fill(0) 或 fill(value) - 使用指定值</code></pre>
+        </div>
+      </div>
+
+      <h3>InfluxDB 函数映射</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>InfluxDB 函数</th>
+              <th>MynaDB 等价函数</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>mean(field)</code></td>
+              <td><code>AVG(field)</code></td>
+              <td>平均值</td>
+            </tr>
+            <tr>
+              <td><code>sum(field)</code></td>
+              <td><code>SUM(field)</code></td>
+              <td>求和</td>
+            </tr>
+            <tr>
+              <td><code>count(field)</code></td>
+              <td><code>COUNT(field)</code></td>
+              <td>计数</td>
+            </tr>
+            <tr>
+              <td><code>min(field)</code></td>
+              <td><code>MIN(field)</code></td>
+              <td>最小值</td>
+            </tr>
+            <tr>
+              <td><code>max(field)</code></td>
+              <td><code>MAX(field)</code></td>
+              <td>最大值</td>
+            </tr>
+            <tr>
+              <td><code>first(field)</code></td>
+              <td><code>first_value(field, time)</code></td>
+              <td>按时间排序的第一个值</td>
+            </tr>
+            <tr>
+              <td><code>last(field)</code></td>
+              <td><code>last_value(field, time)</code></td>
+              <td>按时间排序的最后一个值</td>
+            </tr>
+            <tr>
+              <td><code>spread(field)</code></td>
+              <td><code>MAX(field) - MIN(field)</code></td>
+              <td>值域范围</td>
+            </tr>
+            <tr>
+              <td><code>stddev(field)</code></td>
+              <td><code>STDDEV(field)</code></td>
+              <td>标准差</td>
+            </tr>
+            <tr>
+              <td><code>median(field)</code></td>
+              <td><code>approx_median(field)</code></td>
+              <td>近似中位数</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>完整降采样示例</h3>
+
+      <p>将高频数据降采样为 1 小时间隔，用于长期存储：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>-- 从分钟级数据创建每小时摘要
+SELECT
+  time_bucket(time, 3600000000000, 0) AS hour,
+  host,
+  COUNT(*) AS sample_count,
+  AVG(cpu_usage) AS avg_cpu,
+  MAX(cpu_usage) AS max_cpu,
+  MIN(cpu_usage) AS min_cpu,
+  first_value(cpu_usage, time) AS first_cpu,
+  last_value(cpu_usage, time) AS last_cpu,
+  AVG(memory_used) AS avg_memory,
+  MAX(disk_io) AS peak_disk_io
+FROM system_metrics
+WHERE time >= NOW() - INTERVAL '7 days'
+GROUP BY time_bucket(time, 3600000000000, 0), host
+ORDER BY hour DESC, host</code></pre>
+        </div>
+      </div>
+
+      <h2>使用技巧</h2>
+
+      <ul>
+        <li><strong>使用 POST</strong> 发送复杂的多行查询</li>
+        <li><strong>始终使用 LIMIT</strong> 限制探索性查询的结果数</li>
+        <li><strong>按 time/date 过滤</strong> 以启用分区裁剪</li>
+        <li><strong>使用短表名</strong> 使查询更简洁</li>
+        <li><strong>写入后即可查询</strong>（Memtable 提供即时可见性）</li>
+        <li><strong>使用 time_bucket</strong> 进行高效的时间序列聚合</li>
+      </ul>
+
+      <div class="cards-grid">
+        <a href="examples.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>更多示例</h3>
+          <p>即用型查询模式。</p>
+          <span class="card-link">查看 <span>&#8594;</span></span>
+        </a>
+
+        <a href="api.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>API 参考</h3>
+          <p>查询端点文档。</p>
+          <span class="card-link">查看 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

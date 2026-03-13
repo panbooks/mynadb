@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 指南 - 分步教程">
+  <title>指南 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/guides.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html" class="active">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>指南</h1>
+
+      <p>
+        分步教程帮助您充分利用 MynaDB。
+        从基础操作到高级配置。
+      </p>
+
+      <h2>快速入门</h2>
+
+      <div class="cards-grid">
+        <a href="quickstart.html" class="card">
+          <div class="card-icon">&#128640;</div>
+          <h3>快速开始</h3>
+          <p>5 分钟内启动运行。写入第一条数据并运行第一个查询。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+
+        <a href="installation.html" class="card">
+          <div class="card-icon">&#128229;</div>
+          <h3>安装</h3>
+          <p>从源码构建、Docker 部署和系统要求。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>配置</h3>
+          <p>所有配置选项的详细说明和示例。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+      </div>
+
+      <h2>数据操作</h2>
+
+      <div class="cards-grid">
+        <a href="line-protocol.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>写入数据</h3>
+          <p>InfluxDB Line Protocol 格式、字段类型和数据接入最佳实践。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+
+        <a href="sql-queries.html" class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>SQL 查询</h3>
+          <p>完整 SQL 指南：SELECT、JOIN、聚合、窗口函数等。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+
+        <a href="examples.html" class="card">
+          <div class="card-icon">&#128203;</div>
+          <h3>查询示例</h3>
+          <p>常见时序操作的即用型示例。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+      </div>
+
+      <h2>存储与维护</h2>
+
+      <div class="cards-grid">
+        <a href="compaction.html" class="card">
+          <div class="card-icon">&#128218;</div>
+          <h3>压缩合并</h3>
+          <p>理解 LSM 风格的压缩合并、调优和手动触发。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+
+        <a href="retention.html" class="card">
+          <div class="card-icon">&#128197;</div>
+          <h3>数据保留策略</h3>
+          <p>自动数据过期和手动分区管理。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+
+        <a href="storage.html" class="card">
+          <div class="card-icon">&#128451;</div>
+          <h3>存储</h3>
+          <p>Parquet 格式、分区策略和存储优化。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+      </div>
+
+      <h2>集成</h2>
+
+      <div class="cards-grid">
+        <a href="flight-api.html" class="card">
+          <div class="card-icon">&#9992;</div>
+          <h3>Arrow Flight</h3>
+          <p>面向分析工具和仪表板的高性能 gRPC 流式传输。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+
+        <a href="grafana.html" class="card">
+          <div class="card-icon">&#128202;</div>
+          <h3>Grafana 集成</h3>
+          <p>将 MynaDB 连接到 Grafana 以创建实时仪表板。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+
+        <a href="telegraf.html" class="card">
+          <div class="card-icon">&#128225;</div>
+          <h3>Telegraf 集成</h3>
+          <p>使用 Telegraf 从基础设施收集指标。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+      </div>
+
+      <h2>高可用</h2>
+
+      <div class="cards-grid">
+        <a href="high-availability.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>主从复制</h3>
+          <p>配置主从复制以实现容错和读取扩展。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+
+        <a href="high-availability.html#failover" class="card">
+          <div class="card-icon">&#128260;</div>
+          <h3>故障转移</h3>
+          <p>手动和自动故障转移流程，实现零停机。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+
+        <a href="high-availability.html#monitoring" class="card">
+          <div class="card-icon">&#128200;</div>
+          <h3>高可用监控</h3>
+          <p>监控复制延迟、连接状态和集群健康。</p>
+          <span class="card-link">阅读指南 <span>&#8594;</span></span>
+        </a>
+      </div>
+
+      <h2>精选指南：SQL 查询</h2>
+
+      <p>
+        MynaDB 通过 Apache DataFusion 支持完整 SQL。以下是常见查询模式的快速参考：
+      </p>
+
+      <h3>基础查询</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu LIMIT 10'</code></pre>
+        </div>
+      </div>
+
+      <h3>聚合</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl 'http://localhost:7000/query/mydb' -d "
+SELECT host, AVG(usage) as avg_cpu
+FROM cpu
+GROUP BY host
+ORDER BY avg_cpu DESC
+"</code></pre>
+        </div>
+      </div>
+
+      <h3>JOIN 查询</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl 'http://localhost:7000/query/mydb' -d "
+SELECT c.host, c.usage as cpu, m.used as memory
+FROM cpu c
+JOIN memory m ON c.host = m.host
+WHERE c.usage > 80
+"</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 查看更多</div>
+        <p>查阅 <a href="sql-queries.html">完整 SQL 指南</a>和<a href="examples.html">示例页面</a>以获取全面的内容。</p>
+      </div>
+
+      <h2>精选指南：数据保留策略</h2>
+
+      <p>
+        MynaDB 支持自动数据过期以管理磁盘空间。
+        在 <code>config.toml</code> 中配置数据保留：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[retention]
+enabled = true           # Enable background retention
+default_days = 7         # Delete data older than 7 days
+interval_secs = 3600     # Check every hour</code></pre>
+        </div>
+      </div>
+
+      <p>通过 API 手动触发数据保留：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 删除超过 30 天的分区</span>
+curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"older_than_days": 30}'</code></pre>
+        </div>
+      </div>
+
+      <h2>需要帮助？</h2>
+
+      <div class="cards-grid">
+        <a href="troubleshooting.html" class="card">
+          <div class="card-icon">&#128295;</div>
+          <h3>故障排除</h3>
+          <p>常见问题和解决方案。</p>
+          <span class="card-link">查看 <span>&#8594;</span></span>
+        </a>
+
+        <a href="faq.html" class="card">
+          <div class="card-icon">&#10067;</div>
+          <h3>常见问题</h3>
+          <p>常见问题解答。</p>
+          <span class="card-link">查看 <span>&#8594;</span></span>
+        </a>
+
+        <a href="https://github.com/mynadb/mynadb/issues" class="card" target="_blank">
+          <div class="card-icon">&#128172;</div>
+          <h3>GitHub Issues</h3>
+          <p>报告 bug 或提交功能请求。</p>
+          <span class="card-link">打开 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

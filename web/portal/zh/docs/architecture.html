@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 架构 - MynaDB 如何监听、存储和监控您的基础设施">
+  <title>架构 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/architecture.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html" class="active">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>架构</h1>
+
+      <p>
+        正如八哥鸟拥有卓越的聆听和记忆能力，MynaDB 采用分层架构构建，
+        能够捕获基础设施中的每一个信号。它针对高吞吐量数据采集和快速分析查询进行了优化，
+        本文档将介绍各组件如何协同工作，为您的机器赋予"声音"。
+      </p>
+
+      <h2>系统概览</h2>
+
+      <div class="architecture-diagram">
+        <pre>
+                              +------------------+
+                              |     客户端       |
+                              | (curl, Grafana,  |
+                              |  Telegraf, 等)   |
+                              +--------+---------+
+                                       |
+                 +---------------------+---------------------+
+                 |                                           |
+                 v                                           v
+        +--------+--------+                         +--------+--------+
+        |   HTTP 服务器   |                         | Arrow Flight    |
+        |   (端口 7000)   |                         |   (端口 7001)   |
+        |      Axum       |                         |     Tonic       |
+        +--------+--------+                         +--------+--------+
+                 |                                           |
+       +---------+---------+                                 |
+       |                   |                                 |
+       v                   v                                 |
+  +----+----+        +-----+------+                          |
+  |  写入   |        |   查询     |<-------------------------+
+  |  API    |        |   API      |
+  +----+----+        +-----+------+
+       |                   |
+       v                   v
+  +----+----+        +-----+------+
+  |  Line   |        | DataFusion |
+  | Protocol|        |   查询     |
+  | 解析器  |        |   引擎     |
+  +----+----+        +-----+------+
+       |                   |
+       v                   |
+  +----+----+              |
+  |  数据   |              |
+  |  缓存   |<-------------+ (Memtable: 查询最新写入)
+  | (内存)  |              |
+  +----+----+              |
+       |                   |
+       v                   v
+  +----+-------------------+----+
+  |       Parquet 存储          |
+  |   (列式存储，已压缩)        |
+  +-------------+---------------+
+                |
+                v
+  +-------------+---------------+
+  |       元数据管理器           |
+  | (Catalog、表、文件)          |
+  +-------------+---------------+
+                |
+                v
+        +-------+-------+
+        |   压缩合并器   |
+        |  (LSM 风格)   |
+        +---------------+
+        </pre>
+      </div>
+
+      <h2>核心组件</h2>
+
+      <h3>HTTP 服务器 (Axum)</h3>
+
+      <p>HTTP 服务器处理所有 REST API 请求。基于 <a href="https://github.com/tokio-rs/axum" target="_blank">Axum</a> 构建，提供以下能力：</p>
+
+      <ul>
+        <li>高性能异步请求处理</li>
+        <li>连接池和长连接支持</li>
+        <li>优雅关闭支持</li>
+        <li>Tower 中间件集成</li>
+      </ul>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>端点</th>
+              <th>方法</th>
+              <th>描述</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>/write/:db</code></td>
+              <td>POST</td>
+              <td>写入数据 (Line Protocol)</td>
+            </tr>
+            <tr>
+              <td><code>/query/:db</code></td>
+              <td>GET/POST</td>
+              <td>执行 SQL 查询</td>
+            </tr>
+            <tr>
+              <td><code>/flush</code></td>
+              <td>POST</td>
+              <td>将缓存刷写到磁盘</td>
+            </tr>
+            <tr>
+              <td><code>/compact/:db</code></td>
+              <td>POST</td>
+              <td>触发压缩合并</td>
+            </tr>
+            <tr>
+              <td><code>/tables/:db</code></td>
+              <td>GET</td>
+              <td>列出表</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Line Protocol 解析器</h3>
+
+      <p>高性能解析 InfluxDB Line Protocol：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>&lt;measurement&gt;,&lt;tag_key&gt;=&lt;tag_value&gt;,... &lt;field_key&gt;=&lt;field_value&gt;,... [timestamp]
+
+<span class="token-comment"># 示例：</span>
+cpu,host=server01,region=us-west usage=75.5,temp=45i 1609459200000000000</code></pre>
+        </div>
+      </div>
+
+      <ul>
+        <li><strong>Measurement</strong> - 表名（例如 "cpu"、"memory"）</li>
+        <li><strong>Tags</strong> - 用于过滤的索引字符串键值对</li>
+        <li><strong>Fields</strong> - 数值或字符串值（实际指标数据）</li>
+        <li><strong>Timestamp</strong> - 纳秒级 Unix 时间戳（可选，默认为当前时间）</li>
+      </ul>
+
+      <h3>数据缓存与 Memtable</h3>
+
+      <p>内存缓冲区，批量处理写入以提高效率，并提供即时查询可见性：</p>
+
+      <ul>
+        <li>以 Arrow RecordBatch 形式在内存中缓冲传入数据</li>
+        <li>按数据库、Schema、表和日期分区组织</li>
+        <li>每 60 秒后台刷写（可配置）</li>
+        <li>通过 <code>/flush</code> 端点手动刷写</li>
+        <li><strong>Memtable</strong>：查询引擎直接从缓存读取最新写入的数据</li>
+      </ul>
+
+      <div class="callout callout-info" style="background: linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 100%); border-left: 4px solid #0284c7; padding: 1rem 1.5rem; border-radius: 0.5rem;">
+        <div class="callout-title" style="color: #0284c7; font-weight: 600;">&#9889; 即时查询可见性（新功能！）</div>
+        <p style="margin-top: 0.5rem;">写入数据通过 Memtable 可立即被查询 - <strong>无需刷写！</strong>查询引擎自动合并内存缓存中的最新写入数据和 Parquet 文件中的已刷写数据。</p>
+      </div>
+
+      <h3>元数据管理器</h3>
+
+      <p>基于内存的 Catalog 系统，跟踪所有数据库对象：</p>
+
+      <ul>
+        <li><strong>Catalog</strong>：数据库级容器</li>
+        <li><strong>Schema</strong>：Catalog 内的命名空间（例如服务分组）</li>
+        <li><strong>表</strong>：带统计信息的 Measurement/指标表</li>
+        <li><strong>分区</strong>：基于日期的分区及文件计数</li>
+        <li><strong>文件</strong>：包含行数和时间戳的单个 Parquet 文件</li>
+      </ul>
+
+      <div class="callout callout-info" style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 4px solid #10b981; padding: 1rem 1.5rem; border-radius: 0.5rem;">
+        <div class="callout-title" style="color: #10b981; font-weight: 600;">&#128200; 性能影响</div>
+        <p style="margin-top: 0.5rem;">有了元数据管理器，查询规划速度提升 <strong>10-100 倍</strong>。零文件系统扫描 - 所有元数据保存在内存中，并定期持久化为 JSON。</p>
+      </div>
+
+      <h3>DataFusion 查询引擎</h3>
+
+      <p><a href="https://arrow.apache.org/datafusion/" target="_blank">Apache DataFusion</a> 提供 SQL 查询能力：</p>
+
+      <ul>
+        <li>完整 SQL 支持（SELECT、JOIN、GROUP BY、窗口函数、CTE）</li>
+        <li>谓词下推到 Parquet 文件</li>
+        <li>并行查询执行</li>
+        <li>内存高效的流式处理</li>
+        <li>基于 Apache Arrow 的列式处理</li>
+      </ul>
+
+      <h3>Parquet 存储</h3>
+
+      <p>数据以 <a href="https://parquet.apache.org/" target="_blank">Apache Parquet</a> 格式存储：</p>
+
+      <ul>
+        <li><strong>列式布局</strong> - 高效支持分析查询</li>
+        <li><strong>压缩</strong> - 最高可达 90% 的存储空间缩减</li>
+        <li><strong>谓词下推</strong> - 在读取时过滤</li>
+        <li><strong>Schema 演进</strong> - 无需重写即可添加列</li>
+      </ul>
+
+      <h3>压缩合并器（LSM 风格）</h3>
+
+      <p>多级压缩合并优化存储和查询性能：</p>
+
+      <div class="architecture-diagram">
+        <pre>
+  写入路径                      压缩合并
+      |                             |
+      v                             |
+  +-------+                         |
+  |  L0   |  (最近写入)             |
+  +---+---+                         |
+      |                             |
+      +-----> 4+ 文件时合并 --------+
+      |                             |
+      v                             |
+  +-------+                         |
+  |  L1   |  (第一次压缩)           |
+  +---+---+                         |
+      |                             |
+      +-----> 4+ 文件时合并 --------+
+      |                             |
+      v                             |
+  +-------+                         |
+  |  L2   |  (第二次压缩)           |
+  +---+---+                         |
+      |                             |
+      ...                           |
+      |                             |
+      v                             v
+  +-------+
+  |  L5   |  (最高级别)
+  +-------+
+        </pre>
+      </div>
+
+      <ul>
+        <li><strong>L0</strong> - 最近写入，许多小文件</li>
+        <li><strong>L1-L5</strong> - 逐级更大的合并文件</li>
+        <li>当某级别文件达到 4 个以上时触发压缩</li>
+        <li>并行压缩以提升性能</li>
+      </ul>
+
+      <h2>存储结构</h2>
+
+      <p>MynaDB 使用层级 <strong>Catalog.Schema.Table</strong> 结构：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>data/
+└── {catalog}/                    <span class="token-comment"># 数据库名称</span>
+    ├── {schema}/                 <span class="token-comment"># Service 标签值（或 "default"）</span>
+    │   └── {table}/              <span class="token-comment"># Measurement 名称</span>
+    │       └── date=YYYY-MM-DD/  <span class="token-comment"># 日期分区</span>
+    │           ├── L0_xxx.parquet
+    │           ├── L1_xxx.parquet
+    │           └── L2_xxx.parquet
+    └── _system/
+        └── series_stats/         <span class="token-comment"># 基数追踪</span></code></pre>
+        </div>
+      </div>
+
+      <h3>Schema 策略</h3>
+
+      <p>两种将数据映射到 Catalog 结构的策略：</p>
+
+      <div class="cards-grid">
+        <div class="card">
+          <h3>ServiceAsSchema（默认）</h3>
+          <ul>
+            <li>Schema = Service 标签值</li>
+            <li>Table = Measurement 名称</li>
+            <li>最适合多租户场景</li>
+          </ul>
+          <p><code>cpu,service=web</code> → <code>mydb.web.cpu</code></p>
+        </div>
+
+        <div class="card">
+          <h3>ServiceAsTable</h3>
+          <ul>
+            <li>Schema = "default"</li>
+            <li>Table = Service 标签值</li>
+            <li>Measurement 存储为列</li>
+          </ul>
+          <p><code>cpu,service=web</code> → <code>mydb.default.web</code></p>
+        </div>
+      </div>
+
+      <h2>Arrow Flight</h2>
+
+      <p><a href="https://arrow.apache.org/docs/format/Flight.html" target="_blank">Arrow Flight</a> 提供高性能 gRPC 流式传输：</p>
+
+      <ul>
+        <li>列式数据传输，无序列化开销</li>
+        <li>兼容 DataFusion CLI 和 Arrow 客户端</li>
+        <li>大数据集的流式结果</li>
+        <li>默认运行在端口 7001</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Connect with DataFusion CLI</span>
+datafusion-cli --host localhost --port 7001
+
+<span class="token-comment"># Run SQL queries</span>
+> SELECT * FROM mydb.default.cpu LIMIT 10;</code></pre>
+        </div>
+      </div>
+
+      <h2>关键设计决策</h2>
+
+      <h3>为什么选择 Rust？</h3>
+
+      <ul>
+        <li><strong>内存安全</strong> - 无空指针错误或数据竞争</li>
+        <li><strong>零成本抽象</strong> - 高级代码，C 级性能</li>
+        <li><strong>Async/await</strong> - 高效处理数千连接</li>
+        <li><strong>强类型系统</strong> - 编译时捕获错误</li>
+      </ul>
+
+      <h3>为什么选择 Parquet？</h3>
+
+      <ul>
+        <li><strong>列式格式</strong> - 只读取需要的列</li>
+        <li><strong>压缩</strong> - 支持 Snappy、ZSTD、LZ4</li>
+        <li><strong>谓词下推</strong> - 读取前过滤</li>
+        <li><strong>生态系统</strong> - 兼容 Spark、Pandas、Arrow</li>
+      </ul>
+
+      <h3>为什么选择 DataFusion？</h3>
+
+      <ul>
+        <li><strong>完整 SQL</strong> - 无需学习自定义查询语言</li>
+        <li><strong>可扩展</strong> - 支持自定义函数和优化</li>
+        <li><strong>Arrow 原生</strong> - 零拷贝数据处理</li>
+        <li><strong>活跃社区</strong> - Apache Arrow 项目的一部分</li>
+      </ul>
+
+      <h2>性能特征</h2>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>操作</th>
+              <th>典型延迟</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>写入（缓存）</td>
+              <td>&lt; 1ms</td>
+              <td>数据进入内存后即确认</td>
+            </tr>
+            <tr>
+              <td>简单查询</td>
+              <td>1-10ms</td>
+              <td>单表，索引过滤</td>
+            </tr>
+            <tr>
+              <td>聚合查询</td>
+              <td>10-100ms</td>
+              <td>取决于数据量</td>
+            </tr>
+            <tr>
+              <td>JOIN 查询</td>
+              <td>50-500ms</td>
+              <td>取决于表大小</td>
+            </tr>
+            <tr>
+              <td>刷写</td>
+              <td>100-1000ms</td>
+              <td>取决于缓存大小</td>
+            </tr>
+            <tr>
+              <td>压缩合并 (L0→L1)</td>
+              <td>1-10s</td>
+              <td>后台运行</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>后续步骤</h2>
+
+      <div class="cards-grid">
+        <a href="storage.html" class="card">
+          <div class="card-icon">&#128451;</div>
+          <h3>存储深入解析</h3>
+          <p>了解更多关于 Parquet 存储和分区的内容。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="compaction.html" class="card">
+          <div class="card-icon">&#128218;</div>
+          <h3>压缩合并</h3>
+          <p>深入了解 LSM 风格的压缩合并。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>配置</h3>
+          <p>根据您的工作负载调优 MynaDB。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

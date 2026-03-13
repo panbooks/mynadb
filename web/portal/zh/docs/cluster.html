@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 企业版集群 - 采用共享存储架构的分布式时序数据库">
+  <title>企业版集群 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/cluster.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html" class="active">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <div class="docs-badge" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">
+        v0.3.0 新功能
+      </div>
+
+      <h1>企业版集群</h1>
+
+      <p class="lead">
+        无限扩展。MynaDB 企业版将单机数据库转变为分布式、水平可扩展的集群，实现计算存储分离架构。按需添加节点，
+        扩展至 PB 级别，借助基于 S3 的存储实现 11 个 9 的数据持久性。
+      </p>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #eff6ff, #dbeafe); border-left: 4px solid #3b82f6; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>云原生设计：</strong>完美适配 Kubernetes 部署，支持无状态计算节点、自动弹性扩缩容，无需数据重平衡。
+      </div>
+
+      <h2>架构概览</h2>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
+                            Clients (HTTP / Flight / MySQL)
+                                        │
+                                        ▼
+                              ┌───────────────────┐
+                              │   Load Balancer    │
+                              └─────────┬─────────┘
+                                        │
+              ┌─────────────────────────┼─────────────────────────┐
+              │                         │                         │
+              ▼                         ▼                         ▼
+     ┌────────────────┐      ┌────────────────┐      ┌────────────────┐
+     │  Router Node 1 │      │  Router Node 2 │      │  Router Node N │
+     │  HTTP:7000      │      │  (Stateless)   │      │  (Stateless)   │
+     │  Flight:7001    │      │  ShardCache    │      │  ShardCache    │
+     │  MySQL:7002     │      │  QueryCoord    │      │  QueryCoord    │
+     └──────┬─────────┘      └──────┬─────────┘      └──────┬─────────┘
+            │  Arrow Flight          │                        │
+            ├────────────────────────┼────────────────────────┘
+            │                        │
+            ▼                        ▼
+     ┌────────────────┐      ┌────────────────┐
+     │  Data Node 1   │      │  Data Node N   │      ┌────────────────┐
+     │  HTTP:5000      │      │  (Scaled-out)  │      │  Admin Console │
+     │  Flight:5001    │      │  DataCache     │      │  HTTP:18080    │
+     │  DataCache      │      │  WAL + Parquet │      │  Cluster Mgmt  │
+     │  WAL + Parquet  │      │  Compaction    │      │  SQL Editor    │
+     └──────┬─────────┘      └──────┬─────────┘      └──────┬─────────┘
+            │                        │                        │
+            └────────────┬───────────┘                        │
+                         ▼                                    │
+   ┌──────────────────────────────────────────────────┐       │
+   │          SHARED OBJECT STORAGE                    │       │
+   │            (S3 / MinIO / OSS)                     │       │
+   └──────────────────────────────────────────────────┘       │
+                                                              │
+   ┌──────────────────────────────────────────────────┐       │
+   │           META SERVICE (Raft Consensus)           │◄──────┘
+   │  ┌────────┐  ┌────────┐  ┌────────┐             │
+   │  │ Meta 1 │  │ Meta 2 │  │ Meta 3 │             │
+   │  │ Leader │  │Follower│  │Follower│             │
+   │  │ :6000  │  │ :6100  │  │ :6200  │             │
+   │  └────────┘  └────────┘  └────────┘             │
+   │  Metadata • Table Routing • Locks • Events       │
+   └──────────────────────────────────────────────────┘
+        </pre>
+      </div>
+
+      <h2>核心优势</h2>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #10b981, #34d399);">&#128200;</div>
+          <h3>自动扩缩容</h3>
+          <p>无需数据迁移即可增减计算节点。从 3 个节点无缝扩展到 100+ 个节点。</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #3b82f6, #60a5fa);">&#128274;</div>
+          <h3>11 个 9 的持久性</h3>
+          <p>S3 对象存储提供 99.999999999% 的数据持久性。您的数据安全无忧。</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #f59e0b, #fbbf24);">&#128176;</div>
+          <h3>成本高效</h3>
+          <p>数据仅存储一份于低成本对象存储中，无需副本复制开销。</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa);">&#9889;</div>
+          <h3>即时故障转移</h3>
+          <p>无状态节点意味着即时恢复，无需等待领导者选举。</p>
+        </div>
+      </div>
+
+      <h2>节点类型</h2>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #f59e0b, #fbbf24);">&#9881;</div>
+          <h3>Meta 节点</h3>
+          <p>基于 Raft 的共识服务（OpenRaft 0.9）。管理元数据、表路由、分布式锁、领导者选举和事件流。部署 3 或 5 个节点。</p>
+          <p style="font-size: 0.8rem; color: #6b7394;">端口：HTTP 6000，gRPC 6001</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #3b82f6, #60a5fa);">&#128268;</div>
+          <h3>Router 节点</h3>
+          <p>无状态请求路由器，通过 ShardCache 实现表级路由。面向客户端提供 HTTP、Arrow Flight 和 MySQL 线协议。支持扇出查询协调。</p>
+          <p style="font-size: 0.8rem; color: #6b7394;">端口：HTTP 7000，Flight 7001，MySQL 7002</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #10b981, #34d399);">&#128451;</div>
+          <h3>Data 节点</h3>
+          <p>存储和查询执行引擎。将写入数据缓存到 DataCache，刷新为 Parquet 文件到 S3，运行 LSM 压缩合并，并通过 DataFusion 在本地执行 SQL 查询。</p>
+          <p style="font-size: 0.8rem; color: #6b7394;">端口：HTTP 5000，Flight 5001</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa);">&#128421;</div>
+          <h3>Admin 控制台</h3>
+          <p>可选的 Web 管理界面。连接 Meta 进行节点发现，提供 SQL 编辑器、存储浏览器和集群监控仪表盘。</p>
+          <p style="font-size: 0.8rem; color: #6b7394;">端口：HTTP 18080</p>
+        </div>
+      </div>
+
+      <h2>工作原理</h2>
+
+      <h3>表级路由</h3>
+      <p>
+        MynaDB 使用<strong>表级路由</strong>来优化时序数据工作负载的性能。每个表由特定的 Data 节点拥有，
+        所有权信息在 Meta 服务中跟踪。与文件级路由相比，元数据条目减少 600 倍，同时保持出色的缓存局部性。
+      </p>
+
+      <h3>写入路径</h3>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">写入流程</span>
+        </div>
+        <div class="code-content">
+<pre><code>1. Client → POST /write/:db (to Router)
+2. Router parses line protocol, extracts table name
+3. Router looks up table owner in ShardCache
+4. Router sends RecordBatch to Data node via Arrow Flight
+5. Data node inserts into DataCache (in-memory)
+6. Data node registers table with Meta (if new)
+7. Background: DataCache flushes to Parquet on S3 every 60s
+8. Background: Compactor merges Parquet files (L0 → L1 → L2)</code></pre>
+        </div>
+      </div>
+
+      <h3>查询路径</h3>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">查询流程</span>
+        </div>
+        <div class="code-content">
+<pre><code>1. Client → GET /query/:db?sql=... (to Router)
+2. Router parses SQL, extracts table references
+3. Router determines target Data nodes from ShardCache
+4. Router fans out query to Data nodes in parallel (Arrow Flight)
+5. Each Data node executes locally:
+   - Check DataCache for hot data
+   - Read matching Parquet files from S3
+   - Apply partition pruning + predicate pushdown
+6. Router aggregates partial results
+7. Return combined result to client</code></pre>
+        </div>
+      </div>
+
+      <h3>故障恢复</h3>
+      <p>
+        Data 节点每 5 秒发送一次心跳，租约 TTL 为 15 秒。当节点崩溃时，Meta 领导者检测到过期的租约，
+        将节点标记为 Inactive，并触发恢复管理器。孤立的表会被重新分配给健康的节点，Router 的 ShardCache
+        通过事件流进行更新。可选的冷备节点可在故障转移前将未持久化的数据刷新到 S3。
+      </p>
+
+      <h2>配置</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">config.toml</span>
+        </div>
+        <div class="code-content">
+<pre><code>[cluster]
+enabled = true
+node_id = ""                    # Auto-generated if empty
+advertise_addr = "0.0.0.0:7000"
+role = "hybrid"                 # "compute", "compactor", "hybrid"
+
+[cluster.coordinator]
+type = "etcd"
+endpoints = ["etcd-1:2379", "etcd-2:2379", "etcd-3:2379"]
+lock_prefix = "/mynadb/locks/"
+lock_ttl_secs = 30
+heartbeat_interval_secs = 5
+
+[cluster.cache]
+invalidation_channel = "/mynadb/cache/invalidate"
+
+[cluster.compaction]
+leader_only = true
+election_key = "/mynadb/leader/compactor"
+
+[cluster.health]
+check_interval_secs = 10
+unhealthy_threshold = 3</code></pre>
+        </div>
+      </div>
+
+      <h2>集群 API</h2>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>端点</th>
+            <th>方法</th>
+            <th>描述</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/cluster/status</code></td>
+            <td>GET</td>
+            <td>集群整体状态和当前节点信息</td>
+          </tr>
+          <tr>
+            <td><code>/cluster/nodes</code></td>
+            <td>GET</td>
+            <td>列出所有已注册的节点</td>
+          </tr>
+          <tr>
+            <td><code>/cluster/leader</code></td>
+            <td>GET</td>
+            <td>当前领导者信息</td>
+          </tr>
+          <tr>
+            <td><code>/cluster/health</code></td>
+            <td>GET</td>
+            <td>集群健康检查</td>
+          </tr>
+          <tr>
+            <td><code>/cluster/drain?node_id=xxx</code></td>
+            <td>POST</td>
+            <td>排空节点（准备移除）</td>
+          </tr>
+          <tr>
+            <td><code>/cluster/remove?node_id=xxx</code></td>
+            <td>DELETE</td>
+            <td>从集群中移除节点</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>示例：集群状态</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+<pre><code>curl http://localhost:7000/cluster/status</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Response</span>
+        </div>
+        <div class="code-content">
+<pre><code>{
+  "enabled": true,
+  "node_id": "mynadb-1",
+  "role": "hybrid",
+  "state": "active",
+  "is_leader": true,
+  "leader_id": "mynadb-1",
+  "total_nodes": 3,
+  "healthy_nodes": 3,
+  "coordinator_type": "etcd",
+  "coordinator_connected": true
+}</code></pre>
+        </div>
+      </div>
+
+      <h2>部署</h2>
+
+      <h3>Kubernetes</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+<pre><code># Create namespace
+kubectl create namespace mynadb
+
+# Apply manifests
+kubectl apply -f deploy/kubernetes/configmap.yaml
+kubectl apply -f deploy/kubernetes/service.yaml
+kubectl apply -f deploy/kubernetes/deployment.yaml
+kubectl apply -f deploy/kubernetes/hpa.yaml
+
+# Check status
+kubectl get pods -n mynadb
+kubectl get svc -n mynadb</code></pre>
+        </div>
+      </div>
+
+      <h3>Docker Compose</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+<pre><code># Start cluster with etcd and MinIO
+docker-compose -f deploy/docker-compose.cluster.yaml up -d
+
+# Verify nodes
+curl http://localhost:7000/cluster/nodes
+
+# Write to node 1
+curl -X POST http://localhost:7000/write/testdb \
+  -d "cpu,host=a value=1"
+
+# Query from node 2 (port 7010)
+curl http://localhost:7010/query/testdb \
+  -d "SELECT * FROM cpu"
+
+# Check HAProxy stats
+open http://localhost:8404/stats</code></pre>
+        </div>
+      </div>
+
+      <h2>指标监控</h2>
+
+      <p>Prometheus 指标可通过 <code>/metrics</code> 端点获取：</p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>指标</th>
+            <th>类型</th>
+            <th>描述</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>mynadb_cluster_nodes_total</code></td>
+            <td>Gauge</td>
+            <td>节点总数</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_nodes_healthy</code></td>
+            <td>Gauge</td>
+            <td>健康节点数</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_is_leader</code></td>
+            <td>Gauge</td>
+            <td>当前节点是否为领导者（1 表示是）</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_lock_acquisitions_total</code></td>
+            <td>Counter</td>
+            <td>锁获取次数</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cluster_cache_invalidations_total</code></td>
+            <td>Counter</td>
+            <td>缓存失效发送次数</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>性能</h2>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>指标</th>
+            <th>单机模式</th>
+            <th>集群模式（缓存命中）</th>
+            <th>集群模式（缓存未命中）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>写入延迟（p50）</td>
+            <td>5-10ms</td>
+            <td>10-30ms</td>
+            <td>50-100ms</td>
+          </tr>
+          <tr>
+            <td>写入延迟（p99）</td>
+            <td>20-50ms</td>
+            <td>50-100ms</td>
+            <td>150-300ms</td>
+          </tr>
+          <tr>
+            <td>查询延迟（p50）</td>
+            <td>10-50ms</td>
+            <td>10-50ms</td>
+            <td>100-300ms</td>
+          </tr>
+          <tr>
+            <td>写入吞吐量</td>
+            <td>100K 点/秒</td>
+            <td>100K 点/秒/节点</td>
+            <td>-</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>方案对比</h2>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>特性</th>
+            <th>MynaDB 集群</th>
+            <th>Shared-Nothing（Raft）</th>
+            <th>主从模式</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>复杂度</td>
+            <td>中等</td>
+            <td>非常高</td>
+            <td>低</td>
+          </tr>
+          <tr>
+            <td>自动扩缩容</td>
+            <td><strong>优秀</strong></td>
+            <td>困难（需要重平衡）</td>
+            <td>不支持</td>
+          </tr>
+          <tr>
+            <td>持久性</td>
+            <td><strong>S3（11 个 9）</strong></td>
+            <td>Raft 多数派</td>
+            <td>复制延迟</td>
+          </tr>
+          <tr>
+            <td>故障转移时间</td>
+            <td><strong>即时</strong></td>
+            <td>10-15 秒</td>
+            <td>10-30 秒</td>
+          </tr>
+          <tr>
+            <td>最适场景</td>
+            <td>云端、弹性扩展</td>
+            <td>私有化部署、强一致性</td>
+            <td>简单高可用</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>深入了解</h2>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+        <div style="background: var(--card-bg, #1e293b); border: 1px solid var(--border, #334155); border-radius: 0.75rem; padding: 1.25rem;">
+          <h3 style="margin-top: 0;"><a href="cluster-getting-started.html" style="color: var(--primary, #3b82f6); text-decoration: none;">集群快速入门</a></h3>
+          <p>分步指导如何构建、配置和启动本地开发集群，涵盖所有节点类型。</p>
+        </div>
+        <div style="background: var(--card-bg, #1e293b); border: 1px solid var(--border, #334155); border-radius: 0.75rem; padding: 1.25rem;">
+          <h3 style="margin-top: 0;"><a href="cluster-architecture.html" style="color: var(--primary, #3b82f6); text-decoration: none;">集群架构</a></h3>
+          <p>深入了解 Meta（Raft）、Router（ShardCache）、Data（存储/查询）和 Admin 节点的内部机制。</p>
+        </div>
+        <div style="background: var(--card-bg, #1e293b); border: 1px solid var(--border, #334155); border-radius: 0.75rem; padding: 1.25rem;">
+          <h3 style="margin-top: 0;"><a href="cluster-scaling.html" style="color: var(--primary, #3b82f6); text-decoration: none;">集群扩缩容</a></h3>
+          <p>扩容/缩容操作、节点生命周期、故障检测、冷备复制。</p>
+        </div>
+      </div>
+
+      <div class="docs-nav">
+        <a href="high-availability.html" class="docs-nav-prev">&larr; 高可用</a>
+        <a href="cluster-getting-started.html" class="docs-nav-next">集群快速入门 &rarr;</a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

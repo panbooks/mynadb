@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB MySQL 协议 - 使用 MySQL 客户端、DBeaver 或 Grafana 进行连接">
+  <title>MySQL 协议 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/mysql-protocol.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html" class="active">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>MySQL 协议支持</h1>
+
+      <p>MynaDB 实现了 MySQL 线协议，允许您使用任何兼容 MySQL 的客户端进行连接。这使得与 mysql-cli、DBeaver、Grafana 等现有工具的无缝集成成为可能。</p>
+
+      <h2>配置</h2>
+
+      <p>在 <code>config.toml</code> 中启用 MySQL 协议服务器：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[mysql]
+# Enable MySQL protocol server
+enabled = true
+
+# Port for MySQL connections (default: 3307)
+port = 3307
+
+# Bind address
+bind = "0.0.0.0"
+
+# Maximum concurrent connections
+max_connections = 100</code></pre>
+        </div>
+      </div>
+
+      <h2>使用 MySQL CLI 连接</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Connect to MynaDB
+mysql -h localhost -P 3307 -u root
+
+# Connect to a specific database
+mysql -h localhost -P 3307 -u root mydb
+
+# Execute a query directly
+mysql -h localhost -P 3307 -u root -e "SELECT * FROM mydb.default.cpu LIMIT 10"</code></pre>
+        </div>
+      </div>
+
+      <h2>支持的命令</h2>
+
+      <h3>数据库命令</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>-- List all databases (catalogs)
+SHOW DATABASES;
+
+-- Switch to a database
+USE mydb;
+
+-- Show current database
+SELECT DATABASE();</code></pre>
+        </div>
+      </div>
+
+      <h3>表命令</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>-- List all tables in current database
+SHOW TABLES;
+
+-- List tables in a specific schema
+SHOW TABLES FROM default;
+
+-- Show table schema
+DESCRIBE cpu;
+DESC cpu;
+
+-- Show create table (schema info)
+SHOW CREATE TABLE cpu;</code></pre>
+        </div>
+      </div>
+
+      <h3>查询命令</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>-- Standard SQL queries work as expected
+SELECT host, AVG(usage) as avg_cpu
+FROM cpu
+WHERE time > NOW() - INTERVAL 1 HOUR
+GROUP BY host
+ORDER BY avg_cpu DESC;
+
+-- Fully qualified table names
+SELECT * FROM mydb.default.cpu LIMIT 10;
+
+-- Time-based queries
+SELECT
+  time_bucket('5 minutes', time) as bucket,
+  host,
+  AVG(usage) as avg_usage
+FROM cpu
+GROUP BY bucket, host
+ORDER BY bucket;</code></pre>
+        </div>
+      </div>
+
+      <h2>使用图形化工具连接</h2>
+
+      <h3>DBeaver</h3>
+
+      <ol>
+        <li>创建新连接：数据库 &rarr; 新建数据库连接</li>
+        <li>选择 "MySQL" 作为数据库类型</li>
+        <li>配置连接：
+          <ul>
+            <li>主机：<code>localhost</code></li>
+            <li>端口：<code>3307</code></li>
+            <li>数据库：<code>mydb</code>（或留空）</li>
+            <li>用户名：<code>root</code></li>
+            <li>密码：（留空或使用已配置的密码）</li>
+          </ul>
+        </li>
+        <li>点击 "测试连接" 然后 "完成"</li>
+      </ol>
+
+      <h3>Grafana</h3>
+
+      <ol>
+        <li>添加新数据源</li>
+        <li>选择 "MySQL" 作为类型</li>
+        <li>配置：
+          <ul>
+            <li>主机：<code>localhost:3307</code></li>
+            <li>数据库：<code>mydb</code></li>
+            <li>用户：<code>root</code></li>
+          </ul>
+        </li>
+        <li>保存并测试</li>
+      </ol>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>Example Grafana Query:
+
+SELECT
+  $__timeGroup(time, $__interval) as ts,
+  host,
+  AVG(usage) as usage
+FROM cpu
+WHERE $__timeFilter(time)
+GROUP BY ts, host
+ORDER BY ts</code></pre>
+        </div>
+      </div>
+
+      <h3>DataGrip / IntelliJ</h3>
+
+      <ol>
+        <li>文件 &rarr; 新建 &rarr; 数据源 &rarr; MySQL</li>
+        <li>配置：
+          <ul>
+            <li>主机：<code>localhost</code></li>
+            <li>端口：<code>3307</code></li>
+            <li>用户：<code>root</code></li>
+          </ul>
+        </li>
+        <li>测试连接并应用</li>
+      </ol>
+
+      <h2>Python 连接</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">python</span>
+        </div>
+        <div class="code-content">
+          <pre><code>import mysql.connector
+
+# Connect to MynaDB
+conn = mysql.connector.connect(
+    host="localhost",
+    port=3307,
+    user="root",
+    database="mydb"
+)
+
+cursor = conn.cursor()
+
+# Execute query
+cursor.execute("""
+    SELECT host, AVG(usage) as avg_cpu
+    FROM cpu
+    WHERE time > NOW() - INTERVAL 1 HOUR
+    GROUP BY host
+""")
+
+# Fetch results
+for row in cursor.fetchall():
+    print(f"Host: {row[0]}, Avg CPU: {row[1]:.2f}%")
+
+cursor.close()
+conn.close()</code></pre>
+        </div>
+      </div>
+
+      <h2>Node.js 连接</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">javascript</span>
+        </div>
+        <div class="code-content">
+          <pre><code>const mysql = require('mysql2/promise');
+
+async function query() {
+  const conn = await mysql.createConnection({
+    host: 'localhost',
+    port: 3307,
+    user: 'root',
+    database: 'mydb'
+  });
+
+  const [rows] = await conn.execute(`
+    SELECT host, AVG(usage) as avg_cpu
+    FROM cpu
+    WHERE time > NOW() - INTERVAL 1 HOUR
+    GROUP BY host
+  `);
+
+  console.log(rows);
+  await conn.end();
+}
+
+query();</code></pre>
+        </div>
+      </div>
+
+      <h2>支持的 SQL 语法</h2>
+
+      <p>MynaDB 通过 Apache DataFusion 支持标准 SQL。主要功能包括：</p>
+
+      <ul>
+        <li><strong>SELECT</strong>：支持 WHERE、GROUP BY、HAVING、ORDER BY、LIMIT</li>
+        <li><strong>聚合函数</strong>：COUNT、SUM、AVG、MIN、MAX、STDDEV 等</li>
+        <li><strong>窗口函数</strong>：ROW_NUMBER、RANK、LAG、LEAD 等</li>
+        <li><strong>连接查询</strong>：INNER、LEFT、RIGHT、FULL OUTER</li>
+        <li><strong>子查询</strong>：关联子查询和非关联子查询</li>
+        <li><strong>CTE</strong>：WITH 子句（公共表表达式）</li>
+        <li><strong>时间函数</strong>：NOW()、time_bucket()、date_trunc()</li>
+      </ul>
+
+      <h2>限制</h2>
+
+      <p>MySQL 协议实现存在以下限制：</p>
+
+      <ul>
+        <li><strong>只读</strong>：不支持通过 MySQL 协议执行 INSERT/UPDATE/DELETE（请使用 HTTP API 写入数据）</li>
+        <li><strong>无事务</strong>：BEGIN/COMMIT/ROLLBACK 为空操作</li>
+        <li><strong>无存储过程</strong>：仅支持即时 SQL 查询</li>
+        <li><strong>不支持参数化预处理语句</strong>：动态查询请使用字符串拼接</li>
+      </ul>
+
+      <h2>认证</h2>
+
+      <p>MynaDB 支持 MySQL 连接的基本认证：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[mysql]
+enabled = true
+port = 3307
+
+# Authentication (optional)
+[mysql.auth]
+enabled = true
+username = "mynadb"
+password = "secret123"</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Connect with authentication
+mysql -h localhost -P 3307 -u mynadb -psecret123</code></pre>
+        </div>
+      </div>
+
+      <div class="doc-nav">
+        <a href="caching.html" class="doc-nav-prev">
+          <span>&#8592;</span> 缓存
+        </a>
+        <a href="object-store.html" class="doc-nav-next">
+          对象存储 <span>&#8594;</span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 集群运维指南 - 通过管理控制台管理节点、表、缩容、事件和集群操作的详细说明">
+  <title>集群运维指南 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/admin-operations.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html" class="active">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <div class="docs-badge" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">
+        v0.3.0 新功能
+      </div>
+
+      <h1>集群运维指南</h1>
+
+      <p class="lead">
+        通过管理控制台管理 MynaDB 集群的详细说明。本指南涵盖节点管理、表操作、缩容工作流、事件监控、Meta 和数据操作、调试工具以及设置。
+      </p>
+
+      <!-- ============================================================ -->
+      <h2 id="nodes-management">节点管理</h2>
+
+      <p>
+        <strong>节点</strong>页面（<code>/nodes</code>）以卡片网格布局显示所有已注册的集群节点。每张卡片显示节点 ID、广播地址以及角色、状态和模式的彩色标记。
+      </p>
+
+      <h3>过滤器</h3>
+
+      <p>
+        使用顶部的过滤栏缩小节点列表范围：
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>过滤器</th>
+            <th>选项</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>搜索</strong></td>
+            <td>自由文本</td>
+            <td>按 ID 或地址过滤节点</td>
+          </tr>
+          <tr>
+            <td><strong>角色</strong></td>
+            <td>Meta、Router、Data、Compactor</td>
+            <td>按节点的集群角色过滤</td>
+          </tr>
+          <tr>
+            <td><strong>状态</strong></td>
+            <td>活跃、非活跃、排空中、退役中、已排空</td>
+            <td>按运行状态过滤</td>
+          </tr>
+          <tr>
+            <td><strong>模式</strong></td>
+            <td>主节点、备用节点</td>
+            <td>按节点模式过滤（仅限数据节点）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>节点卡片</h3>
+
+      <p>
+        每张节点卡片显示以下信息：
+      </p>
+
+      <ul>
+        <li><strong>节点 ID</strong> -- 注册时分配的唯一标识符</li>
+        <li><strong>广播地址</strong> -- 其他节点用来访问此节点的 host:port</li>
+        <li><strong>角色标记</strong> -- Meta（蓝色）、Router（绿色）、Data（紫色）、Compactor（橙色）</li>
+        <li><strong>状态标记</strong> -- 活跃（绿色）、非活跃（灰色）、排空中（黄色）、退役中（橙色）、已排空（红色）</li>
+        <li><strong>模式标记</strong> -- 主节点或备用节点（仅限数据节点）</li>
+        <li><strong>可用区</strong> -- 可用区或机架分配</li>
+        <li><strong>拥有的表</strong> -- 分配给此节点的表数量</li>
+        <li><strong>最后心跳</strong> -- 最后一次健康检查的相对时间戳</li>
+      </ul>
+
+      <p>
+        点击任意节点卡片可导航到<strong>节点详情</strong>页面。
+      </p>
+
+      <h3>节点详情页面</h3>
+
+      <p>
+        节点详情页面（<code>/nodes/:id</code>）提供单个节点的完整信息和管理操作：
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>操作</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>刷新节点</strong></td>
+            <td>强制节点将内存中的写入缓存刷新到 Parquet 文件</td>
+          </tr>
+          <tr>
+            <td><strong>压缩合并节点</strong></td>
+            <td>触发此节点上所有表的压缩合并</td>
+          </tr>
+          <tr>
+            <td><strong>清除节点缓存</strong></td>
+            <td>清除节点的元数据和查询结果缓存</td>
+          </tr>
+          <tr>
+            <td><strong>退役节点</strong></td>
+            <td>开始退役节点——将表迁移到其他节点，然后排空</td>
+          </tr>
+          <tr>
+            <td><strong>取消退役</strong></td>
+            <td>取消正在进行的退役操作（在排空/退役状态下可用）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        当节点处于退役中或排空中状态时，详情页面会显示进度跟踪器，包含已迁移和剩余的表数量。
+      </p>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; 退役与移除</div>
+        <p>
+          始终使用退役操作而不是突然停止数据节点。退役操作会在节点关闭前将表所有权优雅地迁移到其他健康节点，避免数据不可用。
+        </p>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2 id="tables-management">表管理</h2>
+
+      <p>
+        <strong>表</strong>页面（<code>/tables</code>）列出集群中所有已注册的表及其关键元数据和管理操作。
+      </p>
+
+      <h3>表列表</h3>
+
+      <p>
+        表列表支持搜索、按 catalog 和 schema 过滤，以及分页（每页 20 个表）。每行显示：
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>列</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>名称</strong></td>
+            <td>完全限定名（<code>catalog.schema.table</code>）</td>
+          </tr>
+          <tr>
+            <td><strong>大小</strong></td>
+            <td>所有分区的总存储大小</td>
+          </tr>
+          <tr>
+            <td><strong>行数</strong></td>
+            <td>近似总行数</td>
+          </tr>
+          <tr>
+            <td><strong>分区数</strong></td>
+            <td>日期分区数量</td>
+          </tr>
+          <tr>
+            <td><strong>所有者节点</strong></td>
+            <td>负责此表的主数据节点（可点击链接到节点详情）</td>
+          </tr>
+          <tr>
+            <td><strong>副本数</strong></td>
+            <td>跨节点的副本数量</td>
+          </tr>
+          <tr>
+            <td><strong>操作</strong></td>
+            <td>重新分配按钮，将表移动到不同节点</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>重新分配表</h3>
+
+      <p>
+        点击任意表行上的<strong>重新分配</strong>按钮，打开一个对话框选择目标数据节点。表重新分配会转移所有权，使新节点处理该表的写入和压缩合并。
+      </p>
+
+      <p>
+        重新分配表的常见原因：
+      </p>
+
+      <ul>
+        <li><strong>负载均衡</strong> -- 将表从过载节点移至较空闲的节点</li>
+        <li><strong>维护</strong> -- 在节点维护前将表迁移出去</li>
+        <li><strong>扩容</strong> -- 添加新数据节点后重新分配表</li>
+        <li><strong>恢复</strong> -- 将故障节点的表转移到健康节点</li>
+      </ul>
+
+      <!-- ============================================================ -->
+      <h2 id="scale-in">缩容操作</h2>
+
+      <p>
+        <strong>缩容</strong>页面（<code>/scale-in</code>）提供引导式三步向导，用于优雅地减少集群中的数据节点数量。
+      </p>
+
+      <h3>步骤 1：配置</h3>
+
+      <p>
+        在配置步骤中，您需要指定：
+      </p>
+
+      <ul>
+        <li><strong>节点数量</strong> -- 要从集群中移除的节点数量</li>
+        <li><strong>策略</strong> -- 选择要退役节点的算法：</li>
+      </ul>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>策略</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>最少负载</strong></td>
+            <td>退役拥有最少表的节点（最小化迁移工作量）</td>
+          </tr>
+          <tr>
+            <td><strong>先进先出</strong></td>
+            <td>按注册时间退役最早的节点</td>
+          </tr>
+          <tr>
+            <td><strong>后进先出</strong></td>
+            <td>退役最近添加的节点</td>
+          </tr>
+          <tr>
+            <td><strong>高可用单元</strong></td>
+            <td>从同一可用区退役节点以维持区域均衡</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        您也可以手动选择特定节点 ID 而不使用自动策略。向导会根据当前集群状态显示推荐方案。
+      </p>
+
+      <h3>步骤 2：预览</h3>
+
+      <p>
+        配置完成后，向导执行<strong>试运行</strong>并显示缩容计划：
+      </p>
+
+      <ul>
+        <li><strong>计划摘要</strong> -- 要退役的总节点数、要迁移的表数、预估时间</li>
+        <li><strong>待退役节点</strong> -- 已选择的节点列表及其当前表数量</li>
+        <li><strong>执行阶段</strong> -- 有序的迁移步骤列表，显示哪些表移动到哪里</li>
+      </ul>
+
+      <p>
+        在继续之前请仔细审查计划。您可以返回步骤 1 调整配置。
+      </p>
+
+      <h3>步骤 3：执行</h3>
+
+      <p>
+        点击<strong>执行</strong>开始缩容操作。页面显示实时进度：
+      </p>
+
+      <ul>
+        <li><strong>进度条</strong> -- 总体完成百分比</li>
+        <li><strong>阶段状态</strong> -- 当前阶段及其状态（等待中、进行中、已完成）</li>
+        <li><strong>每节点进度</strong> -- 每个退役节点的已迁移表数与总数</li>
+        <li><strong>操作状态</strong> -- 运行中、已完成或失败（含错误详情）</li>
+      </ul>
+
+      <p>
+        您可以<strong>取消</strong>正在运行的缩容操作。取消会停止后续迁移，但不会回滚已完成的表迁移。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 缩容最佳实践</div>
+        <p>
+          建议每次缩减一到两个节点，而不是一次缩减多个。这可以限制正在进行的表迁移数量，减少对查询性能的影响。详情请参阅<a href="cluster-scaling.html">集群扩缩容</a>的架构说明。
+        </p>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2 id="events">事件监控</h2>
+
+      <p>
+        <strong>事件</strong>页面（<code>/events</code>）显示通过 WebSocket 传输的集群事件实时流。
+      </p>
+
+      <h3>实时流</h3>
+
+      <p>
+        事件以逆时间顺序以卡片形式出现。每张事件卡片显示：
+      </p>
+
+      <ul>
+        <li><strong>时间戳</strong> -- 相对时间（如"2 分钟前"），悬停时显示完整 ISO 时间戳</li>
+        <li><strong>类型图标</strong> -- 表示事件类别的彩色图标</li>
+        <li><strong>来源</strong> -- 生成事件的节点或组件</li>
+        <li><strong>严重性</strong> -- 信息、警告或错误事件的视觉指示器</li>
+        <li><strong>详情</strong> -- 事件特定的数据载荷</li>
+      </ul>
+
+      <h3>连接状态</h3>
+
+      <p>
+        状态指示器显示与管理节点的 WebSocket 连接是否处于活跃状态。如果连接断开，页面会自动尝试重新连接。使用<strong>暂停</strong>/<strong>恢复</strong>可以在不断开连接的情况下暂时停止实时流。
+      </p>
+
+      <h3>过滤器</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>过滤器</th>
+            <th>选项</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>时间范围</strong></td>
+            <td>全部时间、最近 1 小时、最近 24 小时、最近 7 天</td>
+          </tr>
+          <tr>
+            <td><strong>事件类型</strong></td>
+            <td>从下列事件类型中选择</td>
+          </tr>
+          <tr>
+            <td><strong>事件来源</strong></td>
+            <td>按来源节点或组件过滤</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>事件类型</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>事件类型</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>NodeJoined</strong></td>
+            <td>节点向 Meta 服务注册</td>
+          </tr>
+          <tr>
+            <td><strong>NodeLeft</strong></td>
+            <td>节点注销或超时</td>
+          </tr>
+          <tr>
+            <td><strong>NodeStateChanged</strong></td>
+            <td>节点在不同状态之间转换（活跃、退役中、已排空等）</td>
+          </tr>
+          <tr>
+            <td><strong>LeaderChanged</strong></td>
+            <td>选举了新的 Meta Leader</td>
+          </tr>
+          <tr>
+            <td><strong>TableReassigned</strong></td>
+            <td>表的所有权被移动到不同节点</td>
+          </tr>
+          <tr>
+            <td><strong>TableOwnerSet</strong></td>
+            <td>首次为表分配所有者</td>
+          </tr>
+          <tr>
+            <td><strong>TableOwnerRemoved</strong></td>
+            <td>表的所有者被移除（节点故障或注销）</td>
+          </tr>
+          <tr>
+            <td><strong>CacheInvalidate</strong></td>
+            <td>向数据节点广播了缓存失效消息</td>
+          </tr>
+          <tr>
+            <td><strong>SchemaChanged</strong></td>
+            <td>表的 schema 被修改（新列、类型变更）</td>
+          </tr>
+          <tr>
+            <td><strong>FlushForRecovery</strong></td>
+            <td>指示节点刷新缓存以进行 WAL 恢复</td>
+          </tr>
+          <tr>
+            <td><strong>DistributionConfigChanged</strong></td>
+            <td>表分布配置已更新</td>
+          </tr>
+          <tr>
+            <td><strong>TablesCacheRefresh</strong></td>
+            <td>一个或多个节点上的表缓存已刷新</td>
+          </tr>
+          <tr>
+            <td><strong>Unknown</strong></td>
+            <td>未识别的事件类型（前向兼容）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>导出</h3>
+
+      <p>
+        使用导出按钮下载当前事件列表：
+      </p>
+
+      <ul>
+        <li><strong>JSON</strong> -- 包含所有元数据的完整事件对象</li>
+        <li><strong>CSV</strong> -- 表格格式，适合电子表格分析</li>
+      </ul>
+
+      <p>
+        启用<strong>浏览器通知</strong>（铃铛图标）以接收节点故障或 Leader 变更等重要事件的桌面提醒。
+      </p>
+
+      <!-- ============================================================ -->
+      <h2 id="meta-operations">Meta 操作</h2>
+
+      <p>
+        <strong>Meta 操作</strong>页面（<code>/meta-operations</code>）提供对 Meta 服务集群的可视化和控制。
+      </p>
+
+      <h3>Meta 集群状态</h3>
+
+      <p>
+        状态区域显示：
+      </p>
+
+      <ul>
+        <li><strong>集群健康</strong> -- 如果大多数 Meta 节点可达则为健康</li>
+        <li><strong>当前任期</strong> -- Raft 共识任期编号</li>
+        <li><strong>提交索引</strong> -- 最新已提交的日志条目索引</li>
+        <li><strong>Meta Leader</strong> -- 当前 Leader 的节点 ID 和地址</li>
+      </ul>
+
+      <h3>Meta 节点</h3>
+
+      <p>
+        表格列出所有 Meta 服务实例及其地址、角色（Leader/Follower）和连接状态。
+      </p>
+
+      <h3>Leader 选举</h3>
+
+      <p>
+        两个按钮允许您手动触发 Leader 选举操作：
+      </p>
+
+      <ul>
+        <li><strong>竞选</strong> -- 强制当前 Meta Leader 发起新的选举</li>
+        <li><strong>辞任</strong> -- 要求当前 Leader 下台，触发新的选举</li>
+      </ul>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; 选举注意事项</div>
+        <p>
+          手动触发选举会在新 Leader 选举期间造成短暂中断。仅在维护窗口期间或排查 Leader 问题时使用这些操作。
+        </p>
+      </div>
+
+      <h3>分布配置</h3>
+
+      <p>
+        分布配置控制新表如何分配到数据节点。您可以查看和修改：
+      </p>
+
+      <ul>
+        <li><strong>范围</strong> -- 在 catalog、schema 或节点级别应用分布规则</li>
+        <li><strong>复制因子</strong> -- 表数据的副本数量</li>
+        <li><strong>放置策略</strong> -- 选择哪些节点接收新表的算法</li>
+      </ul>
+
+      <!-- ============================================================ -->
+      <h2 id="data-operations">数据操作</h2>
+
+      <p>
+        <strong>数据操作</strong>页面（<code>/data-operations</code>）提供集群中所有数据节点的批量和单节点操作。
+      </p>
+
+      <h3>汇总卡片</h3>
+
+      <p>
+        顶部的汇总卡片显示数据节点总数、活跃节点数和最后一次操作状态。
+      </p>
+
+      <h3>批量操作</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>操作</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>全部刷新</strong></td>
+            <td>同时在所有活跃数据节点上触发缓存刷新</td>
+          </tr>
+          <tr>
+            <td><strong>全部压缩合并</strong></td>
+            <td>同时在所有活跃数据节点上触发压缩合并</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>单节点操作</h3>
+
+      <p>
+        批量操作下方的表格列出每个数据节点及其单独的操作按钮：
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>操作</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>刷新</strong></td>
+            <td>将节点的内存写入缓存刷新到磁盘/对象存储的 Parquet 文件</td>
+          </tr>
+          <tr>
+            <td><strong>压缩合并</strong></td>
+            <td>对该节点拥有的所有表运行压缩合并，将小的 L0 文件合并为更大的 L1/L2 文件</td>
+          </tr>
+          <tr>
+            <td><strong>清除缓存</strong></td>
+            <td>清除节点的元数据缓存和查询结果缓存以释放内存</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        每个操作按钮在操作进行时显示加载动画。每行上的状态标记指示节点当前的运行状态。
+      </p>
+
+      <!-- ============================================================ -->
+      <h2 id="debug-tools">调试工具</h2>
+
+      <p>
+        <strong>调试工具</strong>页面（<code>/debug</code>）提供测试、性能分析和缓存管理的实用工具。
+      </p>
+
+      <h3>测试数据生成</h3>
+
+      <p>
+        生成用于测试和演示的示例时序数据。可配置参数：
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>选项</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>数据类型</strong></td>
+            <td>CPU、内存、磁盘、网络指标（选择一个或多个）</td>
+          </tr>
+          <tr>
+            <td><strong>数据库</strong></td>
+            <td>生成数据的目标 catalog 名称</td>
+          </tr>
+          <tr>
+            <td><strong>日期范围</strong></td>
+            <td>生成时序数据的起止日期</td>
+          </tr>
+          <tr>
+            <td><strong>数据点数</strong></td>
+            <td>每种指标类型生成的数据点数量</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        点击<strong>生成</strong>通过数据节点的写入 API 写入测试数据。数据可立即在查询控制台中查询。
+      </p>
+
+      <h3>性能分析</h3>
+
+      <p>
+        从数据节点下载性能分析快照：
+      </p>
+
+      <ul>
+        <li><strong>堆内存分析</strong> -- 显示内存分配情况的快照，了解哪些对象占用了内存</li>
+        <li><strong>CPU 分析</strong> -- CPU 使用率分析，用于识别热点代码路径</li>
+      </ul>
+
+      <p>
+        分析结果以文件形式下载，可使用 <code>pprof</code> 或火焰图生成器等标准工具进行分析。
+      </p>
+
+      <h3>缓存管理</h3>
+
+      <ul>
+        <li><strong>预热缓存</strong> -- 将特定 catalog 的元数据主动加载到数据节点缓存中，降低首次查询延迟</li>
+        <li><strong>清除所有缓存</strong> -- 清除所有数据节点上的缓存元数据和查询结果以释放内存</li>
+      </ul>
+
+      <!-- ============================================================ -->
+      <h2 id="settings">设置</h2>
+
+      <p>
+        <strong>设置</strong>页面（<code>/settings</code>）以只读视图显示当前管理节点的配置。
+      </p>
+
+      <h3>显示信息</h3>
+
+      <ul>
+        <li><strong>管理配置</strong> -- HTTP 主机、端口、Meta 端点</li>
+        <li><strong>集群信息</strong> -- 集群 ID、部署模式</li>
+        <li><strong>网络</strong> -- 绑定地址和连接详情</li>
+        <li><strong>节点数量</strong> -- 已注册的 Meta、Router 和数据节点汇总</li>
+      </ul>
+
+      <p>
+        使用<strong>刷新</strong>按钮从管理节点重新加载配置。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 配置变更</div>
+        <p>
+          设置页面为只读。要更改管理节点配置，请编辑 TOML 配置文件并重启管理节点。可用选项请参阅<a href="admin-guide.html#configuration">管理指南 - 配置</a>。
+        </p>
+      </div>
+
+      <div class="docs-nav">
+        <a href="admin-guide.html" class="docs-nav-prev">&larr; 管理指南</a>
+        <a href="security.html" class="docs-nav-next">认证与 RBAC &rarr;</a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

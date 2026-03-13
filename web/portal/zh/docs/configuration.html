@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 配置 - 所有配置选项详解">
+  <title>配置 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/configuration.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html" class="active">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>配置</h1>
+
+      <p>
+        MynaDB 通过 <code>config.toml</code> 文件进行配置。如果该文件不存在，将使用默认值。本指南详细介绍所有可用选项。
+      </p>
+
+      <h2>完整示例</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># config.toml - MynaDB Configuration</span>
+
+[server]
+http_port = 7000
+flight_port = 7001
+
+[storage]
+data_dir = "/data0/stats/data"
+
+[schema]
+strategy = "service_as_schema"
+tag_keys = ["MONITOR.service", "hierarchy_2", "service"]
+default_name = "default"
+prefix_numeric = true
+
+[cache]
+flush_interval_secs = 30
+
+[compaction]
+min_files = 4
+max_level = 5
+max_concurrent_compactions = 8
+full_compaction_max_concurrent = 2
+
+[retention]
+enabled = true
+default_days = 7
+interval_secs = 3600
+exclude_databases = ["_system"]</code></pre>
+        </div>
+      </div>
+
+      <!-- Server Section -->
+      <h2 id="server">服务器</h2>
+
+      <p>网络和服务器设置。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[server]
+http_port = 7000      # HTTP REST API port
+flight_port = 7001    # Arrow Flight gRPC port</code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>选项</th>
+              <th>类型</th>
+              <th>默认值</th>
+              <th>描述</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>http_port</code></td>
+              <td>整数</td>
+              <td>7000</td>
+              <td>HTTP REST API 端口</td>
+            </tr>
+            <tr>
+              <td><code>flight_port</code></td>
+              <td>整数</td>
+              <td>7001</td>
+              <td>Arrow Flight gRPC 端口</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Storage Section -->
+      <h2 id="storage">存储</h2>
+
+      <p>数据存储位置。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[storage]
+data_dir = "/data0/stats/data"    # Root directory for data</code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>选项</th>
+              <th>类型</th>
+              <th>默认值</th>
+              <th>描述</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>data_dir</code></td>
+              <td>字符串</td>
+              <td>"./data"</td>
+              <td>Parquet 文件的根目录</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; 重要提示</div>
+        <p>请确保数据目录有足够的磁盘空间和适当的权限。使用 SSD 存储可获得最佳性能。</p>
+      </div>
+
+      <!-- Schema Section -->
+      <h2 id="schema">Schema 映射</h2>
+
+      <p>控制 InfluxDB 数据如何映射到 catalog.schema.table 结构。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[schema]
+strategy = "service_as_schema"                         # or "service_as_table"
+tag_keys = ["MONITOR.service", "hierarchy_2", "service"]
+default_name = "default"
+prefix_numeric = true</code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>选项</th>
+              <th>类型</th>
+              <th>默认值</th>
+              <th>描述</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>strategy</code></td>
+              <td>字符串</td>
+              <td>"service_as_schema"</td>
+              <td>命名策略（详见下方）</td>
+            </tr>
+            <tr>
+              <td><code>tag_keys</code></td>
+              <td>数组</td>
+              <td>["service"]</td>
+              <td>用于提取服务名的标签键</td>
+            </tr>
+            <tr>
+              <td><code>default_name</code></td>
+              <td>字符串</td>
+              <td>"default"</td>
+              <td>默认 schema/table 名称</td>
+            </tr>
+            <tr>
+              <td><code>prefix_numeric</code></td>
+              <td>布尔值</td>
+              <td>true</td>
+              <td>为数字值添加 "service_" 前缀</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>策略：service_as_schema</h3>
+
+      <ul>
+        <li>Schema = 服务标签值</li>
+        <li>Table = 指标名称（measurement）</li>
+        <li>适用于多租户场景</li>
+      </ul>
+
+      <p>示例：<code>cpu,service=web</code> &#8594; <code>mydb.web.cpu</code></p>
+
+      <h3>策略：service_as_table</h3>
+
+      <ul>
+        <li>Schema = "default"（固定）</li>
+        <li>Table = 服务标签值</li>
+        <li>指标名称存储为列</li>
+      </ul>
+
+      <p>示例：<code>cpu,service=web</code> &#8594; <code>mydb.default.web</code></p>
+
+      <!-- Cache Section -->
+      <h2 id="cache">缓存</h2>
+
+      <p>内存写入缓冲区设置。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[cache]
+flush_interval_secs = 30    # Flush to disk every 30 seconds</code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>选项</th>
+              <th>类型</th>
+              <th>默认值</th>
+              <th>描述</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>flush_interval_secs</code></td>
+              <td>整数</td>
+              <td>30</td>
+              <td>自动刷盘间隔（秒）</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 提示</div>
+        <p>较小的值可减少数据丢失风险，但会增加 I/O 负载。较大的值可提高写入性能，但会增加内存使用。</p>
+      </div>
+
+      <!-- Compaction Section -->
+      <h2 id="compaction">压缩合并</h2>
+
+      <p>LSM 风格的压缩合并设置。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[compaction]
+min_files = 4                          # Trigger when 4+ files at a level
+max_level = 5                          # Maximum compaction level (L0-L5)
+max_concurrent_compactions = 8         # Parallel LSM compactions
+full_compaction_max_concurrent = 2     # Parallel full compactions</code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>选项</th>
+              <th>类型</th>
+              <th>默认值</th>
+              <th>描述</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>min_files</code></td>
+              <td>整数</td>
+              <td>4</td>
+              <td>触发压缩合并所需的文件数</td>
+            </tr>
+            <tr>
+              <td><code>max_level</code></td>
+              <td>整数</td>
+              <td>5</td>
+              <td>最大压缩合并级别</td>
+            </tr>
+            <tr>
+              <td><code>max_concurrent_compactions</code></td>
+              <td>整数</td>
+              <td>8</td>
+              <td>并行 LSM 压缩合并数</td>
+            </tr>
+            <tr>
+              <td><code>full_compaction_max_concurrent</code></td>
+              <td>整数</td>
+              <td>2</td>
+              <td>并行全量压缩合并数（降低以避免 OOM）</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Retention Section -->
+      <h2 id="retention">数据保留</h2>
+
+      <p>自动数据过期设置。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[retention]
+enabled = true                       # Enable background retention
+default_days = 7                     # Delete data older than 7 days
+interval_secs = 3600                 # Check every hour
+exclude_databases = ["_system"]      # Skip these databases
+exclude_tables = ["mydb.default.important"]  # Skip these tables</code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>选项</th>
+              <th>类型</th>
+              <th>默认值</th>
+              <th>描述</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>enabled</code></td>
+              <td>布尔值</td>
+              <td>true</td>
+              <td>启用自动数据保留</td>
+            </tr>
+            <tr>
+              <td><code>default_days</code></td>
+              <td>整数</td>
+              <td>7</td>
+              <td>数据保留天数</td>
+            </tr>
+            <tr>
+              <td><code>interval_secs</code></td>
+              <td>整数</td>
+              <td>3600</td>
+              <td>检查间隔（秒）</td>
+            </tr>
+            <tr>
+              <td><code>exclude_databases</code></td>
+              <td>数组</td>
+              <td>[]</td>
+              <td>跳过的数据库</td>
+            </tr>
+            <tr>
+              <td><code>exclude_tables</code></td>
+              <td>数组</td>
+              <td>[]</td>
+              <td>跳过的表（catalog.schema.table 格式）</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- OTLP Section -->
+      <h2 id="otlp">OpenTelemetry (OTLP)</h2>
+
+      <p>原生 OpenTelemetry 接入设置。详见 <a href="otlp.html">OTLP 文档</a>。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[otlp]
+enabled = false                      # Enable OTLP ingestion
+grpc_port = 4317                     # OTLP gRPC port
+http_enabled = true                  # Enable OTLP HTTP endpoints
+metrics_database = "otel_metrics"    # Target database for metrics
+logs_database = "otel_logs"          # Target database for logs
+traces_database = "otel_traces"      # Target database for traces</code></pre>
+        </div>
+      </div>
+
+      <!-- Iceberg Section -->
+      <h2 id="iceberg">Apache Iceberg</h2>
+
+      <p>Iceberg REST Catalog API 设置。详见 <a href="iceberg.html">Iceberg 文档</a>。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[iceberg]
+enabled = false                      # Enable Iceberg REST Catalog
+catalog_name = "mynadb"              # Catalog name exposed to engines
+sync_interval_secs = 60             # Metadata sync interval
+metadata_location = "data/iceberg"   # Iceberg metadata directory</code></pre>
+        </div>
+      </div>
+
+      <!-- Streaming Section -->
+      <h2 id="streaming">流式查询</h2>
+
+      <p>实时查询订阅设置。详见<a href="streaming.html">流式查询文档</a>。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[streaming]
+enabled = false                      # Enable streaming queries
+max_subscriptions = 100              # Max concurrent subscriptions
+heartbeat_interval_secs = 30         # WebSocket heartbeat interval
+buffer_size = 1000                   # Event buffer size per subscription</code></pre>
+        </div>
+      </div>
+
+      <!-- Continuous Aggregates Section -->
+      <h2 id="continuous-aggregates">持续聚合</h2>
+
+      <p>物化视图和降采样设置。详见<a href="continuous-aggregates.html">持续聚合文档</a>。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[continuous_aggregates]
+enabled = false                      # Enable continuous aggregates
+refresh_check_interval_secs = 60     # Check for refresh every 60s
+max_concurrent_refreshes = 4         # Parallel refresh jobs
+query_rewriting_enabled = true       # Auto-rewrite queries to use aggregates</code></pre>
+        </div>
+      </div>
+
+      <!-- TLS Section -->
+      <h2 id="tls">TLS / SSL</h2>
+
+      <p>传输层安全设置。详见<a href="security.html">安全文档</a>。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[tls]
+enabled = false                      # Enable TLS
+cert_file = "/etc/mynadb/tls/cert.pem"
+key_file = "/etc/mynadb/tls/key.pem"
+ca_file = "/etc/mynadb/tls/ca.pem"   # For mutual TLS (optional)
+mutual_auth = false                  # Require client certificates</code></pre>
+        </div>
+      </div>
+
+      <!-- Audit Section -->
+      <h2 id="audit">审计日志</h2>
+
+      <p>用于合规的审计追踪设置。详见<a href="security.html">安全文档</a>。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[audit]
+enabled = false                      # Enable audit logging
+log_file = "/var/log/mynadb/audit.log"
+rotation = "daily"                   # "daily", "hourly", or "size"
+max_files = 30                       # Rotated files to keep</code></pre>
+        </div>
+      </div>
+
+      <!-- Admin Section -->
+      <h2 id="admin">管理控制台</h2>
+
+      <p>基于 Web 的管理界面设置。详见<a href="admin-console.html">管理控制台文档</a>。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[admin]
+enabled = false                      # Enable admin console
+port = 18080                         # Admin HTTP port
+meta_endpoints = ["localhost:6001"]  # Meta service endpoints for cluster mode</code></pre>
+        </div>
+      </div>
+
+      <h2>环境变量</h2>
+
+      <p>配置也可以通过环境变量设置：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>export STATS_HTTP_PORT=7000
+export STATS_FLIGHT_PORT=7001
+export STATS_DATA_DIR=/data/stats</code></pre>
+        </div>
+      </div>
+
+      <h2>配置优先级</h2>
+
+      <ol>
+        <li>环境变量（最高优先级）</li>
+        <li>config.toml 文件</li>
+        <li>默认值（最低优先级）</li>
+      </ol>
+
+      <h2>推荐的生产环境配置</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Production config.toml</span>
+
+[server]
+http_port = 7000
+flight_port = 7001
+
+[storage]
+data_dir = "/data/stats"              <span class="token-comment"># Use dedicated SSD</span>
+
+[cache]
+flush_interval_secs = 30              <span class="token-comment"># Balance durability/performance</span>
+
+[compaction]
+min_files = 4
+max_level = 5
+max_concurrent_compactions = 4        <span class="token-comment"># Adjust based on CPU cores</span>
+full_compaction_max_concurrent = 1    <span class="token-comment"># Low to prevent OOM</span>
+
+[retention]
+enabled = true
+default_days = 30                     <span class="token-comment"># 30 days retention</span>
+interval_secs = 3600                  <span class="token-comment"># Check hourly</span></code></pre>
+        </div>
+      </div>
+
+      <h2>下一步</h2>
+
+      <div class="cards-grid">
+        <a href="quickstart.html" class="card">
+          <div class="card-icon">&#128640;</div>
+          <h3>快速开始</h3>
+          <p>开始使用 MynaDB。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="architecture.html" class="card">
+          <div class="card-icon">&#127959;</div>
+          <h3>架构</h3>
+          <p>了解其工作原理。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

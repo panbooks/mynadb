@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB API 参考 - 完整的 HTTP 和 Flight API 文档">
+  <title>API 参考 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/api.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>HTTP API 参考</h1>
+
+      <p>
+        向您的数据提问。MynaDB 在端口 7000（可配置）上公开 REST API，让您与基础设施数据进行交互。除非另有说明，所有端点都接受并返回 JSON。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 基础 URL</div>
+        <p><code>http://localhost:7000</code>（默认配置）</p>
+      </div>
+
+      <!-- Write Data -->
+      <h2 id="write">写入数据</h2>
+
+      <p>使用 InfluxDB Line Protocol 写入时序数据。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>端点</strong></td>
+              <td><code>POST /write/:db</code></td>
+            </tr>
+            <tr>
+              <td><strong>Content-Type</strong></td>
+              <td><code>text/plain</code></td>
+            </tr>
+            <tr>
+              <td><strong>参数</strong></td>
+              <td><code>:db</code> - 数据库名称（不存在时自动创建）</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Line Protocol 格式</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>&lt;measurement&gt;,&lt;tag_key&gt;=&lt;tag_value&gt;,... &lt;field_key&gt;=&lt;field_value&gt;,... [timestamp]</code></pre>
+        </div>
+      </div>
+
+      <h3>示例</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/write/mydb \
+  -H "Content-Type: text/plain" \
+  -d 'cpu,host=server01,region=us-west usage=75.5,temp=45
+cpu,host=server02,region=us-east usage=82.3,temp=50
+memory,host=server01 used=16.5,total=32.0'</code></pre>
+        </div>
+      </div>
+
+      <h3>响应</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>HTTP/1.1 204 No Content</code></pre>
+        </div>
+      </div>
+
+      <h3>字段类型</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>后缀</th>
+              <th>类型</th>
+              <th>示例</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>（无）</td>
+              <td>Float64</td>
+              <td><code>usage=75.5</code></td>
+            </tr>
+            <tr>
+              <td><code>i</code></td>
+              <td>Int64</td>
+              <td><code>count=42i</code></td>
+            </tr>
+            <tr>
+              <td><code>u</code></td>
+              <td>UInt64</td>
+              <td><code>bytes=1024u</code></td>
+            </tr>
+            <tr>
+              <td>引号</td>
+              <td>String</td>
+              <td><code>status="ok"</code></td>
+            </tr>
+            <tr>
+              <td><code>t/f</code></td>
+              <td>Boolean</td>
+              <td><code>active=t</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Query Data -->
+      <h2 id="query">查询数据</h2>
+
+      <p>对时序数据执行 SQL 查询。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>端点</strong></td>
+              <td><code>GET /query/:db?sql=&lt;query&gt;</code><br><code>POST /query/:db</code></td>
+            </tr>
+            <tr>
+              <td><strong>Content-Type</strong></td>
+              <td><code>text/plain</code>（POST 请求体为 SQL）</td>
+            </tr>
+            <tr>
+              <td><strong>响应</strong></td>
+              <td>JSON 对象数组</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>GET 请求</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'</code></pre>
+        </div>
+      </div>
+
+      <h3>POST 请求（推荐用于复杂查询）</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/query/mydb \
+  -d "SELECT host, AVG(usage) as avg_cpu
+      FROM cpu
+      WHERE region = 'us-west'
+      GROUP BY host
+      ORDER BY avg_cpu DESC"</code></pre>
+        </div>
+      </div>
+
+      <h3>响应</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[
+  {"host": "server01", "avg_cpu": 75.5},
+  {"host": "server02", "avg_cpu": 45.2}
+]</code></pre>
+        </div>
+      </div>
+
+      <h3>表名格式</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>格式</th>
+              <th>示例</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>短名称</td>
+              <td><code>SELECT * FROM cpu</code></td>
+              <td>自动添加 catalog.schema 前缀</td>
+            </tr>
+            <tr>
+              <td>Schema.table</td>
+              <td><code>SELECT * FROM default.cpu</code></td>
+              <td>显式指定 schema</td>
+            </tr>
+            <tr>
+              <td>完全限定</td>
+              <td><code>SELECT * FROM mydb.default.cpu</code></td>
+              <td>完整的 catalog.schema.table</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Flush Cache -->
+      <h2 id="flush">刷新缓存</h2>
+
+      <p>将内存缓存刷新为磁盘上的 Parquet 文件。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>端点</strong></td>
+              <td><code>POST /flush</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/flush</code></pre>
+        </div>
+      </div>
+
+      <h3>响应</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{"status": "ok", "message": "Cache flushed successfully"}</code></pre>
+        </div>
+      </div>
+
+      <!-- Compaction -->
+      <h2 id="compact">触发压缩合并</h2>
+
+      <p>手动触发数据库或特定 measurement 的压缩合并。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>端点</strong></td>
+              <td><code>POST /compact/:db</code><br><code>POST /compact/:db/:measurement</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 压缩整个数据库</span>
+curl -X POST http://localhost:7000/compact/mydb
+
+<span class="token-comment"># 压缩特定 measurement</span>
+curl -X POST http://localhost:7000/compact/mydb/cpu</code></pre>
+        </div>
+      </div>
+
+      <!-- List Tables -->
+      <h2 id="tables">列出表</h2>
+
+      <p>列出数据库中的所有表。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>端点</strong></td>
+              <td><code>GET /tables/:db</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/tables/mydb</code></pre>
+        </div>
+      </div>
+
+      <h3>响应</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "catalog": "mydb",
+  "tables": [
+    "mydb.default.cpu",
+    "mydb.default.memory",
+    "mydb.default.disk"
+  ],
+  "count": 3
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- Get Schema -->
+      <h2 id="schema">获取表结构</h2>
+
+      <p>获取表的结构（列和类型）。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>端点</strong></td>
+              <td><code>GET /schema/:db/:table</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/schema/mydb/cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>响应</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "table": "cpu",
+  "columns": [
+    {"name": "timestamp", "type": "Int64"},
+    {"name": "host", "type": "Utf8"},
+    {"name": "region", "type": "Utf8"},
+    {"name": "usage", "type": "Float64"},
+    {"name": "temp", "type": "Int64"}
+  ]
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- Partitions -->
+      <h2 id="partitions">列出分区</h2>
+
+      <p>列出表的日期分区。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>端点</strong></td>
+              <td><code>GET /partitions/:catalog/:schema/:table</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/partitions/mydb/default/cpu</code></pre>
+        </div>
+      </div>
+
+      <h3>删除分区</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl -X DELETE http://localhost:7000/partitions/mydb/default/cpu/2024-01-15</code></pre>
+        </div>
+      </div>
+
+      <!-- Retention -->
+      <h2 id="retention">数据保留</h2>
+
+      <p>根据时间或日期删除旧分区。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>端点</strong></td>
+              <td><code>POST /retention/:catalog/:schema/:table</code></td>
+            </tr>
+            <tr>
+              <td><strong>Content-Type</strong></td>
+              <td><code>application/json</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>按时间删除</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"older_than_days": 30}'</code></pre>
+        </div>
+      </div>
+
+      <h3>按日期删除</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"before_date": "2024-01-01"}'</code></pre>
+        </div>
+      </div>
+
+      <!-- Health Check -->
+      <h2 id="health">健康检查</h2>
+
+      <p>检查服务器是否正在运行。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>端点</strong></td>
+              <td><code>GET /health</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/health</code></pre>
+        </div>
+      </div>
+
+      <h3>响应</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{"status": "ok"}</code></pre>
+        </div>
+      </div>
+
+      <!-- Cache Stats -->
+      <h2 id="stats">缓存统计</h2>
+
+      <p>获取内存缓存的统计信息。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>端点</strong></td>
+              <td><code>GET /stats</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/stats</code></pre>
+        </div>
+      </div>
+
+      <!-- OTLP Ingestion -->
+      <h2 id="otlp">OpenTelemetry (OTLP) 数据接入</h2>
+
+      <p>原生 OpenTelemetry 数据接入，支持指标、日志和链路追踪。参见 <a href="otlp.html">完整 OTLP 文档</a>。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>端点</th>
+              <th>方法</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>gRPC :4317</code></td>
+              <td>-</td>
+              <td>OTLP gRPC 接收器（指标、日志、链路追踪）</td>
+            </tr>
+            <tr>
+              <td><code>/v1/metrics</code></td>
+              <td>POST</td>
+              <td>OTLP HTTP 指标接收器</td>
+            </tr>
+            <tr>
+              <td><code>/v1/logs</code></td>
+              <td>POST</td>
+              <td>OTLP HTTP 日志接收器</td>
+            </tr>
+            <tr>
+              <td><code>/v1/traces</code></td>
+              <td>POST</td>
+              <td>OTLP HTTP 链路追踪接收器</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Iceberg REST Catalog -->
+      <h2 id="iceberg">Iceberg REST Catalog</h2>
+
+      <p>Apache Iceberg REST Catalog API，支持多引擎分析。参见 <a href="iceberg.html">完整 Iceberg 文档</a>。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>端点</th>
+              <th>方法</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>/iceberg/v1/namespaces</code></td>
+              <td>GET</td>
+              <td>列出命名空间</td>
+            </tr>
+            <tr>
+              <td><code>/iceberg/v1/namespaces/:ns/tables</code></td>
+              <td>GET</td>
+              <td>列出命名空间中的表</td>
+            </tr>
+            <tr>
+              <td><code>/iceberg/v1/namespaces/:ns/tables/:table</code></td>
+              <td>GET</td>
+              <td>获取表元数据</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Grafana Compatible -->
+      <h2 id="grafana">Grafana 兼容端点</h2>
+
+      <p>InfluxDB 兼容端点，用于 Grafana 数据源集成。参见 <a href="grafana.html">完整 Grafana 文档</a>。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>端点</th>
+              <th>方法</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>/api/v2/query</code></td>
+              <td>POST</td>
+              <td>Flux 兼容查询端点</td>
+            </tr>
+            <tr>
+              <td><code>/api/v1/query</code></td>
+              <td>GET/POST</td>
+              <td>InfluxQL 兼容查询端点</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Streaming -->
+      <h2 id="streaming">流式查询</h2>
+
+      <p>实时查询订阅。参见 <a href="streaming.html">完整流式查询文档</a>。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>端点</th>
+              <th>方法</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>/ws/query/:db</code></td>
+              <td>WebSocket</td>
+              <td>WebSocket 查询订阅</td>
+            </tr>
+            <tr>
+              <td><code>/stream/query/:db</code></td>
+              <td>GET</td>
+              <td>Server-Sent Events 查询流</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Prometheus -->
+      <h2 id="metrics">Prometheus 指标</h2>
+
+      <p>Prometheus 兼容的指标端点。参见 <a href="monitoring.html">完整监控文档</a>。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>端点</strong></td>
+              <td><code>GET /metrics</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/metrics</code></pre>
+        </div>
+      </div>
+
+      <!-- Auth -->
+      <h2 id="auth">认证</h2>
+
+      <p>启用认证时的 API 认证。参见 <a href="security.html">完整安全文档</a>。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>端点</th>
+              <th>方法</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>/auth/users</code></td>
+              <td>GET</td>
+              <td>列出用户</td>
+            </tr>
+            <tr>
+              <td><code>/auth/users</code></td>
+              <td>POST</td>
+              <td>创建用户</td>
+            </tr>
+            <tr>
+              <td><code>/auth/users/:name</code></td>
+              <td>DELETE</td>
+              <td>删除用户</td>
+            </tr>
+            <tr>
+              <td><code>/auth/users/:name/role</code></td>
+              <td>PUT</td>
+              <td>更新用户角色</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>错误响应</h2>
+
+      <p>所有错误都返回包含错误信息的 JSON：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "error": "Table not found: mydb.default.unknown"
+}</code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>状态码</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>200</td>
+              <td>成功（有响应体）</td>
+            </tr>
+            <tr>
+              <td>204</td>
+              <td>成功（无内容）</td>
+            </tr>
+            <tr>
+              <td>400</td>
+              <td>请求错误（语法无效）</td>
+            </tr>
+            <tr>
+              <td>404</td>
+              <td>未找到（表、数据库）</td>
+            </tr>
+            <tr>
+              <td>500</td>
+              <td>服务器内部错误</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>后续步骤</h2>
+
+      <div class="cards-grid">
+        <a href="flight-api.html" class="card">
+          <div class="card-icon">&#9992;</div>
+          <h3>Arrow Flight API</h3>
+          <p>高性能 gRPC 流式接口。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="examples.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>示例</h3>
+          <p>即用型查询示例和模式。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

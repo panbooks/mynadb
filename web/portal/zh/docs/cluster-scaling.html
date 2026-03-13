@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 集群扩缩容 - 弹性扩容和缩容操作、节点生命周期、故障检测和冷备复制">
+  <title>集群扩缩容 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/cluster-scaling.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html" class="active">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>集群扩缩容</h1>
+
+      <p class="lead">
+        MynaDB 集群专为弹性扩展设计。添加 Data 节点以增加写入吞吐量和查询并行度，
+        或在低流量时段移除节点以降低成本。由于所有持久化数据存储在共享对象存储（S3、MinIO 或 OSS）中，
+        扩缩容操作永远不需要数据迁移或重平衡。本页涵盖完整的节点生命周期、扩容和缩容流程、
+        故障检测、冷备复制和运维最佳实践。
+      </p>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #eff6ff, #dbeafe); border-left: 4px solid #3b82f6; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>前提条件：</strong>本页假设您已有运行中的 MynaDB 集群。如果您是首次搭建集群，
+        请先阅读<a href="cluster-getting-started.html">集群快速入门</a>指南，
+        并查看<a href="cluster-architecture.html">集群架构</a>页面了解 Meta 共识、写入协调和缓存失效的背景知识。
+      </div>
+
+      <h2>节点生命周期</h2>
+
+      <p>
+        MynaDB 集群中的每个 Data 节点都经历一组明确定义的状态。理解这些状态对于规划维护窗口、
+        执行缩容操作和分析故障恢复至关重要。Meta 集群跟踪每个已注册节点的当前状态，
+        并将状态转换作为事件发布给所有 Router 和 Admin 控制台。
+      </p>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
+  Node Lifecycle State Machine
+  ============================
+
+  +-----------+     RegisterNode      +----------+
+  | Starting  | --------------------&gt; |  Active  | &lt;----- heartbeat refreshes lease
+  |   (1)     |    (auto on boot)     |   (2)    |
+  +-----------+                       +----+-----+
+                                           |
+                        +------------------+------------------+
+                        |                                     |
+                   drain request                     heartbeat timeout
+                        |                              (3 missed)
+                        v                                     |
+                  +-----------+                               v
+                  | Draining  |                        +------------+
+                  |   (3)     |                        |  Inactive  |
+                  +-----+-----+                        |    (4)     |
+                        |                              +------------+
+                   scale-in plan                  (detected by Meta leader;
+                   assigns tables                  triggers recovery manager)
+                   to other nodes
+                        |
+                        v
+                  +-----------+       flush complete    +-----------+
+                  | Retiring  | ---------------------&gt;  |  Drained  |
+                  |   (5)     |   memtable flushed,     |   (6)     |
+                  +-----------+   tables reassigned     +-----------+
+                                                     (safe to terminate)
+        </pre>
+      </div>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>状态</th>
+            <th>ID</th>
+            <th>描述</th>
+            <th>接受写入</th>
+            <th>提供查询</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Starting</strong></td>
+            <td>1</td>
+            <td>节点正在初始化：加载配置、连接 Meta、回放 WAL。对 Router 不可见，不接受流量。</td>
+            <td>否</td>
+            <td>否</td>
+          </tr>
+          <tr>
+            <td><strong>Active</strong></td>
+            <td>2</td>
+            <td>健康且完全运行。持续向 Meta 发送心跳，提供读写服务，如被选为领导者则运行后台任务。</td>
+            <td>是</td>
+            <td>是</td>
+          </tr>
+          <tr>
+            <td><strong>Draining</strong></td>
+            <td>3</td>
+            <td>维护模式。不接受新写入。允许现有进行中的请求完成。活跃连接在可配置超时（默认 30 秒）内排空。</td>
+            <td>否</td>
+            <td>是（仅现有）</td>
+          </tr>
+          <tr>
+            <td><strong>Inactive</strong></td>
+            <td>4</td>
+            <td>节点已死亡或不可达，在 Meta 领导者观察到连续 3 次心跳缺失（默认 5 秒间隔即 15 秒）后检测到。触发恢复管理器。</td>
+            <td>否</td>
+            <td>否</td>
+          </tr>
+          <tr>
+            <td><strong>Retiring</strong></td>
+            <td>5</td>
+            <td>缩容进行中。节点正在将内存中的 DataCache 刷新到对象存储，其表所有权正由 Meta 领导者重新分配给其他活跃节点。</td>
+            <td>否</td>
+            <td>是（只读）</td>
+          </tr>
+          <tr>
+            <td><strong>Drained</strong></td>
+            <td>6</td>
+            <td>缩容完成。所有缓存数据已刷新到 S3，所有表所有权已转移。节点可以安全终止或退役。</td>
+            <td>否</td>
+            <td>否</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>扩容（添加节点）</h2>
+
+      <p>
+        扩展 MynaDB 集群非常简单：使用指向 Meta 集群的正确配置启动新节点，
+        它将自动注册并开始提供服务。由于所有节点共享同一个对象存储后端，无需数据迁移。
+      </p>
+
+      <h3>添加 Data 节点</h3>
+
+      <p>当新的 Data 节点启动时，以下序列自动发生：</p>
+
+      <ol>
+        <li>Data 节点加载配置并通过 gRPC 连接 Meta 集群。</li>
+        <li>向 Meta 领导者调用 <code>RegisterNode</code>，提供节点 ID、通告地址、HTTP 端口、Flight 端口和能力。</li>
+        <li>Meta 领导者将注册信息持久化到 Raft 日志，并将节点转换为 <strong>Active</strong> 状态。</li>
+        <li><code>NodeRegistered</code> 事件发布给所有订阅者（Router、Admin 控制台）。</li>
+        <li>每个 Router 接收事件并更新 <code>ShardCache</code>，将新节点加入路由表。</li>
+        <li>尚未被任何节点拥有的表的新写入可能被路由到新节点（最低负载选择）。</li>
+        <li>新节点可以立即对共享对象存储中的历史数据提供查询服务。</li>
+      </ol>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># dev/configs/cluster-local/data3.toml
+[data]
+node_id = "data-3"
+http_port = 5200
+flight_port = 5201
+advertise_addr = "127.0.0.1:5201"
+meta_endpoints = ["127.0.0.1:6001", "127.0.0.1:6101", "127.0.0.1:6201"]
+
+[storage]
+backend = "local"
+data_dir = "./dev/data/cluster/data3"
+
+[cache]
+flush_interval_secs = 60
+max_size_mb = 1024
+
+[wal]
+enabled = true
+sync_on_write = false
+rotate_size_mb = 128</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Start the new data node
+./target/release/mynadb -c dev/configs/cluster-local/data3.toml data start
+
+# Verify registration (should show 3 data nodes)
+curl -s http://localhost:7000/cluster/nodes | jq '.nodes[] | {node_id, state, http_addr}'</code></pre>
+        </div>
+      </div>
+
+      <h3>添加 Router 节点</h3>
+
+      <p>
+        Router 节点完全无状态。它们通过 Meta 集群发现 Data 节点，
+        并维护通过 Meta 事件订阅刷新的内存路由表（<code>ShardCache</code>）。
+        添加新 Router 不需要与现有 Router 协调。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Start the second router
+./target/release/mynadb -c dev/configs/cluster/router2.toml router start
+
+# Add to HAProxy backend (example)
+# server router2 127.0.0.1:7010 check inter 5s fall 3 rise 2
+
+# Verify the new router can serve queries
+curl "http://localhost:7010/query/testdb" -d "SELECT * FROM cpu LIMIT 5"</code></pre>
+        </div>
+      </div>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #f0fdf4, #dcfce7); border-left: 4px solid #22c55e; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>无需数据迁移！</strong>由于所有数据存储在共享对象存储（S3/MinIO/OSS）中，
+        任何节点都可以读取任何表的历史数据，不受所有权限制。所有权仅决定哪个节点接受给定表的<em>写入</em>。
+        查询分布到所有活跃节点。
+      </div>
+
+      <h2>缩容（移除节点）</h2>
+
+      <p>
+        从 MynaDB 集群中移除节点需要精心编排以防止数据丢失。缩容过程确保所有内存数据都刷新到对象存储，
+        且所有表所有权都转移到剩余节点后，才终止节点。MynaDB 提供规划（试运行）API 和执行 API 以安全进行缩容操作。
+      </p>
+
+      <h3>优雅缩容流程</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>阶段</th>
+            <th>操作</th>
+            <th>描述</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>1. 规划</strong></td>
+            <td>确定目标节点</td>
+            <td>根据选择的策略（<code>least_loaded</code> 或 <code>most_idle</code>）选择要退役的 Data 节点。验证是否有足够的活跃节点为集群提供服务。试运行模式显示计划而不执行。</td>
+          </tr>
+          <tr>
+            <td><strong>2. 迁移</strong></td>
+            <td>重新分配表所有权</td>
+            <td>对于退役节点拥有的每个表，Meta 领导者调用 <code>ReassignTable</code> 将所有权转移到健康的活跃节点。Router 接收 <code>TableReassigned</code> 事件并更新 ShardCache。</td>
+          </tr>
+          <tr>
+            <td><strong>3. 排空</strong></td>
+            <td>刷新和排空</td>
+            <td>退役节点标记为 <strong>Retiring</strong>（状态 5）。停止接受新写入，将整个 DataCache 刷新到对象存储，完成任何进行中的写操作，并发布所有已刷新文件的缓存失效事件。</td>
+          </tr>
+          <tr>
+            <td><strong>4. 已排空</strong></td>
+            <td>安全终止</td>
+            <td>所有数据刷新完毕且所有表重新分配后，节点转换为 <strong>Drained</strong>（状态 6）。现在可以安全终止，释放其资源。</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>缩容 API</h3>
+
+      <h4>步骤 1：规划（试运行）</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Preview which nodes will be retired and which tables will be reassigned
+curl -s -X POST http://localhost:7000/cluster/scale-in/plan \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reduce_primaries": 2,
+    "strategy": "least_loaded",
+    "dry_run": true
+  }' | jq .</code></pre>
+        </div>
+      </div>
+
+      <h4>步骤 2：执行</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Execute the scale-in plan (removes dry_run flag)
+curl -s -X POST http://localhost:7000/cluster/scale-in/execute-plan \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reduce_primaries": 2,
+    "strategy": "least_loaded"
+  }' | jq .</code></pre>
+        </div>
+      </div>
+
+      <h4>步骤 3：监控进度</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Check progress of an active scale-in operation
+curl -s http://localhost:7000/cluster/scale-in/status | jq .
+
+# Poll until all retiring nodes reach Drained state
+watch -n 5 'curl -s http://localhost:7000/cluster/nodes | \
+  jq ".nodes[] | select(.state == \"Retiring\" or .state == \"Drained\") | {node_id, state}"'</code></pre>
+        </div>
+      </div>
+
+      <h2>故障检测与恢复</h2>
+
+      <p>
+        MynaDB 使用心跳和租约机制来检测节点故障。当 Data 节点不可达时，
+        Meta 领导者自动触发恢复工作流，无需运维人员干预即可保持数据完整性和恢复集群健康。
+      </p>
+
+      <h3>心跳与租约系统</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>参数</th>
+            <th>默认值</th>
+            <th>描述</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>heartbeat_interval_secs</code></td>
+            <td>5</td>
+            <td>每个 Data 节点向 Meta 领导者发送心跳的频率</td>
+          </tr>
+          <tr>
+            <td><code>lease_ttl_secs</code></td>
+            <td>15</td>
+            <td>最后一次心跳后租约过期的时间（应为心跳间隔的 3 倍）</td>
+          </tr>
+          <tr>
+            <td><code>expire_check_interval_secs</code></td>
+            <td>5</td>
+            <td>Meta 领导者扫描过期租约的频率</td>
+          </tr>
+          <tr>
+            <td><code>max_missed_heartbeats</code></td>
+            <td>3</td>
+            <td>节点被认为死亡前的心跳缺失次数（信息性；实际检测基于租约）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>崩溃恢复流程</h3>
+
+      <p>当 Meta 领导者检测到过期的租约时，以下恢复序列自动触发：</p>
+
+      <ol>
+        <li><strong>租约过期检测：</strong>Meta 领导者的周期性 <code>ExpireLeases</code> 任务发现故障节点的陈旧租约。</li>
+        <li><strong>节点标记为 Inactive：</strong>Meta 领导者将节点状态更新为 <strong>Inactive</strong>（状态 4）。发布 <code>NodeStateChanged</code> 事件。</li>
+        <li><strong>恢复管理器触发：</strong>在可配置的 <code>recovery_delay_secs</code>（默认 3 秒）后，恢复管理器开始处理故障节点。</li>
+        <li><strong>Standby 刷新（如已配置）：</strong>如果故障节点有配置的冷备节点，备用节点将其复制的 DataCache 刷新到对象存储，保留主节点尚未持久化的数据。</li>
+        <li><strong>孤立表重新分配：</strong>故障节点之前拥有的所有表被重新分配给健康的活跃节点。</li>
+        <li><strong>Router 通知：</strong>Router 接收 <code>NodeStateChanged</code> 和 <code>TableReassigned</code> 事件，更新 ShardCache。</li>
+        <li><strong>写入自动重路由：</strong>受影响表的后续写入透明地路由到新的所有者节点。</li>
+      </ol>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
+  Crash Recovery Timeline
+  ========================
+
+  Time (seconds)
+  0s        5s       10s       15s       18s       20s       25s
+  |---------|---------|---------|---------|---------|---------|
+  ^         ^         ^         ^         ^         ^
+  |         |         |         |         |         |
+  Node      Last      Missed    Lease     Recovery  Tables
+  crashes   heartbeat heartbeat expires   manager   reassigned;
+            received  #3        (Meta     triggers  writes
+                      detected  marks                rerouted
+                                Inactive)
+
+  |&lt;-- heartbeat_interval --&gt;|
+                      |&lt;-- lease_ttl (15s) --&gt;|
+                                        |&lt;-3s-&gt;|
+                                        delay    |&lt;-- ~5s --&gt;|
+                                                  recovery     traffic
+                                                  processing   restored
+
+  Total recovery time: ~20-25 seconds (worst case)
+        </pre>
+      </div>
+
+      <h2>冷备复制</h2>
+
+      <p>
+        对于需要在节点故障期间最小化数据丢失的工作负载，MynaDB 支持冷备复制模型。
+        每个 Primary Data 节点可以有一个 Standby 节点，异步复制 Primary 的内存 DataCache。
+        如果 Primary 故障，Standby 可以在表所有权重新分配之前将复制的缓存刷新到对象存储，
+        保留尚未持久化的数据。
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>模式</th>
+            <th>接受写入</th>
+            <th>提供查询</th>
+            <th>复制</th>
+            <th>描述</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Primary</strong></td>
+            <td>是</td>
+            <td>是</td>
+            <td>发送到 Standby</td>
+            <td>分配表的主动写入所有者。通过 Arrow Flight 异步将缓存数据复制到配置的 Standby 节点。</td>
+          </tr>
+          <tr>
+            <td><strong>Standby</strong></td>
+            <td>否（仅复制）</td>
+            <td>是（只读）</td>
+            <td>从 Primary 接收</td>
+            <td>维护 Primary DataCache 的副本。可提供读查询以分担 Primary 负载。Primary 故障时自动刷新缓存。</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h4>配置</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Primary data node configuration (data1.toml)
+[data]
+node_id = "data-1"
+mode = "primary"
+http_port = 5000
+flight_port = 5001
+advertise_addr = "10.0.1.10:5001"
+meta_endpoints = ["10.0.1.1:6001", "10.0.1.2:6001", "10.0.1.3:6001"]
+
+# Configure the standby that will receive replication data
+[data.replication]
+backing_standby = "data-1-standby"      # Node ID of the standby
+replication_mode = "async"               # "async" (default) or "sync"
+batch_size = 1000                        # Records per replication batch
+max_lag_secs = 30                        # Alert if standby falls behind</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Standby data node configuration (data1-standby.toml)
+[data]
+node_id = "data-1-standby"
+mode = "standby"
+http_port = 5010
+flight_port = 5011
+advertise_addr = "10.0.1.11:5011"
+meta_endpoints = ["10.0.1.1:6001", "10.0.1.2:6001", "10.0.1.3:6001"]
+
+# Configure the primary this standby replicates from
+[data.replication]
+replication_source = "data-1"            # Node ID of the primary
+flight_endpoint = "10.0.1.10:5001"       # Primary's Flight address for receiving data</code></pre>
+        </div>
+      </div>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #fefce8, #fef9c3); border-left: 4px solid #eab308; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>数据丢失窗口：</strong>在异步复制模式下，Standby 可能落后 Primary 最多
+        <code>max_lag_secs</code>（默认 30 秒）。Primary 已接受但尚未复制到 Standby 的写入在 Primary 崩溃时将丢失。
+        如需零数据丢失，请使用 <code>replication_mode = "sync"</code>，但代价是更高的写入延迟。
+      </div>
+
+      <h2>表所有权 TTL</h2>
+
+      <p>
+        MynaDB 中的表所有权通过 TTL（生存时间）租约机制维护。此设计防止节点崩溃或未经优雅缩容即被移除时，
+        陈旧的所有权记录无限期保留。活跃的 Data 节点必须定期刷新其所有权租约以维持写入权限。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Table ownership TTL configuration
+[data.ownership]
+ttl_secs = 600                   # Ownership expires after 10 minutes without refresh
+refresh_interval_secs = 60       # Refresh every 60 seconds (should be &lt;&lt; ttl_secs)
+cleanup_interval_secs = 120      # Meta checks for expired ownership every 2 minutes</code></pre>
+        </div>
+      </div>
+
+      <h2>监控集群健康</h2>
+
+      <h3>健康端点</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Basic health check (returns 200 if healthy, 503 if degraded)
+curl -s http://localhost:7000/health | jq .
+
+# Detailed cluster status (node count, leader info, coordinator state)
+curl -s http://localhost:7000/cluster/status | jq .
+
+# List all registered nodes with their states
+curl -s http://localhost:7000/cluster/nodes | jq .</code></pre>
+        </div>
+      </div>
+
+      <h3>Prometheus 指标</h3>
+
+      <p>以下 Prometheus 指标在每个节点的 <code>/metrics</code> 端点上暴露，对于监控扩缩容操作和集群健康特别有用：</p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>指标</th>
+            <th>类型</th>
+            <th>描述</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>mynadb_cluster_nodes_total</code></td><td>Gauge</td><td>已注册节点总数（所有状态）</td></tr>
+          <tr><td><code>mynadb_cluster_nodes_healthy</code></td><td>Gauge</td><td>处于 Active 状态且租约有效的节点数</td></tr>
+          <tr><td><code>mynadb_cluster_nodes_by_state</code></td><td>Gauge（带标签）</td><td>按状态统计的节点数：<code>state="active|draining|retiring|inactive|drained"</code></td></tr>
+          <tr><td><code>mynadb_cluster_lock_acquisitions_total</code></td><td>Counter</td><td>分布式锁获取总次数</td></tr>
+          <tr><td><code>mynadb_cluster_lock_wait_seconds</code></td><td>Histogram</td><td>等待获取分布式锁的时间</td></tr>
+          <tr><td><code>mynadb_cluster_heartbeat_latency_seconds</code></td><td>Histogram</td><td>Data 节点到 Meta 的心跳 RPC 往返时间</td></tr>
+          <tr><td><code>mynadb_cluster_tables_owned</code></td><td>Gauge</td><td>该节点拥有的表数量</td></tr>
+          <tr><td><code>mynadb_cluster_replication_lag_seconds</code></td><td>Gauge</td><td>Standby 复制落后 Primary 的延迟（仅 Standby 节点）</td></tr>
+          <tr><td><code>mynadb_cluster_scale_in_operations_total</code></td><td>Counter</td><td>已执行的缩容操作总数</td></tr>
+          <tr><td><code>mynadb_cluster_table_reassignments_total</code></td><td>Counter</td><td>表所有权重新分配总次数</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Grafana 告警规则</h3>
+
+      <p>以下告警规则推荐用于生产部署：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">yaml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>groups:
+  - name: mynadb_cluster_health
+    interval: 15s
+    rules:
+      # Alert if any node has been inactive for more than 2 minutes
+      - alert: MynaDBNodeInactive
+        expr: mynadb_cluster_nodes_by_state{state="inactive"} > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MynaDB node is inactive"
+          description: "{{ $value }} node(s) have been in Inactive state for over 2 minutes."
+
+      # Alert if healthy node count drops below minimum
+      - alert: MynaDBClusterDegraded
+        expr: mynadb_cluster_nodes_healthy < 2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MynaDB cluster has fewer than 2 healthy nodes"
+
+      # Alert if heartbeat latency is elevated
+      - alert: MynaDBHeartbeatSlow
+        expr: histogram_quantile(0.99, rate(mynadb_cluster_heartbeat_latency_seconds_bucket[5m])) > 5
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MynaDB heartbeat latency is high"
+
+      # Alert if standby replication lag exceeds threshold
+      - alert: MynaDBReplicationLag
+        expr: mynadb_cluster_replication_lag_seconds > 60
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MynaDB standby replication lag is high"
+
+      # Alert if a scale-in operation is stuck
+      - alert: MynaDBScaleInStuck
+        expr: mynadb_cluster_nodes_by_state{state="retiring"} > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MynaDB scale-in operation appears stuck"</code></pre>
+        </div>
+      </div>
+
+      <h2>最佳实践</h2>
+
+      <h3>Meta 集群</h3>
+      <ul>
+        <li><strong>始终运行 3 或 5 个 Meta 节点。</strong>Raft 需要多数派仲裁（3 中 2，或 5 中 3）才能工作。偶数个 Meta 节点没有额外好处且浪费资源。</li>
+        <li><strong>将 Meta 节点放置在不同的可用区。</strong>将 Meta 节点分布在至少 2 个（理想 3 个）可用区中，以承受单个可用区故障。</li>
+        <li><strong>为 Meta 节点使用专用实例。</strong>Meta 节点虽然轻量但对延迟敏感。与 Data 节点共置可能在大量写入时导致选举超时。</li>
+      </ul>
+
+      <h3>Router 层</h3>
+      <ul>
+        <li><strong>在生产环境中分离 Router 和 Data 节点。</strong>虽然存在"混合"节点模式，但分离关注点可改善资源隔离并简化扩展。</li>
+        <li><strong>将 Router 放在负载均衡器后面。</strong>使用 HAProxy、NGINX 或云 ALB。配置 <code>/health</code> 健康检查。</li>
+        <li><strong>独立于 Data 节点扩展 Router。</strong>Router 是无状态的，可根据查询/写入请求速率扩展，而 Data 节点根据存储和计算需求扩展。</li>
+      </ul>
+
+      <h3>扩缩容操作</h3>
+      <ul>
+        <li><strong>始终先使用 <code>dry_run: true</code> 测试缩容。</strong>查看计划输出以了解哪些表将被重新分配，并估计刷新时长。</li>
+        <li><strong>在低流量时段进行缩容。</strong>虽然 MynaDB 能优雅处理缩容，但在非高峰时段执行可最小化表重新分配期间对写入延迟的影响。</li>
+        <li><strong>监控缩容进度。</strong>关注 <code>/cluster/scale-in/status</code> 端点，确认节点达到 <strong>Drained</strong> 状态后再终止。</li>
+        <li><strong>不要终止处于 Retiring 状态的节点。</strong>在节点完成 DataCache 刷新之前将其终止会导致未刷新写入的数据丢失。等待 <strong>Drained</strong> 状态。</li>
+      </ul>
+
+      <h3>高可用</h3>
+      <ul>
+        <li><strong>为关键工作负载保留 Standby 节点。</strong>冷备复制显著减少 Primary 故障期间的数据丢失窗口。代价是每个 Primary 需要一个额外节点。</li>
+        <li><strong>监控心跳和租约指标。</strong>升高的心跳延迟可能表示网络问题，可能导致误判故障。如果在高延迟网络环境中运行，请调整 <code>lease_ttl_secs</code>。</li>
+        <li><strong>保持至少 N+1 个 Data 节点。</strong>始终多保留一个 Data 节点，使集群能够在不过载的情况下承受节点故障。</li>
+        <li><strong>对零 RPO 工作负载使用 <code>replication_mode = "sync"</code>。</strong>同步复制保证零数据丢失，代价是更高的写入延迟。</li>
+      </ul>
+
+      <div class="docs-nav">
+        <a href="cluster-architecture.html" class="docs-nav-prev">&larr; 集群架构</a>
+        <a href="guides.html" class="docs-nav-next">指南 &rarr;</a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

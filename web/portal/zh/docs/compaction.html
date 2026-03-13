@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 压缩合并 - LSM 风格多级压缩实现最优存储">
+  <title>压缩合并 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/compaction.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html" class="active">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>压缩合并</h1>
+
+      <p class="lead">
+        MynaDB 使用 LSM-tree 风格的多级压缩来优化存储效率和查询性能。近期写入产生的小文件会被逐步合并为更大、更高效的文件。
+      </p>
+
+      <h2 id="overview">概述</h2>
+
+      <p>
+        当数据写入 MynaDB 时，首先进入内存缓存，然后以小型 Parquet 文件（Level 0）的形式刷写到磁盘。随着时间推移，这些小文件不断累积，可能会降低查询速度。压缩合并通过将文件合并在一起来解决这个问题。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">为什么压缩合并很重要</div>
+        <ul>
+          <li><strong>减少文件数</strong> - 降低文件系统开销</li>
+          <li><strong>加快查询</strong> - 减少 I/O，提升文件扫描效率</li>
+          <li><strong>更好的压缩率</strong> - 更大的文件压缩更高效</li>
+          <li><strong>减少存储</strong> - 消除重复和过时的数据</li>
+        </ul>
+      </div>
+
+      <h2 id="lsm-tree">LSM-Tree 架构</h2>
+
+      <p>
+        MynaDB 实现了一种受日志结构合并树（LSM-tree）启发的架构来管理 Parquet 文件：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">LSM-Tree 数据流</span>
+        </div>
+        <div class="code-content">
+          <pre><code>Write Request
+     │
+     ▼
+┌─────────────┐
+│  In-Memory  │  ← Fast writes
+│    Cache    │
+└─────────────┘
+     │ flush (every 30s)
+     ▼
+┌─────────────┐
+│   Level 0   │  ← Many small files (1-10 MB)
+│  (L0_*.parquet)
+└─────────────┘
+     │ compaction (when ≥4 files)
+     ▼
+┌─────────────┐
+│   Level 1   │  ← Fewer, larger files (10-50 MB)
+│  (L1_*.parquet)
+└─────────────┘
+     │ compaction
+     ▼
+┌─────────────┐
+│   Level 2   │  ← Even fewer files (50-200 MB)
+│  (L2_*.parquet)
+└─────────────┘
+     │
+     ▼
+    ...       ← Up to Level 5</code></pre>
+        </div>
+      </div>
+
+      <h3>关键特性</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>特性</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>写优化</strong></td>
+              <td>新数据追加到 L0，不修改已有文件</td>
+            </tr>
+            <tr>
+              <td><strong>后台合并</strong></td>
+              <td>压缩异步运行，不阻塞写入</td>
+            </tr>
+            <tr>
+              <td><strong>分级结构</strong></td>
+              <td>每一级包含逐渐更大、更优化的文件</td>
+            </tr>
+            <tr>
+              <td><strong>空间放大</strong></td>
+              <td>通过层级比率和压缩阈值控制</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="levels">压缩级别</h2>
+
+      <p>MynaDB 支持最多 6 个级别（L0-L5）：</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>级别</th>
+              <th>文件前缀</th>
+              <th>典型大小</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>L0</strong></td>
+              <td><code>L0_*.parquet</code></td>
+              <td>1-10 MB</td>
+              <td>从缓存直接刷写，大量小文件</td>
+            </tr>
+            <tr>
+              <td><strong>L1</strong></td>
+              <td><code>L1_*.parquet</code></td>
+              <td>10-50 MB</td>
+              <td>第一级压缩</td>
+            </tr>
+            <tr>
+              <td><strong>L2</strong></td>
+              <td><code>L2_*.parquet</code></td>
+              <td>50-200 MB</td>
+              <td>第二级压缩</td>
+            </tr>
+            <tr>
+              <td><strong>L3</strong></td>
+              <td><code>L3_*.parquet</code></td>
+              <td>200-500 MB</td>
+              <td>第三级压缩</td>
+            </tr>
+            <tr>
+              <td><strong>L4</strong></td>
+              <td><code>L4_*.parquet</code></td>
+              <td>500 MB - 1 GB</td>
+              <td>第四级压缩</td>
+            </tr>
+            <tr>
+              <td><strong>L5</strong></td>
+              <td><code>L5_*.parquet</code></td>
+              <td>1+ GB</td>
+              <td>最终级别，完全压缩</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>文件命名规则</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code># Format: L{level}_{timestamp}_{uuid}.parquet
+
+L0_1703251234567_a1b2c3d4.parquet   # Level 0, recently flushed
+L1_1703251300000_e5f6g7h8.parquet   # Level 1, first compaction
+L2_1703252000000_i9j0k1l2.parquet   # Level 2, second compaction</code></pre>
+        </div>
+      </div>
+
+      <h2 id="strategies">压缩策略</h2>
+
+      <p>MynaDB 支持两种协同工作的压缩策略：</p>
+
+      <h3>1. LSM 压缩（默认，持续运行）</h3>
+
+      <p>
+        在后台持续运行，当达到阈值时合并文件。这是主要的压缩机制。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">LSM 压缩流程</span>
+        </div>
+        <div class="code-content">
+          <pre><code># When L0 has 4+ files:
+L0_file1.parquet ─┐
+L0_file2.parquet ─┼─► Merge ─► L1_merged.parquet
+L0_file3.parquet ─┤
+L0_file4.parquet ─┘
+
+# When L1 has 4+ files:
+L1_file1.parquet ─┐
+L1_file2.parquet ─┼─► Merge ─► L2_merged.parquet
+L1_file3.parquet ─┤
+L1_file4.parquet ─┘
+
+# And so on up to L5...</code></pre>
+        </div>
+      </div>
+
+      <h3>2. 全量压缩（计划/手动）</h3>
+
+      <p>
+        将某一级别的所有文件合并为单个文件。适用于激进优化，但更消耗资源。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">全量压缩流程</span>
+        </div>
+        <div class="code-content">
+          <pre><code># Full compaction at L0:
+L0_file1.parquet ─┐
+L0_file2.parquet ─┤
+L0_file3.parquet ─┼─► Merge ALL ─► L1_single.parquet
+L0_file4.parquet ─┤
+L0_file5.parquet ─┤
+L0_file6.parquet ─┘</code></pre>
+        </div>
+      </div>
+
+      <h2 id="configuration">配置</h2>
+
+      <p>压缩在 <code>config.toml</code> 中配置：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">config.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[compaction]
+# Minimum files at a level before compaction triggers
+min_files = 4
+
+# Maximum compaction level (L0-L5)
+max_level = 5
+
+# Parallel LSM compaction tasks
+max_concurrent_compactions = 8
+
+# Parallel full compaction tasks (lower to avoid OOM)
+full_compaction_max_concurrent = 2
+
+# Schedule full compaction at specific hours (0-23)
+# Example: Run at 2 AM and 2 PM
+full_compaction_hours = [2, 14]
+
+# Enable/disable automatic compaction
+enabled = true</code></pre>
+        </div>
+      </div>
+
+      <h3>配置选项说明</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>选项</th>
+              <th>默认值</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>min_files</code></td>
+              <td>4</td>
+              <td>触发压缩所需的同级别文件数</td>
+            </tr>
+            <tr>
+              <td><code>max_level</code></td>
+              <td>5</td>
+              <td>最高压缩级别（L0-L5）</td>
+            </tr>
+            <tr>
+              <td><code>max_concurrent_compactions</code></td>
+              <td>8</td>
+              <td>并行 LSM 压缩工作线程数</td>
+            </tr>
+            <tr>
+              <td><code>full_compaction_max_concurrent</code></td>
+              <td>2</td>
+              <td>并行全量压缩工作线程数（内存密集型）</td>
+            </tr>
+            <tr>
+              <td><code>full_compaction_hours</code></td>
+              <td>[]</td>
+              <td>执行计划全量压缩的时间（0-23 小时）</td>
+            </tr>
+            <tr>
+              <td><code>enabled</code></td>
+              <td>true</td>
+              <td>启用/禁用自动压缩</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">内存注意事项</div>
+        <p>
+          全量压缩会将所有文件加载到内存中进行合并。在内存有限的系统上，请将
+          <code>full_compaction_max_concurrent</code> 设置为较低的值（1-2），以避免内存溢出错误。
+        </p>
+      </div>
+
+      <h2 id="manual">手动压缩</h2>
+
+      <p>您可以通过 HTTP API 手动触发压缩：</p>
+
+      <h3>压缩整个数据库</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code># Compact all tables in a database
+curl -X POST http://localhost:7000/compact/mydb
+
+# Response
+{
+  "status": "compaction_started",
+  "database": "mydb"
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>压缩指定表</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code># Compact a specific table
+curl -X POST http://localhost:7000/compact/mydb/cpu
+
+# Response
+{
+  "status": "compaction_started",
+  "database": "mydb",
+  "table": "cpu"
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>强制全量压缩</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code># Force full compaction (merge all files)
+curl -X POST http://localhost:7000/compact/mydb?full=true
+
+# Response
+{
+  "status": "full_compaction_started",
+  "database": "mydb"
+}</code></pre>
+        </div>
+      </div>
+
+      <h2 id="monitoring">监控压缩</h2>
+
+      <h3>检查文件数量</h3>
+
+      <p>通过检查每个级别的文件数量来监控压缩进度：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code># Count files per level
+find /data/stats/mydb/default/cpu -name "L*.parquet" | \
+  sed 's/.*\(L[0-9]\).*/\1/' | sort | uniq -c
+
+# Output:
+#   12 L0   ← Many L0 files, compaction needed
+#    3 L1
+#    1 L2</code></pre>
+        </div>
+      </div>
+
+      <h3>检查分区文件</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code># List partitions and file counts via API
+curl http://localhost:7000/partitions/mydb/default/cpu
+
+# Response
+{
+  "partitions": [
+    {
+      "date": "2024-01-15",
+      "files": 5,
+      "size_bytes": 52428800
+    },
+    {
+      "date": "2024-01-14",
+      "files": 2,
+      "size_bytes": 104857600
+    }
+  ]
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>服务器日志</h3>
+
+      <p>压缩事件会被记录到日志中以便监控：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>INFO  Compaction started: mydb.default.cpu L0 → L1 (4 files)
+INFO  Compaction completed: mydb.default.cpu L0 → L1 (merged to 1 file, 45MB)
+INFO  Full compaction started: mydb.default.cpu
+INFO  Full compaction completed: mydb.default.cpu (12 files → 1 file, 234MB)</code></pre>
+        </div>
+      </div>
+
+      <h2 id="best-practices">最佳实践</h2>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>调优 min_files</h3>
+          <p>
+            较低的值（2-3）= 更激进的压缩，更高的 CPU 使用率。<br>
+            较高的值（6-8）= 更少的压缩频率，更多的文件需要扫描。
+          </p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128337;</div>
+          <h3>计划全量压缩</h3>
+          <p>
+            使用 <code>full_compaction_hours</code> 在非高峰时段运行全量压缩。
+            例如：<code>[2, 3, 4]</code> 表示凌晨 2-4 点。
+          </p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128190;</div>
+          <h3>监控磁盘空间</h3>
+          <p>
+            压缩合并过程中会临时使用额外的磁盘空间。请为压缩操作保留 20% 的可用空间。
+          </p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128200;</div>
+          <h3>平衡查询与写入</h3>
+          <p>
+            更多压缩 = 更快查询但 CPU 使用率更高。<br>
+            更少压缩 = 更快写入但查询更慢。
+          </p>
+        </div>
+      </div>
+
+      <h3>按工作负载推荐的设置</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>工作负载</th>
+              <th>min_files</th>
+              <th>max_concurrent</th>
+              <th>备注</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>写密集型</strong></td>
+              <td>6-8</td>
+              <td>4</td>
+              <td>减少压缩频率，优先保障写入</td>
+            </tr>
+            <tr>
+              <td><strong>读密集型</strong></td>
+              <td>2-3</td>
+              <td>8</td>
+              <td>激进压缩，优化查询性能</td>
+            </tr>
+            <tr>
+              <td><strong>均衡型</strong></td>
+              <td>4</td>
+              <td>8</td>
+              <td>默认设置即可</td>
+            </tr>
+            <tr>
+              <td><strong>低内存</strong></td>
+              <td>4</td>
+              <td>2</td>
+              <td>限制并发压缩数</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>压缩与数据保留</h2>
+
+      <p>
+        压缩和数据保留协同工作，但服务于不同的目的：
+      </p>
+
+      <ul>
+        <li><strong>压缩合并</strong> - 合并分区内的文件以提高效率</li>
+        <li><strong>数据保留</strong> - 删除超过阈值的整个分区</li>
+      </ul>
+
+      <p>
+        当数据保留策略删除旧分区时，也会移除这些分区中的所有已压缩文件。无需对即将删除的数据进行压缩。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">提示</div>
+        <p>
+          如果您设置了较短的保留期限（例如 7 天），可以考虑使用较不激进的压缩设置，因为数据在压缩带来显著收益之前就会被删除。
+        </p>
+      </div>
+
+      <div class="cards-grid">
+        <a href="storage.html" class="card">
+          <div class="card-icon">&#128451;</div>
+          <h3>存储</h3>
+          <p>了解 Parquet 格式和分区策略。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>配置</h3>
+          <p>完整的配置参考。</p>
+          <span class="card-link">查看 <span>&#8594;</span></span>
+        </a>
+
+        <a href="api.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>API 参考</h3>
+          <p>压缩 API 端点。</p>
+          <span class="card-link">查看 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

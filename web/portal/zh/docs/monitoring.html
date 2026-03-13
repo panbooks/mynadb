@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 监控与可观测性 - Prometheus 指标、查询追踪、健康检查端点和告警">
+  <title>监控 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/monitoring.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html" class="active">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <div class="docs-badge" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">
+        v0.3.0 新功能
+      </div>
+
+      <h1>监控与可观测性</h1>
+
+      <p class="lead">
+        全面的监控能力，包括 Prometheus 指标、查询追踪和系统健康端点。
+        全面洞察 MynaDB 的性能、资源使用和运维健康状况，确保您的时序数据基础设施平稳运行。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128200; 完整的可观测性栈</div>
+        <p>
+          MynaDB 暴露 Prometheus 兼容指标、结构化健康端点、慢查询追踪和自报告系统指标。配合 <a href="grafana.html">Grafana</a> 即可获得完整的监控和可视化方案。
+        </p>
+      </div>
+
+      <!-- Prometheus 指标 -->
+      <h2 id="prometheus-metrics">Prometheus 指标</h2>
+
+      <p>
+        MynaDB 暴露一个 <code>/metrics</code> 端点，使用 Prometheus 导出格式。
+        抓取此端点可收集关于写入、查询、缓存性能、存储和后台操作的详细指标。
+      </p>
+
+      <h3>端点</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Fetch Prometheus metrics</span>
+curl http://localhost:7000/metrics</code></pre>
+        </div>
+      </div>
+
+      <h3>Prometheus 抓取配置</h3>
+
+      <p>在 <code>prometheus.yml</code> 中将 MynaDB 添加为抓取目标：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">yaml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>scrape_configs:
+  - job_name: 'mynadb'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:7000']
+        labels:
+          instance: 'mynadb-prod-01'
+
+  <span class="token-comment"># For a cluster deployment, add all nodes</span>
+  - job_name: 'mynadb-cluster'
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - 'node1:7000'
+          - 'node2:7000'
+          - 'node3:7000'</code></pre>
+        </div>
+      </div>
+
+      <h3>关键指标</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>指标</th>
+            <th>类型</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>mynadb_writes_total</code></td>
+            <td>Counter</td>
+            <td>接收的写入请求总数</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_write_bytes_total</code></td>
+            <td>Counter</td>
+            <td>写入的总字节数（Line Protocol 载荷大小）</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_queries_total</code></td>
+            <td>Counter</td>
+            <td>执行的 SQL 查询总数</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_query_duration_seconds</code></td>
+            <td>Histogram</td>
+            <td>查询执行耗时（秒）（桶：0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10）</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cache_hits_total</code></td>
+            <td>Counter</td>
+            <td>缓存命中总数（元数据缓存 + 查询缓存）</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_cache_misses_total</code></td>
+            <td>Counter</td>
+            <td>缓存未命中总数</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_storage_bytes</code></td>
+            <td>Gauge</td>
+            <td>所有 catalog 当前总存储使用量（字节）</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_compaction_runs_total</code></td>
+            <td>Counter</td>
+            <td>已完成的压缩运行总数</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_active_connections</code></td>
+            <td>Gauge</td>
+            <td>当前活跃的客户端连接数（HTTP、Flight、MySQL）</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_flush_duration_seconds</code></td>
+            <td>Histogram</td>
+            <td>缓存刷写到 Parquet 的操作耗时（秒）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>指标输出示例</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># HELP mynadb_writes_total Total number of write requests</span>
+<span class="token-comment"># TYPE mynadb_writes_total counter</span>
+mynadb_writes_total{catalog="mydb"} 158432
+
+<span class="token-comment"># HELP mynadb_query_duration_seconds Query execution duration</span>
+<span class="token-comment"># TYPE mynadb_query_duration_seconds histogram</span>
+mynadb_query_duration_seconds_bucket{le="0.01"} 12045
+mynadb_query_duration_seconds_bucket{le="0.05"} 34210
+mynadb_query_duration_seconds_bucket{le="0.1"} 45123
+mynadb_query_duration_seconds_bucket{le="0.25"} 48900
+mynadb_query_duration_seconds_bucket{le="0.5"} 49800
+mynadb_query_duration_seconds_bucket{le="1"} 49950
+mynadb_query_duration_seconds_bucket{le="+Inf"} 50000
+mynadb_query_duration_seconds_sum 1523.45
+mynadb_query_duration_seconds_count 50000
+
+<span class="token-comment"># HELP mynadb_storage_bytes Current storage usage in bytes</span>
+<span class="token-comment"># TYPE mynadb_storage_bytes gauge</span>
+mynadb_storage_bytes{catalog="mydb",schema="default"} 10737418240</code></pre>
+        </div>
+      </div>
+
+      <!-- 健康检查端点 -->
+      <h2 id="health-endpoints">健康检查端点</h2>
+
+      <p>
+        MynaDB 提供多个 HTTP 端点用于健康检查、负载均衡器集成和运维可视化。这些端点返回 JSON 响应，无需身份认证。
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>端点</th>
+            <th>方法</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>GET /health</code></td>
+            <td>GET</td>
+            <td>基本健康检查。服务器运行时返回 <code>200 OK</code>。用于负载均衡器探测。</td>
+          </tr>
+          <tr>
+            <td><code>GET /stats</code></td>
+            <td>GET</td>
+            <td>写缓存统计：当前大小、条目数、刷写状态和缓冲区利用率。</td>
+          </tr>
+          <tr>
+            <td><code>GET /memory</code></td>
+            <td>GET</td>
+            <td>内存使用明细：堆分配、RSS、缓存大小和缓冲池使用情况。</td>
+          </tr>
+          <tr>
+            <td><code>GET /cache/stats</code></td>
+            <td>GET</td>
+            <td>元数据缓存和查询结果缓存的命中/未命中率。</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>健康检查</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Basic health check</span>
+curl http://localhost:7000/health
+
+<span class="token-comment"># Response:</span>
+<span class="token-comment"># {"status": "ok"}</span></code></pre>
+        </div>
+      </div>
+
+      <h3>写缓存统计</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/stats
+
+<span class="token-comment"># Response:</span>
+{
+  "cache_size_bytes": 52428800,
+  "cache_entries": 1250,
+  "max_size_bytes": 4294967296,
+  "utilization_pct": 1.22,
+  "last_flush": "2026-02-13T10:30:00Z",
+  "flush_interval_secs": 60
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>内存使用</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/memory
+
+<span class="token-comment"># Response:</span>
+{
+  "rss_bytes": 536870912,
+  "heap_allocated_bytes": 268435456,
+  "write_cache_bytes": 52428800,
+  "metadata_cache_bytes": 16777216,
+  "query_cache_bytes": 33554432
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>缓存命中率</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/cache/stats
+
+<span class="token-comment"># Response:</span>
+{
+  "metadata_cache": {
+    "hits": 45230,
+    "misses": 1280,
+    "hit_rate": 0.972,
+    "size_bytes": 16777216,
+    "entries": 342
+  },
+  "query_cache": {
+    "hits": 12450,
+    "misses": 8320,
+    "hit_rate": 0.599,
+    "size_bytes": 33554432,
+    "entries": 89,
+    "ttl_secs": 300
+  }
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- 查询追踪 -->
+      <h2 id="query-tracing">查询追踪</h2>
+
+      <p>
+        MynaDB 支持慢查询日志和 Trace ID 传播，用于调试查询性能问题。慢查询会被自动记录并附带执行详情，帮助您识别和优化有问题的查询。
+      </p>
+
+      <h3>慢查询日志配置</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[logging]
+level = "info"
+log_dir = "/data0/mynadb/logs"
+
+<span class="token-comment"># Slow query threshold (milliseconds)</span>
+<span class="token-comment"># Queries exceeding this duration are logged at WARN level</span>
+slow_query_threshold_ms = 500
+
+<span class="token-comment"># Include execution plan in slow query logs</span>
+slow_query_log_plan = true</code></pre>
+        </div>
+      </div>
+
+      <h3>慢查询日志输出</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>WARN  query: Slow query detected
+  catalog=mydb
+  sql="SELECT * FROM cpu WHERE time > now() - interval '1 hour' ORDER BY time DESC"
+  duration_ms=1523
+  rows_returned=48200
+  partitions_scanned=3
+  files_scanned=12
+  trace_id=abc123def456</code></pre>
+        </div>
+      </div>
+
+      <h3>Trace ID 传播</h3>
+
+      <p>
+        通过 <code>X-Trace-Id</code> 请求头传递 Trace ID，以便在您的可观测性栈中关联查询。Trace ID 会包含在日志条目、指标标签和错误响应中，实现端到端的追踪。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Pass a trace ID with your query</span>
+curl -H "X-Trace-Id: req-abc123" \
+  "http://localhost:7000/query/mydb?sql=SELECT+count(*)+FROM+cpu"
+
+<span class="token-comment"># The trace ID appears in logs, allowing correlation</span>
+<span class="token-comment"># with upstream services and distributed tracing systems</span></code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128279; OpenTelemetry 集成</div>
+        <p>
+          MynaDB 还支持通过 <code>traceparent</code> 请求头（W3C Trace Context）进行 <a href="otlp.html">OpenTelemetry (OTLP)</a> 追踪上下文传播。这使得与 Jaeger、Zipkin 和 Grafana Tempo 等分布式追踪系统的无缝集成成为可能。
+        </p>
+      </div>
+
+      <!-- 系统指标采集 -->
+      <h2 id="system-metrics">系统指标采集</h2>
+
+      <p>
+        MynaDB 自报告关键的系统级指标，涵盖 CPU、内存、磁盘和网络。这些指标包含在 <code>/metrics</code> 端点中，无需单独的 Node Exporter 即可提供对宿主环境的可视化。
+      </p>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">&#9889;</div>
+          <h4>CPU</h4>
+          <p>
+            进程 CPU 使用率百分比、使用的核心数和系统负载均值。
+            指标：<code>mynadb_process_cpu_usage</code>
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128187;</div>
+          <h4>内存</h4>
+          <p>
+            驻留集大小（RSS）、堆分配和虚拟内存。
+            指标：<code>mynadb_process_memory_bytes</code>
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128190;</div>
+          <h4>磁盘</h4>
+          <p>
+            数据目录磁盘使用量、可用空间和 I/O 吞吐量。
+            指标：<code>mynadb_disk_usage_bytes</code>
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#127760;</div>
+          <h4>网络</h4>
+          <p>
+            发送/接收字节数，各协议活跃连接数（HTTP、Flight、MySQL）。
+            指标：<code>mynadb_network_bytes_total</code>
+          </p>
+        </div>
+      </div>
+
+      <h3>系统指标表</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>指标</th>
+            <th>类型</th>
+            <th>标签</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>mynadb_process_cpu_usage</code></td>
+            <td>Gauge</td>
+            <td>-</td>
+            <td>进程 CPU 使用率百分比（0-100）</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_process_memory_bytes</code></td>
+            <td>Gauge</td>
+            <td><code>type</code> (rss, heap, virtual)</td>
+            <td>进程内存使用量（字节）</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_disk_usage_bytes</code></td>
+            <td>Gauge</td>
+            <td><code>state</code> (used, available)</td>
+            <td>数据目录磁盘使用情况</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_disk_io_bytes_total</code></td>
+            <td>Counter</td>
+            <td><code>direction</code> (read, write)</td>
+            <td>累计磁盘 I/O（字节）</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_network_bytes_total</code></td>
+            <td>Counter</td>
+            <td><code>direction</code> (rx, tx)</td>
+            <td>累计网络传输字节数</td>
+          </tr>
+          <tr>
+            <td><code>mynadb_open_file_descriptors</code></td>
+            <td>Gauge</td>
+            <td>-</td>
+            <td>打开的文件描述符数量</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 告警规则 -->
+      <h2 id="alerting-rules">告警规则</h2>
+
+      <p>
+        使用 Prometheus 告警规则，在潜在问题影响工作负载之前获得通知。以下示例涵盖了 MynaDB 部署的常见场景。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">yaml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>groups:
+  - name: mynadb_alerts
+    rules:
+      <span class="token-comment"># Alert when query latency p99 exceeds 5 seconds</span>
+      - alert: MynaDBHighQueryLatency
+        expr: |
+          histogram_quantile(0.99,
+            rate(mynadb_query_duration_seconds_bucket[5m])
+          ) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High query latency on {{ $labels.instance }}"
+          description: "p99 query latency is {{ $value | humanizeDuration }} (threshold: 5s)"
+
+      <span class="token-comment"># Alert when cache hit rate drops below 80%</span>
+      - alert: MynaDBLowCacheHitRate
+        expr: |
+          rate(mynadb_cache_hits_total[5m])
+          / (rate(mynadb_cache_hits_total[5m]) + rate(mynadb_cache_misses_total[5m]))
+          < 0.8
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low cache hit rate on {{ $labels.instance }}"
+          description: "Cache hit rate is {{ $value | humanizePercentage }} (threshold: 80%)"
+
+      <span class="token-comment"># Alert when disk usage exceeds 85%</span>
+      - alert: MynaDBDiskUsageHigh
+        expr: |
+          mynadb_disk_usage_bytes{state="used"}
+          / (mynadb_disk_usage_bytes{state="used"} + mynadb_disk_usage_bytes{state="available"})
+          > 0.85
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk usage critical on {{ $labels.instance }}"
+          description: "Disk usage is {{ $value | humanizePercentage }}. Consider adjusting retention or adding storage."
+
+      <span class="token-comment"># Alert when no writes are received for 5 minutes</span>
+      - alert: MynaDBNoWrites
+        expr: |
+          rate(mynadb_writes_total[5m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No writes on {{ $labels.instance }}"
+          description: "MynaDB has not received any write requests in the last 5 minutes."
+
+      <span class="token-comment"># Alert when compaction is backed up</span>
+      - alert: MynaDBCompactionBacklog
+        expr: |
+          mynadb_storage_bytes > 50e9
+          and rate(mynadb_compaction_runs_total[1h]) == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Compaction stalled on {{ $labels.instance }}"
+          description: "No compaction runs in the last 30 minutes with >50GB storage."
+
+      <span class="token-comment"># Alert when instance is down</span>
+      - alert: MynaDBInstanceDown
+        expr: up{job="mynadb"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MynaDB instance {{ $labels.instance }} is down"
+          description: "The MynaDB instance has been unreachable for more than 1 minute."</code></pre>
+        </div>
+      </div>
+
+      <h3>预计算规则</h3>
+
+      <p>
+        将常用表达式预计算为 Recording Rules，以提升仪表板性能：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">yaml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>groups:
+  - name: mynadb_recording_rules
+    rules:
+      <span class="token-comment"># Write rate per second</span>
+      - record: mynadb:writes_per_second
+        expr: rate(mynadb_writes_total[5m])
+
+      <span class="token-comment"># Query rate per second</span>
+      - record: mynadb:queries_per_second
+        expr: rate(mynadb_queries_total[5m])
+
+      <span class="token-comment"># Cache hit rate</span>
+      - record: mynadb:cache_hit_rate
+        expr: |
+          rate(mynadb_cache_hits_total[5m])
+          / (rate(mynadb_cache_hits_total[5m]) + rate(mynadb_cache_misses_total[5m]))
+
+      <span class="token-comment"># p50 query latency</span>
+      - record: mynadb:query_latency_p50
+        expr: histogram_quantile(0.5, rate(mynadb_query_duration_seconds_bucket[5m]))
+
+      <span class="token-comment"># p99 query latency</span>
+      - record: mynadb:query_latency_p99
+        expr: histogram_quantile(0.99, rate(mynadb_query_duration_seconds_bucket[5m]))</code></pre>
+        </div>
+      </div>
+
+      <!-- Grafana 仪表板 -->
+      <h2 id="grafana-dashboard">Grafana 仪表板</h2>
+
+      <p>
+        使用预构建的 Grafana 仪表板可视化所有这些指标。MynaDB 提供了一个全面的仪表板模板，包含写入/查询吞吐量、延迟分布、缓存性能、存储使用和系统资源利用率面板。
+      </p>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#9989; 开箱即用的仪表板</div>
+        <p>
+          请参阅 <a href="grafana.html">Grafana 集成</a>指南，了解设置数据源、导入 MynaDB 仪表板和在 Grafana 中配置告警的详细步骤。
+        </p>
+      </div>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">&#128202;</div>
+          <h4>写入吞吐量</h4>
+          <p>每秒请求数和每秒字节数的写入速率与趋势线</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#9201;</div>
+          <h4>查询延迟</h4>
+          <p>p50、p95、p99 延迟直方图和百分位分布</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128640;</div>
+          <h4>缓存性能</h4>
+          <p>命中/未命中率、淘汰计数和内存利用率</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128451;</div>
+          <h4>存储概览</h4>
+          <p>磁盘使用趋势、压缩进度和分区计数</p>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128712; 相关指南</div>
+        <p>
+          <a href="grafana.html">Grafana 集成</a> - 仪表板设置与可视化<br>
+          <a href="configuration.html">配置</a> - 完整配置参考<br>
+          <a href="troubleshooting.html">故障排除</a> - 常见问题诊断<br>
+          <a href="admin-console.html">管理控制台</a> - 内置 Web 管理界面
+        </p>
+      </div>
+
+      <div class="docs-nav-links">
+        <a href="retention.html" class="docs-nav-prev">&larr; 数据保留</a>
+        <a href="admin-console.html" class="docs-nav-next">管理控制台 &rarr;</a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

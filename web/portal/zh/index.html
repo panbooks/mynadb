@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB - 倾听您的机器之声。您的基础设施正在说话，开始倾听。基于 Rust 构建的高性能时序数据库，由 Apache DataFusion 驱动。">
+  <meta name="keywords" content="时序数据库, TSDB, Rust, DataFusion, Parquet, InfluxDB, 指标, 分析, MynaDB">
+  <title>MynaDB - 倾听您的机器之声</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="../css/style.css">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="../images/favicon.svg">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <a href="index.html" class="navbar-brand">
+        <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+
+      <ul class="navbar-nav">
+        <li><a href="docs/index.html">文档</a></li>
+        <li><a href="docs/quickstart.html">快速开始</a></li>
+        <li><a href="docs/architecture.html">架构</a></li>
+        <li><a href="docs/api.html">API 参考</a></li>
+        <li><a href="docs/examples.html">示例</a></li>
+      </ul>
+
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+        <a href="docs/quickstart.html" class="btn btn-primary">快速开始</a>
+      </div>
+
+      <button class="mobile-menu-btn" aria-label="Toggle menu">&#9776;</button>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <!-- Floating Particles -->
+    <div class="hero-particles">
+      <div class="particle"></div>
+      <div class="particle"></div>
+      <div class="particle"></div>
+      <div class="particle"></div>
+      <div class="particle"></div>
+      <div class="particle"></div>
+      <div class="particle"></div>
+      <div class="particle"></div>
+      <div class="particle"></div>
+      <div class="particle"></div>
+    </div>
+    <div class="container">
+      <div class="hero-content">
+        <div class="hero-badge">
+          <span>&#9889;</span> 倾听您的机器之声
+        </div>
+
+        <h1>
+          MynaDB<br>
+          <span>时序数据库</span>
+        </h1>
+
+        <p class="hero-subtitle" style="font-size: 1.5rem; color: var(--text-secondary); margin-bottom: 0.5rem; font-weight: 500;">
+          您的基础设施正在说话，开始倾听。
+        </p>
+
+        <p class="hero-action" style="font-size: 1.25rem; color: var(--primary); font-weight: 600; letter-spacing: 0.05em; margin-bottom: 1.5rem;">
+          倾听。存储。监控。
+        </p>
+
+        <p class="hero-description">
+          基于 Rust 构建的高性能时序数据库。通过 InfluxDB Line Protocol 或 OpenTelemetry 接入数据，
+          以列式 Parquet 格式存储并支持 Apache Iceberg，使用 Apache DataFusion 驱动的 SQL 进行查询。
+          多协议接入、流式查询和 Grafana 原生仪表盘。
+        </p>
+
+        <div class="hero-buttons">
+          <a href="docs/quickstart.html" class="btn btn-primary btn-lg">
+            <span>&#9654;</span> 快速开始
+          </a>
+          <a href="docs/index.html" class="btn btn-secondary btn-lg">
+            <span>&#128214;</span> 阅读文档
+          </a>
+        </div>
+
+        <div class="hero-code">
+          <pre><code><span class="comment"># 使用 InfluxDB Line Protocol 写入数据</span>
+<span class="command">curl</span> -X POST http://localhost:7000/write/mydb \
+  -d <span class="string">'cpu,host=server01,region=us-west usage=75.5,temp=45'</span>
+
+<span class="comment"># 使用 SQL 查询</span>
+<span class="command">curl</span> 'http://localhost:7000/query/mydb' \
+  -d <span class="string">'SELECT host, AVG(usage) FROM cpu GROUP BY host'</span></code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Stats Section -->
+  <section class="stats-section section">
+    <div class="container">
+      <div class="stats-grid">
+        <div class="stat-item">
+          <h3>10x</h3>
+          <p>更快的数据接入</p>
+        </div>
+        <div class="stat-item">
+          <h3>90%</h3>
+          <p>存储空间节省</p>
+        </div>
+        <div class="stat-item">
+          <h3>&lt;1ms</h3>
+          <p>查询延迟</p>
+        </div>
+        <div class="stat-item">
+          <h3>SQL</h3>
+          <p>标准查询语言</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- What's New Section -->
+  <section class="section" style="background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 50%, #f0f9ff 100%);">
+    <div class="container">
+      <div class="section-header">
+        <h2>最新特性</h2>
+        <p>重大新功能，将 MynaDB 扩展为完整的可观测性平台。</p>
+      </div>
+
+      <div class="features-grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+        <div class="feature-card" style="background: white; border: 2px solid #0284c7;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #0284c7, #06b6d4);">&#127899;</div>
+          <h3>OpenTelemetry (OTLP)</h3>
+          <p>通过 gRPC 和 HTTP 原生支持 OTLP 接入。接收来自任何 OpenTelemetry 应用的指标、日志和追踪数据。</p>
+          <a href="docs/otlp.html" style="color: #0284c7; text-decoration: none; font-weight: 500;">了解更多 &rarr;</a>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #06b6d4;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #06b6d4, #22d3ee);">&#129482;</div>
+          <h3>Apache Iceberg</h3>
+          <p>REST Catalog API 实现多引擎分析。从 Spark、Trino、DuckDB 和 Flink 查询 MynaDB 数据。</p>
+          <a href="docs/iceberg.html" style="color: #06b6d4; text-decoration: none; font-weight: 500;">了解更多 &rarr;</a>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #10b981;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #10b981, #34d399);">&#128202;</div>
+          <h3>Grafana 集成</h3>
+          <p>内置 Grafana 兼容端点和全面的系统指标监控仪表盘。</p>
+          <a href="docs/grafana.html" style="color: #10b981; text-decoration: none; font-weight: 500;">了解更多 &rarr;</a>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #8b5cf6;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa);">&#128200;</div>
+          <h3>持续聚合</h3>
+          <p>TimescaleDB 风格的物化视图，支持自动刷新和透明查询重写，即时获取结果。</p>
+          <a href="docs/continuous-aggregates.html" style="color: #8b5cf6; text-decoration: none; font-weight: 500;">了解更多 &rarr;</a>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #f59e0b;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #f59e0b, #fbbf24);">&#128290;</div>
+          <h3>预测分析与地理空间</h3>
+          <p>内置 forecast_linear、forecast_arima、geo_distance 和 geo_within UDF，支持高级分析。</p>
+          <a href="docs/forecasting.html" style="color: #f59e0b; text-decoration: none; font-weight: 500;">了解更多 &rarr;</a>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #ec4899;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #ec4899, #f472b6);">&#9889;</div>
+          <h3>流式查询</h3>
+          <p>通过 WebSocket 和 Server-Sent Events 实现实时查询订阅，用于实时仪表盘和告警。</p>
+          <a href="docs/streaming.html" style="color: #ec4899; text-decoration: none; font-weight: 500;">了解更多 &rarr;</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Enterprise Cluster Section -->
+  <section class="section" style="background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 50%, #ede9fe 100%);">
+    <div class="container">
+      <div class="section-header">
+        <div style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.35rem 1rem; border-radius: 1rem; font-size: 0.8rem; font-weight: 600; margin-bottom: 1rem;">
+          新：企业版
+        </div>
+        <h2>无限扩展</h2>
+        <p>计算存储分离的分布式集群。按需添加节点，实现 11 个 9 的数据持久性。</p>
+      </div>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto; margin-bottom: 2rem;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.8rem; text-align: center;">
+                         ┌─────────────┐
+                         │  负载均衡器  │
+                         └──────┬──────┘
+          ┌──────────────────────┼──────────────────────┐
+          ▼                      ▼                      ▼
+   ┌─────────────┐        ┌─────────────┐        ┌─────────────┐
+   │   节点 1    │        │   节点 2    │        │   节点 3    │
+   │  (计算节点) │        │  (计算节点) │        │  (计算节点) │
+   └──────┬──────┘        └──────┬──────┘        └──────┬──────┘
+          └──────────────────────┼──────────────────────┘
+                                 ▼
+   ┌─────────────────────────────────────────────────────────────┐
+   │            共享对象存储 (S3/MinIO/OSS)                       │
+   └─────────────────────────────────────────────────────────────┘
+                                 ▼
+   ┌─────────────────────────────────────────────────────────────┐
+   │       协调服务 (etcd): 锁 • 选主 • 发布/订阅                │
+   └─────────────────────────────────────────────────────────────┘
+        </pre>
+      </div>
+
+      <div class="features-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+        <div class="feature-card" style="background: white; border: 2px solid #7c3aed; padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #7c3aed, #a78bfa);">&#128200;</div>
+          <h3>自动扩缩容</h3>
+          <p>无需数据迁移即可添加或移除计算节点。无状态设计。</p>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #8b5cf6; padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #8b5cf6, #c4b5fd);">&#128274;</div>
+          <h3>11 个 9 持久性</h3>
+          <p>S3 对象存储提供 99.999999999% 的数据持久性。</p>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #a78bfa; padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #a78bfa, #ddd6fe);">&#9889;</div>
+          <h3>即时故障转移</h3>
+          <p>无状态节点意味着即时恢复，无选举延迟。</p>
+        </div>
+
+        <div class="feature-card" style="background: white; border: 2px solid #c4b5fd; padding: 1.25rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #c4b5fd, #ede9fe);">&#9729;</div>
+          <h3>云原生</h3>
+          <p>完美适配 Kubernetes，支持自动扩缩容和自愈能力。</p>
+        </div>
+      </div>
+
+      <div class="text-center" style="margin-top: 2rem;">
+        <a href="docs/cluster.html" class="btn btn-primary btn-lg" style="background: linear-gradient(135deg, #7c3aed, #a78bfa);">
+          <span>&#128214;</span> 了解企业版集群
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header">
+        <h2>为什么选择 MynaDB？</h2>
+        <p>您的基础设施正在说话，MynaDB 在倾听。专为现代监控和分析而构建，注重性能和开发者体验。</p>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">&#128293;</div>
+          <h3>极致性能</h3>
+          <p>使用 Rust 编写，零拷贝反序列化和高效内存管理，实现最大吞吐量。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128451;</div>
+          <h3>列式存储</h3>
+          <p>Apache Parquet 格式提供出色的压缩率和快速的分析查询性能。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128270;</div>
+          <h3>SQL 查询</h3>
+          <p>基于 Apache DataFusion 的完整 SQL 支持。使用熟悉的语法进行复杂的分析查询。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128268;</div>
+          <h3>兼容 InfluxDB</h3>
+          <p>InfluxDB 写入 API 的直接替代品。无缝迁移现有应用程序。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128218;</div>
+          <h3>LSM 压缩合并</h3>
+          <p>多级压缩合并策略自动优化存储和查询性能。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#9992;</div>
+          <h3>Arrow Flight</h3>
+          <p>高性能 gRPC 流式传输，高效地将数据传输到分析工具和仪表盘。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128203;</div>
+          <h3>灵活的 Schema</h3>
+          <p>自动 Schema 检测和演化。无需预先定义 Schema。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128200;</div>
+          <h3>时间分区</h3>
+          <p>自动按日期分区，实现高效的时间范围查询和数据保留。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128274;</div>
+          <h3>数据保留策略</h3>
+          <p>基于可配置的保留策略自动过期和清理数据。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128279;</div>
+          <h3>高可用</h3>
+          <p>主从复制，支持自动故障转移，实现容错和读扩展。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128171;</div>
+          <h3>MySQL 协议</h3>
+          <p>使用任何 MySQL 客户端连接。支持 mysql-cli、DBeaver 或 Grafana 等工具。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#9729;</div>
+          <h3>对象存储</h3>
+          <p>原生支持 S3、MinIO 和阿里云 OSS，适用于云原生部署。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128202;</div>
+          <h3>多级缓存</h3>
+          <p>元数据缓存、查询结果缓存和 Parquet 文件缓存，实现极速查询。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128260;</div>
+          <h3>零停机故障转移</h3>
+          <p>无缝将从节点提升为主节点。支持手动或自动故障转移，无数据丢失。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128272;</div>
+          <h3>WAL 复制</h3>
+          <p>实时 Write-Ahead Log 流式传输确保跨节点的数据持久性。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128736;</div>
+          <h3>GROUP BY time()</h3>
+          <p>兼容 InfluxDB 的时间分桶，支持 fill 选项处理数据间隙。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">&#128737;</div>
+          <h3>久经考验</h3>
+          <p>200+ 测试，包括基于属性的测试、模糊测试和性能基准测试。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #0284c7, #06b6d4);">&#127899;</div>
+          <h3>OpenTelemetry 原生支持</h3>
+          <p>通过 gRPC（端口 4317）和 HTTP 端点原生支持 OTLP 接入指标、日志和追踪数据。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #06b6d4, #22d3ee);">&#129482;</div>
+          <h3>Apache Iceberg</h3>
+          <p>REST Catalog API 支持 Spark、Trino、DuckDB 和 Flink 的多引擎分析。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #10b981, #34d399);">&#128202;</div>
+          <h3>Grafana 仪表盘</h3>
+          <p>兼容 InfluxDB 的数据源端点和内置监控仪表盘。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa);">&#128200;</div>
+          <h3>持续聚合</h3>
+          <p>TimescaleDB 风格的物化视图，支持自动刷新和透明查询重写。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #ec4899, #f472b6);">&#9889;</div>
+          <h3>流式查询</h3>
+          <p>通过 WebSocket 和 SSE 实现实时订阅，用于实时仪表盘和告警。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #dc2626, #f87171);">&#128274;</div>
+          <h3>RBAC 安全</h3>
+          <p>基于角色的访问控制，支持用户、角色、权限、TLS 和审计日志。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #f59e0b, #fbbf24);">&#128290;</div>
+          <h3>预测分析 UDF</h3>
+          <p>内置 forecast_linear、forecast_ema、forecast_arima，支持预测性分析。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #14b8a6, #5eead4);">&#127758;</div>
+          <h3>地理空间函数</h3>
+          <p>geo_distance、geo_hash、geo_within 和 geo_bounding_box，支持位置感知查询。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #7c3aed, #a78bfa);">&#128421;</div>
+          <h3>管理控制台</h3>
+          <p>基于 Web 的 SQL 编辑器（Monaco）、存储浏览器和集群管理。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #ea580c, #fb923c);">&#128200;</div>
+          <h3>Prometheus 指标</h3>
+          <p>原生 /metrics 端点，监控数据接入、查询性能和系统健康状况。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture Overview -->
+  <section class="section" style="background: var(--bg-secondary);">
+    <div class="container">
+      <div class="section-header">
+        <h2>架构</h2>
+        <p>现代化的分层架构，专为高吞吐量数据接入和快速分析查询而设计。</p>
+      </div>
+
+      <div class="architecture-diagram">
+        <pre>
+  +----------------+  +----------------+  +----------------+
+  | Line Protocol  |  |  OTLP (gRPC/  |  | Arrow Flight / |
+  | POST /write/:db|  |  HTTP)        |  | MySQL Protocol |
+  +-------+--------+  +-------+--------+  +-------+--------+
+          |                    |                    |
+          +--------------------+--------------------+
+                               |
+                       +-------v-------+          +------------------+
+                       |   DataCache   |          |   QueryEngine    |
+                       |  (内存缓存)   |&lt;---------| (DataFusion SQL) |
+                       +-------+-------+ Memtable +--------+---------+
+                               |                           |
+                       +-------v---------------------------v--------+
+                       |            Parquet 文件 (列式存储)          |
+                       |         + 元数据管理器 (Catalog)            |
+                       +-----+---------------------------+----------+
+                             |                           |
+                    +--------v--------+         +--------v---------+
+                    |    压缩合并器   |         | Iceberg REST API |
+                    | (LSM L0-L5)    |         | (多引擎分析)      |
+                    +-----------------+         +------------------+
+                             |
+          +------------------+------------------+
+          |                                     |
+  +-------v--------+  流式查询  +-------v--------+
+  | 对象存储        |            | WebSocket/SSE  |
+  | (S3/MinIO/OSS) |            | (实时推送)      |
+  +----------------+            +----------------+
+        </pre>
+      </div>
+
+      <div class="architecture-cards">
+        <div class="arch-card">
+          <h4>&#128229; 多协议接入</h4>
+          <p>InfluxDB Line Protocol、OpenTelemetry OTLP 和 Arrow Flight，灵活的数据接入方式。</p>
+        </div>
+        <div class="arch-card">
+          <h4>&#9889; Memtable</h4>
+          <p>无需等待刷盘即可立即查询最新写入数据。自动合并内存和 Parquet 数据。</p>
+        </div>
+        <div class="arch-card">
+          <h4>&#128200; 持续聚合</h4>
+          <p>TimescaleDB 风格的物化视图，支持自动刷新和透明查询重写。</p>
+        </div>
+        <div class="arch-card">
+          <h4>&#128451; 存储层</h4>
+          <p>列式 Parquet 文件，支持日期分区、LSM 压缩合并和 Iceberg 元数据。</p>
+        </div>
+        <div class="arch-card">
+          <h4>&#128270; 查询引擎</h4>
+          <p>Apache DataFusion，支持预测分析 UDF、地理空间函数和谓词下推。</p>
+        </div>
+        <div class="arch-card">
+          <h4>&#128190; 流式查询</h4>
+          <p>通过 WebSocket 和 SSE 实现实时查询订阅，用于实时仪表盘。</p>
+        </div>
+        <div class="arch-card">
+          <h4>&#129482; Apache Iceberg</h4>
+          <p>REST Catalog API 支持 Spark、Trino、DuckDB 和 Flink 的多引擎分析。</p>
+        </div>
+        <div class="arch-card">
+          <h4>&#128274; 安全与 RBAC</h4>
+          <p>基于角色的访问控制、TLS/SSL 双向认证和全面的审计日志。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quick Start -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header">
+        <h2>快速开始</h2>
+        <p>60 秒内开始倾听。</p>
+      </div>
+
+      <div class="code-block" style="max-width: 800px; margin: 0 auto;">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 1. 构建并运行</span>
+<span class="token-function">cargo</span> build --release
+<span class="token-function">./target/release/mynadb</span>
+
+<span class="token-comment"># 2. 写入一些数据</span>
+<span class="token-function">curl</span> -X POST http://localhost:7000/write/mydb -d <span class="token-string">'
+cpu,host=server01,region=us-west usage=75.5,temp=45
+cpu,host=server02,region=us-east usage=82.3,temp=50
+memory,host=server01 used=16.5,total=32.0
+'</span>
+
+<span class="token-comment"># 3. 立即查询！（无需刷盘 - Memtable 提供即时可见性）</span>
+<span class="token-function">curl</span> <span class="token-string">'http://localhost:7000/query/mydb'</span> \
+  -d <span class="token-string">'SELECT host, AVG(usage) as avg_cpu FROM cpu GROUP BY host'</span>
+
+<span class="token-comment"># 结果：</span>
+<span class="token-comment"># [{"host":"server01","avg_cpu":75.5},{"host":"server02","avg_cpu":82.3}]</span>
+
+<span class="token-comment"># 4. 使用 GROUP BY time() 进行时间序列聚合</span>
+<span class="token-function">curl</span> <span class="token-string">'http://localhost:7000/query/mydb'</span> \
+  -d <span class="token-string">'SELECT host, AVG(usage) FROM cpu GROUP BY time(5m), host'</span></code></pre>
+        </div>
+      </div>
+
+      <div class="text-center mt-2">
+        <a href="docs/quickstart.html" class="btn btn-primary btn-lg">
+          查看完整快速开始指南 <span>&#8594;</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Use Cases -->
+  <section class="section" style="background: var(--bg-secondary);">
+    <div class="container">
+      <div class="section-header">
+        <h2>应用场景</h2>
+        <p>从微弱信号到强烈警报，每个信号都很重要。MynaDB 全部捕获。</p>
+      </div>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-icon">&#128187;</div>
+          <h3>基础设施监控</h3>
+          <p>实时追踪数千台服务器的 CPU、内存、磁盘和网络指标。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128202;</div>
+          <h3>应用指标</h3>
+          <p>存储和分析应用性能数据、请求延迟和错误率。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#127760;</div>
+          <h3>物联网数据</h3>
+          <p>高频接入物联网设备的传感器数据，高效存储。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128176;</div>
+          <h3>金融数据</h3>
+          <p>以亚毫秒精度存储行情数据、价格推送和交易指标。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128640;</div>
+          <h3>DevOps 分析</h3>
+          <p>追踪部署、构建时间和 CI/CD 指标，获取运维洞察。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#127919;</div>
+          <h3>实时分析</h3>
+          <p>通过快速分析查询驱动仪表盘和告警系统。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Documentation Cards -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header">
+        <h2>文档</h2>
+        <p>从入门到精通，一切尽在其中。</p>
+      </div>
+
+      <div class="cards-grid">
+        <a href="docs/quickstart.html" class="card">
+          <div class="card-icon">&#128640;</div>
+          <h3>快速开始</h3>
+          <p>5 分钟内启动并运行 MynaDB。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/architecture.html" class="card">
+          <div class="card-icon">&#127959;</div>
+          <h3>架构</h3>
+          <p>深入了解内部架构和设计决策。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/guides.html" class="card">
+          <div class="card-icon">&#128214;</div>
+          <h3>指南</h3>
+          <p>常见任务和工作流程的分步教程。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/api.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>API 参考</h3>
+          <p>所有 HTTP 和 Arrow Flight API 的完整参考。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/examples.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>示例</h3>
+          <p>常见查询模式的即用示例。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>配置</h3>
+          <p>所有配置选项详解及示例。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/high-availability.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>高可用</h3>
+          <p>主从复制、故障转移和高可用配置。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/cluster.html" class="card" style="border: 2px solid #7c3aed;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #7c3aed, #a78bfa);">&#127760;</div>
+          <h3>企业版集群</h3>
+          <p>共享存储架构的分布式集群，支持自动扩缩容。</p>
+          <span class="card-link" style="color: #7c3aed;">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/caching.html" class="card">
+          <div class="card-icon">&#128202;</div>
+          <h3>缓存</h3>
+          <p>元数据、查询和 Parquet 文件的多级缓存。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/mysql-protocol.html" class="card">
+          <div class="card-icon">&#128171;</div>
+          <h3>MySQL 协议</h3>
+          <p>使用 MySQL 客户端、DBeaver 或 Grafana 连接。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/object-store.html" class="card">
+          <div class="card-icon">&#9729;</div>
+          <h3>对象存储</h3>
+          <p>S3、MinIO 和阿里云 OSS 云存储配置。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/testing.html" class="card">
+          <div class="card-icon">&#128737;</div>
+          <h3>测试</h3>
+          <p>200+ 测试：单元测试、正确性测试、属性测试、模糊测试和基准测试。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/otlp.html" class="card" style="border: 2px solid #0284c7;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #0284c7, #06b6d4);">&#127899;</div>
+          <h3>OpenTelemetry (OTLP)</h3>
+          <p>通过 gRPC 和 HTTP 原生支持 OTLP 接入指标、日志和追踪数据。</p>
+          <span class="card-link" style="color: #0284c7;">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/iceberg.html" class="card" style="border: 2px solid #06b6d4;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #06b6d4, #22d3ee);">&#129482;</div>
+          <h3>Apache Iceberg</h3>
+          <p>REST Catalog API 支持 Spark、Trino 和 DuckDB 的多引擎分析。</p>
+          <span class="card-link" style="color: #06b6d4;">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/grafana.html" class="card" style="border: 2px solid #10b981;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #10b981, #34d399);">&#128202;</div>
+          <h3>Grafana 集成</h3>
+          <p>兼容 InfluxDB 的数据源和内置监控仪表盘。</p>
+          <span class="card-link" style="color: #10b981;">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/continuous-aggregates.html" class="card" style="border: 2px solid #8b5cf6;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa);">&#128200;</div>
+          <h3>持续聚合</h3>
+          <p>物化视图，支持自动刷新和查询重写。</p>
+          <span class="card-link" style="color: #8b5cf6;">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/streaming.html" class="card" style="border: 2px solid #ec4899;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #ec4899, #f472b6);">&#9889;</div>
+          <h3>流式查询</h3>
+          <p>通过 WebSocket 和 Server-Sent Events 实现实时订阅。</p>
+          <span class="card-link" style="color: #ec4899;">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/security.html" class="card" style="border: 2px solid #dc2626;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #dc2626, #f87171);">&#128274;</div>
+          <h3>安全与 RBAC</h3>
+          <p>认证、基于角色的访问控制、TLS 和审计日志。</p>
+          <span class="card-link" style="color: #dc2626;">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/forecasting.html" class="card" style="border: 2px solid #f59e0b;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #f59e0b, #fbbf24);">&#128290;</div>
+          <h3>预测分析与地理空间</h3>
+          <p>内置预测分析和地理空间 UDF，支持高级分析。</p>
+          <span class="card-link" style="color: #f59e0b;">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/admin-console.html" class="card" style="border: 2px solid #7c3aed;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #7c3aed, #a78bfa);">&#128421;</div>
+          <h3>管理控制台</h3>
+          <p>基于 Web 的 SQL 编辑器、存储浏览器和集群管理。</p>
+          <span class="card-link" style="color: #7c3aed;">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="docs/monitoring.html" class="card" style="border: 2px solid #ea580c;">
+          <div class="card-icon" style="background: linear-gradient(135deg, #ea580c, #fb923c);">&#128200;</div>
+          <h3>监控</h3>
+          <p>Prometheus 指标、查询追踪和系统健康端点。</p>
+          <span class="card-link" style="color: #ea580c;">阅读更多 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a href="index.html" class="navbar-brand">
+            <img src="../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+            MynaDB
+          </a>
+          <p>倾听您的机器之声。基于 Rust、Apache DataFusion 和 Parquet 构建的高性能时序数据库。</p>
+        </div>
+
+        <div class="footer-column">
+          <h4>文档</h4>
+          <ul>
+            <li><a href="docs/quickstart.html">快速开始</a></li>
+            <li><a href="docs/architecture.html">架构</a></li>
+            <li><a href="docs/guides.html">指南</a></li>
+            <li><a href="docs/api.html">API 参考</a></li>
+            <li><a href="docs/high-availability.html">高可用</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-column">
+          <h4>特性</h4>
+          <ul>
+            <li><a href="docs/otlp.html">OpenTelemetry</a></li>
+            <li><a href="docs/iceberg.html">Apache Iceberg</a></li>
+            <li><a href="docs/grafana.html">Grafana</a></li>
+            <li><a href="docs/continuous-aggregates.html">持续聚合</a></li>
+            <li><a href="docs/streaming.html">流式查询</a></li>
+            <li><a href="docs/cluster.html">企业版集群</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-column">
+          <h4>资源</h4>
+          <ul>
+            <li><a href="docs/security.html">安全与 RBAC</a></li>
+            <li><a href="docs/monitoring.html">监控</a></li>
+            <li><a href="docs/admin-console.html">管理控制台</a></li>
+            <li><a href="docs/configuration.html">配置</a></li>
+            <li><a href="docs/troubleshooting.html">故障排除</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-column">
+          <h4>社区</h4>
+          <ul>
+            <li><a href="https://github.com/mynadb/mynadb" target="_blank">GitHub</a></li>
+            <li><a href="#">Discord</a></li>
+            <li><a href="#">Twitter</a></li>
+            <li><a href="#">贡献指南</a></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <p>&copy; 2026 MynaDB. 倾听您的机器之声。倾听。存储。监控。</p>
+        <div class="footer-social">
+          <a href="https://github.com/mynadb/mynadb" target="_blank" aria-label="GitHub">&#128736;</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

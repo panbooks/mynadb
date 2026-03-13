@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 集群架构 - 基于 Raft 共识、表级路由和共享对象存储的分离式架构">
+  <title>集群架构 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/cluster-architecture.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html" class="active">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>集群架构</h1>
+
+      <p class="lead">
+        MynaDB 采用分离式架构，包含四种不同的节点类型：Meta 节点用于基于 Raft 的共识和元数据协调，
+        Router 节点用于无状态请求路由，Data 节点用于存储和查询执行，
+        以及可选的 Admin 节点用于集群管理。表级路由使元数据开销保持最小，
+        同时支持跨数百个 Data 节点的水平扩展。
+      </p>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #eff6ff, #dbeafe); border-left: 4px solid #3b82f6; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>前提条件：</strong>本页假设您已阅读<a href="cluster-getting-started.html">集群快速入门</a>指南，并已有一个运行中的本地集群。
+        有关生产部署指导，请参阅<a href="cluster-scaling.html">集群扩缩容</a>。
+      </div>
+
+      <h2>架构概览</h2>
+
+      <p>
+        下图展示了所有四种节点类型及其交互。客户端通过负载均衡器连接到 Router 节点，
+        Router 与 Meta 节点协调表所有权，并将数据操作路由到相应的 Data 节点。
+        Data 节点将 Parquet 文件持久化到共享对象存储（S3、MinIO 或 OSS）。
+        Admin 节点连接 Meta 进行发现，并将管理请求转发到各个 Data 节点。
+      </p>
+
+      <div class="architecture-diagram" style="background: #1e293b; padding: 1.5rem; border-radius: 0.75rem; overflow-x: auto;">
+        <pre style="color: #e2e8f0; margin: 0; font-size: 0.85rem;">
+                                    Clients
+                  (InfluxDB Line Protocol / SQL / Arrow Flight / MySQL)
+                                       |
+                                       v
+                              +------------------+
+                              |  Load Balancer   |
+                              |  (HAProxy/Nginx) |
+                              +--------+---------+
+                                       |
+                  +--------------------+--------------------+
+                  |                    |                    |
+                  v                    v                    v
+          +---------------+    +---------------+    +---------------+
+          |  Router Node  |    |  Router Node  |    |  Router Node  |
+          |  HTTP  :7000  |    |  HTTP  :7010  |    |  HTTP  :7020  |
+          |  Flight:7001  |    |  Flight:7011  |    |  Flight:7021  |
+          |  MySQL :7002  |    |  MySQL :7012  |    |  MySQL :7022  |
+          |  [ShardCache] |    |  [ShardCache] |    |  [ShardCache] |
+          +-------+-------+    +-------+-------+    +-------+-------+
+                  |                    |                    |
+                  |  Arrow Flight DoPut/DoGet              |
+                  +--------------------+--------------------+
+                                       |
+                  +--------------------+--------------------+
+                  |                    |                    |
+                  v                    v                    v
+          +---------------+    +---------------+    +---------------+
+          |  Data Node 1  |    |  Data Node 2  |    |  Data Node N  |
+          |  Primary      |    |  Primary      |    |  Standby      |
+          |  [DataCache]  |    |  [DataCache]  |    |  [DataCache]  |
+          |  [WAL]        |    |  [WAL]        |    |  [read-only]  |
+          |  [QueryEngine]|    |  [QueryEngine]|    |  [QueryEngine]|
+          +-------+-------+    +-------+-------+    +-------+-------+
+                  |                    |                    |
+                  +--------------------+--------------------+
+                                       |
+                  +--------------------------------------------+
+                  |       SHARED OBJECT STORAGE                |
+                  |       (S3 / MinIO / Alibaba OSS)           |
+                  |                                            |
+                  |  {catalog}/{schema}/{table}/date=YYYY-MM-DD|
+                  |    /node_id={id}/L0_*.parquet              |
+                  +--------------------------------------------+
+
+  +-------------------+                         +-------------------+
+  |   Admin Node      | ---- Meta Discovery --> |   Meta Node 1     |
+  |   HTTP :18080     |                         |   (Raft Leader)   |
+  |   [Web Console]   |                         |   gRPC :6001      |
+  |   [Query Editor]  |                         |   [sled DB]       |
+  +-------------------+                         +--------+----------+
+          |                                              |
+          | HTTP forwarding                    Raft Log Replication
+          | to Data Nodes                              |
+          v                                   +--------+----------+
+  +-------------------+                       |                   |
+  |  Data Node APIs   |               +-------+------+    +-------+------+
+  |  /query, /tables  |               | Meta Node 2  |    | Meta Node 3  |
+  |  /schema, /stats  |               | (Follower)   |    | (Follower)   |
+  +-------------------+               | gRPC :6101   |    | gRPC :6201   |
+                                      | [sled DB]    |    | [sled DB]    |
+                                      +--------------+    +--------------+
+
+  Router &lt;------ Event Stream (NodeRegistered, TableOwnershipChanged) ------- Meta
+  Router ------&gt; MetaCommand (RegisterTable, AcquireLock, Heartbeat) ------&gt; Meta
+        </pre>
+      </div>
+
+      <h2>Meta 节点（Raft 共识）</h2>
+
+      <p>
+        Meta 节点构成集群的协调骨干。它们使用 Raft 共识协议维护强一致的、可复制的元数据存储。
+        所有集群状态 &mdash; 节点注册、表所有权、分布式锁和领导者选举 &mdash; 都通过 Raft 日志条目在所有 Meta 节点间复制。
+      </p>
+
+      <ul>
+        <li><strong>技术：</strong>OpenRaft 0.9 + sled 嵌入式键值数据库用于持久化存储</li>
+        <li><strong>部署：</strong>始终部署奇数个 Meta 节点（3 或 5 个）以维持 Raft 仲裁</li>
+        <li><strong>容错：</strong><em>N</em> 个 Meta 节点的集群可容忍 <code>&lfloor;N/2&rfloor;</code> 个同时故障（例如 3 节点容忍 1 个故障，5 节点容忍 2 个）</li>
+        <li><strong>一致性：</strong>所有写入通过 Raft 领导者；读取可由任何节点提供（可选通过 ReadIndex 实现线性一致读）</li>
+      </ul>
+
+      <h3>Raft 配置</h3>
+
+      <p>
+        Raft 参数控制领导者选举时序和日志压缩。这些默认值针对低延迟本地网络进行了调优。
+        对于跨数据中心部署，应按 Meta 节点之间的往返时间比例增加选举超时。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>[meta.raft]
+heartbeat_interval_ms = 150          # Leader sends heartbeats at this interval
+election_timeout_min_ms = 300        # Minimum election timeout (randomized)
+election_timeout_max_ms = 500        # Maximum election timeout (randomized)
+snapshot_threshold = 10000           # Compact Raft log after this many entries
+max_payload_entries = 300            # Max entries per AppendEntries RPC
+replication_lag_threshold = 5000     # Warn if follower is this far behind
+
+# Derived timing:
+#   Heartbeat:         150ms
+#   Election timeout:  300-500ms (randomized per node)
+#   Failover time:     ~500-650ms (election timeout + 1 heartbeat)</code></pre>
+        </div>
+      </div>
+
+      <h3>状态机</h3>
+
+      <p>
+        Raft 状态机由 sled 支持，sled 是一个提供崩溃安全持久化存储的嵌入式键值存储。
+        所有集群元数据按照定义明确的键前缀组织：
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>键前缀</th>
+            <th>值类型</th>
+            <th>描述</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/raft/vote</code></td>
+            <td>Vote</td>
+            <td>当前任期和投票候选人（Raft 协议状态）</td>
+          </tr>
+          <tr>
+            <td><code>/raft/log/{index}</code></td>
+            <td>LogEntry</td>
+            <td>按日志位置索引的 Raft 日志条目；快照后压缩</td>
+          </tr>
+          <tr>
+            <td><code>/raft/snapshot</code></td>
+            <td>Snapshot</td>
+            <td>序列化的状态机快照，用于日志压缩和新节点追赶</td>
+          </tr>
+          <tr>
+            <td><code>/nodes/{node_id}</code></td>
+            <td>NodeInfo</td>
+            <td>节点注册：角色、状态、模式、地址、租约过期时间、能力</td>
+          </tr>
+          <tr>
+            <td><code>/tables/{catalog}/{schema}/{table}</code></td>
+            <td>TableMeta</td>
+            <td>表所有权：所有者节点、分区数、总字节数、版本计数器</td>
+          </tr>
+          <tr>
+            <td><code>/locks/{key}</code></td>
+            <td>LockEntry</td>
+            <td>带 TTL 的分布式锁：持有者节点、获取时间、过期时间</td>
+          </tr>
+          <tr>
+            <td><code>/events/{sequence}</code></td>
+            <td>ClusterEvent</td>
+            <td>有序事件流，用于缓存失效和 Router 通知</td>
+          </tr>
+          <tr>
+            <td><code>/leader/campaign/{role}</code></td>
+            <td>LeaderEntry</td>
+            <td>后台任务的领导者选举（压缩合并、数据保留） &mdash; 与 Raft 领导者分开</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>MetaCommand 类型</h3>
+
+      <p>
+        对 Meta 状态机的所有变更都表示为 <code>MetaCommand</code> 变体。这些命令被提议到 Raft 领导者，
+        复制到多数派 Follower，然后应用到状态机。下表列出了每种命令类型：
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>命令</th>
+            <th>发起者</th>
+            <th>描述</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>RegisterNode</code></td><td>Data / Router</td><td>注册新节点，包含角色、地址和能力。创建带 TTL 的租约。</td></tr>
+          <tr><td><code>DeregisterNode</code></td><td>Admin / Node</td><td>优雅地从集群中移除节点。如果节点拥有表，则触发表重新分配。</td></tr>
+          <tr><td><code>Heartbeat</code></td><td>Data / Router</td><td>续期节点租约。包含当前负载指标（CPU、内存、连接数、表数量）。</td></tr>
+          <tr><td><code>UpdateNodeState</code></td><td>Admin / Node</td><td>在状态之间转换节点（Active、Draining、Retiring 等）。</td></tr>
+          <tr><td><code>RegisterTable</code></td><td>Router / Data</td><td>在元数据目录中注册新表。将初始所有权分配给请求的 Data 节点。</td></tr>
+          <tr><td><code>AddTableOwner</code></td><td>Router</td><td>为表添加次要所有者（用于备用复制或读扩展）。</td></tr>
+          <tr><td><code>RefreshOwnerTTL</code></td><td>Data</td><td>续期表的所有权 TTL，防止正常运行期间所有权过期。</td></tr>
+          <tr><td><code>RemoveTableOwner</code></td><td>Router / Admin</td><td>从表的所有者列表中移除节点（如节点排空或手动重新分配时）。</td></tr>
+          <tr><td><code>ReassignTable</code></td><td>Meta（内部）</td><td>将表所有权转移到另一个 Data 节点。由节点故障或负载均衡触发。</td></tr>
+          <tr><td><code>AcquireLock</code></td><td>Data / Router</td><td>获取带 TTL 的分布式锁。用于压缩合并协调和写入序列化。</td></tr>
+          <tr><td><code>ReleaseLock</code></td><td>Data / Router</td><td>释放之前获取的锁。持有者租约过期时自动释放。</td></tr>
+          <tr><td><code>Campaign</code></td><td>Data</td><td>竞选命名的领导者角色（如压缩合并领导者）。每个角色只有一个节点胜出。</td></tr>
+          <tr><td><code>Publish</code></td><td>Data / Meta</td><td>向事件流发布集群事件，用于 Router 缓存更新和 Admin 通知。</td></tr>
+          <tr><td><code>ExpireLeases</code></td><td>Meta（定时器）</td><td>定期命令，移除过期的节点租约和所有权条目。在 Raft 领导者上每 5 秒运行一次。</td></tr>
+        </tbody>
+      </table>
+
+      <h3>领导者选举</h3>
+
+      <p>
+        Meta 集群中的 Raft 领导者选举是自动的，无需手动干预。当当前领导者不可用时（崩溃、网络分区或优雅关闭），
+        剩余的 Follower 检测到心跳缺失并开始新的选举。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">选举时间线</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>T=0ms     Leader sends last heartbeat
+T=150ms   Heartbeat interval passes, no new heartbeat
+T=300ms   Follower A's election timeout fires (randomized: 300-500ms)
+T=300ms   Follower A increments term, votes for self, sends RequestVote RPCs
+T=310ms   Follower B receives RequestVote, grants vote (has not voted this term)
+T=310ms   Follower A receives majority vote, becomes new leader
+T=320ms   New leader sends heartbeat to establish authority
+T=320ms   New leader begins accepting MetaCommand proposals
+
+Total failover time: ~320ms (best case) to ~650ms (worst case)</code></pre>
+        </div>
+      </div>
+
+      <h3>事件流</h3>
+
+      <p>
+        Meta 集群发布有序的集群事件流。Router 节点订阅此流以保持本地 ShardCache 更新，无需轮询。
+        事件分配单调递增的序列号，并保留可配置的时长（默认：5 分钟）。
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>事件类型</th>
+            <th>触发者</th>
+            <th>消费者动作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>NodeRegistered</code></td><td><code>RegisterNode</code></td><td>Router 将新 Data 节点添加到连接池</td></tr>
+          <tr><td><code>NodeStateChanged</code></td><td><code>UpdateNodeState</code>、租约过期</td><td>Router 将节点标记为排空中或从路由目标中移除</td></tr>
+          <tr><td><code>TableOwnershipChanged</code></td><td><code>RegisterTable</code>、<code>ReassignTable</code>、<code>RemoveTableOwner</code></td><td>Router 使受影响表的 ShardCache 条目失效</td></tr>
+          <tr><td><code>LeaderChanged</code></td><td>Raft 选举、<code>Campaign</code></td><td>Admin UI 更新领导者指示器；Data 节点检查是否应运行后台任务</td></tr>
+          <tr><td><code>LockAcquired</code></td><td><code>AcquireLock</code></td><td>等待同一锁的 Data 节点可以立即退避</td></tr>
+          <tr><td><code>LockReleased</code></td><td><code>ReleaseLock</code>、租约过期</td><td>等待锁的 Data 节点可以尝试获取</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Router 节点（请求路由）</h2>
+
+      <p>
+        Router 节点是所有数据操作的客户端入口点。它们是完全无状态的 &mdash; 本地不存储数据，
+        任何 Router 都可以处理任何请求。这使得它们可以在负载均衡器后面轻松水平扩展。
+      </p>
+
+      <ul>
+        <li><strong>协议：</strong>HTTP（InfluxDB Line Protocol 写入、SQL 查询）、Apache Arrow Flight（高吞吐量二进制）、MySQL 线协议（BI 工具兼容）</li>
+        <li><strong>路由：</strong>基于本地 ShardCache 的表级路由，将表映射到所有者 Data 节点</li>
+        <li><strong>故障转移：</strong>Data 节点故障时自动重试到次要所有者</li>
+        <li><strong>连接池：</strong>维护到所有 Data 节点的持久 Arrow Flight 连接</li>
+      </ul>
+
+      <h3>表级路由</h3>
+
+      <p>
+        MynaDB 使用<strong>表级路由</strong>而非文件级或分区级路由。这是一个经过深思熟虑的设计选择，
+        在路由开销和粒度之间取得平衡。下表比较了三种方法在 100 个数据库、每数据库 100 个表、
+        每表 365 个日分区、平均 16 个 Parquet 文件/分区条件下的表现：
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>路由粒度</th>
+            <th>路由表大小</th>
+            <th>元数据开销</th>
+            <th>重平衡成本</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>文件级</td>
+            <td>~58,400,000 条目</td>
+            <td>非常高（~2.3 GB 内存）</td>
+            <td>逐文件迁移</td>
+          </tr>
+          <tr>
+            <td>分区级</td>
+            <td>~3,650,000 条目</td>
+            <td>高（~146 MB 内存）</td>
+            <td>逐分区迁移</td>
+          </tr>
+          <tr>
+            <td><strong>表级（已选用）</strong></td>
+            <td><strong>~100,000 条目</strong></td>
+            <td><strong>低（~4 MB 内存）</strong></td>
+            <td><strong>逐表重新分配</strong></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>查询协调</h3>
+
+      <p>
+        查询路由比写入路由更复杂，因为单个 SQL 查询可能引用由不同 Data 节点拥有的多个表。
+        Router 实现了扇出/扇入模式：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">查询路由步骤</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>1. PARSE       Parse the SQL query and extract all referenced table names
+               Example: "SELECT * FROM cpu JOIN memory ON cpu.host = memory.host"
+               Tables: ["cpu", "memory"]
+
+2. RESOLVE     For each table, look up the owner data node(s) in the ShardCache
+               cpu    -> data-1 (primary), data-3 (secondary)
+               memory -> data-2 (primary), data-1 (secondary)
+
+3. DETERMINE   Identify the set of unique data nodes that need to participate
+               Target nodes: {data-1, data-2}
+
+4. FAN-OUT     Send the full SQL query to each target node via Arrow Flight DoGet
+               (parallel, non-blocking)
+               data-1: executes locally, returns partial results for cpu + memory
+               data-2: executes locally, returns partial results for memory
+
+5. AGGREGATE   Receive RecordBatch streams from all nodes
+               Merge partial results (union, then re-apply ORDER BY / LIMIT)
+
+6. RETURN      Stream the final result back to the client
+               (Arrow Flight stream, JSON, or MySQL result set)</code></pre>
+        </div>
+      </div>
+
+      <h2>Data 节点（存储与执行）</h2>
+
+      <p>
+        Data 节点是集群的主力。它们通过 Arrow Flight 从 Router 节点接收写入，在内存中缓冲数据，
+        持久化到共享对象存储，并使用 Apache DataFusion 执行 SQL 查询。
+        每个 Data 节点独立运行 &mdash; Data 节点之间没有直接通信。
+      </p>
+
+      <ul>
+        <li><strong>Primary 模式：</strong>接受写入并为拥有的表提供查询服务</li>
+        <li><strong>Standby 模式：</strong>对备份的表提供只读查询执行（不写入，不使用 WAL）</li>
+        <li><strong>后台任务：</strong>压缩合并、数据保留和缓存刷新（选举的领导者任务仅在一个节点上运行）</li>
+      </ul>
+
+      <h3>存储布局</h3>
+
+      <p>
+        在共享对象存储（S3/MinIO/OSS）上，Parquet 文件按层次目录结构组织，支持日期分区和节点级命名空间：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">S3 存储布局</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>{bucket}/
+  {catalog}/                              # Database name (e.g., "metrics")
+    {schema}/                             # Schema name (e.g., "service_1")
+      {table}/                            # Table/measurement (e.g., "cpu")
+        date=2026-02-13/                  # Date partition
+          node_id=data-1/                 # Node namespace (prevents conflicts)
+            L0_1739462400_0001.parquet    # Level 0 (recent flush)
+            L0_1739462460_0002.parquet    # Level 0 (another flush)
+          node_id=data-2/                 # Different node's files
+            L0_1739462400_0001.parquet
+        date=2026-02-12/
+          node_id=data-1/
+            L1_1739376000_0001.parquet    # Level 1 (compacted from L0)
+            L2_1739376000_0001.parquet    # Level 2 (compacted from L1)
+
+# File naming convention:
+#   L{level}_{timestamp}_{sequence}.parquet
+#
+# Level 0: Direct flush from DataCache (many small files)
+# Level 1: First compaction pass (fewer, larger files)
+# Level 2+: Higher compaction levels (fewest, largest files)</code></pre>
+        </div>
+      </div>
+
+      <h3>压缩合并</h3>
+
+      <p>
+        压缩合并将小的 L0 Parquet 文件合并为更大的、查询效率更高的高层文件。
+        MynaDB 使用受 LSM-tree 启发的分层压缩策略：
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>层级</th>
+            <th>文件大小（典型）</th>
+            <th>来源</th>
+            <th>触发条件</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>L0</td><td>1-10 MB</td><td>DataCache 刷新</td><td>自动（flush_interval_secs）</td></tr>
+          <tr><td>L1</td><td>50-100 MB</td><td>L0 压缩</td><td>当 L0 文件数超过 <code>min_files</code>（默认：5）</td></tr>
+          <tr><td>L2</td><td>200-500 MB</td><td>L1 压缩</td><td>当 L1 文件数超过阈值</td></tr>
+          <tr><td>L3+</td><td>500 MB - 1 GB</td><td>L2+ 压缩</td><td>可配置至 <code>max_level</code>（默认：5）</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Admin 节点</h2>
+
+      <p>
+        Admin 节点提供用于监控和操作集群的 Web 管理控制台。它完全是可选的，对数据路径没有影响。Admin 节点：
+      </p>
+
+      <ul>
+        <li>连接 Meta 集群进行服务发现（发现所有 Router 和 Data 节点）</li>
+        <li>在 <code>http://&lt;admin-host&gt;:18080</code> 提供 Web UI 进行集群监控</li>
+        <li>通过 HTTP（非 Arrow Flight）将查询请求转发到各个 Data 节点</li>
+        <li>显示实时节点健康、表所有权和事件历史</li>
+        <li>提供交互式 SQL 查询控制台，支持语法高亮和结果可视化</li>
+        <li>提供存储浏览器，用于探索 Parquet 文件和分区元数据</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Admin API 端点</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>GET  /api/v1/nodes              # List all registered nodes with health status
+GET  /api/v1/nodes/:id          # Get details for a specific node
+GET  /api/v1/tables             # List all tables across the cluster
+GET  /api/v1/events             # Recent cluster events (paginated)
+POST /api/v1/query/:db          # Execute SQL on a specific data node
+GET  /api/v1/storage/catalogs   # Browse storage catalogs
+GET  /api/v1/storage/info       # Storage backend information</code></pre>
+        </div>
+      </div>
+
+      <div class="docs-nav">
+        <a href="cluster-getting-started.html" class="docs-nav-prev">&larr; 集群快速入门</a>
+        <a href="cluster-scaling.html" class="docs-nav-next">集群扩缩容 &rarr;</a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

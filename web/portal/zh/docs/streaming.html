@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 流式查询 - 通过 WebSocket 和 Server-Sent Events 实现实时查询订阅">
+  <title>流式查询 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/streaming.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html" class="active">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <span class="badge-new">新功能</span>
+      <h1>流式查询</h1>
+
+      <p class="lead">
+        通过 WebSocket 和 Server-Sent Events 实现实时查询订阅。在新数据到达时将持续查询结果
+        流式推送到客户端，支持实时仪表板、告警管道和实时数据推送。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#9889; 推送式查询结果</div>
+        <p>流式查询会按可配置的间隔自动重新执行，并将新结果推送到已连接的客户端。
+        与轮询不同，流式订阅维持持久连接，以最小延迟交付更新。</p>
+      </div>
+
+      <!-- WebSocket 订阅 -->
+      <h2 id="websocket-subscriptions">WebSocket 订阅</h2>
+
+      <p>
+        WebSocket 订阅提供全双工通信，支持实时查询流。客户端连接到 WebSocket 端点，
+        发送 SQL 订阅消息，然后持续接收结果更新。
+      </p>
+
+      <h3>端点</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>URL</strong></td>
+              <td><code>ws://host:port/ws/query/:db</code></td>
+            </tr>
+            <tr>
+              <td><strong>协议</strong></td>
+              <td>WebSocket (RFC 6455)</td>
+            </tr>
+            <tr>
+              <td><strong>消息格式</strong></td>
+              <td>JSON</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>订阅消息</h3>
+
+      <p>连接后，发送 JSON 消息以启动流式订阅：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">json</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>{
+  <span class="token-string">"sql"</span>: <span class="token-string">"SELECT host, AVG(usage) as avg_cpu FROM cpu WHERE time &gt; now() - interval '5 minutes' GROUP BY host"</span>,
+  <span class="token-string">"interval_ms"</span>: <span class="token-number">5000</span>,
+  <span class="token-string">"format"</span>: <span class="token-string">"json"</span>
+}</code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>字段</th>
+              <th>类型</th>
+              <th>必填</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>sql</code></td>
+              <td>string</td>
+              <td>是</td>
+              <td>每个间隔执行的 SQL 查询</td>
+            </tr>
+            <tr>
+              <td><code>interval_ms</code></td>
+              <td>integer</td>
+              <td>否</td>
+              <td>重新执行间隔（毫秒），默认值：1000</td>
+            </tr>
+            <tr>
+              <td><code>format</code></td>
+              <td>string</td>
+              <td>否</td>
+              <td>结果格式：<code>json</code> 或 <code>arrow</code>（默认：<code>json</code>）</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>JavaScript 示例</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">javascript</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">// 连接到 WebSocket 流式端点</span>
+<span class="token-keyword">const</span> ws = <span class="token-keyword">new</span> WebSocket(<span class="token-string">"ws://localhost:7000/ws/query/mydb"</span>);
+
+ws.onopen = () => {
+  <span class="token-function">console.log</span>(<span class="token-string">"Connected to MynaDB streaming"</span>);
+
+  <span class="token-comment">// 订阅流式查询</span>
+  ws.send(JSON.stringify({
+    sql: <span class="token-string">"SELECT host, AVG(usage) as avg_cpu FROM cpu WHERE time &gt; now() - interval '5 minutes' GROUP BY host"</span>,
+    interval_ms: <span class="token-number">5000</span>
+  }));
+};
+
+ws.onmessage = (event) => {
+  <span class="token-keyword">const</span> message = JSON.parse(event.data);
+
+  <span class="token-keyword">if</span> (message.type === <span class="token-string">"result"</span>) {
+    <span class="token-comment">// 收到查询结果</span>
+    <span class="token-function">console.log</span>(<span class="token-string">"Subscription:"</span>, message.subscription_id);
+    <span class="token-function">console.log</span>(<span class="token-string">"Rows:"</span>, message.data.length);
+    message.data.forEach(row => {
+      <span class="token-function">console.log</span>(<span class="token-string">`  ${row.host}: ${row.avg_cpu.toFixed(2)}%`</span>);
+    });
+  } <span class="token-keyword">else if</span> (message.type === <span class="token-string">"heartbeat"</span>) {
+    <span class="token-comment">// 连接保活</span>
+    <span class="token-function">console.log</span>(<span class="token-string">"Heartbeat received"</span>);
+  } <span class="token-keyword">else if</span> (message.type === <span class="token-string">"error"</span>) {
+    <span class="token-function">console.error</span>(<span class="token-string">"Stream error:"</span>, message.message);
+  }
+};
+
+ws.onclose = (event) => {
+  <span class="token-function">console.log</span>(<span class="token-string">`Connection closed: ${event.code} ${event.reason}`</span>);
+};
+
+ws.onerror = (error) => {
+  <span class="token-function">console.error</span>(<span class="token-string">"WebSocket error:"</span>, error);
+};</code></pre>
+        </div>
+      </div>
+
+      <h3>响应消息</h3>
+
+      <p>服务器发送以下消息类型：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">json</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">// 订阅确认</span>
+{
+  <span class="token-string">"type"</span>: <span class="token-string">"subscribed"</span>,
+  <span class="token-string">"subscription_id"</span>: <span class="token-string">"sub_a1b2c3d4"</span>,
+  <span class="token-string">"sql"</span>: <span class="token-string">"SELECT host, AVG(usage) ..."</span>,
+  <span class="token-string">"interval_ms"</span>: <span class="token-number">5000</span>
+}
+
+<span class="token-comment">// 查询结果</span>
+{
+  <span class="token-string">"type"</span>: <span class="token-string">"result"</span>,
+  <span class="token-string">"subscription_id"</span>: <span class="token-string">"sub_a1b2c3d4"</span>,
+  <span class="token-string">"timestamp"</span>: <span class="token-number">1704067200000</span>,
+  <span class="token-string">"data"</span>: [
+    {<span class="token-string">"host"</span>: <span class="token-string">"server-01"</span>, <span class="token-string">"avg_cpu"</span>: <span class="token-number">45.2</span>},
+    {<span class="token-string">"host"</span>: <span class="token-string">"server-02"</span>, <span class="token-string">"avg_cpu"</span>: <span class="token-number">62.8</span>}
+  ],
+  <span class="token-string">"row_count"</span>: <span class="token-number">2</span>,
+  <span class="token-string">"execution_time_ms"</span>: <span class="token-number">12</span>
+}
+
+<span class="token-comment">// 心跳</span>
+{
+  <span class="token-string">"type"</span>: <span class="token-string">"heartbeat"</span>,
+  <span class="token-string">"timestamp"</span>: <span class="token-number">1704067230000</span>
+}
+
+<span class="token-comment">// 错误</span>
+{
+  <span class="token-string">"type"</span>: <span class="token-string">"error"</span>,
+  <span class="token-string">"subscription_id"</span>: <span class="token-string">"sub_a1b2c3d4"</span>,
+  <span class="token-string">"message"</span>: <span class="token-string">"Table 'cpu' not found"</span>
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- Server-Sent Events -->
+      <h2 id="server-sent-events">Server-Sent Events (SSE)</h2>
+
+      <p>
+        Server-Sent Events 提供了一种更简单的基于 HTTP 的流式机制。SSE 非常适合
+        只需接收数据（单向通信）且希望协议内置自动重连功能的浏览器客户端。
+      </p>
+
+      <h3>端点</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>URL</strong></td>
+              <td><code>GET /stream/query/:db?sql=...&amp;interval_ms=...</code></td>
+            </tr>
+            <tr>
+              <td><strong>Content-Type</strong></td>
+              <td><code>text/event-stream</code></td>
+            </tr>
+            <tr>
+              <td><strong>方法</strong></td>
+              <td>GET</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>参数</th>
+              <th>类型</th>
+              <th>必填</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>sql</code></td>
+              <td>string (query)</td>
+              <td>是</td>
+              <td>URL 编码的 SQL 查询</td>
+            </tr>
+            <tr>
+              <td><code>interval_ms</code></td>
+              <td>integer (query)</td>
+              <td>否</td>
+              <td>重新执行间隔（毫秒），默认值：1000</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>curl 示例</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 每 5 秒流式传输查询结果</span>
+curl -N "http://localhost:7000/stream/query/mydb?sql=SELECT%20host%2C%20AVG(usage)%20as%20avg_cpu%20FROM%20cpu%20WHERE%20time%20%3E%20now()%20-%20interval%20'5%20minutes'%20GROUP%20BY%20host&interval_ms=5000"
+
+<span class="token-comment"># 输出（Server-Sent Events 格式）：</span>
+<span class="token-comment"># event: result</span>
+<span class="token-comment"># id: 1</span>
+<span class="token-comment"># data: {"data":[{"host":"server-01","avg_cpu":45.2}],"row_count":1,"execution_time_ms":8}</span>
+<span class="token-comment">#</span>
+<span class="token-comment"># event: result</span>
+<span class="token-comment"># id: 2</span>
+<span class="token-comment"># data: {"data":[{"host":"server-01","avg_cpu":47.1}],"row_count":1,"execution_time_ms":6}</span></code></pre>
+        </div>
+      </div>
+
+      <h3>JavaScript EventSource API</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">javascript</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">// 使用查询参数构建 SSE URL</span>
+<span class="token-keyword">const</span> sql = <span class="token-function">encodeURIComponent</span>(
+  <span class="token-string">"SELECT host, AVG(usage) as avg_cpu FROM cpu WHERE time &gt; now() - interval '5 minutes' GROUP BY host"</span>
+);
+<span class="token-keyword">const</span> url = <span class="token-string">`http://localhost:7000/stream/query/mydb?sql=${sql}&amp;interval_ms=5000`</span>;
+
+<span class="token-comment">// 创建 EventSource 连接（失败时自动重连）</span>
+<span class="token-keyword">const</span> source = <span class="token-keyword">new</span> EventSource(url);
+
+<span class="token-comment">// 监听查询结果</span>
+source.addEventListener(<span class="token-string">"result"</span>, (event) => {
+  <span class="token-keyword">const</span> result = JSON.parse(event.data);
+  <span class="token-function">console.log</span>(<span class="token-string">`Received ${result.row_count} rows in ${result.execution_time_ms}ms`</span>);
+
+  result.data.forEach(row => {
+    <span class="token-function">console.log</span>(<span class="token-string">`  ${row.host}: ${row.avg_cpu.toFixed(2)}%`</span>);
+  });
+});
+
+<span class="token-comment">// 监听心跳</span>
+source.addEventListener(<span class="token-string">"heartbeat"</span>, (event) => {
+  <span class="token-function">console.log</span>(<span class="token-string">"Heartbeat:"</span>, event.data);
+});
+
+<span class="token-comment">// 处理错误</span>
+source.onerror = (error) => {
+  <span class="token-function">console.error</span>(<span class="token-string">"SSE connection error:"</span>, error);
+  <span class="token-comment">// EventSource 会自动尝试重新连接</span>
+};
+
+<span class="token-comment">// 停止流式传输</span>
+<span class="token-comment">// source.close();</span></code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128260; WebSocket 与 SSE 对比</div>
+        <p><strong>WebSocket</strong> 适合需要双向通信的场景（例如动态修改查询、在一个连接上管理
+        多个订阅）。<strong>SSE</strong> 对于只读流更简单，并通过 <code>EventSource</code> API 在浏览器中提供
+        内置的自动重连功能。</p>
+      </div>
+
+      <!-- 订阅管理 -->
+      <h2 id="subscription-management">订阅管理</h2>
+
+      <p>
+        可以通过管理 API 列出和取消活跃的流式订阅。
+        这对于监控资源使用情况和终止失控查询非常有用。
+      </p>
+
+      <h3>列出活跃订阅</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 列出所有活跃的流式订阅</span>
+curl http://localhost:7000/stream/subscriptions
+
+<span class="token-comment"># 响应：</span>
+<span class="token-comment"># {</span>
+<span class="token-comment">#   "subscriptions": [</span>
+<span class="token-comment">#     {</span>
+<span class="token-comment">#       "id": "sub_a1b2c3d4",</span>
+<span class="token-comment">#       "database": "mydb",</span>
+<span class="token-comment">#       "sql": "SELECT host, AVG(usage) ...",</span>
+<span class="token-comment">#       "interval_ms": 5000,</span>
+<span class="token-comment">#       "protocol": "websocket",</span>
+<span class="token-comment">#       "created_at": "2026-01-15T10:30:00Z",</span>
+<span class="token-comment">#       "last_execution": "2026-01-15T10:35:00Z",</span>
+<span class="token-comment">#       "execution_count": 60,</span>
+<span class="token-comment">#       "avg_execution_time_ms": 11</span>
+<span class="token-comment">#     }</span>
+<span class="token-comment">#   ],</span>
+<span class="token-comment">#   "count": 1</span>
+<span class="token-comment"># }</span></code></pre>
+        </div>
+      </div>
+
+      <h3>取消订阅</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 按 ID 取消特定订阅</span>
+curl -X DELETE http://localhost:7000/stream/subscriptions/sub_a1b2c3d4
+
+<span class="token-comment"># 响应：</span>
+<span class="token-comment"># {"status": "canceled", "subscription_id": "sub_a1b2c3d4"}</span>
+
+<span class="token-comment"># 取消某个数据库的所有订阅</span>
+curl -X DELETE http://localhost:7000/stream/subscriptions?database=mydb
+
+<span class="token-comment"># 响应：</span>
+<span class="token-comment"># {"status": "canceled", "count": 3}</span></code></pre>
+        </div>
+      </div>
+
+      <h3>WebSocket 订阅控制</h3>
+
+      <p>也可以通过活跃的 WebSocket 连接直接管理订阅：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">javascript</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">// 通过 WebSocket 取消特定订阅</span>
+ws.send(JSON.stringify({
+  action: <span class="token-string">"cancel"</span>,
+  subscription_id: <span class="token-string">"sub_a1b2c3d4"</span>
+}));
+
+<span class="token-comment">// 暂停订阅（停止执行，保持连接）</span>
+ws.send(JSON.stringify({
+  action: <span class="token-string">"pause"</span>,
+  subscription_id: <span class="token-string">"sub_a1b2c3d4"</span>
+}));
+
+<span class="token-comment">// 恢复已暂停的订阅</span>
+ws.send(JSON.stringify({
+  action: <span class="token-string">"resume"</span>,
+  subscription_id: <span class="token-string">"sub_a1b2c3d4"</span>
+}));
+
+<span class="token-comment">// 列出此连接上的活跃订阅</span>
+ws.send(JSON.stringify({
+  action: <span class="token-string">"list"</span>
+}));</code></pre>
+        </div>
+      </div>
+
+      <!-- 配置 -->
+      <h2 id="configuration">配置</h2>
+
+      <p>
+        流式查询在 <code>config.toml</code> 的 <code>[streaming]</code> 部分进行配置。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[streaming]
+<span class="token-comment"># 启用流式查询端点（WebSocket 和 SSE）</span>
+enabled = <span class="token-keyword">true</span>
+
+<span class="token-comment"># 每台服务器的最大并发流式订阅数</span>
+max_subscriptions = <span class="token-number">100</span>
+
+<span class="token-comment"># 心跳间隔（秒），用于保持连接活跃</span>
+heartbeat_interval_secs = <span class="token-number">30</span>
+
+<span class="token-comment"># 每个订阅的内部缓冲区大小（结果集数量）</span>
+buffer_size = <span class="token-number">16</span></code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>参数</th>
+              <th>默认值</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>enabled</code></td>
+              <td><code>true</code></td>
+              <td>启用或禁用流式查询功能</td>
+            </tr>
+            <tr>
+              <td><code>max_subscriptions</code></td>
+              <td><code>100</code></td>
+              <td>所有客户端的最大并发流式订阅数。防止过多活跃查询导致资源耗尽。</td>
+            </tr>
+            <tr>
+              <td><code>heartbeat_interval_secs</code></td>
+              <td><code>30</code></td>
+              <td>向已连接客户端发送心跳消息的间隔（秒）。有助于检测过期连接并防止防火墙关闭空闲连接。</td>
+            </tr>
+            <tr>
+              <td><code>buffer_size</code></td>
+              <td><code>16</code></td>
+              <td>每个订阅缓冲的结果集数量。如果客户端消费结果较慢，当缓冲区满时旧结果将被丢弃。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; 资源注意事项</div>
+        <p>每个流式订阅都维护一个活跃的查询执行循环。请注意
+        <code>max_subscriptions</code> 和 <code>interval_ms</code> 的设置，避免查询引擎过载。
+        对于高频订阅（间隔 &lt; 1 秒），建议使用<a href="continuous-aggregates.html">持续聚合</a>
+        来预计算结果。</p>
+      </div>
+
+      <!-- 使用场景 -->
+      <h2 id="use-cases">使用场景</h2>
+
+      <h3>实时仪表板</h3>
+
+      <p>
+        构建随着新指标到达而自动更新的实时监控仪表板。
+        流式查询消除了客户端轮询的需求并降低了延迟。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">javascript</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">// 仪表板：所有主机的实时 CPU 使用率</span>
+<span class="token-keyword">const</span> ws = <span class="token-keyword">new</span> WebSocket(<span class="token-string">"ws://localhost:7000/ws/query/mydb"</span>);
+
+ws.onopen = () => {
+  <span class="token-comment">// 订阅聚合 CPU 指标</span>
+  ws.send(JSON.stringify({
+    sql: <span class="token-string">`SELECT
+      host,
+      AVG(usage) as avg_cpu,
+      MAX(usage) as max_cpu,
+      MIN(usage) as min_cpu
+    FROM cpu
+    WHERE time &gt; now() - interval '1 minute'
+    GROUP BY host
+    ORDER BY avg_cpu DESC`</span>,
+    interval_ms: <span class="token-number">2000</span>
+  }));
+};
+
+ws.onmessage = (event) => {
+  <span class="token-keyword">const</span> msg = JSON.parse(event.data);
+  <span class="token-keyword">if</span> (msg.type === <span class="token-string">"result"</span>) {
+    <span class="token-function">updateDashboard</span>(msg.data);
+  }
+};</code></pre>
+        </div>
+      </div>
+
+      <h3>告警</h3>
+
+      <p>
+        使用流式查询实时检测异常并触发告警。
+        当阈值被突破时，立即通知运维人员。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">javascript</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">// 告警：检测 CPU 使用率超过 90% 的主机</span>
+<span class="token-keyword">const</span> ws = <span class="token-keyword">new</span> WebSocket(<span class="token-string">"ws://localhost:7000/ws/query/monitoring"</span>);
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({
+    sql: <span class="token-string">`SELECT host, AVG(usage) as avg_cpu
+      FROM cpu
+      WHERE time &gt; now() - interval '2 minutes'
+      GROUP BY host
+      HAVING AVG(usage) &gt; 90`</span>,
+    interval_ms: <span class="token-number">10000</span>
+  }));
+};
+
+ws.onmessage = (event) => {
+  <span class="token-keyword">const</span> msg = JSON.parse(event.data);
+  <span class="token-keyword">if</span> (msg.type === <span class="token-string">"result"</span> &amp;&amp; msg.data.length > <span class="token-number">0</span>) {
+    msg.data.forEach(row => {
+      <span class="token-function">sendAlert</span>({
+        severity: <span class="token-string">"critical"</span>,
+        host: row.host,
+        cpu: row.avg_cpu,
+        message: <span class="token-string">`CPU usage at ${row.avg_cpu.toFixed(1)}% on ${row.host}`</span>
+      });
+    });
+  }
+};</code></pre>
+        </div>
+      </div>
+
+      <h3>实时数据推送</h3>
+
+      <p>
+        将原始或轻度转换的数据流式传输到下游消费者，例如
+        数据管道、事件处理器或外部分析系统。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">python</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-keyword">import</span> json
+<span class="token-keyword">import</span> requests
+
+<span class="token-comment"># 使用 requests 库通过 SSE 流式传输数据</span>
+url = <span class="token-string">"http://localhost:7000/stream/query/mydb"</span>
+params = {
+    <span class="token-string">"sql"</span>: <span class="token-string">"SELECT * FROM sensor_readings WHERE time &gt; now() - interval '10 seconds' ORDER BY time DESC LIMIT 50"</span>,
+    <span class="token-string">"interval_ms"</span>: <span class="token-number">1000</span>
+}
+
+response = requests.get(url, params=params, stream=<span class="token-keyword">True</span>)
+
+<span class="token-keyword">for</span> line <span class="token-keyword">in</span> response.iter_lines():
+    <span class="token-keyword">if</span> line:
+        decoded = line.decode(<span class="token-string">"utf-8"</span>)
+        <span class="token-keyword">if</span> decoded.startswith(<span class="token-string">"data: "</span>):
+            data = json.loads(decoded[<span class="token-number">6</span>:])
+            <span class="token-function">print</span>(<span class="token-string">f"Received {data['row_count']} rows"</span>)
+            <span class="token-comment"># 转发到下游管道...</span>
+            <span class="token-function">process_batch</span>(data[<span class="token-string">"data"</span>])</code></pre>
+        </div>
+      </div>
+
+      <!-- 下一步 -->
+      <h2>下一步</h2>
+
+      <div class="cards-grid">
+        <a href="continuous-aggregates.html" class="card">
+          <div class="card-icon">&#128202;</div>
+          <h3>持续聚合</h3>
+          <p>为高频流式订阅预计算查询结果。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="sql-queries.html" class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>SQL 参考</h3>
+          <p>用于构建流式查询表达式的完整 SQL 语法。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="grafana.html" class="card">
+          <div class="card-icon">&#128200;</div>
+          <h3>Grafana 集成</h3>
+          <p>将 Grafana 连接到 MynaDB，实现实时可视化仪表板。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

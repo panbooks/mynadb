@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 集群快速入门 - 从零开始部署多节点 MynaDB 集群的分步指南">
+  <title>集群快速入门 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/cluster-getting-started.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html" class="active">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>集群快速入门</h1>
+
+      <p class="lead">
+        几分钟内在本地机器上运行完整功能的 MynaDB 集群。本指南将引导您从源码构建项目、
+        理解四种节点类型、配置各组件、使用单条命令启动开发集群，以及验证数据端到端的正确流转。
+      </p>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #eff6ff, #dbeafe); border-left: 4px solid #3b82f6; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>提示：</strong>如果您是 MynaDB 集群的新手，请从这里开始。本地集群运行后，
+        请前往<a href="cluster-architecture.html">集群架构</a>深入了解，并查看
+        <a href="cluster-scaling.html">集群扩缩容</a>获取生产部署指导。
+      </div>
+
+      <h2>前提条件</h2>
+
+      <p>开始之前，请确保系统中已安装以下工具：</p>
+
+      <h3>从源码构建</h3>
+
+      <p>MynaDB 使用 Rust 编写。您需要最新的稳定版 Rust 工具链来编译项目。如果尚未安装，请通过 <a href="https://rustup.rs" target="_blank">rustup.rs</a> 安装。</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Install Rust (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Clone and build
+git clone https://github.com/mynadb/mynadb.git
+cd mynadb
+cargo build --release</code></pre>
+        </div>
+      </div>
+
+      <p>编译后的二进制文件位于 <code>./target/release/mynadb</code>。所有集群节点类型（meta、router、data、admin）都由这个单一二进制文件通过不同的配置文件和子命令提供服务。</p>
+
+      <h3>安装 goreman</h3>
+
+      <p><a href="https://github.com/mattn/goreman" target="_blank">goreman</a> 是一个基于 Procfile 的进程管理器。它可以用一条命令启动所有集群进程，并提供彩色日志输出。</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Install via Go (requires Go toolchain)
+go install github.com/mattn/goreman@latest
+
+# Or download a prebuilt binary from the releases page
+# https://github.com/mattn/goreman/releases</code></pre>
+        </div>
+      </div>
+
+      <h3>MinIO（可选）</h3>
+
+      <p>MinIO 仅在您需要测试 S3 兼容的共享对象存储时才需要。默认的本地存储集群配置将数据存储在本地文件系统上，不需要 MinIO。如果您想测试 S3 后端：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Run MinIO with Docker
+docker run -d --name minio \
+  -p 9000:9000 -p 9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin \
+  -e MINIO_ROOT_PASSWORD=minioadmin \
+  minio/minio server /data --console-address ":9001"
+
+# Create a bucket for MynaDB
+mc alias set local http://localhost:9000 minioadmin minioadmin
+mc mb local/mynadb</code></pre>
+        </div>
+      </div>
+
+      <h2>理解节点类型</h2>
+
+      <p>MynaDB 集群由四种不同的节点类型组成，各有专门的职责。在部署第一个集群之前，理解这些角色至关重要。</p>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; margin: 1.5rem 0;">
+        <div class="feature-card" style="padding: 1.25rem; border: 1px solid #e2e8f0; border-radius: 0.75rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #8b5cf6, #a78bfa); width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-bottom: 0.75rem;">&#9878;</div>
+          <h3 style="margin-top: 0;">Meta 节点</h3>
+          <p>集群的大脑。Meta 节点组成一个 <strong>Raft 共识组</strong>，存储所有集群元数据：节点注册、表 Schema、分区分配和领导者选举状态。它们提供服务发现，使 Router 和 Data 节点能够相互找到。</p>
+          <p><strong>部署：</strong>3 或 5 个节点（Raft 仲裁需要奇数）<br>
+          <strong>端口：</strong>HTTP 6000，gRPC 6001<br>
+          <strong>有状态：</strong>是（Raft 日志 + 快照持久化到磁盘）</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem; border: 1px solid #e2e8f0; border-radius: 0.75rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #3b82f6, #60a5fa); width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-bottom: 0.75rem;">&#8644;</div>
+          <h3 style="margin-top: 0;">Router 节点</h3>
+          <p>所有客户端连接的网关。Router 是<strong>完全无状态的</strong>，提供 HTTP（InfluxDB Line Protocol + SQL）、Apache Arrow Flight (gRPC) 和 MySQL 线协议。它们通过 Meta 发现 Data 节点，将写入路由到正确的 Data 节点，并协调跨多个 Data 节点的分布式查询。</p>
+          <p><strong>部署：</strong>1+（使用 HAProxy 或 Nginx 负载均衡实现高可用）<br>
+          <strong>端口：</strong>HTTP 7000，Flight 7001，MySQL 7002<br>
+          <strong>有状态：</strong>否（可以自由终止和重启）</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem; border: 1px solid #e2e8f0; border-radius: 0.75rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #10b981, #34d399); width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-bottom: 0.75rem;">&#128451;</div>
+          <h3 style="margin-top: 0;">Data 节点</h3>
+          <p>集群的主力。Data 节点将时序数据以 Parquet 格式<strong>存储</strong>，使用 Apache DataFusion 在本地执行查询，运行后台压缩合并任务，并管理数据保留策略。每个 Data 节点向 Meta 集群注册，并根据分区所有权接收写入分配。</p>
+          <p><strong>部署：</strong>2+（水平扩展以获得更大的吞吐量和存储容量）<br>
+          <strong>端口：</strong>HTTP 5000，Flight 5001<br>
+          <strong>有状态：</strong>是（Parquet 文件 + WAL 在本地或共享存储上）</p>
+        </div>
+
+        <div class="feature-card" style="padding: 1.25rem; border: 1px solid #e2e8f0; border-radius: 0.75rem;">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #f59e0b, #fbbf24); width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-bottom: 0.75rem;">&#128421;</div>
+          <h3 style="margin-top: 0;">Admin 节点</h3>
+          <p>一个<strong>可选的 Web 管理控制台</strong>，提供整个集群的统一视图。Admin 节点连接 Meta 进行节点发现，并将 API 请求转发到各个 Data 节点。它提供查询控制台、存储浏览器、集群监控仪表盘和事件日志。</p>
+          <p><strong>部署：</strong>0 或 1（可选，方便运维）<br>
+          <strong>端口：</strong>HTTP 18080<br>
+          <strong>有状态：</strong>否（所有状态来自 Meta + Data 节点）</p>
+        </div>
+      </div>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>节点类型</th>
+            <th>角色</th>
+            <th>默认端口</th>
+            <th>推荐数量</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Meta</strong></td>
+            <td>Raft 共识、元数据存储、服务发现、集群协调</td>
+            <td>HTTP: 6000, gRPC: 6001</td>
+            <td>3（Raft 仲裁需要奇数）</td>
+          </tr>
+          <tr>
+            <td><strong>Router</strong></td>
+            <td>无状态请求路由、面向客户端的协议（HTTP、Arrow Flight、MySQL 线协议）</td>
+            <td>HTTP: 7000, Flight: 7001, MySQL: 7002</td>
+            <td>1+（负载均衡实现高可用）</td>
+          </tr>
+          <tr>
+            <td><strong>Data</strong></td>
+            <td>数据存储、查询执行、压缩合并和后台任务</td>
+            <td>HTTP: 5000, Flight: 5001</td>
+            <td>2+（水平扩展）</td>
+          </tr>
+          <tr>
+            <td><strong>Admin</strong></td>
+            <td>Web 管理控制台，用于监控、查询和集群管理</td>
+            <td>HTTP: 18080</td>
+            <td>0&ndash;1（可选）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="alert alert-info" style="background: linear-gradient(135deg, #fef3c7, #fde68a); border-left: 4px solid #f59e0b; padding: 1rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>启动顺序很重要：</strong>Meta 节点必须首先启动并完成 Raft 领导者选举，然后其他节点类型才能注册。Router 和 Data 节点连接 Meta 集群进行服务发现，Admin 节点连接 Meta 获取集群全局视图。
+      </div>
+
+      <h2>配置</h2>
+
+      <p>每种节点类型都有自己的 TOML 配置文件。以下是本地开发集群中每个节点的注释示例。在生产环境中，您需要根据基础设施调整端口、地址和存储路径。</p>
+
+      <h3>Meta 节点配置（meta1.toml）</h3>
+
+      <p>Meta 节点使用 Raft 共识来维护一致的、可复制的元数据存储。<code>peers</code> 列表必须包含集群中所有<em>其他</em> Meta 节点的 gRPC 地址（不包括节点自身的地址）。</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml &mdash; dev/configs/cluster/meta1.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>[meta]
+node_id = 1                              # Unique integer ID for this meta node
+http_port = 6000                         # HTTP API for management and health checks
+bind_addr = "0.0.0.0:6001"              # gRPC listen address (Raft + client RPCs)
+advertise_addr = "127.0.0.1:6001"       # Address other nodes use to reach this node
+data_dir = "./dev/data/cluster/meta1"   # Persistent storage for Raft log and snapshots
+peers = ["127.0.0.1:6101", "127.0.0.1:6201"]  # gRPC addresses of OTHER meta nodes
+
+[meta.raft]
+heartbeat_interval_ms = 150              # Raft heartbeat frequency
+election_timeout_min_ms = 300            # Minimum election timeout
+election_timeout_max_ms = 500            # Maximum election timeout (randomized)
+snapshot_threshold = 10000               # Compact Raft log after this many entries</code></pre>
+        </div>
+      </div>
+
+      <p>对于第二和第三个 Meta 节点，相应更改 <code>node_id</code>、端口、<code>data_dir</code> 和 <code>peers</code>：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml &mdash; dev/configs/cluster/meta2.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>[meta]
+node_id = 2
+http_port = 6100
+bind_addr = "0.0.0.0:6101"
+advertise_addr = "127.0.0.1:6101"
+data_dir = "./dev/data/cluster/meta2"
+peers = ["127.0.0.1:6001", "127.0.0.1:6201"]
+
+[meta.raft]
+heartbeat_interval_ms = 150
+election_timeout_min_ms = 300
+election_timeout_max_ms = 500
+snapshot_threshold = 10000</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml &mdash; dev/configs/cluster/meta3.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>[meta]
+node_id = 3
+http_port = 6200
+bind_addr = "0.0.0.0:6201"
+advertise_addr = "127.0.0.1:6201"
+data_dir = "./dev/data/cluster/meta3"
+peers = ["127.0.0.1:6001", "127.0.0.1:6101"]
+
+[meta.raft]
+heartbeat_interval_ms = 150
+election_timeout_min_ms = 300
+election_timeout_max_ms = 500
+snapshot_threshold = 10000</code></pre>
+        </div>
+      </div>
+
+      <h3>Router 节点配置（router1.toml）</h3>
+
+      <p>Router 是无状态的，处理所有面向客户端的协议。它们通过 Meta 集群发现 Data 节点，并相应地路由写入和查询请求。您可以在负载均衡器后面运行多个 Router。</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml &mdash; dev/configs/cluster/router1.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>[router]
+node_id = "router-1"                    # Unique string ID for this router
+http_port = 7000                         # HTTP API (write/query endpoints)
+flight_port = 7001                       # Apache Arrow Flight gRPC port
+mysql_port = 7002                        # MySQL wire protocol port
+
+[router.meta]
+endpoints = [                            # All meta node gRPC addresses
+  "127.0.0.1:6001",
+  "127.0.0.1:6101",
+  "127.0.0.1:6201"
+]
+connect_timeout_ms = 5000               # Timeout for connecting to meta nodes
+request_timeout_ms = 30000              # Timeout for meta RPC requests
+
+[router.routing]
+cache_refresh_interval_ms = 1000        # How often to refresh the routing table
+data_node_pool_size = 10                # HTTP connection pool size per data node</code></pre>
+        </div>
+      </div>
+
+      <h3>Data 节点配置（data1.toml）</h3>
+
+      <p>Data 节点存储 Parquet 文件，使用 Apache DataFusion 执行查询，并运行压缩合并和数据保留等后台任务。在本地存储模式下，每个节点写入本地文件系统上的独立目录。在生产 S3 部署中，所有节点共享同一个存储桶。</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml &mdash; dev/configs/cluster-local/data1.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>[data]
+node_id = "data-1"                       # Unique string ID for this data node
+http_port = 5000                          # HTTP API for direct access and health checks
+advertise_addr = "127.0.0.1:5001"        # Address the router uses to reach this node
+meta_endpoints = [                        # All meta node gRPC addresses
+  "127.0.0.1:6001",
+  "127.0.0.1:6101",
+  "127.0.0.1:6201"
+]
+
+[storage]
+backend = "local"                         # Storage backend: "local", "s3", "minio", "oss"
+data_dir = "./dev/data/cluster/data1"    # Local data directory for Parquet files
+
+[cache]
+flush_interval_secs = 60                 # Flush write cache to Parquet every 60 seconds
+max_size_mb = 1024                       # Maximum in-memory write cache size
+
+[wal]
+enabled = true                            # Enable write-ahead log for durability
+sync_on_write = false                     # true = durable but slower, false = faster
+rotate_size_mb = 128                      # Rotate WAL file at this size
+
+[compaction]
+min_files = 5                             # Minimum L0 files before triggering compaction
+max_level = 5                             # Maximum compaction level
+max_concurrent_compactions = 4            # Parallel compaction jobs
+
+[retention]
+enabled = true                            # Enable automatic partition cleanup
+default_days = 7                          # Delete partitions older than N days
+interval_secs = 3600                      # Check every hour</code></pre>
+        </div>
+      </div>
+
+      <p>对于第二个 Data 节点，更改 <code>node_id</code>、<code>http_port</code>、<code>advertise_addr</code> 和 <code>data_dir</code>：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml &mdash; dev/configs/cluster-local/data2.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>[data]
+node_id = "data-2"
+http_port = 5100
+advertise_addr = "127.0.0.1:5101"
+meta_endpoints = [
+  "127.0.0.1:6001",
+  "127.0.0.1:6101",
+  "127.0.0.1:6201"
+]
+
+[storage]
+backend = "local"
+data_dir = "./dev/data/cluster/data2"
+
+[cache]
+flush_interval_secs = 60
+max_size_mb = 1024
+
+[wal]
+enabled = true
+sync_on_write = false
+rotate_size_mb = 128
+
+[compaction]
+min_files = 5
+max_level = 5
+max_concurrent_compactions = 4
+
+[retention]
+enabled = true
+default_days = 7
+interval_secs = 3600</code></pre>
+        </div>
+      </div>
+
+      <h3>Admin 节点配置（admin.toml）</h3>
+
+      <p>Admin 节点连接 Meta 集群发现所有其他节点，并提供 Web 管理界面，包括查询控制台、存储浏览器和集群仪表盘。</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml &mdash; dev/configs/cluster/admin.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>[admin]
+enabled = true                           # Enable the admin console
+port = 18080                             # HTTP port for the web UI and API
+meta_endpoints = [                       # All meta node gRPC addresses
+  "127.0.0.1:6001",
+  "127.0.0.1:6101",
+  "127.0.0.1:6201"
+]</code></pre>
+        </div>
+      </div>
+
+      <h2>启动本地集群</h2>
+
+      <h3>使用 goreman 快速启动</h3>
+
+      <p>启动完整集群最快的方式是使用 goreman 和内置的 Procfile。这将以本地存储配置启动所有节点类型（不需要 MinIO）。Procfile 定义了启动顺序和进程组之间的延迟：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Procfile &mdash; dev/Procfile.cluster-local</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Meta nodes start first (Raft consensus group)
+meta1: ./target/release/mynadb -c dev/configs/cluster/meta1.toml meta start
+meta2: ./target/release/mynadb -c dev/configs/cluster/meta2.toml meta start
+meta3: ./target/release/mynadb -c dev/configs/cluster/meta3.toml meta start
+
+# Router and data nodes start after 3s delay (meta must be ready)
+router1: sleep 3 && ./target/release/mynadb -c dev/configs/cluster/router1.toml router start
+data1: sleep 3 && ./target/release/mynadb -c dev/configs/cluster-local/data1.toml data start
+data2: sleep 3 && ./target/release/mynadb -c dev/configs/cluster-local/data2.toml data start
+
+# Admin starts after 5s delay (data nodes must be registered)
+admin: sleep 5 && ./target/release/mynadb -c dev/configs/cluster/admin.toml admin start</code></pre>
+        </div>
+      </div>
+
+      <p>使用一条命令启动整个集群：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>goreman -f dev/Procfile.cluster-local start</code></pre>
+        </div>
+      </div>
+
+      <h3>启动序列</h3>
+
+      <p>理解启动序列有助于调试。以下是集群启动时的过程：</p>
+
+      <ol>
+        <li><strong>Meta 节点启动</strong> &mdash; 三个 Meta 节点同时启动，通过 <code>peers</code> 列表互相连接，开始 Raft 领导者选举过程。在 300&ndash;500ms 内，一个节点被选为领导者并开始接受元数据写入。</li>
+        <li><strong>Router 连接 Meta</strong>（约 3 秒后）&mdash; Router 使用 <code>endpoints</code> 列表连接 Meta 集群，获取路由表（哪些 Data 节点存在以及它们拥有哪些分区），并开始在 HTTP、Flight 和 MySQL 端口上接受客户端连接。</li>
+        <li><strong>Data 节点向 Meta 注册</strong>（约 3 秒后）&mdash; 每个 Data 节点连接 Meta 集群，注册自身（通告其 HTTP 和 Flight 地址），并开始发送心跳。Meta 领导者更新路由表，使 Router 能够发现新的 Data 节点。</li>
+        <li><strong>Admin 发现所有节点</strong>（约 5 秒后）&mdash; Admin 节点连接 Meta，检索所有已注册节点的完整列表，并启动 Web 界面。它定期轮询 Meta 以获取变更，并根据需要将请求转发到 Data 节点。</li>
+      </ol>
+
+      <h3>手动启动（逐步操作）</h3>
+
+      <p>如果您更喜欢逐个启动每个节点，或需要调试特定节点，请按顺序执行以下步骤。为每个命令打开一个独立的终端。</p>
+
+      <h4>步骤 1：启动 Meta 节点</h4>
+
+      <p>三个 Meta 节点组成一个 Raft 共识组。它们必须全部启动后，其他节点才能注册。在三个独立的终端中启动它们：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash &mdash; 终端 1</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Meta node 1
+./target/release/mynadb -c dev/configs/cluster/meta1.toml meta start</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash &mdash; 终端 2</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Meta node 2
+./target/release/mynadb -c dev/configs/cluster/meta2.toml meta start</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash &mdash; 终端 3</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Meta node 3
+./target/release/mynadb -c dev/configs/cluster/meta3.toml meta start</code></pre>
+        </div>
+      </div>
+
+      <p>等待约 3 秒让 Raft 领导者选举完成。您将在其中一个终端中看到类似 <code>INFO raft: node 1 elected as leader for term 1</code> 的日志消息。</p>
+
+      <h4>步骤 2：启动 Router 节点</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash &mdash; 终端 4</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Router node
+./target/release/mynadb -c dev/configs/cluster/router1.toml router start</code></pre>
+        </div>
+      </div>
+
+      <h4>步骤 3：启动 Data 节点</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash &mdash; 终端 5</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Data node 1
+./target/release/mynadb -c dev/configs/cluster-local/data1.toml data start</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash &mdash; 终端 6</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Data node 2
+./target/release/mynadb -c dev/configs/cluster-local/data2.toml data start</code></pre>
+        </div>
+      </div>
+
+      <h4>步骤 4：启动 Admin 控制台（可选）</h4>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash &mdash; 终端 7</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Admin console
+./target/release/mynadb -c dev/configs/cluster/admin.toml admin start</code></pre>
+        </div>
+      </div>
+
+      <h2>验证集群</h2>
+
+      <p>所有节点运行后，验证集群健康状态以及数据能否在整个系统中正确流转。</p>
+
+      <h3>检查集群健康状态</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Check cluster health via router
+curl http://localhost:7000/health</code></pre>
+        </div>
+      </div>
+
+      <p>预期响应：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">json</span>
+        </div>
+        <div class="code-content">
+<pre><code>{
+  "status": "ok",
+  "version": "0.3.0",
+  "uptime_secs": 12
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>列出已注册的节点</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># List all registered nodes via admin console API
+curl http://localhost:18080/api/v1/nodes</code></pre>
+        </div>
+      </div>
+
+      <h3>写入测试数据</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Write a single point through the router
+curl -X POST http://localhost:7000/write/testdb \
+  -d "cpu,host=server1,region=us-east value=85.5"
+
+# Write multiple points at once
+curl -X POST http://localhost:7000/write/testdb \
+  -d "cpu,host=server1,region=us-east value=85.5
+cpu,host=server2,region=us-west value=72.3
+cpu,host=server3,region=eu-west value=91.0
+memory,host=server1,region=us-east used_percent=64.2
+memory,host=server2,region=us-west used_percent=48.7
+disk,host=server1,region=us-east used_gb=450,total_gb=1000"</code></pre>
+        </div>
+      </div>
+
+      <p>写入成功返回 HTTP 204 No Content，响应体为空。</p>
+
+      <h3>查询数据</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Query all CPU metrics
+curl "http://localhost:7000/query/testdb" \
+  -d "SELECT * FROM cpu ORDER BY time DESC LIMIT 10"
+
+# Aggregate query
+curl "http://localhost:7000/query/testdb" \
+  -d "SELECT host, AVG(value) as avg_cpu FROM cpu GROUP BY host"
+
+# Use the EXPLAIN endpoint to inspect query plans
+curl "http://localhost:7000/explain/testdb?sql=SELECT+*+FROM+cpu+LIMIT+10"</code></pre>
+        </div>
+      </div>
+
+      <h3>访问 Admin 控制台</h3>
+
+      <p>打开浏览器访问 <a href="http://localhost:18080" target="_blank"><code>http://localhost:18080</code></a> 进入 Admin Web 控制台。您可以：</p>
+
+      <ul>
+        <li><strong>仪表盘</strong> &mdash; 实时监控节点健康、写入吞吐量和查询延迟</li>
+        <li><strong>查询控制台</strong> &mdash; 执行 SQL 查询，支持自动补全、语法高亮和结果可视化</li>
+        <li><strong>存储浏览器</strong> &mdash; 浏览 catalog/schema/table 层次结构，检查 Parquet 文件和分区详情</li>
+        <li><strong>集群视图</strong> &mdash; 查看所有已注册节点及其角色、健康状态和资源使用情况</li>
+        <li><strong>事件</strong> &mdash; 查看集群事件时间线（节点加入、压缩合并、领导者选举）</li>
+      </ul>
+
+      <h2>下一步</h2>
+
+      <p>本地集群运行后，探索以下指南以深入了解并为生产部署做准备：</p>
+
+      <div class="cards-grid">
+        <a href="cluster-architecture.html" class="card">
+          <div class="card-icon">&#127959;</div>
+          <h3>集群架构</h3>
+          <p>深入了解 Meta 共识、写入协调、分区锁、缓存失效和领导者选举的内部机制。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="cluster-scaling.html" class="card">
+          <div class="card-icon">&#128200;</div>
+          <h3>集群扩缩容</h3>
+          <p>了解如何添加和移除节点、配置 S3 共享存储、调优性能，以及使用 Kubernetes 部署到生产环境。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="monitoring.html" class="card">
+          <div class="card-icon">&#128202;</div>
+          <h3>监控</h3>
+          <p>为您的 MynaDB 集群配置 Prometheus 指标、Grafana 仪表盘和告警。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="admin-console.html" class="card">
+          <div class="card-icon">&#128421;</div>
+          <h3>Admin 控制台</h3>
+          <p>探索 Web 管理界面，用于监控、查询和管理您的集群。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+      </div>
+
+      <div class="docs-nav">
+        <a href="cluster.html" class="docs-nav-prev">&larr; 企业版集群</a>
+        <a href="cluster-architecture.html" class="docs-nav-next">集群架构 &rarr;</a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

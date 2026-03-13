@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 内置预测和地理空间 UDF，用于高级时间序列分析">
+  <title>预测分析与地理空间函数 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/forecasting.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html" class="active">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <div class="docs-badge" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">
+        v0.3.0 新功能
+      </div>
+
+      <h1>预测分析与地理空间函数</h1>
+
+      <p class="lead">
+        内置预测和地理空间 UDF，用于高级时间序列分析。无需外部工具或库，
+        即可直接在 SQL 查询中预测未来值，并对带有位置信息的时间序列数据执行空间计算。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; SQL 原生分析</div>
+        <p>
+          所有预测和地理空间函数均作为原生 UDF 实现在 DataFusion
+          查询引擎中。它们在进程内运行，零序列化开销，支持在标准 SQL 聚合的同时
+          进行实时预测和空间查询。
+        </p>
+      </div>
+
+      <h2>预测函数</h2>
+
+      <p>
+        MynaDB 提供了一套预测函数，可对时间序列数据进行操作以预测未来值。
+        这些函数分析历史模式，并按指定的周期数向前外推。
+      </p>
+
+      <div class="table-wrapper">
+        <table class="docs-table">
+          <thead>
+            <tr>
+              <th>函数</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>forecast_linear(column, periods)</code></td>
+              <td>简单线性回归预测。对历史数据拟合直线，并按给定周期数向前投射。</td>
+            </tr>
+            <tr>
+              <td><code>forecast_ema(column, periods, alpha)</code></td>
+              <td>指数移动平均预测。使用平滑因子（<code>alpha</code> 取值 0 到 1 之间）进行加权平均，适用于趋势敏感的预测。</td>
+            </tr>
+            <tr>
+              <td><code>forecast_arima(column, periods, p, d, q)</code></td>
+              <td>ARIMA 模型预测。自回归积分滑动平均模型，支持可配置的阶数参数 <code>p</code>（AR）、<code>d</code>（差分）和 <code>q</code>（MA）。</td>
+            </tr>
+            <tr>
+              <td><code>forecast_auto(column, periods)</code></td>
+              <td>自动模型选择预测。评估多个模型并根据 AIC/BIC 准则选择最佳拟合。</td>
+            </tr>
+            <tr>
+              <td><code>forecast_series(column, periods, model)</code></td>
+              <td>使用指定模型进行预测。<code>model</code> 参数接受 <code>'linear'</code>、<code>'ema'</code>、<code>'arima'</code>、<code>'holt_winters'</code> 或 <code>'seasonal'</code>。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>forecast_linear</h3>
+
+      <p>
+        对历史数据拟合简单线性回归（最小二乘法），并将趋势向前投射。
+        最适合具有稳定上升或下降趋势且季节性较低的数据。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- 使用线性回归预测接下来 12 个小时的 CPU 使用率
+SELECT
+  forecast_linear(usage, 12) AS predicted
+FROM cpu
+WHERE host = 'server01'
+GROUP BY time(1h);</code></pre>
+        </div>
+      </div>
+
+      <h3>forecast_ema</h3>
+
+      <p>
+        使用可配置平滑因子的指数移动平均。较高的 <code>alpha</code>
+        （接近 1）赋予近期观测值更大权重，使预测对近期变化更敏感。
+        较低的 <code>alpha</code>（接近 0）产生更平滑、更稳定的预测。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- 使用 EMA 预测接下来 24 个数据点（alpha=0.3，中等平滑度）
+SELECT
+  time_bucket('15 minutes', time) AS bucket,
+  AVG(temperature) AS actual,
+  forecast_ema(temperature, 24, 0.3) AS predicted
+FROM sensors.default.environment
+WHERE location = 'datacenter-east'
+  AND time &gt; now() - INTERVAL '7 days'
+GROUP BY bucket
+ORDER BY bucket;</code></pre>
+        </div>
+      </div>
+
+      <h3>forecast_arima</h3>
+
+      <p>
+        实现 ARIMA（自回归积分滑动平均）模型，非常适合具有复杂趋势和自相关性的时间序列。
+        参数 <code>p</code>、<code>d</code> 和 <code>q</code> 分别控制自回归阶数、差分阶数和滑动平均阶数。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- ARIMA(2,1,1) 预测接下来 48 个周期的内存使用率
+SELECT
+  time_bucket('30 minutes', time) AS bucket,
+  AVG(mem_used_percent) AS actual,
+  forecast_arima(mem_used_percent, 48, 2, 1, 1) AS predicted
+FROM mydb.default.system_metrics
+WHERE host = 'db-primary'
+  AND time &gt; now() - INTERVAL '14 days'
+GROUP BY bucket
+ORDER BY bucket;</code></pre>
+        </div>
+      </div>
+
+      <h3>forecast_auto</h3>
+
+      <p>
+        自动评估多种预测模型（线性、EMA、ARIMA 变体）与输入数据的拟合程度，
+        并根据信息准则（AIC/BIC）选择最佳模型。当您不确定哪种模型最适合数据时，
+        推荐使用此函数。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- 让 MynaDB 自动选择最佳预测模型
+SELECT
+  time_bucket('1 hour', time) AS bucket,
+  AVG(request_rate) AS actual,
+  forecast_auto(request_rate, 72) AS predicted
+FROM mydb.default.api_metrics
+WHERE service = 'payment-gateway'
+  AND time &gt; now() - INTERVAL '30 days'
+GROUP BY bucket
+ORDER BY bucket;</code></pre>
+        </div>
+      </div>
+
+      <h3>forecast_series</h3>
+
+      <p>
+        灵活的预测函数，接受模型名称作为字符串参数。当模型选择由应用逻辑驱动
+        或需要在相同数据上比较不同模型时，此函数非常有用。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- 使用 Holt-Winters 预测季节性数据（如每日流量模式）
+SELECT
+  time_bucket('1 hour', time) AS bucket,
+  AVG(active_connections) AS actual,
+  forecast_series(active_connections, 168, 'holt_winters') AS predicted
+FROM mydb.default.network
+WHERE interface = 'eth0'
+  AND time &gt; now() - INTERVAL '60 days'
+GROUP BY bucket
+ORDER BY bucket;
+
+-- 并排比较不同模型
+SELECT
+  time_bucket('1 hour', time) AS bucket,
+  AVG(cpu_usage) AS actual,
+  forecast_series(cpu_usage, 24, 'linear') AS linear_pred,
+  forecast_series(cpu_usage, 24, 'ema') AS ema_pred,
+  forecast_series(cpu_usage, 24, 'seasonal') AS seasonal_pred
+FROM mydb.default.host_metrics
+WHERE host = 'web-01'
+  AND time &gt; now() - INTERVAL '14 days'
+GROUP BY bucket
+ORDER BY bucket;</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 如何选择合适的模型</div>
+        <p>
+          <strong>Linear</strong> 最适合有明确趋势且无季节性的数据。
+          <strong>EMA</strong> 适合噪声较大且近期值更重要的数据。
+          <strong>ARIMA</strong> 处理复杂的自相关模式。
+          <strong>Holt-Winters</strong> 和 <strong>Seasonal</strong> 擅长处理具有重复周期性模式
+          的数据（如日周期或周周期）。如果不确定，使用
+          <code>forecast_auto</code> 让 MynaDB 自动选择。
+        </p>
+      </div>
+
+      <h2>地理空间函数</h2>
+
+      <p>
+        MynaDB 包含地理空间 UDF，用于计算距离、编码位置信息，以及对带有经纬度坐标的
+        时间序列数据进行空间过滤。这些函数使用 WGS84 椭球模型进行精确的地球表面计算。
+      </p>
+
+      <div class="table-wrapper">
+        <table class="docs-table">
+          <thead>
+            <tr>
+              <th>函数</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>geo_distance(lat1, lon1, lat2, lon2)</code></td>
+              <td>使用 Haversine 公式计算两个地理点之间的大圆距离（单位：米）。</td>
+            </tr>
+            <tr>
+              <td><code>geo_hash(lat, lon, precision)</code></td>
+              <td>将经纬度对编码为指定精度（1-12 个字符）的 Geohash 字符串。</td>
+            </tr>
+            <tr>
+              <td><code>geo_within(lat, lon, polygon)</code></td>
+              <td>如果点在给定多边形内则返回 <code>true</code>。多边形以 WKT 字符串格式指定（如 <code>'POLYGON((...))' </code>）。</td>
+            </tr>
+            <tr>
+              <td><code>geo_bounding_box(lat, lon, min_lat, min_lon, max_lat, max_lon)</code></td>
+              <td>如果点在指定的边界框（矩形）内则返回 <code>true</code>。</td>
+            </tr>
+            <tr>
+              <td><code>geo_bearing(lat1, lon1, lat2, lon2)</code></td>
+              <td>计算从点 1 到点 2 的初始方位角（前方位角），单位为度，从正北顺时针测量（0-360）。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>geo_distance</h3>
+
+      <p>
+        使用 Haversine 公式计算地球表面两点之间的大圆距离。结果以米为单位。
+        适用于邻近查询、地理围栏和物联网车队追踪中的行驶距离计算。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- 查找仓库 5 公里范围内的所有车辆位置
+SELECT
+  time,
+  vehicle_id,
+  lat,
+  lon,
+  geo_distance(lat, lon, 37.7749, -122.4194) AS distance_m
+FROM fleet.default.vehicle_positions
+WHERE time &gt; now() - INTERVAL '1 hour'
+  AND geo_distance(lat, lon, 37.7749, -122.4194) &lt; 5000
+ORDER BY distance_m ASC;</code></pre>
+        </div>
+      </div>
+
+      <h3>geo_hash</h3>
+
+      <p>
+        将地理坐标编码为 Geohash 字符串，适用于空间索引、聚合附近的点以及基于区域的高效分组。
+        较高的精度值产生更长的字符串，代表更小的地理区域。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- 按地理区域分组传感器读数（精度 5 约 4.9km x 4.9km 网格）
+SELECT
+  geo_hash(lat, lon, 5) AS region,
+  COUNT(*) AS reading_count,
+  AVG(temperature) AS avg_temp,
+  MIN(temperature) AS min_temp,
+  MAX(temperature) AS max_temp
+FROM iot.default.weather_stations
+WHERE time &gt; now() - INTERVAL '24 hours'
+GROUP BY region
+ORDER BY avg_temp DESC;</code></pre>
+        </div>
+      </div>
+
+      <h3>geo_within</h3>
+
+      <p>
+        检测某点是否位于以 Well-Known Text (WKT) 格式定义的多边形内。
+        这对地理围栏应用至关重要，例如判断车辆是否已进入或离开某个定义的区域。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- 查找当前在市中心服务区内的所有配送卡车
+SELECT
+  time,
+  vehicle_id,
+  lat,
+  lon,
+  speed_kmh
+FROM fleet.default.vehicle_positions
+WHERE time &gt; now() - INTERVAL '5 minutes'
+  AND geo_within(lat, lon,
+    'POLYGON((-122.42 37.77, -122.42 37.79, -122.40 37.79, -122.40 37.77, -122.42 37.77))')
+ORDER BY time DESC;</code></pre>
+        </div>
+      </div>
+
+      <h3>geo_bounding_box</h3>
+
+      <p>
+        快速的矩形包含检测，判断某点是否在给定的边界框内。
+        计算成本比多边形检测更低，适合在进行更精确的几何测试之前进行初步的空间过滤。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- 将物联网传感器数据过滤到旧金山湾区边界框
+SELECT
+  time,
+  sensor_id,
+  lat,
+  lon,
+  pm25,
+  pm10
+FROM iot.default.air_quality
+WHERE time &gt; now() - INTERVAL '6 hours'
+  AND geo_bounding_box(lat, lon, 37.20, -122.60, 37.90, -122.00)
+ORDER BY pm25 DESC
+LIMIT 100;</code></pre>
+        </div>
+      </div>
+
+      <h3>geo_bearing</h3>
+
+      <p>
+        计算从一个地理点到另一个地理点的初始方位角（前方位角）。结果以度为单位，
+        从正北顺时针测量（0 = 北，90 = 东，180 = 南，270 = 西）。
+        适用于追踪应用中的移动方向判断。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- 计算连续车辆位置之间的行进方向
+SELECT
+  time,
+  vehicle_id,
+  lat,
+  lon,
+  geo_bearing(
+    LAG(lat) OVER (PARTITION BY vehicle_id ORDER BY time),
+    LAG(lon) OVER (PARTITION BY vehicle_id ORDER BY time),
+    lat,
+    lon
+  ) AS heading_degrees,
+  geo_distance(
+    LAG(lat) OVER (PARTITION BY vehicle_id ORDER BY time),
+    LAG(lon) OVER (PARTITION BY vehicle_id ORDER BY time),
+    lat,
+    lon
+  ) AS distance_m
+FROM fleet.default.vehicle_positions
+WHERE vehicle_id = 'truck-42'
+  AND time &gt; now() - INTERVAL '2 hours'
+ORDER BY time;</code></pre>
+        </div>
+      </div>
+
+      <h2>组合示例</h2>
+
+      <p>
+        MynaDB 分析 UDF 的真正威力在于将预测和地理空间函数组合在单个查询中使用。
+        以下示例展示了同时利用两种能力的高级使用场景。
+      </p>
+
+      <h3>按区域预测空气质量</h3>
+
+      <p>
+        结合基于 Geohash 的分组和时间序列预测，预测不同地理区域的 PM2.5 水平。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- 预测每个地理区域未来 24 小时的 PM2.5 水平
+SELECT
+  geo_hash(lat, lon, 4) AS region,
+  time_bucket('1 hour', time) AS bucket,
+  AVG(pm25) AS avg_pm25,
+  forecast_auto(pm25, 24) AS predicted_pm25
+FROM iot.default.air_quality
+WHERE time &gt; now() - INTERVAL '30 days'
+  AND geo_bounding_box(lat, lon, 37.20, -122.60, 37.90, -122.00)
+GROUP BY region, bucket
+ORDER BY region, bucket;</code></pre>
+        </div>
+      </div>
+
+      <h3>车队到达时间预测</h3>
+
+      <p>
+        结合距离计算和速度趋势预测，估算配送车辆的到达时间。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- 预测活跃配送的剩余行程时间
+SELECT
+  vehicle_id,
+  lat,
+  lon,
+  geo_distance(lat, lon, dest_lat, dest_lon) AS remaining_distance_m,
+  speed_kmh,
+  forecast_ema(speed_kmh, 6, 0.5) AS predicted_speed,
+  geo_distance(lat, lon, dest_lat, dest_lon) / (forecast_ema(speed_kmh, 6, 0.5) * 1000.0 / 3600.0) AS eta_seconds,
+  geo_bearing(lat, lon, dest_lat, dest_lon) AS heading_to_dest
+FROM fleet.default.vehicle_positions v
+JOIN fleet.default.active_deliveries d
+  ON v.vehicle_id = d.vehicle_id
+WHERE v.time &gt; now() - INTERVAL '30 minutes'
+  AND d.status = 'in_transit'
+ORDER BY eta_seconds ASC;</code></pre>
+        </div>
+      </div>
+
+      <h3>地理围栏容量预测</h3>
+
+      <p>
+        结合空间过滤和容量预测，预测特定数据中心区域内服务器的资源利用率。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- 预测美西区域服务器的磁盘使用率
+SELECT
+  host,
+  geo_hash(datacenter_lat, datacenter_lon, 3) AS dc_region,
+  time_bucket('1 day', time) AS bucket,
+  AVG(disk_used_percent) AS current_usage,
+  forecast_linear(disk_used_percent, 30) AS predicted_30d,
+  CASE
+    WHEN forecast_linear(disk_used_percent, 30) &gt; 90 THEN 'CRITICAL'
+    WHEN forecast_linear(disk_used_percent, 30) &gt; 75 THEN 'WARNING'
+    ELSE 'OK'
+  END AS capacity_status
+FROM mydb.default.host_metrics
+WHERE time &gt; now() - INTERVAL '90 days'
+  AND geo_within(datacenter_lat, datacenter_lon,
+    'POLYGON((-125.0 32.0, -125.0 49.0, -104.0 49.0, -104.0 32.0, -125.0 32.0))')
+GROUP BY host, dc_region, bucket
+ORDER BY predicted_30d DESC;</code></pre>
+        </div>
+      </div>
+
+      <h3>带空间上下文的异常检测</h3>
+
+      <p>
+        通过将实际读数与预测值进行比较，并结合空间邻近数据，识别温度传感器异常。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- 检测温度读数与预测值的异常偏差，按区域分组
+SELECT
+  sensor_id,
+  geo_hash(lat, lon, 6) AS micro_region,
+  time_bucket('15 minutes', time) AS bucket,
+  AVG(temperature) AS actual_temp,
+  forecast_ema(temperature, 1, 0.2) AS expected_temp,
+  ABS(AVG(temperature) - forecast_ema(temperature, 1, 0.2)) AS deviation,
+  geo_distance(lat, lon, 37.7749, -122.4194) AS distance_from_center
+FROM iot.default.temperature_sensors
+WHERE time &gt; now() - INTERVAL '7 days'
+  AND geo_bounding_box(lat, lon, 37.70, -122.50, 37.85, -122.35)
+GROUP BY sensor_id, micro_region, bucket, lat, lon
+HAVING ABS(AVG(temperature) - forecast_ema(temperature, 1, 0.2)) &gt; 5.0
+ORDER BY deviation DESC
+LIMIT 50;</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 性能提示</div>
+        <p>
+          在组合地理空间过滤与预测函数时，请将空间过滤条件
+          （<code>geo_bounding_box</code>、<code>geo_within</code>）放在 <code>WHERE</code> 子句中，
+          以在预测计算运行之前缩小数据集。预测函数受益于通过时间范围过滤的分区裁剪，
+          因此请始终包含 <code>time &gt; now() - INTERVAL '...'</code> 谓词。
+        </p>
+      </div>
+
+      <div class="docs-nav">
+        <a href="streaming.html" class="docs-nav-prev">&larr; 流式查询</a>
+        <a href="grafana.html" class="docs-nav-next">Grafana &rarr;</a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

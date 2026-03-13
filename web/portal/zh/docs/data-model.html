@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 数据模型 - 理解时序数据结构">
+  <title>数据模型 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/data-model.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html" class="active">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>数据模型</h1>
+
+      <p class="lead">
+        MynaDB 使用与 InfluxDB Line Protocol 兼容的时序数据模型。
+        理解数据模型有助于您设计高效的 Schema 并编写最优的查询。
+      </p>
+
+      <h2 id="overview">概述</h2>
+
+      <p>MynaDB 中的时序数据由以下部分组成：</p>
+
+      <div class="architecture-diagram">
+        <pre>
+  +------------------------------------------------------------------+
+  |                         数据点                                    |
+  +------------------------------------------------------------------+
+  |                                                                   |
+  |  Measurement     Tags                  Fields           Timestamp |
+  |  (表名)          (索引元数据)           (值)             (时间)    |
+  |                                                                   |
+  |  cpu             host=server01         usage=75.5       1699900000|
+  |                  region=us-west        temp=45                    |
+  |                                                                   |
+  +------------------------------------------------------------------+
+        </pre>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>组成部分</th>
+              <th>描述</th>
+              <th>是否索引</th>
+              <th>是否必需</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Measurement</strong></td>
+              <td>表名（例如 "cpu"、"memory"）</td>
+              <td>是</td>
+              <td>是</td>
+            </tr>
+            <tr>
+              <td><strong>Tags</strong></td>
+              <td>用于过滤的键值元数据</td>
+              <td>是</td>
+              <td>否</td>
+            </tr>
+            <tr>
+              <td><strong>Fields</strong></td>
+              <td>实际的指标值</td>
+              <td>否</td>
+              <td>是（至少一个）</td>
+            </tr>
+            <tr>
+              <td><strong>Timestamp</strong></td>
+              <td>数据点的时间</td>
+              <td>是</td>
+              <td>否（默认为当前时间）</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="line-protocol">Line Protocol 格式</h2>
+
+      <p>数据使用 InfluxDB Line Protocol 写入：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">Line Protocol</span>
+        </div>
+        <div class="code-content">
+          <pre><code>&lt;measurement&gt;,&lt;tag_key&gt;=&lt;tag_value&gt;,... &lt;field_key&gt;=&lt;field_value&gt;,... [timestamp]
+
+<span class="token-comment"># Examples:</span>
+cpu,host=server01,region=us-west usage=75.5,temp=45i 1699900000000000000
+memory,host=server01 used=16.5,total=32.0
+disk,host=server01,mount=/data free=100.5,used=50.2</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 语法规则</div>
+        <ul>
+          <li>Measurement 和 Tags 之间用逗号分隔（无空格）</li>
+          <li>Tags 和 Fields 之间用空格分隔</li>
+          <li>多个 Tags/Fields 之间用逗号分隔</li>
+          <li>Timestamp 是可选的，用空格分隔</li>
+        </ul>
+      </div>
+
+      <h2 id="measurements">Measurement</h2>
+
+      <p>
+        Measurement 类似于关系数据库中的表。它将相关的时序数据组织在一起。
+      </p>
+
+      <h3>命名规范</h3>
+
+      <ul>
+        <li>使用小写字母加下划线：<code>cpu_usage</code>、<code>network_io</code></li>
+        <li>简洁但具有描述性</li>
+        <li>避免使用下划线以外的特殊字符</li>
+        <li>不要在名称中包含元数据（应使用 Tags）</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 好的 measurement 名称</span>
+cpu
+memory
+disk_io
+http_requests
+application_errors
+
+<span class="token-comment"># 不好的 measurement 名称（应使用 tags）</span>
+cpu_server01           <span class="token-comment"># 应使用: cpu,host=server01</span>
+memory_us_west         <span class="token-comment"># 应使用: memory,region=us-west</span></code></pre>
+        </div>
+      </div>
+
+      <h2 id="tags">Tags</h2>
+
+      <p>
+        Tags 是用于过滤和分组的索引键值对。它们以字符串形式存储，
+        非常适合用于需要查询的元数据。
+      </p>
+
+      <h3>何时使用 Tags</h3>
+
+      <ul>
+        <li><strong>标识符</strong>：host、server_id、container_id</li>
+        <li><strong>位置</strong>：region、datacenter、rack</li>
+        <li><strong>分类</strong>：environment（prod/dev）、service、team</li>
+        <li><strong>版本</strong>：app_version、os_version</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Tags 支持高效过滤</span>
+cpu,host=server01,region=us-west,env=prod usage=75.5
+
+<span class="token-comment"># 按 tags 查询</span>
+SELECT * FROM cpu WHERE host = 'server01'
+SELECT * FROM cpu WHERE region = 'us-west' AND env = 'prod'
+SELECT region, AVG(usage) FROM cpu GROUP BY region</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; 基数警告</div>
+        <p>
+          避免使用高基数 Tags（唯一 ID、时间戳、随机值）。
+          高基数会增加存储开销并降低查询速度。
+          对于高基数数据，请使用 Fields。
+        </p>
+      </div>
+
+      <h3>Tag 最佳实践</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>推荐</th>
+              <th>不推荐</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>host=server01</code></td>
+              <td><code>request_id=abc123...</code>（应使用 field）</td>
+            </tr>
+            <tr>
+              <td><code>region=us-west</code></td>
+              <td><code>timestamp=1699900000</code>（应使用 timestamp）</td>
+            </tr>
+            <tr>
+              <td><code>env=prod</code></td>
+              <td><code>user_id=12345</code>（高基数）</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="fields">Fields</h2>
+
+      <p>
+        Fields 包含实际的指标值。它们不被索引，因此按 Fields 过滤需要扫描数据，
+        但它们支持多种数据类型。
+      </p>
+
+      <h3>Field 类型</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>类型</th>
+              <th>后缀</th>
+              <th>示例</th>
+              <th>存储类型</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>浮点数</td>
+              <td>（无）</td>
+              <td><code>usage=75.5</code></td>
+              <td>Float64</td>
+            </tr>
+            <tr>
+              <td>整数</td>
+              <td><code>i</code></td>
+              <td><code>count=42i</code></td>
+              <td>Int64</td>
+            </tr>
+            <tr>
+              <td>无符号整数</td>
+              <td><code>u</code></td>
+              <td><code>bytes=1024u</code></td>
+              <td>UInt64</td>
+            </tr>
+            <tr>
+              <td>字符串</td>
+              <td>引号</td>
+              <td><code>status="ok"</code></td>
+              <td>Utf8</td>
+            </tr>
+            <tr>
+              <td>布尔值</td>
+              <td><code>t/f/true/false</code></td>
+              <td><code>active=t</code></td>
+              <td>Boolean</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Different field types</span>
+system,host=server01 cpu=75.5,memory=16384i,active=t,status="healthy"
+
+<span class="token-comment"># Multiple fields per measurement</span>
+http_request,endpoint=/api/users latency=45.2,status_code=200i,success=t</code></pre>
+        </div>
+      </div>
+
+      <h3>何时使用 Fields</h3>
+
+      <ul>
+        <li><strong>指标</strong>：cpu_usage、memory_bytes、request_latency</li>
+        <li><strong>计数器</strong>：request_count、error_count</li>
+        <li><strong>高基数数据</strong>：user_id、request_id</li>
+        <li><strong>需要聚合的值</strong>：SUM、AVG、MIN、MAX</li>
+      </ul>
+
+      <h2 id="timestamps">时间戳</h2>
+
+      <p>
+        时间戳表示数据点发生的时间。MynaDB 以纳秒为单位存储时间戳，
+        基于 Unix 纪元（1970 年 1 月 1 日）。
+      </p>
+
+      <h3>时间戳精度</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>精度</th>
+              <th>位数</th>
+              <th>示例</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>纳秒</td>
+              <td>19</td>
+              <td><code>1699900000000000000</code></td>
+            </tr>
+            <tr>
+              <td>微秒</td>
+              <td>16</td>
+              <td><code>1699900000000000</code></td>
+            </tr>
+            <tr>
+              <td>毫秒</td>
+              <td>13</td>
+              <td><code>1699900000000</code></td>
+            </tr>
+            <tr>
+              <td>秒</td>
+              <td>10</td>
+              <td><code>1699900000</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># With explicit timestamp (nanoseconds)</span>
+cpu,host=server01 usage=75.5 1699900000000000000
+
+<span class="token-comment"># Without timestamp (uses server time)</span>
+cpu,host=server01 usage=75.5
+
+<span class="token-comment"># Query by time range</span>
+SELECT * FROM cpu
+WHERE time > 1699900000000000000
+  AND time < 1699986400000000000</code></pre>
+        </div>
+      </div>
+
+      <h2 id="schema">Schema 结构</h2>
+
+      <p>MynaDB 以 <strong>Catalog.Schema.Table</strong> 层级组织数据：</p>
+
+      <div class="architecture-diagram">
+        <pre>
+  Catalog（数据库）
+  └── mydb
+      ├── Schema（服务）
+      │   ├── default
+      │   │   ├── Table（Measurement）
+      │   │   │   ├── cpu
+      │   │   │   ├── memory
+      │   │   │   └── disk
+      │   │   └── ...
+      │   ├── web
+      │   │   ├── cpu
+      │   │   └── requests
+      │   └── api
+      │       └── latency
+      └── _system
+          └── series_stats
+        </pre>
+      </div>
+
+      <h3>Schema 策略</h3>
+
+      <div class="cards-grid">
+        <div class="card">
+          <h3>ServiceAsSchema（默认）</h3>
+          <p>Service 标签成为 Schema 名称。</p>
+          <ul>
+            <li>Schema = service 标签值</li>
+            <li>Table = measurement 名称</li>
+          </ul>
+          <code>cpu,service=web</code> &#8594; <code>mydb.web.cpu</code>
+        </div>
+
+        <div class="card">
+          <h3>ServiceAsTable</h3>
+          <p>Service 标签成为表名。</p>
+          <ul>
+            <li>Schema = "default"</li>
+            <li>Table = service 标签值</li>
+          </ul>
+          <code>cpu,service=web</code> &#8594; <code>mydb.default.web</code>
+        </div>
+      </div>
+
+      <h3>Parquet 中的列类型</h3>
+
+      <p>存储到 Parquet 时，数据被转换为 Arrow 类型：</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Line Protocol</th>
+              <th>Arrow 类型</th>
+              <th>Parquet 类型</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Tag 值</td>
+              <td>Utf8</td>
+              <td>BYTE_ARRAY (STRING)</td>
+            </tr>
+            <tr>
+              <td>浮点数 Fields</td>
+              <td>Float64</td>
+              <td>DOUBLE</td>
+            </tr>
+            <tr>
+              <td>整数 Fields</td>
+              <td>Int64</td>
+              <td>INT64</td>
+            </tr>
+            <tr>
+              <td>布尔值 Fields</td>
+              <td>Boolean</td>
+              <td>BOOLEAN</td>
+            </tr>
+            <tr>
+              <td>Timestamp</td>
+              <td>Int64</td>
+              <td>INT64</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>示例：完整数据模型</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Write data with proper structure</span>
+curl -X POST http://localhost:7000/write/mydb -d '
+cpu,host=server01,region=us-west,env=prod usage=75.5,temp=45i,cores=8i
+cpu,host=server02,region=us-east,env=prod usage=82.3,temp=50i,cores=16i
+memory,host=server01,region=us-west used=16.5,total=32.0,cached=8.2
+disk,host=server01,mount=/data free=100i,used=50i,iops=1500.5
+'
+
+<span class="token-comment"># Query with proper filtering</span>
+curl 'http://localhost:7000/query/mydb' -d "
+SELECT
+  host,
+  region,
+  AVG(usage) as avg_cpu,
+  MAX(temp) as max_temp
+FROM cpu
+WHERE env = 'prod'
+GROUP BY host, region
+ORDER BY avg_cpu DESC
+"</code></pre>
+        </div>
+      </div>
+
+      <h2>后续步骤</h2>
+
+      <div class="cards-grid">
+        <a href="storage.html" class="card">
+          <div class="card-icon">&#128451;</div>
+          <h3>存储</h3>
+          <p>了解 Parquet 存储和分区。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="sql-queries.html" class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>SQL 查询</h3>
+          <p>使用 SQL 查询您的时序数据。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="examples.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>示例</h3>
+          <p>开箱即用的查询模式。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

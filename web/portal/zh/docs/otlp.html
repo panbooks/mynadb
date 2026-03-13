@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB OpenTelemetry OTLP 数据接入 - 原生支持通过 gRPC 和 HTTP 接入指标、日志和链路追踪">
+  <title>OpenTelemetry (OTLP) - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/otlp.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html" class="active">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <div class="docs-badge" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">
+        v0.3.0 新增
+      </div>
+
+      <h1>OpenTelemetry (OTLP) 数据接入</h1>
+
+      <p class="lead">
+        MynaDB 原生支持 OpenTelemetry Protocol (OTLP)，可接入指标、日志和链路追踪数据。
+        您可以直接从应用程序、OpenTelemetry Collector 或任何兼容 OTLP 的 Agent 发送可观测性数据，
+        无需额外的适配器或转换层。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 符合标准</div>
+        <p>
+          MynaDB 实现了 <strong>OpenTelemetry Protocol (OTLP) v1.0</strong> 规范，
+          支持 gRPC 和 HTTP/protobuf 两种传输方式。任何支持 OTLP 的 OpenTelemetry SDK 或 Collector
+          均可开箱即用地向 MynaDB 发送数据。
+        </p>
+      </div>
+
+      <h2>支持的端点</h2>
+
+      <p>MynaDB 公开以下 OTLP 端点用于接收遥测数据：</p>
+
+      <div class="table-wrapper">
+        <table class="docs-table">
+          <thead>
+            <tr>
+              <th>协议</th>
+              <th>端点</th>
+              <th>方法</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>gRPC</td>
+              <td><code>:4317</code></td>
+              <td>-</td>
+              <td>原生 gRPC OTLP 接收端，支持所有信号类型（指标、日志、链路追踪）</td>
+            </tr>
+            <tr>
+              <td>HTTP</td>
+              <td><code>/v1/metrics</code></td>
+              <td>POST</td>
+              <td>HTTP/protobuf 指标接入端点</td>
+            </tr>
+            <tr>
+              <td>HTTP</td>
+              <td><code>/v1/logs</code></td>
+              <td>POST</td>
+              <td>HTTP/protobuf 日志接入端点</td>
+            </tr>
+            <tr>
+              <td>HTTP</td>
+              <td><code>/v1/traces</code></td>
+              <td>POST</td>
+              <td>HTTP/protobuf 链路追踪接入端点</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>配置</h2>
+
+      <p>在 <code>config.toml</code> 中启用和配置 OTLP 数据接入：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>[otlp]
+enabled = true
+database = "otel"                  # Target database for OTLP data
+grpc_port = 4317                   # gRPC receiver port
+http_enabled = true                # Enable HTTP/protobuf endpoints
+http_port = 4318                   # HTTP receiver port (on main HTTP server if 0)
+
+# Signal-specific configuration
+[otlp.metrics]
+enabled = true
+table_name = "otel_metrics"        # Table name for metrics data
+resource_attributes_as_tags = true # Map resource attributes to tags
+include_scope_info = true          # Include instrumentation scope
+
+[otlp.logs]
+enabled = true
+table_name = "otel_logs"           # Table name for log records
+body_field = "body"                # Field name for log body
+severity_as_tag = true             # Map severity level to a tag
+resource_attributes_as_tags = true
+
+[otlp.traces]
+enabled = true
+table_name = "otel_traces"         # Table name for trace spans
+span_attributes_as_fields = true   # Map span attributes to fields
+resource_attributes_as_tags = true
+include_events = true              # Store span events as nested data</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 默认数据库</div>
+        <p>
+          所有 OTLP 数据都写入由 <code>otlp.database</code> 指定的数据库（默认值：<code>otel</code>）。
+          在该数据库中，每种信号类型存储在各自配置的 <code>table_name</code> 所指定的表中。
+        </p>
+      </div>
+
+      <h2>数据映射</h2>
+
+      <p>
+        MynaDB 自动将 OTLP 数据结构映射为其时序存储模型。
+        资源属性成为标签，数据点成为对应表中的字段。
+      </p>
+
+      <h3>指标映射</h3>
+
+      <p>OTLP 指标被展平存储到 <code>otel_metrics</code> 表中，其 Schema 如下：</p>
+
+      <div class="table-wrapper">
+        <table class="docs-table">
+          <thead>
+            <tr>
+              <th>列</th>
+              <th>类型</th>
+              <th>来源</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>time</code></td>
+              <td>TIMESTAMP</td>
+              <td>数据点时间戳</td>
+            </tr>
+            <tr>
+              <td><code>metric_name</code></td>
+              <td>STRING (tag)</td>
+              <td>OTLP 指标名称</td>
+            </tr>
+            <tr>
+              <td><code>metric_type</code></td>
+              <td>STRING (tag)</td>
+              <td>gauge、sum、histogram、summary</td>
+            </tr>
+            <tr>
+              <td><code>value</code></td>
+              <td>FLOAT</td>
+              <td>指标值（gauge/sum）</td>
+            </tr>
+            <tr>
+              <td><code>count</code></td>
+              <td>INTEGER</td>
+              <td>histogram/summary 计数</td>
+            </tr>
+            <tr>
+              <td><code>sum</code></td>
+              <td>FLOAT</td>
+              <td>histogram/summary 总和</td>
+            </tr>
+            <tr>
+              <td><code>service_name</code></td>
+              <td>STRING (tag)</td>
+              <td>资源属性：service.name</td>
+            </tr>
+            <tr>
+              <td><code>host_name</code></td>
+              <td>STRING (tag)</td>
+              <td>资源属性：host.name</td>
+            </tr>
+            <tr>
+              <td><code>{attribute}</code></td>
+              <td>STRING (tag)</td>
+              <td>其他数据点属性</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>日志映射</h3>
+
+      <p>OTLP 日志记录存储在 <code>otel_logs</code> 表中：</p>
+
+      <div class="table-wrapper">
+        <table class="docs-table">
+          <thead>
+            <tr>
+              <th>列</th>
+              <th>类型</th>
+              <th>来源</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>time</code></td>
+              <td>TIMESTAMP</td>
+              <td>日志记录时间戳</td>
+            </tr>
+            <tr>
+              <td><code>severity</code></td>
+              <td>STRING (tag)</td>
+              <td>严重级别（INFO、WARN、ERROR 等）</td>
+            </tr>
+            <tr>
+              <td><code>severity_number</code></td>
+              <td>INTEGER</td>
+              <td>数值严重级别（1-24）</td>
+            </tr>
+            <tr>
+              <td><code>body</code></td>
+              <td>STRING</td>
+              <td>日志消息正文</td>
+            </tr>
+            <tr>
+              <td><code>trace_id</code></td>
+              <td>STRING</td>
+              <td>关联的 trace ID（如有）</td>
+            </tr>
+            <tr>
+              <td><code>span_id</code></td>
+              <td>STRING</td>
+              <td>关联的 span ID（如有）</td>
+            </tr>
+            <tr>
+              <td><code>service_name</code></td>
+              <td>STRING (tag)</td>
+              <td>资源属性：service.name</td>
+            </tr>
+            <tr>
+              <td><code>{attribute}</code></td>
+              <td>STRING (tag)</td>
+              <td>其他日志属性</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>链路追踪映射</h3>
+
+      <p>OTLP 链路追踪 Span 存储在 <code>otel_traces</code> 表中：</p>
+
+      <div class="table-wrapper">
+        <table class="docs-table">
+          <thead>
+            <tr>
+              <th>列</th>
+              <th>类型</th>
+              <th>来源</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>time</code></td>
+              <td>TIMESTAMP</td>
+              <td>Span 开始时间</td>
+            </tr>
+            <tr>
+              <td><code>trace_id</code></td>
+              <td>STRING (tag)</td>
+              <td>Trace 标识符</td>
+            </tr>
+            <tr>
+              <td><code>span_id</code></td>
+              <td>STRING</td>
+              <td>Span 标识符</td>
+            </tr>
+            <tr>
+              <td><code>parent_span_id</code></td>
+              <td>STRING</td>
+              <td>父 Span 标识符</td>
+            </tr>
+            <tr>
+              <td><code>span_name</code></td>
+              <td>STRING (tag)</td>
+              <td>操作名称</td>
+            </tr>
+            <tr>
+              <td><code>span_kind</code></td>
+              <td>STRING (tag)</td>
+              <td>INTERNAL、SERVER、CLIENT、PRODUCER、CONSUMER</td>
+            </tr>
+            <tr>
+              <td><code>duration_ns</code></td>
+              <td>INTEGER</td>
+              <td>Span 持续时间（纳秒）</td>
+            </tr>
+            <tr>
+              <td><code>status_code</code></td>
+              <td>STRING (tag)</td>
+              <td>OK、ERROR、UNSET</td>
+            </tr>
+            <tr>
+              <td><code>status_message</code></td>
+              <td>STRING</td>
+              <td>状态描述（错误时）</td>
+            </tr>
+            <tr>
+              <td><code>service_name</code></td>
+              <td>STRING (tag)</td>
+              <td>资源属性：service.name</td>
+            </tr>
+            <tr>
+              <td><code>{attribute}</code></td>
+              <td>STRING</td>
+              <td>Span 属性作为字段</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>OpenTelemetry Collector</h2>
+
+      <p>
+        向 MynaDB 发送 OTLP 数据的推荐方式是通过
+        <a href="https://opentelemetry.io/docs/collector/" target="_blank">OpenTelemetry Collector</a>。
+        在 Collector 管道中将 MynaDB 配置为 OTLP 导出器：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">yaml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># otel-collector-config.yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # Example: scrape Prometheus metrics and forward as OTLP
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'node-exporter'
+          scrape_interval: 15s
+          static_configs:
+            - targets: ['localhost:9100']
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1000
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+  resource:
+    attributes:
+      - key: environment
+        value: production
+        action: upsert
+
+exporters:
+  otlp/mynadb:
+    endpoint: mynadb-host:4317
+    tls:
+      insecure: true            # Set to false in production with TLS
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 1000
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlp/mynadb]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlp/mynadb]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlp/mynadb]</code></pre>
+        </div>
+      </div>
+
+      <h3>运行 Collector</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Docker
+docker run -d --name otel-collector \
+  -v ./otel-collector-config.yaml:/etc/otelcol/config.yaml \
+  -p 4317:4317 \
+  -p 4318:4318 \
+  otel/opentelemetry-collector-contrib:latest
+
+# Binary
+otelcol-contrib --config otel-collector-config.yaml</code></pre>
+        </div>
+      </div>
+
+      <h3>SDK 直接集成</h3>
+
+      <p>您也可以使用任何 OpenTelemetry SDK 直接从应用程序发送 OTLP 数据：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">python</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code># Python example - sending metrics directly to MynaDB
+from opentelemetry import metrics
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+
+# Configure OTLP exporter pointing to MynaDB
+exporter = OTLPMetricExporter(
+    endpoint="mynadb-host:4317",
+    insecure=True,
+)
+
+reader = PeriodicExportingMetricReader(exporter, export_interval_millis=10000)
+provider = MeterProvider(metric_readers=[reader])
+metrics.set_meter_provider(provider)
+
+# Create and record metrics
+meter = metrics.get_meter("myapp")
+counter = meter.create_counter("http_requests", description="Total HTTP requests")
+histogram = meter.create_histogram("request_duration_ms", description="Request latency")
+
+counter.add(1, {"method": "GET", "path": "/api/users", "status": "200"})
+histogram.record(42.5, {"method": "GET", "path": "/api/users"})</code></pre>
+        </div>
+      </div>
+
+      <h2>查询 OTLP 数据</h2>
+
+      <p>
+        OTLP 数据接入后，以常规 MynaDB 表的形式存储，可使用标准 SQL 进行查询。
+        以下是各信号类型的常见查询模式。
+      </p>
+
+      <h3>查询指标</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Average CPU usage per service over the last hour
+SELECT
+  service_name,
+  metric_name,
+  time_bucket('5 minutes', time) AS bucket,
+  AVG(value) AS avg_value,
+  MAX(value) AS max_value
+FROM otel.default.otel_metrics
+WHERE metric_name = 'system.cpu.utilization'
+  AND time &gt; now() - INTERVAL '1 hour'
+GROUP BY service_name, metric_name, bucket
+ORDER BY bucket DESC;
+
+-- Top 10 services by request count
+SELECT
+  service_name,
+  SUM(value) AS total_requests
+FROM otel.default.otel_metrics
+WHERE metric_name = 'http_requests'
+  AND time &gt; now() - INTERVAL '24 hours'
+GROUP BY service_name
+ORDER BY total_requests DESC
+LIMIT 10;</code></pre>
+        </div>
+      </div>
+
+      <h3>查询日志</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Recent error logs across all services
+SELECT
+  time,
+  service_name,
+  severity,
+  body
+FROM otel.default.otel_logs
+WHERE severity = 'ERROR'
+  AND time &gt; now() - INTERVAL '1 hour'
+ORDER BY time DESC
+LIMIT 50;
+
+-- Error rate by service over time
+SELECT
+  service_name,
+  time_bucket('15 minutes', time) AS bucket,
+  COUNT(*) FILTER (WHERE severity = 'ERROR') AS errors,
+  COUNT(*) AS total,
+  ROUND(100.0 * COUNT(*) FILTER (WHERE severity = 'ERROR') / COUNT(*), 2) AS error_pct
+FROM otel.default.otel_logs
+WHERE time &gt; now() - INTERVAL '6 hours'
+GROUP BY service_name, bucket
+ORDER BY bucket DESC;</code></pre>
+        </div>
+      </div>
+
+      <h3>查询链路追踪</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Slowest endpoints in the last hour
+SELECT
+  service_name,
+  span_name,
+  COUNT(*) AS span_count,
+  AVG(duration_ns / 1000000.0) AS avg_ms,
+  MAX(duration_ns / 1000000.0) AS max_ms,
+  APPROX_PERCENTILE_CONT(duration_ns / 1000000.0, 0.99) AS p99_ms
+FROM otel.default.otel_traces
+WHERE span_kind = 'SERVER'
+  AND time &gt; now() - INTERVAL '1 hour'
+GROUP BY service_name, span_name
+ORDER BY p99_ms DESC
+LIMIT 20;
+
+-- Trace waterfall - all spans for a specific trace
+SELECT
+  span_name,
+  span_kind,
+  service_name,
+  duration_ns / 1000000.0 AS duration_ms,
+  status_code,
+  parent_span_id,
+  span_id
+FROM otel.default.otel_traces
+WHERE trace_id = '4bf92f3577b34da6a3ce929d0e0e4736'
+ORDER BY time ASC;
+
+-- Error spans by service
+SELECT
+  service_name,
+  span_name,
+  COUNT(*) AS error_count,
+  MIN(time) AS first_seen,
+  MAX(time) AS last_seen
+FROM otel.default.otel_traces
+WHERE status_code = 'ERROR'
+  AND time &gt; now() - INTERVAL '24 hours'
+GROUP BY service_name, span_name
+ORDER BY error_count DESC;</code></pre>
+        </div>
+      </div>
+
+      <h3>跨信号关联</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+<pre><code>-- Find error logs associated with slow traces
+SELECT
+  t.trace_id,
+  t.span_name,
+  t.duration_ns / 1000000.0 AS duration_ms,
+  l.severity,
+  l.body AS log_message
+FROM otel.default.otel_traces t
+JOIN otel.default.otel_logs l
+  ON t.trace_id = l.trace_id
+WHERE t.duration_ns &gt; 5000000000  -- spans longer than 5 seconds
+  AND l.severity IN ('ERROR', 'WARN')
+  AND t.time &gt; now() - INTERVAL '1 hour'
+ORDER BY t.duration_ns DESC
+LIMIT 25;</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 性能提示</div>
+        <p>
+          为获得最佳查询性能，查询 OTLP 数据时请始终包含时间范围过滤条件
+          （<code>time &gt; now() - INTERVAL '...'</code>），以利用基于日期的分区裁剪。
+          <code>service_name</code> 和 <code>metric_name</code> 等标签列已建立索引，过滤效率很高。
+        </p>
+      </div>
+
+      <div class="docs-nav">
+        <a href="line-protocol.html" class="docs-nav-prev">&larr; Line Protocol</a>
+        <a href="flight-api.html" class="docs-nav-next">Arrow Flight API &rarr;</a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

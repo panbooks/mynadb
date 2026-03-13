@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 安装指南 - 安装和部署 MynaDB">
+  <title>安装 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/installation.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html" class="active">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>安装</h1>
+
+      <p class="lead">
+        本指南介绍安装 MynaDB 的多种方式：预编译二进制文件、从源码构建、Docker 容器，以及设置为系统服务。
+      </p>
+
+      <h2 id="requirements">系统要求</h2>
+
+      <h3>硬件</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>组件</th>
+              <th>最低要求</th>
+              <th>推荐配置</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>CPU</strong></td>
+              <td>2 核</td>
+              <td>4+ 核</td>
+            </tr>
+            <tr>
+              <td><strong>内存</strong></td>
+              <td>2 GB</td>
+              <td>8+ GB</td>
+            </tr>
+            <tr>
+              <td><strong>存储</strong></td>
+              <td>10 GB SSD</td>
+              <td>100+ GB NVMe SSD</td>
+            </tr>
+            <tr>
+              <td><strong>网络</strong></td>
+              <td>100 Mbps</td>
+              <td>1 Gbps+</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>软件</h3>
+
+      <ul>
+        <li><strong>操作系统：</strong>Linux（Ubuntu 20.04+、Debian 11+、RHEL 8+ 等）</li>
+        <li><strong>架构：</strong>x86_64 (AMD64) 或 ARM64</li>
+        <li><strong>Rust：</strong>1.75+（从源码构建时需要）</li>
+      </ul>
+
+      <h2 id="binary">二进制发行版</h2>
+
+      <p>安装 MynaDB 最简单的方式是使用预编译的二进制文件。</p>
+
+      <h3>下载最新版本</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 下载最新版本</span>
+curl -LO https://github.com/mynadb/mynadb/releases/latest/download/mynadb-linux-amd64.tar.gz
+
+<span class="token-comment"># 解压归档文件</span>
+tar -xzf mynadb-linux-amd64.tar.gz
+
+<span class="token-comment"># 移动二进制文件到 /usr/local/bin</span>
+sudo mv mynadb /usr/local/bin/
+
+<span class="token-comment"># 验证安装</span>
+mynadb --version</code></pre>
+        </div>
+      </div>
+
+      <h3>ARM64（Apple Silicon、AWS Graviton）</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 下载 ARM64 版本</span>
+curl -LO https://github.com/mynadb/mynadb/releases/latest/download/mynadb-linux-arm64.tar.gz
+
+<span class="token-comment"># 解压并安装</span>
+tar -xzf mynadb-linux-arm64.tar.gz
+sudo mv mynadb /usr/local/bin/</code></pre>
+        </div>
+      </div>
+
+      <h2 id="source">从源码构建</h2>
+
+      <p>从源码构建可以获取最新功能并支持自定义。</p>
+
+      <h3>前置条件</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 安装 Rust（如果尚未安装）</span>
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+<span class="token-comment"># 重新加载 shell 配置</span>
+source $HOME/.cargo/env
+
+<span class="token-comment"># 验证 Rust 安装</span>
+rustc --version  <span class="token-comment"># 应为 1.75+</span></code></pre>
+        </div>
+      </div>
+
+      <h3>克隆并构建</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 克隆仓库</span>
+git clone https://github.com/mynadb/mynadb.git
+cd mynadb
+
+<span class="token-comment"># 构建 release 二进制文件</span>
+cargo build --release
+
+<span class="token-comment"># 二进制文件位于 target/release/mynadb</span>
+./target/release/mynadb --version
+
+<span class="token-comment"># 可选：安装到系统路径</span>
+sudo cp target/release/mynadb /usr/local/bin/</code></pre>
+        </div>
+      </div>
+
+      <h3>构建脚本</h3>
+
+      <p>使用提供的构建脚本创建可分发的归档文件：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 构建并创建发行归档文件</span>
+./build.sh
+
+<span class="token-comment"># 输出：mynadb-vX.X.X-linux-amd64.tar.gz</span></code></pre>
+        </div>
+      </div>
+
+      <h2 id="docker">Docker</h2>
+
+      <p>在 Docker 容器中运行 MynaDB，便于部署和隔离。</p>
+
+      <h3>拉取官方镜像</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 拉取最新镜像</span>
+docker pull ghcr.io/mynadb/mynadb:latest
+
+<span class="token-comment"># 使用默认设置运行</span>
+docker run -d \
+  --name mynadb \
+  -p 7000:7000 \
+  -p 7001:7001 \
+  -v stats-data:/data \
+  ghcr.io/mynadb/mynadb:latest</code></pre>
+        </div>
+      </div>
+
+      <h3>Docker Compose</h3>
+
+      <p>生产环境部署建议使用 Docker Compose：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">yaml</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># docker-compose.yml</span>
+version: '3.8'
+
+services:
+  mynadb:
+    image: ghcr.io/mynadb/mynadb:latest
+    container_name: mynadb
+    restart: unless-stopped
+    ports:
+      - "7000:7000"   <span class="token-comment"># HTTP API</span>
+      - "7001:7001"   <span class="token-comment"># Arrow Flight</span>
+    volumes:
+      - ./data:/data
+      - ./config.toml:/etc/mynadb/config.toml:ro
+    environment:
+      - RUST_LOG=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 使用 Docker Compose 启动</span>
+docker-compose up -d
+
+<span class="token-comment"># 查看日志</span>
+docker-compose logs -f mynadb
+
+<span class="token-comment"># 停止</span>
+docker-compose down</code></pre>
+        </div>
+      </div>
+
+      <h3>本地构建 Docker 镜像</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">dockerfile</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Dockerfile</span>
+FROM rust:1.75-slim as builder
+
+WORKDIR /app
+COPY . .
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/mynadb /usr/local/bin/
+
+EXPOSE 7000 7001
+VOLUME ["/data"]
+
+CMD ["mynadb"]</code></pre>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 构建镜像</span>
+docker build -t mynadb:local .
+
+<span class="token-comment"># 运行本地构建的镜像</span>
+docker run -d -p 7000:7000 -p 7001:7001 mynadb:local</code></pre>
+        </div>
+      </div>
+
+      <h2 id="systemd">Systemd 服务</h2>
+
+      <p>将 MynaDB 设置为 systemd 服务，实现自动启动和管理。</p>
+
+      <h3>创建服务用户</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 创建专用用户</span>
+sudo useradd --system --no-create-home --shell /bin/false mynadb
+
+<span class="token-comment"># 创建数据目录</span>
+sudo mkdir -p /var/lib/mynadb
+sudo chown mynadb:mynadb /var/lib/mynadb
+
+<span class="token-comment"># 创建配置目录</span>
+sudo mkdir -p /etc/mynadb</code></pre>
+        </div>
+      </div>
+
+      <h3>创建配置文件</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># /etc/mynadb/config.toml</span>
+
+[server]
+http_port = 7000
+flight_port = 7001
+
+[storage]
+data_dir = "/var/lib/mynadb/data"
+
+[cache]
+flush_interval_secs = 30
+
+[compaction]
+min_files = 4
+max_level = 5
+max_concurrent_compactions = 8
+
+[retention]
+enabled = true
+default_days = 30
+interval_secs = 3600</code></pre>
+        </div>
+      </div>
+
+      <h3>创建 Systemd 单元文件</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">ini</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># /etc/systemd/system/mynadb.service</span>
+
+[Unit]
+Description=MynaDB - High-Performance Time Series Database
+Documentation=https://github.com/mynadb/mynadb
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mynadb
+Group=mynadb
+ExecStart=/usr/local/bin/mynadb --config /etc/mynadb/config.toml
+Restart=on-failure
+RestartSec=5
+
+<span class="token-comment"># 资源限制</span>
+LimitNOFILE=65536
+LimitNPROC=4096
+
+<span class="token-comment"># 安全加固</span>
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/mynadb
+PrivateTmp=true
+
+<span class="token-comment"># 环境变量</span>
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+        </div>
+      </div>
+
+      <h3>启用并启动服务</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 重新加载 systemd</span>
+sudo systemctl daemon-reload
+
+<span class="token-comment"># 设置开机自启</span>
+sudo systemctl enable mynadb
+
+<span class="token-comment"># 启动服务</span>
+sudo systemctl start mynadb
+
+<span class="token-comment"># 检查状态</span>
+sudo systemctl status mynadb
+
+<span class="token-comment"># 查看日志</span>
+sudo journalctl -u mynadb -f</code></pre>
+        </div>
+      </div>
+
+      <h2 id="verify">验证安装</h2>
+
+      <p>安装完成后，验证 MynaDB 是否正常运行：</p>
+
+      <h3>健康检查</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 检查 HTTP 健康端点</span>
+curl http://localhost:7000/health
+
+<span class="token-comment"># 预期响应：</span>
+<span class="token-string">{"status": "ok"}</span></code></pre>
+        </div>
+      </div>
+
+      <h3>写入测试数据</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 写入测试数据</span>
+curl -X POST 'http://localhost:7000/write/testdb' \
+  -d 'cpu,host=server01 usage=45.2'
+
+<span class="token-comment"># 刷盘到磁盘</span>
+curl -X POST http://localhost:7000/flush
+
+<span class="token-comment"># 查询数据</span>
+curl 'http://localhost:7000/query/testdb' \
+  -d 'SELECT * FROM cpu'</code></pre>
+        </div>
+      </div>
+
+      <h3>检查端口</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 验证端口是否在监听</span>
+ss -tlnp | grep -E '7000|7001'
+
+<span class="token-comment"># 预期输出：</span>
+<span class="token-string">LISTEN  0  128  *:7000  *:*  users:(("mynadb",pid=1234,fd=3))</span>
+<span class="token-string">LISTEN  0  128  *:7001  *:*  users:(("mynadb",pid=1234,fd=4))</span></code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-success">
+        <div class="callout-title">安装完成！</div>
+        <p>
+          MynaDB 已安装并正在运行。请继续阅读<a href="quickstart.html">快速入门</a>指南了解如何使用，
+          或查看<a href="configuration.html">配置</a>了解高级设置选项。
+        </p>
+      </div>
+
+      <h2>故障排除</h2>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>问题</th>
+              <th>解决方案</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>端口已被占用</strong></td>
+              <td>在 config.toml 中修改 <code>http_port</code> 或 <code>flight_port</code></td>
+            </tr>
+            <tr>
+              <td><strong>权限被拒绝</strong></td>
+              <td>检查数据目录所有权：<code>chown -R mynadb:mynadb /var/lib/mynadb</code></td>
+            </tr>
+            <tr>
+              <td><strong>服务无法启动</strong></td>
+              <td>检查日志：<code>journalctl -u mynadb -n 50</code></td>
+            </tr>
+            <tr>
+              <td><strong>内存不足</strong></td>
+              <td>在配置中减小 <code>full_compaction_max_concurrent</code> 的值</td>
+            </tr>
+            <tr>
+              <td><strong>查询缓慢</strong></td>
+              <td>触发压缩合并：<code>curl -X POST http://localhost:7000/compact/mydb</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="cards-grid">
+        <a href="quickstart.html" class="card">
+          <div class="card-icon">&#9889;</div>
+          <h3>快速开始</h3>
+          <p>5 分钟内上手 MynaDB。</p>
+          <span class="card-link">开始 <span>&#8594;</span></span>
+        </a>
+
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>配置</h3>
+          <p>完整的配置参考。</p>
+          <span class="card-link">配置 <span>&#8594;</span></span>
+        </a>
+
+        <a href="architecture.html" class="card">
+          <div class="card-icon">&#127959;</div>
+          <h3>架构</h3>
+          <p>了解 MynaDB 的工作原理。</p>
+          <span class="card-link">探索 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

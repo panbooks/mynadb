@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 持续聚合 - 类似 TimescaleDB 的物化视图，支持自动刷新和查询重写">
+  <title>持续聚合 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/continuous-aggregates.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html" class="active">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <div style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">新功能</div>
+
+      <h1>持续聚合与降采样</h1>
+
+      <p>
+        持续聚合为 MynaDB 带来了类似 TimescaleDB 的物化视图功能。只需定义一次查询，MynaDB
+        就会在新数据到达时自动保持结果更新。查询引擎会透明地重写传入的查询，尽可能从
+        预计算的聚合中读取数据，从而大幅降低仪表板和监控工作负载的查询延迟。
+      </p>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#128161; 为什么选择持续聚合？</div>
+        <p>
+          无需在每次仪表板刷新时运行昂贵的 <code>GROUP BY time_bucket(...)</code> 查询，
+          只需定义一次聚合，让 MynaDB 以增量方式维护结果。对于大数据集上的时间分桶查询，
+          典型加速比为 10 倍到 100 倍。
+        </p>
+      </div>
+
+      <!-- 创建聚合 -->
+      <h2 id="creating-aggregates">创建聚合</h2>
+
+      <p>
+        使用类 SQL 的 <code>CREATE CONTINUOUS AGGREGATE</code> 语法在时间序列数据上定义物化视图。
+        每个聚合都需要一个 <code>time_bucket()</code> 调用和至少一个聚合函数。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- 创建 CPU 指标的 5 分钟汇总</span>
+CREATE CONTINUOUS AGGREGATE cpu_5m
+  WITH (refresh_interval = '1m')
+AS
+  SELECT
+    time_bucket(time, 300000000000, 0) AS bucket,
+    host,
+    AVG(usage) AS avg_usage,
+    MAX(usage) AS max_usage,
+    MIN(usage) AS min_usage,
+    COUNT(*) AS sample_count
+  FROM cpu
+  GROUP BY time_bucket(time, 300000000000, 0), host;</code></pre>
+        </div>
+      </div>
+
+      <p>定义的关键要素：</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>要素</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>cpu_5m</code></td>
+              <td>持续聚合的名称（在数据库内必须唯一）</td>
+            </tr>
+            <tr>
+              <td><code>refresh_interval</code></td>
+              <td>物化数据的刷新频率（例如 <code>1m</code>、<code>5m</code>、<code>1h</code>）</td>
+            </tr>
+            <tr>
+              <td><code>time_bucket()</code></td>
+              <td>必需的分桶函数，定义输出粒度</td>
+            </tr>
+            <tr>
+              <td>聚合函数</td>
+              <td><code>AVG</code>、<code>MAX</code>、<code>MIN</code>、<code>SUM</code>、<code>COUNT</code>、<code>first_value</code>、<code>last_value</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>使用 API</h3>
+
+      <p>也可以通过 HTTP API 创建聚合：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 通过 API 创建持续聚合</span>
+curl -X POST http://localhost:7000/aggregates/mydb \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "cpu_5m",
+    "query": "SELECT time_bucket(time, 300000000000, 0) AS bucket, host, AVG(usage) AS avg_usage, MAX(usage) AS max_usage, MIN(usage) AS min_usage, COUNT(*) AS sample_count FROM cpu GROUP BY time_bucket(time, 300000000000, 0), host",
+    "refresh_interval_secs": 60
+  }'</code></pre>
+        </div>
+      </div>
+
+      <!-- 自动降采样 -->
+      <h2 id="automated-downsampling">自动降采样</h2>
+
+      <p>
+        持续聚合支持自动降采样策略，可随时间推移降低数据粒度。
+        这对于在保持长期可见性的同时管理存储成本至关重要。定义不同粒度的多个聚合，
+        即可构建分层汇总管道。
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- 第 1 层：原始数据（通过保留策略保留 7 天）</span>
+<span class="token-comment">-- 1 分钟分辨率</span>
+
+<span class="token-comment">-- 第 2 层：5 分钟汇总（保留 30 天）</span>
+CREATE CONTINUOUS AGGREGATE cpu_5m
+  WITH (refresh_interval = '1m')
+AS
+  SELECT
+    time_bucket(time, 300000000000, 0) AS bucket,
+    host,
+    AVG(usage) AS avg_usage,
+    MAX(usage) AS max_usage,
+    MIN(usage) AS min_usage,
+    first_value(usage, time) AS first_usage,
+    last_value(usage, time) AS last_usage,
+    COUNT(*) AS sample_count
+  FROM cpu
+  GROUP BY time_bucket(time, 300000000000, 0), host;
+
+<span class="token-comment">-- 第 3 层：1 小时汇总（保留 1 年）</span>
+CREATE CONTINUOUS AGGREGATE cpu_1h
+  WITH (refresh_interval = '5m')
+AS
+  SELECT
+    time_bucket(time, 3600000000000, 0) AS bucket,
+    host,
+    AVG(usage) AS avg_usage,
+    MAX(usage) AS max_usage,
+    MIN(usage) AS min_usage,
+    COUNT(*) AS sample_count
+  FROM cpu
+  GROUP BY time_bucket(time, 3600000000000, 0), host;</code></pre>
+        </div>
+      </div>
+
+      <p>分层方案遵循常见模式：</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>层级</th>
+              <th>粒度</th>
+              <th>保留期</th>
+              <th>使用场景</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>原始数据</td>
+              <td>原始精度（如 1 秒）</td>
+              <td>7 天</td>
+              <td>调试、事件调查</td>
+            </tr>
+            <tr>
+              <td>第 1 层聚合</td>
+              <td>5 分钟</td>
+              <td>30 天</td>
+              <td>近期仪表板、告警</td>
+            </tr>
+            <tr>
+              <td>第 2 层聚合</td>
+              <td>1 小时</td>
+              <td>1 年</td>
+              <td>容量规划、趋势分析</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="info-box" style="background: linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 100%); border-left: 4px solid #0284c7; padding: 1rem 1.5rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>提示：</strong> 将持续聚合与<a href="retention.html">保留策略</a>结合使用，
+        可以在保留降采样摘要的同时自动过期原始数据。
+      </div>
+
+      <!-- 查询重写 -->
+      <h2 id="query-rewriting">查询重写</h2>
+
+      <p>
+        当 <code>query_rewriting_enabled</code> 设为 <code>true</code> 时，查询引擎会自动
+        检测传入查询是否可由持续聚合满足，并将查询计划重写为从物化视图读取数据，
+        而非扫描原始数据。
+      </p>
+
+      <h3>工作原理</h3>
+
+      <ol>
+        <li>到达一个在源表上使用 <code>time_bucket()</code> 或 <code>GROUP BY time()</code> 的查询。</li>
+        <li>查询重写器检查该表是否存在具有匹配或更粗粒度桶大小的持续聚合。</li>
+        <li>如果聚合的桶大小能整除请求的桶大小，查询将被重写为从聚合中读取。</li>
+        <li>原始查询中的聚合函数将被转换为对预聚合列的操作。</li>
+      </ol>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- 原始查询（用户编写）</span>
+SELECT
+  time_bucket(time, 3600000000000, 0) AS hour,
+  host,
+  AVG(usage) AS avg_cpu
+FROM cpu
+WHERE time >= NOW() - INTERVAL '24 hours'
+GROUP BY time_bucket(time, 3600000000000, 0), host;
+
+<span class="token-comment">-- 重写后的查询（引擎内部执行）</span>
+<span class="token-comment">-- 从 5 分钟聚合中读取并重新聚合为 1 小时</span>
+SELECT
+  time_bucket(bucket, 3600000000000, 0) AS hour,
+  host,
+  SUM(avg_usage * sample_count) / SUM(sample_count) AS avg_cpu
+FROM cpu_5m
+WHERE bucket >= NOW() - INTERVAL '24 hours'
+GROUP BY time_bucket(bucket, 3600000000000, 0), host;</code></pre>
+        </div>
+      </div>
+
+      <h3>重写规则</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>原始函数</th>
+              <th>重写为</th>
+              <th>前提条件</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>AVG(col)</code></td>
+              <td><code>SUM(avg_col * count) / SUM(count)</code></td>
+              <td>聚合必须包含 <code>AVG</code> 和 <code>COUNT</code></td>
+            </tr>
+            <tr>
+              <td><code>SUM(col)</code></td>
+              <td><code>SUM(sum_col)</code></td>
+              <td>聚合必须包含 <code>SUM</code></td>
+            </tr>
+            <tr>
+              <td><code>COUNT(*)</code></td>
+              <td><code>SUM(count_col)</code></td>
+              <td>聚合必须包含 <code>COUNT</code></td>
+            </tr>
+            <tr>
+              <td><code>MIN(col)</code></td>
+              <td><code>MIN(min_col)</code></td>
+              <td>聚合必须包含 <code>MIN</code></td>
+            </tr>
+            <tr>
+              <td><code>MAX(col)</code></td>
+              <td><code>MAX(max_col)</code></td>
+              <td>聚合必须包含 <code>MAX</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        您可以使用 <a href="api.html"><code>/explain</code></a> 端点来验证查询重写是否生效：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 检查查询是否使用了持续聚合</span>
+curl "http://localhost:7000/explain/mydb?sql=SELECT+time_bucket(time,3600000000000,0)+AS+hour,+host,+AVG(usage)+FROM+cpu+GROUP+BY+1,2&verbose=true"
+
+<span class="token-comment"># 在逻辑计划中查找 "ContinuousAggregate: cpu_5m"</span></code></pre>
+        </div>
+      </div>
+
+      <!-- 配置 -->
+      <h2 id="configuration">配置</h2>
+
+      <p>
+        在 <code>config.toml</code> 中启用和调优持续聚合：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[continuous_aggregates]
+<span class="token-comment"># 启用持续聚合功能</span>
+enabled = true
+
+<span class="token-comment"># 后台任务检查需要刷新的聚合的频率（秒）</span>
+refresh_check_interval_secs = 60
+
+<span class="token-comment"># 最大并发刷新聚合数</span>
+max_concurrent_refreshes = 4
+
+<span class="token-comment"># 有利时自动将查询重写为使用聚合</span>
+query_rewriting_enabled = true</code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>参数</th>
+              <th>默认值</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>enabled</code></td>
+              <td><code>false</code></td>
+              <td>持续聚合功能的主开关。禁用时，现有聚合不会刷新且查询重写不活跃。</td>
+            </tr>
+            <tr>
+              <td><code>refresh_check_interval_secs</code></td>
+              <td><code>60</code></td>
+              <td>后台刷新检查之间的间隔（秒）。较低的值会提高数据新鲜度，但会增加 CPU 使用率。</td>
+            </tr>
+            <tr>
+              <td><code>max_concurrent_refreshes</code></td>
+              <td><code>4</code></td>
+              <td>并行运行的最大聚合刷新任务数。对于拥有大量聚合和可用 CPU 核心的系统，可以适当增加。</td>
+            </tr>
+            <tr>
+              <td><code>query_rewriting_enabled</code></td>
+              <td><code>true</code></td>
+              <td>启用后，查询引擎会自动将符合条件的查询重写为使用物化视图。可禁用以强制查询原始数据。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="info-box" style="background: linear-gradient(135deg, #fef3c7 0%, #fffbeb 100%); border-left: 4px solid #f59e0b; padding: 1rem 1.5rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <strong>注意：</strong> 在集群模式下，只有选举出的 Leader 节点运行后台刷新任务。
+        查询重写在所有节点上都处于活跃状态。详见<a href="cluster.html">企业版集群</a>。
+      </div>
+
+      <!-- API 端点 -->
+      <h2 id="api-endpoints">API 端点</h2>
+
+      <p>
+        通过 REST API 管理持续聚合：
+      </p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>端点</th>
+              <th>方法</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>/aggregates/:db</code></td>
+              <td>GET</td>
+              <td>列出数据库的所有持续聚合</td>
+            </tr>
+            <tr>
+              <td><code>/aggregates/:db</code></td>
+              <td>POST</td>
+              <td>创建新的持续聚合</td>
+            </tr>
+            <tr>
+              <td><code>/aggregates/:db/:name</code></td>
+              <td>DELETE</td>
+              <td>删除持续聚合及其物化数据</td>
+            </tr>
+            <tr>
+              <td><code>/aggregates/:db/:name/refresh</code></td>
+              <td>POST</td>
+              <td>手动触发立即刷新</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>列出聚合</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 列出所有持续聚合</span>
+curl http://localhost:7000/aggregates/mydb
+
+<span class="token-comment"># 响应</span>
+{
+  "aggregates": [
+    {
+      "name": "cpu_5m",
+      "source_table": "cpu",
+      "bucket_interval_ns": 300000000000,
+      "refresh_interval_secs": 60,
+      "state": "active",
+      "last_refresh": "2026-02-13T10:15:00Z",
+      "watermark": 1739440500000000000
+    },
+    {
+      "name": "cpu_1h",
+      "source_table": "cpu",
+      "bucket_interval_ns": 3600000000000,
+      "refresh_interval_secs": 300,
+      "state": "active",
+      "last_refresh": "2026-02-13T10:10:00Z",
+      "watermark": 1739438400000000000
+    }
+  ],
+  "count": 2
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>创建聚合</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 创建内存指标的 1 小时汇总</span>
+curl -X POST http://localhost:7000/aggregates/mydb \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "memory_1h",
+    "query": "SELECT time_bucket(time, 3600000000000, 0) AS bucket, host, AVG(used) AS avg_used, MAX(used) AS max_used, AVG(total) AS avg_total FROM memory GROUP BY time_bucket(time, 3600000000000, 0), host",
+    "refresh_interval_secs": 300
+  }'
+
+<span class="token-comment"># 响应</span>
+{
+  "status": "created",
+  "name": "memory_1h",
+  "message": "Continuous aggregate created. First refresh will begin within 60 seconds."
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>删除聚合</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 删除持续聚合</span>
+curl -X DELETE http://localhost:7000/aggregates/mydb/cpu_5m
+
+<span class="token-comment"># 响应</span>
+{
+  "status": "deleted",
+  "name": "cpu_5m",
+  "message": "Continuous aggregate and materialized data removed."
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>手动刷新</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 触发立即刷新</span>
+curl -X POST http://localhost:7000/aggregates/mydb/cpu_5m/refresh
+
+<span class="token-comment"># 响应</span>
+{
+  "status": "refreshing",
+  "name": "cpu_5m",
+  "message": "Refresh started. New data will be available shortly."
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- 监控 -->
+      <h2 id="monitoring">监控</h2>
+
+      <p>
+        通过列表端点和服务器日志跟踪持续聚合的健康状况和性能。
+      </p>
+
+      <h3>聚合状态</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>状态</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>active</code></td>
+              <td>聚合运行正常，正在按计划刷新。</td>
+            </tr>
+            <tr>
+              <td><code>refreshing</code></td>
+              <td>正在进行刷新。</td>
+            </tr>
+            <tr>
+              <td><code>error</code></td>
+              <td>上次刷新失败。请查看日志了解详情。系统将在下一个间隔重试。</td>
+            </tr>
+            <tr>
+              <td><code>disabled</code></td>
+              <td>聚合存在但未被刷新（例如，配置中禁用了该功能）。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>关键指标</h3>
+
+      <p>列表端点为每个聚合返回有用的监控字段：</p>
+
+      <ul>
+        <li><strong>last_refresh</strong> - 最近一次成功刷新的时间戳。过期的时间戳可能表示存在问题。</li>
+        <li><strong>watermark</strong> - 已物化的最高时间戳（纳秒）。此时间点之后的数据尚未包含在聚合中。</li>
+        <li><strong>state</strong> - 聚合的当前状态（参见上表）。</li>
+      </ul>
+
+      <h3>日志消息</h3>
+
+      <p>
+        刷新任务以 <code>info</code> 级别输出结构化日志。需要关注的关键消息：
+      </p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 刷新成功</span>
+INFO  continuous_aggregates::job: Refreshed aggregate name="cpu_5m" rows=1842 duration_ms=234 watermark=1739440500000000000
+
+<span class="token-comment"># 刷新错误</span>
+ERROR continuous_aggregates::job: Failed to refresh aggregate name="cpu_5m" error="table not found: cpu" retries=3
+
+<span class="token-comment"># 查询重写已应用</span>
+DEBUG continuous_aggregates::query_rewriter: Rewrote query to use aggregate original_table="cpu" aggregate="cpu_5m"</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#128200; 仪表板集成</div>
+        <p>
+          使用 <a href="grafana.html">Grafana 集成</a>可视化聚合刷新延迟和水位线滞后。
+          详见<a href="monitoring.html">监控</a>页面中的预置仪表板面板。
+        </p>
+      </div>
+
+      <div class="cards-grid">
+        <a href="sql-queries.html" class="card">
+          <div class="card-icon">&#128269;</div>
+          <h3>SQL 查询</h3>
+          <p>完整的 SQL 参考，包括时间序列函数。</p>
+          <span class="card-link">查看 <span>&#8594;</span></span>
+        </a>
+
+        <a href="retention.html" class="card">
+          <div class="card-icon">&#128197;</div>
+          <h3>保留策略</h3>
+          <p>配置与聚合配合使用的自动数据过期策略。</p>
+          <span class="card-link">查看 <span>&#8594;</span></span>
+        </a>
+
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>配置</h3>
+          <p>MynaDB 的所有配置选项。</p>
+          <span class="card-link">查看 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

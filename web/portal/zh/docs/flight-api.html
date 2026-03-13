@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Arrow Flight API - 面向分析场景的高性能 gRPC 流式传输">
+  <title>Arrow Flight API - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/flight-api.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html" class="active">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>Arrow Flight API</h1>
+
+      <p>
+        MynaDB 提供 <strong>Apache Arrow Flight</strong> 接口，用于高性能数据流式传输。
+        Arrow Flight 是一种基于 gRPC 的协议，针对大规模数据集的零拷贝传输进行了优化。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#9992; 为什么选择 Arrow Flight？</div>
+        <p>对于大型结果集，Arrow Flight 的数据传输速度比 REST API 快 10-100 倍。
+        它非常适合分析仪表盘、数据管道和机器学习工作负载。</p>
+      </div>
+
+      <!-- Overview -->
+      <h2 id="overview">概述</h2>
+
+      <p>Arrow Flight API 提供以下功能：</p>
+
+      <ul>
+        <li><strong>高吞吐量流式传输</strong> - 每秒传输数百万行数据</li>
+        <li><strong>零拷贝传输</strong> - 数据保持 Arrow 列式格式</li>
+        <li><strong>SQL 查询执行</strong> - 完整的 DataFusion SQL 支持</li>
+        <li><strong>并行数据检索</strong> - 多端点分布式读取</li>
+        <li><strong>压缩</strong> - 内置 LZ4/ZSTD 压缩</li>
+      </ul>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>特性</th>
+              <th>HTTP API</th>
+              <th>Arrow Flight</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>协议</td>
+              <td>REST/JSON</td>
+              <td>gRPC/Arrow IPC</td>
+            </tr>
+            <tr>
+              <td>数据格式</td>
+              <td>JSON（文本）</td>
+              <td>Arrow（二进制）</td>
+            </tr>
+            <tr>
+              <td>适用场景</td>
+              <td>小型查询、写入</td>
+              <td>大型结果集</td>
+            </tr>
+            <tr>
+              <td>流式传输</td>
+              <td>否</td>
+              <td>是</td>
+            </tr>
+            <tr>
+              <td>客户端库</td>
+              <td>任何 HTTP 客户端</td>
+              <td>Arrow Flight 客户端</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Connection -->
+      <h2 id="connection">连接</h2>
+
+      <p>Arrow Flight 服务器默认运行在端口 <code>7001</code>（可通过 <code>flight_port</code> 配置）。</p>
+
+      <div class="table-wrapper">
+        <table>
+          <tbody>
+            <tr>
+              <td><strong>默认端口</strong></td>
+              <td><code>7001</code></td>
+            </tr>
+            <tr>
+              <td><strong>协议</strong></td>
+              <td>gRPC (HTTP/2)</td>
+            </tr>
+            <tr>
+              <td><strong>连接字符串</strong></td>
+              <td><code>grpc://localhost:7001</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>配置</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[server]
+http_port = 7000
+flight_port = 7001  # Arrow Flight gRPC port</code></pre>
+        </div>
+      </div>
+
+      <!-- DataFusion CLI -->
+      <h2 id="datafusion-cli">DataFusion CLI</h2>
+
+      <p>
+        通过 Flight 查询 MynaDB 最简单的方式是使用 <strong>DataFusion CLI</strong>。
+        它提供了支持 Arrow Flight 的交互式 SQL 命令行。
+      </p>
+
+      <h3>安装</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Install via Cargo</span>
+cargo install datafusion-cli
+
+<span class="token-comment"># Or download pre-built binary</span>
+<span class="token-comment"># https://github.com/apache/arrow-datafusion/releases</span></code></pre>
+        </div>
+      </div>
+
+      <h3>连接到 MynaDB</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Connect to Flight server</span>
+datafusion-cli --host localhost --port 7001
+
+<span class="token-comment"># With specific database catalog</span>
+datafusion-cli --host localhost --port 7001 --catalog mydb</code></pre>
+        </div>
+      </div>
+
+      <h3>交互式会话</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- List available tables</span>
+<span class="token-keyword">SHOW</span> TABLES;
+
+<span class="token-comment">-- Query data</span>
+<span class="token-keyword">SELECT</span> host, <span class="token-function">AVG</span>(usage) <span class="token-keyword">AS</span> avg_cpu
+<span class="token-keyword">FROM</span> mydb.default.cpu
+<span class="token-keyword">WHERE</span> time > now() - interval '1 hour'
+<span class="token-keyword">GROUP BY</span> host
+<span class="token-keyword">ORDER BY</span> avg_cpu <span class="token-keyword">DESC</span>;
+
+<span class="token-comment">-- Describe table schema</span>
+<span class="token-keyword">DESCRIBE</span> mydb.default.cpu;</code></pre>
+        </div>
+      </div>
+
+      <!-- Python Client -->
+      <h2 id="python">Python 客户端</h2>
+
+      <p>使用 <code>pyarrow</code> 通过 Arrow Flight 连接 MynaDB。</p>
+
+      <h3>安装</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>pip install pyarrow pandas</code></pre>
+        </div>
+      </div>
+
+      <h3>基本查询</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">python</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-keyword">import</span> pyarrow.flight <span class="token-keyword">as</span> flight
+<span class="token-keyword">import</span> pandas <span class="token-keyword">as</span> pd
+
+<span class="token-comment"># Connect to MynaDB</span>
+client = flight.connect(<span class="token-string">"grpc://localhost:7001"</span>)
+
+<span class="token-comment"># Execute SQL query</span>
+sql = <span class="token-string">"""
+    SELECT host, region, AVG(usage) as avg_cpu
+    FROM mydb.default.cpu
+    WHERE time > now() - interval '1 hour'
+    GROUP BY host, region
+"""</span>
+
+<span class="token-comment"># Get Flight info and read data</span>
+flight_info = client.get_flight_info(flight.FlightDescriptor.for_command(sql))
+reader = client.do_get(flight_info.endpoints[<span class="token-number">0</span>].ticket)
+
+<span class="token-comment"># Convert to Pandas DataFrame</span>
+df = reader.read_pandas()
+<span class="token-function">print</span>(df)</code></pre>
+        </div>
+      </div>
+
+      <h3>流式读取大型结果集</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">python</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-keyword">import</span> pyarrow.flight <span class="token-keyword">as</span> flight
+
+client = flight.connect(<span class="token-string">"grpc://localhost:7001"</span>)
+
+sql = <span class="token-string">"SELECT * FROM mydb.default.cpu"</span>
+flight_info = client.get_flight_info(flight.FlightDescriptor.for_command(sql))
+
+<span class="token-comment"># Stream record batches (memory efficient)</span>
+reader = client.do_get(flight_info.endpoints[<span class="token-number">0</span>].ticket)
+
+total_rows = <span class="token-number">0</span>
+<span class="token-keyword">for</span> batch <span class="token-keyword">in</span> reader:
+    total_rows += batch.data.num_rows
+    <span class="token-comment"># Process each batch...</span>
+    <span class="token-function">print</span>(<span class="token-string">f"Received batch with {batch.data.num_rows} rows"</span>)
+
+<span class="token-function">print</span>(<span class="token-string">f"Total rows: {total_rows}"</span>)</code></pre>
+        </div>
+      </div>
+
+      <h3>与 Pandas/Polars 集成</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">python</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-keyword">import</span> pyarrow.flight <span class="token-keyword">as</span> flight
+<span class="token-keyword">import</span> polars <span class="token-keyword">as</span> pl
+
+<span class="token-keyword">def</span> <span class="token-function">query_stats_service</span>(sql: <span class="token-variable">str</span>) -> pl.DataFrame:
+    <span class="token-string">"""Execute SQL and return Polars DataFrame."""</span>
+    client = flight.connect(<span class="token-string">"grpc://localhost:7001"</span>)
+    flight_info = client.get_flight_info(
+        flight.FlightDescriptor.for_command(sql)
+    )
+    reader = client.do_get(flight_info.endpoints[<span class="token-number">0</span>].ticket)
+
+    <span class="token-comment"># Read as Arrow table, convert to Polars</span>
+    arrow_table = reader.read_all()
+    <span class="token-keyword">return</span> pl.from_arrow(arrow_table)
+
+<span class="token-comment"># Example usage</span>
+df = query_stats_service(<span class="token-string">"""
+    SELECT
+        date_trunc('minute', to_timestamp(timestamp/1000000000)) as minute,
+        host,
+        AVG(usage) as avg_cpu,
+        MAX(usage) as max_cpu
+    FROM mydb.default.cpu
+    GROUP BY 1, 2
+    ORDER BY 1 DESC
+    LIMIT 100
+"""</span>)
+<span class="token-function">print</span>(df)</code></pre>
+        </div>
+      </div>
+
+      <!-- Rust Client -->
+      <h2 id="rust">Rust 客户端</h2>
+
+      <p>使用 <code>arrow-flight</code> crate 从 Rust 应用程序进行连接。</p>
+
+      <h3>Cargo.toml</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[dependencies]
+arrow-flight = "50"
+arrow = "50"
+tonic = "0.10"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"</code></pre>
+        </div>
+      </div>
+
+      <h3>示例客户端</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">rust</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-keyword">use</span> arrow_flight::flight_service_client::FlightServiceClient;
+<span class="token-keyword">use</span> arrow_flight::{FlightDescriptor, Ticket};
+<span class="token-keyword">use</span> futures::StreamExt;
+
+<span class="token-keyword">async fn</span> <span class="token-function">query_stats_service</span>() -> Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    <span class="token-comment">// Connect to Flight server</span>
+    <span class="token-keyword">let mut</span> client = FlightServiceClient::connect(
+        <span class="token-string">"http://localhost:7001"</span>
+    ).<span class="token-keyword">await</span>?;
+
+    <span class="token-comment">// Create SQL command</span>
+    <span class="token-keyword">let</span> sql = <span class="token-string">"SELECT * FROM mydb.default.cpu LIMIT 100"</span>;
+    <span class="token-keyword">let</span> descriptor = FlightDescriptor::new_cmd(sql.to_string());
+
+    <span class="token-comment">// Get flight info</span>
+    <span class="token-keyword">let</span> flight_info = client
+        .get_flight_info(descriptor)
+        .<span class="token-keyword">await</span>?
+        .into_inner();
+
+    <span class="token-comment">// Read data from first endpoint</span>
+    <span class="token-keyword">if let</span> Some(endpoint) = flight_info.endpoint.first() {
+        <span class="token-keyword">let</span> ticket = endpoint.ticket.clone().unwrap();
+        <span class="token-keyword">let mut</span> stream = client.do_get(ticket).<span class="token-keyword">await</span>?.into_inner();
+
+        <span class="token-keyword">while let</span> Some(batch) = stream.next().<span class="token-keyword">await</span> {
+            <span class="token-keyword">let</span> batch = batch?;
+            <span class="token-function">println!</span>(<span class="token-string">"Received batch with {} bytes"</span>, batch.data_body.len());
+        }
+    }
+
+    Ok(())
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- SQL Queries -->
+      <h2 id="queries">通过 Flight 执行 SQL 查询</h2>
+
+      <p>
+        MynaDB 中的 Arrow Flight 使用 <strong>FlightSQL 语义</strong>。
+        SQL 查询以命令描述符的形式传递。
+      </p>
+
+      <h3>支持的操作</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>操作</th>
+              <th>说明</th>
+              <th>示例</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>SELECT</code></td>
+              <td>查询数据</td>
+              <td><code>SELECT * FROM cpu</code></td>
+            </tr>
+            <tr>
+              <td><code>SHOW TABLES</code></td>
+              <td>列出表</td>
+              <td><code>SHOW TABLES</code></td>
+            </tr>
+            <tr>
+              <td><code>DESCRIBE</code></td>
+              <td>表 Schema</td>
+              <td><code>DESCRIBE cpu</code></td>
+            </tr>
+            <tr>
+              <td>聚合</td>
+              <td>GROUP BY、窗口函数</td>
+              <td><code>SELECT AVG(x) FROM t GROUP BY y</code></td>
+            </tr>
+            <tr>
+              <td>连接查询</td>
+              <td>跨表查询</td>
+              <td><code>SELECT * FROM a JOIN b ON ...</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>表命名</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- Fully qualified name (recommended)</span>
+<span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> mydb.default.cpu;
+
+<span class="token-comment">-- With schema</span>
+<span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> default.cpu;
+
+<span class="token-comment">-- Simple name (uses default catalog/schema)</span>
+<span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> cpu;</code></pre>
+        </div>
+      </div>
+
+      <!-- Performance Tips -->
+      <h2 id="performance">性能建议</h2>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#128293; 性能最佳实践</div>
+        <ul>
+          <li>使用<strong>列投影</strong> - 只选择需要的列</li>
+          <li>应用<strong>时间过滤</strong> - 利用分区裁剪</li>
+          <li>对大数据集使用<strong>流式读取</strong></li>
+          <li>启用<strong>压缩</strong>以优化网络传输</li>
+        </ul>
+      </div>
+
+      <h3>列投影</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- Good: Only select needed columns</span>
+<span class="token-keyword">SELECT</span> time, host, usage <span class="token-keyword">FROM</span> cpu;
+
+<span class="token-comment">-- Avoid: Selecting all columns</span>
+<span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> cpu;</code></pre>
+        </div>
+      </div>
+
+      <h3>时间范围过滤</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- Leverages date partition pruning</span>
+<span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> cpu
+<span class="token-keyword">WHERE</span> time >= <span class="token-number">1704067200000000000</span>  <span class="token-comment">-- epoch nanos</span>
+  <span class="token-keyword">AND</span> time <  <span class="token-number">1704153600000000000</span>;
+
+<span class="token-comment">-- Or using date functions</span>
+<span class="token-keyword">SELECT</span> * <span class="token-keyword">FROM</span> cpu
+<span class="token-keyword">WHERE</span> time > now() - interval <span class="token-string">'1 day'</span>;</code></pre>
+        </div>
+      </div>
+
+      <h3>压缩选项</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">python</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-keyword">import</span> pyarrow.flight <span class="token-keyword">as</span> flight
+
+<span class="token-comment"># Enable gRPC compression</span>
+options = flight.FlightCallOptions(
+    headers=[(b<span class="token-string">"grpc-encoding"</span>, b<span class="token-string">"gzip"</span>)]
+)
+
+client = flight.connect(<span class="token-string">"grpc://localhost:7001"</span>)
+flight_info = client.get_flight_info(
+    flight.FlightDescriptor.for_command(sql),
+    options=options
+)</code></pre>
+        </div>
+      </div>
+
+      <h2>故障排除</h2>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>问题</th>
+              <th>解决方案</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>连接被拒绝</td>
+              <td>检查 <code>flight_port</code> 配置，确保服务器正在运行</td>
+            </tr>
+            <tr>
+              <td>找不到表</td>
+              <td>使用完全限定名：<code>catalog.schema.table</code></td>
+            </tr>
+            <tr>
+              <td>大型查询超时</td>
+              <td>增加 gRPC 超时时间，使用流式读取</td>
+            </tr>
+            <tr>
+              <td>内存问题</td>
+              <td>使用流式批次读取，避免使用 <code>read_all()</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>下一步</h2>
+
+      <div class="cards-grid">
+        <a href="api.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>HTTP API</h3>
+          <p>用于写入和简单查询的 REST API。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="examples.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>示例</h3>
+          <p>开箱即用的查询示例和模式。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="sql-queries.html" class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>SQL 参考</h3>
+          <p>完整的 SQL 语法和函数。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

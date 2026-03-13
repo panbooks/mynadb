@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Grafana 集成 - 使用 Grafana 仪表板可视化时序数据">
+  <title>Grafana 集成 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/grafana.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html" class="active">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <span class="badge-new">新</span>
+      <h1>Grafana 集成</h1>
+
+      <p>使用 Grafana 仪表板可视化您的时序数据。MynaDB 通过多种数据源选项与 Grafana 无缝集成，包括 InfluxDB 兼容端点、通过 MySQL 协议的原生 SQL，以及用于运维可视化的内置监控仪表板。</p>
+
+      <h2>数据源配置</h2>
+
+      <p>按照以下步骤使用 InfluxDB 数据源插件将 Grafana 连接到 MynaDB：</p>
+
+      <ol>
+        <li>
+          <strong>打开 Grafana 并导航到数据源</strong><br>
+          在 Grafana 实例中前往 <strong>配置 &rarr; 数据源 &rarr; 添加数据源</strong>。
+        </li>
+        <li>
+          <strong>选择 InfluxDB 数据源类型</strong><br>
+          在数据源列表中搜索 <em>InfluxDB</em> 并选择它。MynaDB 提供 InfluxDB 兼容的查询端点。
+        </li>
+        <li>
+          <strong>配置连接 URL</strong><br>
+          将 URL 设置为 MynaDB 实例的 HTTP 地址：
+          <div class="code-block">
+            <div class="code-header">
+              <span class="lang">text</span>
+            </div>
+            <div class="code-content">
+              <pre><code>http://your-mynadb-host:7000</code></pre>
+            </div>
+          </div>
+        </li>
+        <li>
+          <strong>设置数据库名称</strong><br>
+          在 <em>Database</em> 字段中输入您的数据库（catalog）名称。这对应于 MynaDB 写入和查询端点中使用的 <code>:db</code> 参数（例如 <code>mydb</code>）。
+        </li>
+        <li>
+          <strong>配置认证（如已启用）</strong><br>
+          如果 MynaDB 启用了认证，请开启 <em>Basic Auth</em> 并提供在 <code>config.toml</code> 的 <code>[auth]</code> 部分配置的用户名和密码。
+        </li>
+        <li>
+          <strong>保存并测试</strong><br>
+          点击 <strong>保存并测试</strong>。Grafana 将验证与 MynaDB 的连接。
+        </li>
+      </ol>
+
+      <h2>InfluxDB 兼容端点</h2>
+
+      <p>MynaDB 提供多个查询端点，Grafana 可根据您偏好的查询语言选择使用：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>端点</th>
+            <th>协议</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/api/v2/query</code></td>
+            <td>Flux</td>
+            <td>InfluxDB v2 兼容的 Flux 查询端点。当 Grafana 配置为 Flux 模式的 InfluxDB 数据源时使用此端点。</td>
+          </tr>
+          <tr>
+            <td><code>/api/v1/query</code></td>
+            <td>InfluxQL</td>
+            <td>InfluxDB v1 兼容的 InfluxQL 查询端点。适用于传统仪表板或更简单的查询语法。</td>
+          </tr>
+          <tr>
+            <td><code>/query/:db</code></td>
+            <td>原生 SQL</td>
+            <td>由 Apache DataFusion 驱动的 MynaDB 原生 SQL 端点。提供完整的 SQL 功能，包括 JOIN、窗口函数和 CTE。</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>内置仪表板</h2>
+
+      <p>MynaDB 自带一个可从管理控制台访问的 Grafana 风格监控仪表板。此内置仪表板无需单独安装 Grafana 即可提供实时运维可视化。</p>
+
+      <p>仪表板包含以下面板：</p>
+
+      <ul>
+        <li><strong>数据接入速率</strong> &mdash; 跟踪每秒写入的数据点数，按数据库和 measurement 分类。有助于识别写入吞吐量瓶颈和流量峰值。</li>
+        <li><strong>查询延迟</strong> &mdash; 显示 p50、p95 和 p99 查询执行时间。监控查询性能随时间的变化，突出显示可能需要优化的慢查询。</li>
+        <li><strong>存储大小</strong> &mdash; 显示所有 catalog 和 schema 的总磁盘使用量，按压缩级别（L0、L1、L2）分类。对容量规划和跟踪数据增长很有用。</li>
+        <li><strong>压缩合并进度</strong> &mdash; 可视化活跃的压缩合并任务、已合并的文件、回收的字节数和压缩合并积压量。确保后台维护跟上写入量。</li>
+      </ul>
+
+      <p>访问内置仪表板：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>http://your-mynadb-host:7000/admin/dashboard</code></pre>
+        </div>
+      </div>
+
+      <h2>Grafana 中的示例查询</h2>
+
+      <p>在 Grafana 中使用 MynaDB 的原生 SQL 端点时，您可以使用 Grafana 内置的模板变量来创建动态的、具有时间感知能力的仪表板。以下是常见的查询模式。</p>
+
+      <h3>按时间过滤的聚合</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>SELECT
+  time_bucket('$__interval', time) AS time,
+  avg(cpu_usage) AS avg_cpu,
+  max(cpu_usage) AS max_cpu
+FROM mydb.default.system_metrics
+WHERE $__timeFilter(time)
+GROUP BY time_bucket('$__interval', time)
+ORDER BY time</code></pre>
+        </div>
+      </div>
+
+      <h3>多主机对比</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>SELECT
+  time_bucket('$__interval', time) AS time,
+  host,
+  avg(memory_used_percent) AS avg_memory
+FROM mydb.default.system_metrics
+WHERE $__timeFilter(time)
+  AND host IN ($host)
+GROUP BY time_bucket('$__interval', time), host
+ORDER BY time</code></pre>
+        </div>
+      </div>
+
+      <h3>数据接入速率监控</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>SELECT
+  time_bucket('$__interval', time) AS time,
+  count(*) / EXTRACT(EPOCH FROM INTERVAL '$__interval') AS points_per_second
+FROM mydb.default.measurements
+WHERE $__timeFilter(time)
+GROUP BY time_bucket('$__interval', time)
+ORDER BY time</code></pre>
+        </div>
+      </div>
+
+      <h3>带变量的 Top-N 查询</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>SELECT
+  host,
+  avg(cpu_usage) AS avg_cpu,
+  max(cpu_usage) AS peak_cpu
+FROM mydb.default.system_metrics
+WHERE $__timeFilter(time)
+GROUP BY host
+ORDER BY avg_cpu DESC
+LIMIT $topN</code></pre>
+        </div>
+      </div>
+
+      <p>支持以下 Grafana 宏：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>宏</th>
+            <th>说明</th>
+            <th>展开示例</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>$__timeFilter(time)</code></td>
+            <td>根据仪表板选定的时间范围展开为时间范围过滤器</td>
+            <td><code>time &gt;= 1704067200000000000 AND time &lt;= 1704153600000000000</code></td>
+          </tr>
+          <tr>
+            <td><code>$__interval</code></td>
+            <td>根据仪表板时间范围和面板宽度自动计算的聚合间隔</td>
+            <td><code>1m</code>、<code>5m</code>、<code>1h</code></td>
+          </tr>
+          <tr>
+            <td><code>$__from</code> / <code>$__to</code></td>
+            <td>选定仪表板时间范围的开始和结束时间戳</td>
+            <td><code>1704067200000</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>MySQL 数据源替代方案</h2>
+
+      <p>作为 InfluxDB 数据源的替代方案，您可以使用 <strong>MySQL 数据源</strong>将 Grafana 连接到 MynaDB。MynaDB 在端口 7002 上实现了 MySQL 线协议，允许标准 MySQL 客户端和工具（包括 Grafana）直接执行 SQL 查询。</p>
+
+      <h3>配置步骤</h3>
+
+      <ol>
+        <li>
+          <strong>在 MynaDB 中启用 MySQL 协议</strong><br>
+          确保在 <code>config.toml</code> 中启用了 MySQL 协议：
+          <div class="code-block">
+            <div class="code-header">
+              <span class="lang">toml</span>
+            </div>
+            <div class="code-content">
+              <pre><code>[server]
+mysql_enabled = true
+mysql_port = 7002</code></pre>
+            </div>
+          </div>
+        </li>
+        <li>
+          <strong>在 Grafana 中添加 MySQL 数据源</strong><br>
+          前往 <strong>配置 &rarr; 数据源 &rarr; 添加数据源</strong> 并选择 <em>MySQL</em>。
+        </li>
+        <li>
+          <strong>配置连接</strong>
+          <div class="code-block">
+            <div class="code-header">
+              <span class="lang">text</span>
+            </div>
+            <div class="code-content">
+              <pre><code>Host:     your-mynadb-host:7002
+Database: mydb
+User:     admin      (if auth is enabled)
+Password: secret     (if auth is enabled)</code></pre>
+            </div>
+          </div>
+        </li>
+        <li>
+          <strong>保存并测试连接</strong><br>
+          点击 <strong>保存并测试</strong> 以验证连接。
+        </li>
+      </ol>
+
+      <h3>MySQL 数据源的优势</h3>
+
+      <ul>
+        <li>完整的 SQL 支持，包括 JOIN、子查询、CTE 和窗口函数</li>
+        <li>Grafana 原生 SQL 查询编辑器，带自动补全</li>
+        <li>兼容 Grafana 告警规则</li>
+        <li>无需安装额外插件</li>
+      </ul>
+
+      <h3>MySQL 数据源查询示例</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+        </div>
+        <div class="code-content">
+          <pre><code>SELECT
+  UNIX_TIMESTAMP(time) AS time_sec,
+  avg(value) AS avg_value,
+  measurement
+FROM cpu
+WHERE time BETWEEN FROM_UNIXTIME($__from / 1000) AND FROM_UNIXTIME($__to / 1000)
+GROUP BY time_bucket('$__interval', time), measurement
+ORDER BY time_sec</code></pre>
+        </div>
+      </div>
+
+      <div class="doc-nav">
+        <a href="forecasting.html" class="doc-nav-prev">
+          <span>&#8592;</span> 预测分析
+        </a>
+        <a href="iceberg.html" class="doc-nav-next">
+          Apache Iceberg <span>&#8594;</span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 管理仪表盘指南 - 入门指南、操作教程和核心概念介绍">
+  <title>管理仪表盘指南 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/admin-guide.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html" class="active">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <div class="docs-badge" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #a78bfa); color: white; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; margin-bottom: 1rem;">
+        v0.3.0 新功能
+      </div>
+
+      <h1>管理仪表盘指南</h1>
+
+      <p class="lead">
+        MynaDB 管理控制台的全面指南——从集群健康监控到交互式 SQL 查询。了解仪表盘的工作原理、每个页面的功能，以及如何通过浏览器开始管理您的集群。
+      </p>
+
+      <h2 id="overview">概述</h2>
+
+      <p>
+        MynaDB 管理控制台是一个独立的 React Web 应用程序，提供对 MynaDB 集群的全面可视化和控制。它作为单独的管理节点运行，连接到 Meta 服务进行集群发现，并将请求转发到相应的数据节点。
+      </p>
+
+      <h3>架构</h3>
+
+      <p>
+        管理节点位于集群旁边，与两个层面进行通信：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>  Browser (Admin UI)
+        |
+        v
+  +------------------+
+  |   Admin Node     |  Port 18080
+  |   (Axum HTTP)    |
+  +--------+---------+
+           |
+     +-----+-----+
+     |           |
+     v           v
+  +------+   +--------+    +--------+
+  | Meta |   | Data 1 |    | Data 2 |  ...
+  | Svc  |   | Node   |    | Node   |
+  +------+   +--------+    +--------+
+
+  Meta Service:  Cluster discovery, node registry, leader election
+  Data Nodes:    Query execution, storage, compaction
+  Admin Node:    Web UI, request forwarding, event streaming</code></pre>
+        </div>
+      </div>
+
+      <ul>
+        <li><strong>Meta 服务</strong> -- 管理节点查询 Meta 端点以发现所有已注册的数据节点、其角色、状态和表分配信息</li>
+        <li><strong>数据节点</strong> -- 查询、存储操作、压缩合并和刷新命令直接转发到相应数据节点的 HTTP API</li>
+        <li><strong>事件流</strong> -- 管理节点接收实时集群事件（节点加入、Leader 变更、表重新分配），并通过 WebSocket 流式传输到浏览器</li>
+      </ul>
+
+      <h2 id="dashboard">仪表盘</h2>
+
+      <p>
+        仪表盘是管理控制台的首页。它提供集群健康状况和关键统计数据的高层概览。
+      </p>
+
+      <h3>集群健康</h3>
+
+      <p>
+        顶部区域显示整体集群状态：
+      </p>
+
+      <ul>
+        <li><strong>集群状态</strong> -- 健康（所有节点响应正常）或降级（一个或多个节点不可达）</li>
+        <li><strong>Meta Leader</strong> -- 当前 Meta Leader 节点 ID 及其 Raft 任期编号</li>
+      </ul>
+
+      <h3>节点数量卡片</h3>
+
+      <p>
+        四个汇总卡片显示集群中每种节点类型的数量：
+      </p>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>卡片</th>
+            <th>显示内容</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Meta 节点</strong></td>
+            <td>Meta 服务实例总数（活跃/非活跃）</td>
+          </tr>
+          <tr>
+            <td><strong>Router 节点</strong></td>
+            <td>用于查询路由的 Router 实例总数</td>
+          </tr>
+          <tr>
+            <td><strong>数据节点</strong></td>
+            <td>数据节点总数，包含主节点/备用/退役中/已排空的明细</td>
+          </tr>
+          <tr>
+            <td><strong>表</strong></td>
+            <td>集群中已注册的表和分区总数</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>数据节点明细</h3>
+
+      <p>
+        卡片下方的详细明细显示数据节点状态：
+      </p>
+
+      <ul>
+        <li><strong>主节点</strong> -- 接受写入和查询的活跃节点</li>
+        <li><strong>备用节点</strong> -- 准备好在主节点故障时接管的健康节点</li>
+        <li><strong>退役中</strong> -- 缩容期间正在迁移表的节点</li>
+        <li><strong>已排空</strong> -- 已完成表迁移、可以安全移除的节点</li>
+      </ul>
+
+      <h3>快捷操作</h3>
+
+      <p>
+        仪表盘包含快捷操作卡片，链接到最常用的运维页面：节点管理、表概览和缩容向导。
+      </p>
+
+      <h2 id="navigation">导航</h2>
+
+      <p>
+        管理控制台采用侧边栏导航布局。所有页面分为两组：
+      </p>
+
+      <h3>主要页面</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>页面</th>
+            <th>路径</th>
+            <th>用途</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>仪表盘</strong></td>
+            <td><code>/</code></td>
+            <td>集群健康概览、节点数量、快捷操作</td>
+          </tr>
+          <tr>
+            <td><strong>查询控制台</strong></td>
+            <td><code>/query</code></td>
+            <td>Monaco SQL 编辑器，支持执行、解释和分析</td>
+          </tr>
+          <tr>
+            <td><strong>存储浏览器</strong></td>
+            <td><code>/storage</code></td>
+            <td>catalog、schema、表和 Parquet 文件的树形视图</td>
+          </tr>
+          <tr>
+            <td><strong>节点</strong></td>
+            <td><code>/nodes</code></td>
+            <td>节点列表，支持角色/状态过滤和搜索</td>
+          </tr>
+          <tr>
+            <td><strong>节点详情</strong></td>
+            <td><code>/nodes/:id</code></td>
+            <td>单个节点的健康状态、统计信息和管理操作</td>
+          </tr>
+          <tr>
+            <td><strong>表</strong></td>
+            <td><code>/tables</code></td>
+            <td>表列表，包含所有权、大小和重新分配功能</td>
+          </tr>
+          <tr>
+            <td><strong>缩容</strong></td>
+            <td><code>/scale-in</code></td>
+            <td>用于集群缩容操作的多步向导</td>
+          </tr>
+          <tr>
+            <td><strong>事件</strong></td>
+            <td><code>/events</code></td>
+            <td>实时集群事件流，支持过滤</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>运维页面</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>页面</th>
+            <th>路径</th>
+            <th>用途</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Meta 操作</strong></td>
+            <td><code>/meta-operations</code></td>
+            <td>Meta 集群状态、选举、分布配置</td>
+          </tr>
+          <tr>
+            <td><strong>数据操作</strong></td>
+            <td><code>/data-operations</code></td>
+            <td>跨节点批量刷新、压缩合并和缓存操作</td>
+          </tr>
+          <tr>
+            <td><strong>调试工具</strong></td>
+            <td><code>/debug</code></td>
+            <td>测试数据生成、性能分析和缓存管理</td>
+          </tr>
+          <tr>
+            <td><strong>设置</strong></td>
+            <td><code>/settings</code></td>
+            <td>管理节点配置和集群信息展示</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2 id="getting-started">入门指南</h2>
+
+      <p>
+        启动集群后，按照以下六个步骤熟悉管理控制台：
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 前提条件</div>
+        <p>
+          确保您的集群已运行并配置了管理节点。请参阅<a href="admin-console.html#configuration">管理控制台配置</a>或使用<a href="cluster-getting-started.html">开发集群快速入门</a>。
+        </p>
+      </div>
+
+      <h3>步骤 1：检查集群健康</h3>
+
+      <p>
+        在浏览器中打开 <code>http://localhost:18080</code>。仪表盘会自动加载，显示集群状态、Meta Leader 和节点数量。确认集群状态为<strong>健康</strong>且所有预期节点都已出现。
+      </p>
+
+      <h3>步骤 2：生成测试数据</h3>
+
+      <p>
+        在侧边栏中导航到<strong>调试工具</strong>。使用测试数据生成卡片将示例指标（CPU、内存、磁盘、网络）写入数据库。配置数据库名称、日期范围和数据点数量，然后点击<strong>生成</strong>。
+      </p>
+
+      <h3>步骤 3：运行第一个查询</h3>
+
+      <p>
+        转到<strong>查询控制台</strong>。从下拉菜单中选择您的 catalog，然后尝试一个简单的查询：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">sql</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">-- List all tables in the selected catalog</span>
+SHOW TABLES;
+
+<span class="token-comment">-- Query the test data you just generated</span>
+SELECT * FROM default.cpu ORDER BY time DESC LIMIT 10;</code></pre>
+        </div>
+      </div>
+
+      <p>
+        按 <code>Ctrl+Enter</code>（macOS 上为 <code>Cmd+Enter</code>）执行。结果将显示在编辑器下方的可排序、分页表格中。
+      </p>
+
+      <h3>步骤 4：浏览存储</h3>
+
+      <p>
+        打开<strong>存储浏览器</strong>并展开 catalog 树。浏览 schema 和表以查看分区详情、文件数量和存储大小。点击 Parquet 文件可检查其行组、压缩和列统计信息。
+      </p>
+
+      <h3>步骤 5：监控事件</h3>
+
+      <p>
+        访问<strong>事件</strong>页面查看实时集群事件流。节点加入、表注册和 Leader 选举等事件会实时显示。使用类型和时间过滤器缩小视图范围。
+      </p>
+
+      <h3>步骤 6：查看设置</h3>
+
+      <p>
+        检查<strong>设置</strong>页面以确认管理节点配置，包括 HTTP 端口、Meta 端点和集群信息。
+      </p>
+
+      <h2 id="key-concepts">核心概念</h2>
+
+      <p>
+        以下定义将帮助您理解管理控制台中使用的术语：
+      </p>
+
+      <div class="features-grid" style="margin-top: 1.5rem;">
+        <div class="feature-card">
+          <div class="feature-icon">&#128451;</div>
+          <h3>Catalog</h3>
+          <p>
+            顶层命名空间，对应写入 URI（<code>/write/{db}</code>）中的数据库名称。每个 catalog 包含一个或多个 schema。
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128193;</div>
+          <h3>Schema</h3>
+          <p>
+            catalog 内的分组，由 <code>service</code> 标签派生（ServiceAsSchema 模式）或固定为 <code>default</code>（ServiceAsTable 模式）。
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128197;</div>
+          <h3>分区</h3>
+          <p>
+            表中的数据按日期分区（<code>date=YYYY-MM-DD</code>）。分区支持查询时的高效时间范围裁剪。
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128202;</div>
+          <h3>压缩合并级别</h3>
+          <p>
+            Parquet 文件通过压缩合并级别递进：<strong>L0</strong>（最近写入）、<strong>L1</strong>（首次合并）、<strong>L2+</strong>（更高级别合并）。更高级别具有更少、更大的文件，以获得更好的查询性能。
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128221;</div>
+          <h3>WAL（预写日志）</h3>
+          <p>
+            传入的写入在存储到内存缓存之前先记录到 WAL 中以确保持久性。重启时会重放 WAL 以恢复未刷新的数据。
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#127760;</div>
+          <h3>节点状态</h3>
+          <p>
+            数据节点在不同状态之间转换：<strong>活跃</strong>（服务流量）、<strong>非活跃</strong>（不可达）、<strong>排空中</strong>/<strong>退役中</strong>（迁移表）、<strong>已排空</strong>（可安全移除）。
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128279;</div>
+          <h3>表所有权</h3>
+          <p>
+            每个表被分配到一个主数据节点，负责其写入和压缩合并。可以将表重新分配到其他节点以实现负载均衡或缩容。
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128200;</div>
+          <h3>缩容</h3>
+          <p>
+            通过退役数据节点来优雅地缩减集群规模的过程。在退役节点排空之前，表会迁移到剩余节点。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="configuration">配置</h2>
+
+      <p>
+        管理节点通过 TOML 配置文件进行配置。以下是典型配置：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[admin]
+<span class="token-comment"># Enable the admin console</span>
+enabled = true
+
+<span class="token-comment"># HTTP host and port for the admin web interface</span>
+host = "0.0.0.0"
+port = 18080
+
+<span class="token-comment"># Meta service endpoints for cluster discovery</span>
+<span class="token-comment"># List multiple endpoints for high availability</span>
+meta_endpoints = [
+    "http://127.0.0.1:6000",
+    "http://127.0.0.1:6100",
+    "http://127.0.0.1:6200"
+]</code></pre>
+        </div>
+      </div>
+
+      <h3>配置选项</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>选项</th>
+            <th>类型</th>
+            <th>默认值</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>enabled</code></td>
+            <td>bool</td>
+            <td><code>false</code></td>
+            <td>启用或禁用管理控制台</td>
+          </tr>
+          <tr>
+            <td><code>host</code></td>
+            <td>string</td>
+            <td><code>"0.0.0.0"</code></td>
+            <td>管理 HTTP 服务器的绑定地址</td>
+          </tr>
+          <tr>
+            <td><code>port</code></td>
+            <td>u16</td>
+            <td><code>18080</code></td>
+            <td>管理 Web 界面的 HTTP 端口</td>
+          </tr>
+          <tr>
+            <td><code>meta_endpoints</code></td>
+            <td>array</td>
+            <td><code>[]</code></td>
+            <td>用于集群发现的 Meta 服务 URL 列表</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>开发集群快速启动</h3>
+
+      <p>
+        体验管理控制台最快的方式是使用本地开发集群：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Start the full local cluster (meta x3, data x2, router, admin)</span>
+goreman -f dev/Procfile.cluster-local start
+
+<span class="token-comment"># Default ports:</span>
+<span class="token-comment">#   Meta nodes:  6000, 6100, 6200</span>
+<span class="token-comment">#   Data nodes:  5000, 5100</span>
+<span class="token-comment">#   Router:      7000</span>
+<span class="token-comment">#   Admin:       18080</span>
+
+<span class="token-comment"># Open the admin console</span>
+open http://localhost:18080</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 下一步</div>
+        <p>
+          现在您已熟悉仪表盘布局，请阅读<a href="admin-operations.html">集群运维指南</a>获取管理节点、表、缩容、事件等方面的详细说明。
+        </p>
+      </div>
+
+      <div class="docs-nav">
+        <a href="admin-console.html" class="docs-nav-prev">&larr; 管理控制台</a>
+        <a href="admin-operations.html" class="docs-nav-next">集群运维 &rarr;</a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

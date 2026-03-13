@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 高可用 - 主从复制实现容错能力">
+  <title>高可用 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/high-availability.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html" class="active">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>高可用</h1>
+
+      <p>
+        时刻在线，不错过任何一拍。MynaDB 支持主从复制以实现高可用性和容错能力。
+        主节点处理所有写入操作，同时将数据实时复制到一个或多个从节点。
+        如果主节点发生故障，可以提升从节点接管服务。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 核心优势</div>
+        <ul>
+          <li><strong>容错能力：</strong>即使主节点宕机，仍可继续提供读取服务</li>
+          <li><strong>读取扩展：</strong>将读查询分散到从节点</li>
+          <li><strong>数据安全：</strong>实时复制确保数据持久性</li>
+          <li><strong>零停机故障转移：</strong>将从节点提升为主节点，不丢失数据</li>
+        </ul>
+      </div>
+
+      <h2>架构概览</h2>
+
+      <p>
+        高可用系统采用简单的主从架构，通过 WAL（预写日志）流进行复制：
+      </p>
+
+      <div class="architecture-diagram">
+        <pre>
+                    +-----------------+
+                    |     Clients     |
+                    +--------+--------+
+                             |
+              +--------------+--------------+
+              |                             |
+      +-------v-------+             +-------v-------+
+      |    MASTER     |             |     SLAVE     |
+      |   (Active)    |------------>|   (Standby)   |
+      |               | WAL Stream  |               |
+      +-------+-------+             +-------+-------+
+              |                             |
+      +-------v-------+             +-------v-------+
+      |  Parquet      |             |  Parquet      |
+      |  Files        |             |  Files        |
+      +---------------+             +---------------+
+        </pre>
+      </div>
+
+      <h3>工作原理</h3>
+
+      <ol>
+        <li><strong>写入路径：</strong>所有写入都发送到主节点</li>
+        <li><strong>WAL 复制：</strong>主节点通过 TCP 将 WAL 条目流式传输到已连接的从节点</li>
+        <li><strong>从节点回放：</strong>从节点将 WAL 条目应用到本地存储</li>
+        <li><strong>心跳检测：</strong>主节点定期发送心跳；从节点监控故障</li>
+        <li><strong>故障转移：</strong>主节点故障时，从节点可被提升为主节点（手动或自动）</li>
+      </ol>
+
+      <h2>配置</h2>
+
+      <h3>主节点配置</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">config-master.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[server]
+http_port = 7000
+flight_port = 7001
+
+[storage]
+data_dir = "/data/master"
+
+[ha]
+enabled = true
+role = "master"
+node_id = "master-01"
+
+[ha.replication]
+mode = "async"                    # "async" or "sync"
+listen_addr = "0.0.0.0:7003"      # Replication port
+
+[ha.heartbeat]
+interval_secs = 5                 # Send heartbeat every 5 seconds
+timeout_secs = 15                 # Slave timeout threshold</code></pre>
+        </div>
+      </div>
+
+      <h3>从节点配置</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">config-slave.toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[server]
+http_port = 7100                  # Different port from master
+flight_port = 7101
+
+[storage]
+data_dir = "/data/slave"
+
+[ha]
+enabled = true
+role = "slave"
+node_id = "slave-01"
+
+[ha.replication]
+master_addr = "master-host:7003"  # Master's replication address
+reconnect_interval_secs = 5       # Retry interval on disconnect
+
+[ha.heartbeat]
+interval_secs = 5
+timeout_secs = 15
+
+[ha.failover]
+mode = "manual"                   # "manual", "automatic", or "disabled"
+failure_threshold = 3             # Missed heartbeats before failover
+promotion_delay_secs = 10         # Wait before auto-promotion</code></pre>
+        </div>
+      </div>
+
+      <h3>配置选项</h3>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>选项</th>
+            <th>描述</th>
+            <th>默认值</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>ha.enabled</code></td>
+            <td>启用高可用模式</td>
+            <td><code>false</code></td>
+          </tr>
+          <tr>
+            <td><code>ha.role</code></td>
+            <td>节点角色："master" 或 "slave"</td>
+            <td><code>"master"</code></td>
+          </tr>
+          <tr>
+            <td><code>ha.node_id</code></td>
+            <td>当前节点的唯一标识符</td>
+            <td><code>"node-{pid}"</code></td>
+          </tr>
+          <tr>
+            <td><code>ha.replication.mode</code></td>
+            <td>"async"（更快）或 "sync"（更安全）</td>
+            <td><code>"async"</code></td>
+          </tr>
+          <tr>
+            <td><code>ha.replication.listen_addr</code></td>
+            <td>主节点：监听从节点连接的地址</td>
+            <td><code>"0.0.0.0:7003"</code></td>
+          </tr>
+          <tr>
+            <td><code>ha.replication.master_addr</code></td>
+            <td>从节点：主节点的复制地址</td>
+            <td><em>必填</em></td>
+          </tr>
+          <tr>
+            <td><code>ha.failover.mode</code></td>
+            <td>"manual"、"automatic" 或 "disabled"</td>
+            <td><code>"automatic"</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>高可用 API 端点</h2>
+
+      <h3>GET /ha/status</h3>
+
+      <p>返回当前节点的高可用状态。</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/ha/status</code></pre>
+        </div>
+      </div>
+
+      <p>响应：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "enabled": true,
+  "node_id": "master-01",
+  "role": "master",
+  "state": "running",
+  "replication": {
+    "role": "master",
+    "current_sequence": 12345,
+    "slave_count": 1,
+    "connected": true
+  },
+  "promotion": {
+    "role": "master",
+    "state": "running",
+    "can_promote": false,
+    "failover_mode": "manual"
+  }
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>POST /ha/promote</h3>
+
+      <p>手动将从节点提升为主节点（需要确认）。</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7100/ha/promote \
+  -H "Content-Type: application/json" \
+  -d '{"confirm": true}'</code></pre>
+        </div>
+      </div>
+
+      <p>响应：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "status": "success",
+  "message": "Promoted to master",
+  "new_role": "master"
+}</code></pre>
+        </div>
+      </div>
+
+      <h2>运维指南</h2>
+
+      <h3>启动集群</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Terminal 1: Start master</span>
+./tsdb-stats -c config-master.toml
+
+<span class="token-comment"># Terminal 2: Start slave</span>
+./tsdb-stats -c config-slave.toml
+
+<span class="token-comment"># Verify connection</span>
+curl http://localhost:7000/ha/status | jq '.replication.slave_count'
+<span class="token-comment"># Should return: 1</span></code></pre>
+        </div>
+      </div>
+
+      <h3>写入数据</h3>
+
+      <p>始终向主节点写入数据。向从节点写入会被拒绝：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Write to master (succeeds)</span>
+curl -X POST http://localhost:7000/write/mydb \
+  -d 'cpu,host=server1 usage=75.5'
+
+<span class="token-comment"># Write to slave (fails with 503)</span>
+curl -X POST http://localhost:7100/write/mydb \
+  -d 'cpu,host=server1 usage=75.5'
+<span class="token-comment"># Error: This node is a slave; writes must be sent to the master</span></code></pre>
+        </div>
+      </div>
+
+      <h3>读取数据</h3>
+
+      <p>主节点和从节点都可以提供读查询服务：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Query master</span>
+curl -X POST http://localhost:7000/query/mydb \
+  -d 'SELECT * FROM cpu LIMIT 10'
+
+<span class="token-comment"># Query slave (same data after replication)</span>
+curl -X POST http://localhost:7100/query/mydb \
+  -d 'SELECT * FROM cpu LIMIT 10'</code></pre>
+        </div>
+      </div>
+
+      <h3>手动故障转移</h3>
+
+      <p>当主节点不可用时，提升从节点：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 1. Check slave status</span>
+curl http://localhost:7100/ha/status | jq '{role, state, can_promote: .promotion.can_promote}'
+
+<span class="token-comment"># 2. Promote slave to master</span>
+curl -X POST http://localhost:7100/ha/promote \
+  -H "Content-Type: application/json" \
+  -d '{"confirm": true}'
+
+<span class="token-comment"># 3. Verify new role</span>
+curl http://localhost:7100/ha/status | jq '.role'
+<span class="token-comment"># Should return: "master"</span>
+
+<span class="token-comment"># 4. Update your application to point to the new master</span></code></pre>
+        </div>
+      </div>
+
+      <h2>复制模式</h2>
+
+      <h3>异步复制（默认）</h3>
+
+      <ul>
+        <li>主节点在本地写入完成后立即返回成功</li>
+        <li>复制在后台进行</li>
+        <li>更低延迟，更高吞吐量</li>
+        <li>主节点故障时存在少量数据丢失窗口</li>
+      </ul>
+
+      <h3>同步复制</h3>
+
+      <ul>
+        <li>主节点等待从节点确认后才响应</li>
+        <li>零数据丢失保证</li>
+        <li>更高延迟（网络往返）</li>
+        <li>从节点故障会阻塞写入（有超时保护）</li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[ha.replication]
+mode = "sync"
+timeout_ms = 5000  # Wait up to 5 seconds for slave ACK</code></pre>
+        </div>
+      </div>
+
+      <h2>故障转移模式</h2>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>模式</th>
+            <th>描述</th>
+            <th>使用场景</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>manual</code></td>
+            <td>运维人员必须调用 /ha/promote API</td>
+            <td>有人值守的生产环境</td>
+          </tr>
+          <tr>
+            <td><code>automatic</code></td>
+            <td>从节点检测到主节点故障后自动提升</td>
+            <td>无人值守的运行环境</td>
+          </tr>
+          <tr>
+            <td><code>disabled</code></td>
+            <td>不允许提升</td>
+            <td>只读副本</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>本地测试</h2>
+
+      <p>在单台机器上测试主从模式：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Use the included test script</span>
+./scripts/ha_setup_local.sh setup   # Create configs
+./scripts/ha_setup_local.sh master  # Terminal 1
+./scripts/ha_setup_local.sh slave   # Terminal 2
+./scripts/ha_setup_local.sh test    # Terminal 3 - Run tests
+
+<span class="token-comment"># Or run automated tests</span>
+./scripts/test_ha_local.sh</code></pre>
+        </div>
+      </div>
+
+      <h2>监控</h2>
+
+      <h3>需要监控的关键指标</h3>
+
+      <ul>
+        <li><strong>复制延迟：</strong>主节点和从节点之间的 <code>current_sequence</code> 差值</li>
+        <li><strong>连接状态：</strong>从节点上的 <code>replication.connected</code></li>
+        <li><strong>心跳：</strong>从节点上的 <code>seconds_since_heartbeat</code></li>
+        <li><strong>从节点数量：</strong>主节点上的 <code>replication.slave_count</code></li>
+      </ul>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Monitor script example</span>
+while true; do
+  echo "=== Master ==="
+  curl -s http://master:7000/ha/status | jq '{seq: .replication.current_sequence, slaves: .replication.slave_count}'
+
+  echo "=== Slave ==="
+  curl -s http://slave:7100/ha/status | jq '{seq: .replication.last_sequence, connected: .replication.connected, lag: .replication.seconds_since_heartbeat}'
+
+  sleep 5
+done</code></pre>
+        </div>
+      </div>
+
+      <h2>最佳实践</h2>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; 生产环境建议</div>
+        <ul>
+          <li><strong>网络：</strong>主从节点之间使用低延迟网络</li>
+          <li><strong>存储：</strong>每个节点使用独立的存储卷</li>
+          <li><strong>监控：</strong>设置复制延迟和连接状态的告警</li>
+          <li><strong>备份：</strong>定期从从节点备份数据</li>
+          <li><strong>测试：</strong>定期测试故障转移流程</li>
+        </ul>
+      </div>
+
+      <h3>部署拓扑</h3>
+
+      <ul>
+        <li><strong>同数据中心：</strong>低延迟，可使用同步复制</li>
+        <li><strong>跨数据中心：</strong>较高延迟，使用异步复制</li>
+        <li><strong>多从节点：</strong>分散读负载，提高持久性</li>
+      </ul>
+
+      <h2>故障排除</h2>
+
+      <h3>从节点无法连接</h3>
+
+      <ul>
+        <li>检查 <code>master_addr</code> 是否正确且可达</li>
+        <li>确认防火墙允许 7003 端口（或配置的复制端口）</li>
+        <li>检查主节点日志中的连接尝试记录</li>
+      </ul>
+
+      <h3>复制延迟</h3>
+
+      <ul>
+        <li>网络带宽可能不足</li>
+        <li>从节点磁盘 I/O 可能成为瓶颈</li>
+        <li>考虑增加 <code>reconnect_interval_secs</code></li>
+      </ul>
+
+      <h3>提升失败</h3>
+
+      <ul>
+        <li>检查状态中的 <code>can_promote</code> 是否为 <code>true</code></li>
+        <li>确认故障转移模式不是 <code>disabled</code></li>
+        <li>节点必须处于 <code>running</code> 或 <code>syncing</code> 状态</li>
+      </ul>
+
+      <h2>另请参阅</h2>
+
+      <div class="cards-grid">
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>配置</h3>
+          <p>完整配置参考</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="api.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>API 参考</h3>
+          <p>完整 API 文档</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="troubleshooting.html" class="card">
+          <div class="card-icon">&#128295;</div>
+          <h3>故障排除</h3>
+          <p>常见问题与解决方案</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 快速入门指南 - 60 秒内开始监听您的基础设施">
+  <title>快速开始 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html" class="active">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/quickstart.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html" class="active">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>快速入门指南</h1>
+
+      <p>60 秒内开始监听您的基础设施。本指南涵盖 MynaDB 的构建、运行、写入数据和查询。</p>
+
+      <h2>前置条件</h2>
+
+      <ul>
+        <li>Rust 1.70+（通过 <a href="https://rustup.rs" target="_blank">rustup</a> 安装）</li>
+        <li>curl（用于测试 API）</li>
+      </ul>
+
+      <h2>第 1 步：构建和运行</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 克隆仓库</span>
+git clone https://github.com/mynadb/mynadb.git
+cd mynadb
+
+<span class="token-comment"># 以 release 模式构建</span>
+cargo build --release
+
+<span class="token-comment"># 运行服务器</span>
+./target/release/mynadb</code></pre>
+        </div>
+      </div>
+
+      <p>您应该会看到如下输出：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>MynaDB starting...
+HTTP server listening on 0.0.0.0:7000
+Arrow Flight listening on 0.0.0.0:7001
+Ready to accept connections</code></pre>
+        </div>
+      </div>
+
+      <h2>第 2 步：写入数据</h2>
+
+      <p>MynaDB 接受 <strong>InfluxDB Line Protocol</strong> 格式的数据：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">Line Protocol Format</span>
+        </div>
+        <div class="code-content">
+          <pre><code>&lt;measurement&gt;,&lt;tag_key&gt;=&lt;tag_value&gt; &lt;field_key&gt;=&lt;field_value&gt; [timestamp]</code></pre>
+        </div>
+      </div>
+
+      <p>写入一些示例数据：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 写入 CPU 和内存指标</span>
+curl -X POST http://localhost:7000/write/mydb -d '
+cpu,host=server01,region=us-west usage=75.5,temp=45
+cpu,host=server02,region=us-west usage=45.2,temp=38
+cpu,host=server03,region=us-east usage=89.1,temp=52
+memory,host=server01 used=16.5,total=32.0
+memory,host=server02 used=24.8,total=64.0
+memory,host=server03 used=12.2,total=32.0
+'</code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 关于数据库</div>
+        <p>数据库（<code>mydb</code>）在首次写入时会自动创建，无需手动创建！</p>
+      </div>
+
+      <h2>第 3 步：使用 SQL 查询</h2>
+
+      <div class="callout" style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 4px solid #10b981; padding: 1rem 1.5rem; border-radius: 0.5rem; margin-bottom: 1.5rem;">
+        <div class="callout-title" style="color: #10b981; font-weight: 600;">&#9889; 即时查询可见性</div>
+        <p style="margin: 0.5rem 0;">无需刷盘！MynaDB 的 <strong>Memtable</strong> 为新写入的数据提供即时查询可见性。查询引擎会自动合并内存中（未刷盘）和 Parquet 文件中（已刷盘）的数据。</p>
+      </div>
+
+      <p>现在使用标准 SQL 查询您的数据：</p>
+
+      <h3>基础查询</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 查询所有 CPU 数据</span>
+curl 'http://localhost:7000/query/mydb' -d 'SELECT * FROM cpu'</code></pre>
+        </div>
+      </div>
+
+      <h3>聚合查询</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 按主机计算平均 CPU 使用率</span>
+curl 'http://localhost:7000/query/mydb' \
+  -d 'SELECT host, AVG(usage) as avg_cpu FROM cpu GROUP BY host'</code></pre>
+        </div>
+      </div>
+
+      <p>结果：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[
+  {"host": "server01", "avg_cpu": 75.5},
+  {"host": "server02", "avg_cpu": 45.2},
+  {"host": "server03", "avg_cpu": 89.1}
+]</code></pre>
+        </div>
+      </div>
+
+      <h3>过滤查询</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 高 CPU 使用率的服务器</span>
+curl 'http://localhost:7000/query/mydb' \
+  -d 'SELECT host, usage FROM cpu WHERE usage > 70 ORDER BY usage DESC'</code></pre>
+        </div>
+      </div>
+
+      <h3>JOIN 查询</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 关联 CPU 和内存数据</span>
+curl 'http://localhost:7000/query/mydb' -d "
+SELECT c.host, c.usage as cpu_usage, m.used as memory_used
+FROM cpu c
+JOIN memory m ON c.host = m.host
+"</code></pre>
+        </div>
+      </div>
+
+      <h2>第 4 步：列出表</h2>
+
+      <p>查看数据库中可用的表：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl http://localhost:7000/tables/mydb</code></pre>
+        </div>
+      </div>
+
+      <p>结果：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "catalog": "mydb",
+  "tables": ["mydb.default.cpu", "mydb.default.memory"],
+  "count": 2
+}</code></pre>
+        </div>
+      </div>
+
+      <h2>总结</h2>
+
+      <p>您已经成功完成了以下操作：</p>
+
+      <ul>
+        <li>&#10003; 构建并启动了 MynaDB</li>
+        <li>&#10003; 使用 Line Protocol 写入时序数据</li>
+        <li>&#10003; 立即查询数据（无需刷盘！）</li>
+        <li>&#10003; 使用 SQL 进行聚合和 JOIN 查询</li>
+        <li>&#10003; 列出可用的表</li>
+      </ul>
+
+      <h2>下一步</h2>
+
+      <div class="cards-grid">
+        <a href="sql-queries.html" class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>SQL 查询指南</h3>
+          <p>学习所有 SQL 功能，包括聚合、JOIN 和窗口函数。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="architecture.html" class="card">
+          <div class="card-icon">&#127959;</div>
+          <h3>架构</h3>
+          <p>了解 MynaDB 的内部工作原理。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>配置</h3>
+          <p>根据您的工作负载定制 MynaDB。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

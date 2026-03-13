@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 文档 - 倾听您机器的声音。了解如何使用这款高性能时序数据库来监听您的基础设施。">
+  <title>文档 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html" class="active">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/index.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html" class="active">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>MynaDB 文档</h1>
+
+      <p class="hero-description" style="font-size: 1.125rem; max-width: none;">
+        <strong>倾听您机器的声音。</strong>欢迎来到 MynaDB 文档。
+        您的基础设施在不断发出信号 &mdash; MynaDB 为您倾听。这是一款使用 Rust、Apache DataFusion 和 Parquet 构建的高性能时序数据库，专为现代基础设施监控和分析而设计。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 初次使用 MynaDB？</div>
+        <p>从我们的<a href="quickstart.html">快速入门指南</a>开始，几分钟内即可上手运行。</p>
+      </div>
+
+      <div class="callout" style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 4px solid #10b981; padding: 1rem 1.5rem; border-radius: 0.5rem; margin: 1.5rem 0;">
+        <div class="callout-title" style="color: #10b981; font-weight: 600;">&#9889; 最新动态</div>
+        <p style="margin: 0.5rem 0;">
+          <strong>OpenTelemetry (OTLP)</strong> - 原生接入指标、日志和链路追踪数据。<br>
+          <strong>Apache Iceberg</strong> - REST Catalog API，支持多引擎分析。<br>
+          <strong>Grafana 集成</strong> - 内置监控仪表板和 InfluxDB 兼容端点。<br>
+          <strong>持续聚合</strong> - 支持自动刷新的物化视图。<br>
+          <strong>流式查询</strong> - 通过 WebSocket 和 SSE 实时订阅。<br>
+          <strong>RBAC 与安全</strong> - 基于角色的访问控制、TLS 和审计日志。<br>
+          <strong>预测与地理空间分析</strong> - 内置预测和空间分析 UDF。
+        </p>
+        <a href="otlp.html" style="color: #10b981; text-decoration: none; font-weight: 500;">探索新功能 &rarr;</a>
+      </div>
+
+      <h2>什么是 MynaDB？</h2>
+
+      <p>
+        正如鹩哥以其卓越的倾听和完美复述声音的能力而闻名，
+        MynaDB 以完美的保真度捕获来自基础设施的每一个信号。
+        它是一款专为高吞吐量数据接入和快速分析查询而设计的时序数据库，
+        融合了现代数据基础设施的精华：
+      </p>
+
+      <ul>
+        <li><strong>InfluxDB Line Protocol 与 OpenTelemetry</strong> - 多协议接入，支持指标、日志和链路追踪</li>
+        <li><strong>Apache Parquet 与 Iceberg</strong> - 列式存储，支持多引擎目录</li>
+        <li><strong>Apache DataFusion</strong> - 完整 SQL 支持，包含预测 UDF 和地理空间函数</li>
+        <li><strong>Apache Arrow Flight</strong> - 高性能 gRPC 流式数据传输</li>
+        <li><strong>Grafana 与 Prometheus</strong> - 原生监控集成和指标导出</li>
+        <li><strong>Rust</strong> - 内存安全、零成本抽象，实现极致性能</li>
+      </ul>
+
+      <h2>核心特性</h2>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-icon">&#128293;</div>
+          <h3>高性能</h3>
+          <p>使用 Rust 编写，采用零拷贝反序列化，实现最大吞吐量和最低延迟。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>SQL 查询</h3>
+          <p>完整的 SQL 支持，包括 JOIN、聚合、窗口函数和 CTE。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128451;</div>
+          <h3>列式存储</h3>
+          <p>Parquet 格式提供高达 90% 的压缩率，同时保持优秀的查询性能。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128268;</div>
+          <h3>兼容 InfluxDB</h3>
+          <p>可直接替换 InfluxDB 写入 API，实现无缝迁移。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#9889;</div>
+          <h3>即时可见</h3>
+          <p>通过 Memtable 立即查询新写入的数据 - 无需等待刷盘！</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128200;</div>
+          <h3>智能缓存</h3>
+          <p>多级缓存：元数据、查询结果和 SSD 上的 Parquet 文件缓存。</p>
+        </div>
+      </div>
+
+      <h2>快速示例</h2>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># 使用 InfluxDB Line Protocol 写入指标数据</span>
+curl -X POST http://localhost:7000/write/mydb -d '
+cpu,host=server01,region=us-west usage=75.5,temp=45
+cpu,host=server02,region=us-east usage=82.3,temp=50
+memory,host=server01 used=16.5,total=32.0
+'
+
+<span class="token-comment"># 立即查询 - 无需刷盘！（Memtable 提供即时可见性）</span>
+curl 'http://localhost:7000/query/mydb' \
+  -d 'SELECT host, AVG(usage) as avg_cpu FROM cpu GROUP BY host'
+
+<span class="token-comment"># 使用 GROUP BY time() 进行时序聚合</span>
+curl 'http://localhost:7000/query/mydb' \
+  -d 'SELECT AVG(usage) FROM cpu GROUP BY time(5m), host'</code></pre>
+        </div>
+      </div>
+
+      <h2>架构概览</h2>
+
+      <p>MynaDB 采用分层架构设计，兼顾性能与可靠性：</p>
+
+      <div class="architecture-diagram">
+        <pre>
+  Client Request
+        |
+        v
+  +------------------+
+  |   HTTP Server    |  Port 7000/7001/7002
+  | (Axum/Flight/MySQL)|
+  +--------+---------+
+           |
+     +-----+-----+
+     |           |
+     v           v
+  +------+   +-------+
+  |Write |   | Query |
+  |  API |   |  API  |
+  +--+---+   +---+---+
+     |           |
+     v           |
+  +------+       |
+  |Cache |&lt;------+ (Memtable: instant query visibility)
+  +--+---+       |
+     |           v
+     |    +----------+
+     |    |DataFusion|
+     |    +----+-----+
+     |         |
+     +----+----+
+          |
+          v
+    +-----+------+
+    |  Metadata  |
+    |  Manager   |
+    +-----+------+
+          |
+          v
+    +-----+------+
+    |  Parquet   |
+    |  Storage   |
+    +-----+------+
+          |
+          v
+    +-----+------+
+    |  Compactor |
+    | (LSM-style)|
+    +------------+
+        </pre>
+      </div>
+
+      <h2>文档章节</h2>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>章节</th>
+              <th>描述</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><a href="quickstart.html">快速开始</a></td>
+              <td>5 分钟内上手运行</td>
+            </tr>
+            <tr>
+              <td><a href="architecture.html">架构</a></td>
+              <td>深入了解系统设计和组件</td>
+            </tr>
+            <tr>
+              <td><a href="otlp.html">OpenTelemetry (OTLP)</a></td>
+              <td>原生 OTLP 接入，支持指标、日志和链路追踪</td>
+            </tr>
+            <tr>
+              <td><a href="iceberg.html">Apache Iceberg</a></td>
+              <td>REST Catalog API，支持多引擎分析</td>
+            </tr>
+            <tr>
+              <td><a href="grafana.html">Grafana 集成</a></td>
+              <td>兼容 InfluxDB 的数据源和监控仪表板</td>
+            </tr>
+            <tr>
+              <td><a href="continuous-aggregates.html">持续聚合</a></td>
+              <td>支持自动刷新和查询改写的物化视图</td>
+            </tr>
+            <tr>
+              <td><a href="streaming.html">流式查询</a></td>
+              <td>通过 WebSocket 和 SSE 实时订阅</td>
+            </tr>
+            <tr>
+              <td><a href="forecasting.html">预测与地理空间分析</a></td>
+              <td>内置预测和地理空间 UDF</td>
+            </tr>
+            <tr>
+              <td><a href="security.html">安全与 RBAC</a></td>
+              <td>认证、角色管理、TLS 和审计日志</td>
+            </tr>
+            <tr>
+              <td><a href="monitoring.html">监控</a></td>
+              <td>Prometheus 指标、查询追踪和健康检查端点</td>
+            </tr>
+            <tr>
+              <td><a href="admin-console.html">管理控制台</a></td>
+              <td>基于 Web 的 SQL 编辑器、存储浏览器和集群管理</td>
+            </tr>
+            <tr>
+              <td><a href="admin-guide.html">管理仪表板指南</a></td>
+              <td>快速上手指引、导航参考和管理界面核心概念</td>
+            </tr>
+            <tr>
+              <td><a href="admin-operations.html">集群运维</a></td>
+              <td>节点管理、表管理、缩容、事件、Meta/Data 操作和调试工具</td>
+            </tr>
+            <tr>
+              <td><a href="cluster.html">企业版集群</a></td>
+              <td>包含 Meta、Router、Data 和 Admin 节点的分布式集群</td>
+            </tr>
+            <tr>
+              <td><a href="cluster-getting-started.html">集群快速入门</a></td>
+              <td>分步指南：启动本地开发集群</td>
+            </tr>
+            <tr>
+              <td><a href="cluster-architecture.html">集群架构</a></td>
+              <td>Raft 共识、表级路由和节点内部机制</td>
+            </tr>
+            <tr>
+              <td><a href="cluster-scaling.html">集群扩缩容</a></td>
+              <td>扩容、缩容、故障检测和冷备</td>
+            </tr>
+            <tr>
+              <td><a href="api.html">API 参考</a></td>
+              <td>完整的 HTTP 和 Flight API 文档</td>
+            </tr>
+            <tr>
+              <td><a href="configuration.html">配置</a></td>
+              <td>所有配置选项详解</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>获取帮助</h2>
+
+      <p>如果遇到问题或有疑问：</p>
+
+      <ul>
+        <li>查阅<a href="troubleshooting.html">故障排除指南</a></li>
+        <li>浏览<a href="faq.html">常见问题</a></li>
+        <li>在 <a href="https://github.com/mynadb/mynadb/issues" target="_blank">GitHub</a> 上提交 issue</li>
+      </ul>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#128640; 准备好了吗？</div>
+        <p>前往<a href="quickstart.html">快速入门指南</a>，开始编写您的第一个查询！</p>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB Line Protocol - 使用 InfluxDB Line Protocol 格式写入时序数据">
+  <title>Line Protocol - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/line-protocol.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html" class="active">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+      <h1>InfluxDB Line Protocol</h1>
+
+      <p>
+        MynaDB 使用 InfluxDB Line Protocol 进行数据写入。这种基于文本的格式简单、可读性强，且非常适合高效写入时序数据。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128161; 兼容性</div>
+        <p>
+          MynaDB 兼容 InfluxDB Line Protocol v1。如果您已经在使用 InfluxDB、Telegraf 或其他输出 Line Protocol 的工具，
+          只需进行极少的修改即可将数据直接发送到 MynaDB。
+        </p>
+      </div>
+
+      <h2>Line Protocol 语法</h2>
+
+      <p>每一行代表一个数据点，格式如下：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">syntax</span>
+        </div>
+        <div class="code-content">
+          <pre><code>&lt;measurement&gt;[,&lt;tag_key&gt;=&lt;tag_value&gt;...] &lt;field_key&gt;=&lt;field_value&gt;[,&lt;field_key&gt;=&lt;field_value&gt;...] [&lt;timestamp&gt;]</code></pre>
+        </div>
+      </div>
+
+      <h3>组成部分</h3>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>组成部分</th>
+            <th>是否必需</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>measurement</code></td>
+            <td>是</td>
+            <td>度量名称（类似于表名）</td>
+          </tr>
+          <tr>
+            <td><code>tags</code></td>
+            <td>否</td>
+            <td>用于元数据的键值对（已索引，用于过滤）</td>
+          </tr>
+          <tr>
+            <td><code>fields</code></td>
+            <td>是</td>
+            <td>用于实际数据值的键值对</td>
+          </tr>
+          <tr>
+            <td><code>timestamp</code></td>
+            <td>否</td>
+            <td>纳秒精度的 Unix 时间戳（默认使用服务器时间）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>基本示例</h2>
+
+      <h3>简单数据点</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">line-protocol</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>cpu usage=75.5</code></pre>
+        </div>
+      </div>
+
+      <p>这会在 <code>cpu</code> 度量中创建一个数据点，包含一个字段 <code>usage</code>。</p>
+
+      <h3>带标签</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>cpu,host=server01,region=us-west usage=75.5,temperature=45</code></pre>
+        </div>
+      </div>
+
+      <p>标签是度量名称之后以逗号分隔的键值对，用于过滤和分组。</p>
+
+      <h3>带时间戳</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>cpu,host=server01 usage=75.5 1609459200000000000</code></pre>
+        </div>
+      </div>
+
+      <p>时间戳为自 Unix 纪元（1970 年 1 月 1 日）以来的纳秒数。</p>
+
+      <h3>多个字段</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>system,host=server01 cpu_usage=75.5,memory_used=8589934592,disk_free=107374182400</code></pre>
+        </div>
+      </div>
+
+      <h2>数据类型</h2>
+
+      <h3>字段值类型</h3>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>类型</th>
+            <th>语法</th>
+            <th>示例</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>浮点数</td>
+            <td>普通数字或带小数点</td>
+            <td><code>value=82.5</code> 或 <code>value=82</code></td>
+          </tr>
+          <tr>
+            <td>整数</td>
+            <td>数字后加 <code>i</code> 后缀</td>
+            <td><code>count=100i</code></td>
+          </tr>
+          <tr>
+            <td>字符串</td>
+            <td>双引号括起</td>
+            <td><code>status="running"</code></td>
+          </tr>
+          <tr>
+            <td>布尔值</td>
+            <td><code>true</code>/<code>false</code>、<code>t</code>/<code>f</code>、<code>TRUE</code>/<code>FALSE</code></td>
+            <td><code>active=true</code></td>
+          </tr>
+          <tr>
+            <td>无符号整数</td>
+            <td>数字后加 <code>u</code> 后缀</td>
+            <td><code>bytes=1024u</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>按类型示例</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">line-protocol</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Float (default for numbers)</span>
+temperature value=23.5
+
+<span class="token-comment"># Integer</span>
+requests count=1000i
+
+<span class="token-comment"># String</span>
+event message="Server started successfully"
+
+<span class="token-comment"># Boolean</span>
+status healthy=true
+
+<span class="token-comment"># Unsigned integer</span>
+network bytes_sent=1073741824u
+
+<span class="token-comment"># Mixed types in one line</span>
+server,host=web01 cpu=75.5,memory=8192i,status="ok",active=true</code></pre>
+        </div>
+      </div>
+
+      <h2>通过 API 写入数据</h2>
+
+      <h3>单行写入</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/write/mydb \
+  -d 'cpu,host=server01,region=us-west usage=75.5,temperature=45'</code></pre>
+        </div>
+      </div>
+
+      <h3>多行写入（批量）</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/write/mydb -d '
+cpu,host=server01,region=us-west usage=75.5
+cpu,host=server02,region=us-east usage=82.3
+cpu,host=server03,region=eu-west usage=68.9
+memory,host=server01 used=8589934592,total=17179869184
+memory,host=server02 used=12884901888,total=17179869184
+'</code></pre>
+        </div>
+      </div>
+
+      <h3>带时间戳写入</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>curl -X POST http://localhost:7000/write/mydb -d '
+cpu,host=server01 usage=75.5 1704067200000000000
+cpu,host=server01 usage=76.2 1704067260000000000
+cpu,host=server01 usage=74.8 1704067320000000000
+'</code></pre>
+        </div>
+      </div>
+
+      <h2>Schema 策略</h2>
+
+      <p>
+        MynaDB 支持两种 Schema 策略，决定数据如何组织到 Schema 和表中。
+        通过 <code>schema.strategy</code> 进行配置。
+      </p>
+
+      <h3>ServiceAsSchema（默认）</h3>
+
+      <p><code>service</code> 标签成为 Schema 名称，measurement 成为表名。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Write with service tag</span>
+curl -X POST http://localhost:7000/write/mydb \
+  -d 'cpu,service=webserver,host=web01 usage=75.5'
+
+<span class="token-comment"># Query: catalog.schema.table = mydb.webserver.cpu</span>
+curl -X POST http://localhost:7000/query/mydb \
+  -d 'SELECT * FROM mydb.webserver.cpu'</code></pre>
+        </div>
+      </div>
+
+      <h3>ServiceAsTable</h3>
+
+      <p><code>service</code> 标签成为表名，measurement 作为标签存储。</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Write with service tag</span>
+curl -X POST http://localhost:7000/write/mydb \
+  -d 'cpu,service=webserver,host=web01 usage=75.5'
+
+<span class="token-comment"># Query: catalog.schema.table = mydb.default.webserver</span>
+curl -X POST http://localhost:7000/query/mydb \
+  -d 'SELECT * FROM mydb.default.webserver WHERE measurement = '\''cpu'\'''</code></pre>
+        </div>
+      </div>
+
+      <h2>特殊字符</h2>
+
+      <h3>转义规则</h3>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>位置</th>
+            <th>需转义的字符</th>
+            <th>转义方式</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>度量名称</td>
+            <td>逗号、空格</td>
+            <td>反斜杠（<code>\,</code> <code>\ </code>）</td>
+          </tr>
+          <tr>
+            <td>标签键/值</td>
+            <td>逗号、等号、空格</td>
+            <td>反斜杠（<code>\,</code> <code>\=</code> <code>\ </code>）</td>
+          </tr>
+          <tr>
+            <td>字段键</td>
+            <td>逗号、等号、空格</td>
+            <td>反斜杠（<code>\,</code> <code>\=</code> <code>\ </code>）</td>
+          </tr>
+          <tr>
+            <td>字符串字段值</td>
+            <td>双引号、反斜杠</td>
+            <td>反斜杠（<code>\"</code> <code>\\</code>）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>示例</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Escaped comma in measurement name</span>
+cpu\,usage,host=server01 value=75.5
+
+<span class="token-comment"># Escaped equals in tag value</span>
+event,equation=a\=b result=42
+
+<span class="token-comment"># Escaped quotes in string field</span>
+log,host=server01 message="Error: \"Connection refused\""
+
+<span class="token-comment"># Escaped backslash</span>
+path,host=server01 value="C:\\Users\\admin"</code></pre>
+        </div>
+      </div>
+
+      <h2>时间戳</h2>
+
+      <h3>精度</h3>
+
+      <p>MynaDB 默认接受纳秒精度的时间戳：</p>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>精度</th>
+            <th>示例值</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>纳秒</td>
+            <td><code>1704067200000000000</code></td>
+            <td>默认精度（19 位）</td>
+          </tr>
+          <tr>
+            <td>微秒</td>
+            <td><code>1704067200000000</code></td>
+            <td>16 位</td>
+          </tr>
+          <tr>
+            <td>毫秒</td>
+            <td><code>1704067200000</code></td>
+            <td>13 位</td>
+          </tr>
+          <tr>
+            <td>秒</td>
+            <td><code>1704067200</code></td>
+            <td>10 位</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>生成时间戳</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Current time in nanoseconds (Linux)</span>
+date +%s%N
+
+<span class="token-comment"># Current time in nanoseconds (macOS)</span>
+python3 -c "import time; print(int(time.time() * 1e9))"
+
+<span class="token-comment"># Specific date to nanoseconds</span>
+date -d "2024-01-01 00:00:00" +%s%N</code></pre>
+        </div>
+      </div>
+
+      <h2>最佳实践</h2>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; 性能建议</div>
+        <ul>
+          <li><strong>批量写入：</strong>在单个请求中发送多行数据以获得更高的吞吐量</li>
+          <li><strong>限制标签数量：</strong>标签用于低基数的元数据（host、region、service）</li>
+          <li><strong>数值使用字段：</strong>数值型数据应作为字段而非标签</li>
+          <li><strong>保持 Schema 一致性：</strong>在各数据点之间保持字段类型一致</li>
+          <li><strong>合理的批量大小：</strong>每个请求 5,000-10,000 行为最佳</li>
+        </ul>
+      </div>
+
+      <h3>正确与错误示例</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">line-protocol</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># GOOD: Low-cardinality tags, numeric fields</span>
+cpu,host=server01,region=us-west usage=75.5,cores=8i
+
+<span class="token-comment"># BAD: High-cardinality tag (user_id has millions of values)</span>
+pageview,user_id=12345678 count=1
+
+<span class="token-comment"># GOOD: User ID as field instead</span>
+pageview,page=/home user_id="12345678",count=1i
+
+<span class="token-comment"># BAD: Numeric value as tag</span>
+temperature,value=75.5 dummy=1
+
+<span class="token-comment"># GOOD: Numeric value as field</span>
+temperature,sensor=outdoor value=75.5</code></pre>
+        </div>
+      </div>
+
+      <h2>验证错误</h2>
+
+      <p>写入 Line Protocol 数据时的常见错误：</p>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>错误</th>
+            <th>原因</th>
+            <th>解决方案</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>缺少字段</td>
+            <td>未提供字段值</td>
+            <td>添加至少一个字段：<code>cpu usage=75</code></td>
+          </tr>
+          <tr>
+            <td>无效时间戳</td>
+            <td>时间戳不是数字</td>
+            <td>使用 Unix 纳秒时间戳：<code>1704067200000000000</code></td>
+          </tr>
+          <tr>
+            <td>类型冲突</td>
+            <td>字段类型发生变化（例如浮点数变为字符串）</td>
+            <td>保持字段类型一致</td>
+          </tr>
+          <tr>
+            <td>空度量名称</td>
+            <td>行以逗号或空格开头</td>
+            <td>首先提供度量名称</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>与 Telegraf 集成</h2>
+
+      <p>配置 Telegraf 向 MynaDB 发送数据：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[[outputs.influxdb]]
+  urls = ["http://localhost:7000"]
+  database = "mydb"
+  skip_database_creation = true
+
+  <span class="token-comment"># Use /write endpoint</span>
+  [outputs.influxdb.tagpass]
+
+[[inputs.cpu]]
+  percpu = true
+  totalcpu = true
+
+[[inputs.mem]]
+
+[[inputs.disk]]
+  ignore_fs = ["tmpfs", "devtmpfs"]</code></pre>
+        </div>
+      </div>
+
+      <h2>相关内容</h2>
+
+      <div class="cards-grid">
+        <a href="api.html" class="card">
+          <div class="card-icon">&#128279;</div>
+          <h3>API 参考</h3>
+          <p>完整的写入 API 文档</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="sql-queries.html" class="card">
+          <div class="card-icon">&#128270;</div>
+          <h3>SQL 查询</h3>
+          <p>查询您已写入的数据</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="examples.html" class="card">
+          <div class="card-icon">&#128221;</div>
+          <h3>示例</h3>
+          <p>更多写入和查询示例</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

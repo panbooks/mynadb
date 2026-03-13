@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 存储 - Parquet 格式与分区策略">
+  <title>存储 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/storage.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html" class="active">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>存储</h1>
+
+      <p class="lead">
+        为您的机器提供应有的记忆。MynaDB 以 Apache Parquet 格式存储时序数据，这是一种针对分析查询
+        优化的列式存储格式。本页介绍存储架构、分区策略和优化技术。
+      </p>
+
+      <h2 id="overview">概述</h2>
+
+      <div class="architecture-diagram">
+        <pre>
+  写入路径                         存储
+      |                               |
+      v                               v
+  +--------+     刷写      +---------------------------+
+  | 缓存   | ------------> | Parquet 文件              |
+  | (RAM)  |    (30s)      |                           |
+  +--------+               | data/                      |
+                           | └── mydb/                  |
+                           |     └── default/           |
+                           |         └── cpu/           |
+                           |             └── date=.../  |
+                           |                 ├── L0_... |
+                           |                 ├── L1_... |
+                           |                 └── L2_... |
+                           +---------------------------+
+        </pre>
+      </div>
+
+      <h3>核心特性</h3>
+
+      <ul>
+        <li><strong>列式存储</strong> - 只读取需要的列</li>
+        <li><strong>压缩</strong> - 最高可达 90% 的存储空间缩减</li>
+        <li><strong>日期分区</strong> - 高效的时间范围查询</li>
+        <li><strong>LSM 层级</strong> - 优化的读写平衡</li>
+        <li><strong>谓词下推</strong> - 在存储层过滤</li>
+      </ul>
+
+      <h2 id="parquet">Apache Parquet 格式</h2>
+
+      <p>
+        <a href="https://parquet.apache.org/" target="_blank">Apache Parquet</a> 是一种专为高效数据处理
+        设计的列式存储格式。它是 MynaDB 高性能存储的基础。
+      </p>
+
+      <h3>为什么选择 Parquet？</h3>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-icon">&#128451;</div>
+          <h3>列式布局</h3>
+          <p>数据按列而非按行存储。只访问少数列的查询读取的数据量更少。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128230;</div>
+          <h3>压缩</h3>
+          <p>列中相似的值压缩效果好。支持 Snappy、ZSTD、LZ4 等算法。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#128269;</div>
+          <h3>谓词下推</h3>
+          <p>文件尾部的统计信息允许跳过不相关的行组。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">&#127760;</div>
+          <h3>生态系统</h3>
+          <p>兼容 Spark、Pandas、DuckDB、DataFusion 等众多工具。</p>
+        </div>
+      </div>
+
+      <h3>Parquet 文件结构</h3>
+
+      <div class="architecture-diagram">
+        <pre>
+  +------------------------------------------+
+  |              Parquet 文件                 |
+  +------------------------------------------+
+  |  行组 1                                   |
+  |  +--------------------------------------+|
+  |  | 列块: timestamp                      ||
+  |  | 列块: host                           ||
+  |  | 列块: usage                          ||
+  |  +--------------------------------------+|
+  |                                          |
+  |  行组 2                                   |
+  |  +--------------------------------------+|
+  |  | 列块: timestamp                      ||
+  |  | 列块: host                           ||
+  |  | 列块: usage                          ||
+  |  +--------------------------------------+|
+  |                                          |
+  |  尾部 (Schema + 统计信息)                 |
+  +------------------------------------------+
+        </pre>
+      </div>
+
+      <h2 id="directory">目录结构</h2>
+
+      <p>MynaDB 以层级结构组织文件：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>data/
+├── {catalog}/                        <span class="token-comment"># 数据库名称</span>
+│   ├── {schema}/                     <span class="token-comment"># Schema（服务或 "default"）</span>
+│   │   └── {table}/                  <span class="token-comment"># Measurement 名称</span>
+│   │       └── date=YYYY-MM-DD/      <span class="token-comment"># 日期分区</span>
+│   │           ├── L0_xxx.parquet    <span class="token-comment"># Level 0（最近写入）</span>
+│   │           ├── L0_yyy.parquet
+│   │           ├── L1_aaa.parquet    <span class="token-comment"># Level 1（已压缩）</span>
+│   │           └── L2_bbb.parquet    <span class="token-comment"># Level 2（更高压缩）</span>
+│   └── _system/
+│       └── series_stats/             <span class="token-comment"># 基数追踪</span>
+│           └── {catalog}.parquet
+│
+└── mydb/                             <span class="token-comment"># 示例数据库</span>
+    ├── default/
+    │   ├── cpu/
+    │   │   ├── date=2024-01-15/
+    │   │   │   ├── L0_1705312345_abc.parquet
+    │   │   │   └── L1_1705398745_def.parquet
+    │   │   └── date=2024-01-16/
+    │   │       └── L0_1705398800_ghi.parquet
+    │   └── memory/
+    │       └── date=2024-01-15/
+    └── web/
+        └── requests/</code></pre>
+        </div>
+      </div>
+
+      <h2 id="partitioning">日期分区</h2>
+
+      <p>
+        数据根据每个数据点的时间戳自动按日期分区。
+        这使得时间范围查询能够通过跳过不相关的分区来提高效率。
+      </p>
+
+      <h3>工作原理</h3>
+
+      <ol>
+        <li>提取每个数据点的时间戳</li>
+        <li>推导日期：<code>YYYY-MM-DD</code></li>
+        <li>将数据写入对应的分区目录</li>
+        <li>带有时间过滤条件的查询会跳过不需要的分区</li>
+      </ol>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Data written with timestamp 2024-01-15T10:30:00Z</span>
+cpu,host=server01 usage=75.5 1705315800000000000
+
+<span class="token-comment"># Stored in:</span>
+data/mydb/default/cpu/date=2024-01-15/L0_xxx.parquet
+
+<span class="token-comment"># Query only reads date=2024-01-15 partition</span>
+SELECT * FROM cpu
+WHERE time >= '2024-01-15' AND time < '2024-01-16'</code></pre>
+        </div>
+      </div>
+
+      <h3>分区裁剪</h3>
+
+      <p>当您按时间过滤时，只扫描相关的分区：</p>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>查询</th>
+              <th>扫描的分区</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>WHERE time > '2024-01-15'</code></td>
+              <td>仅 date=2024-01-15 及之后的分区</td>
+            </tr>
+            <tr>
+              <td><code>WHERE time BETWEEN '2024-01-10' AND '2024-01-12'</code></td>
+              <td>仅 3 个分区</td>
+            </tr>
+            <tr>
+              <td><code>SELECT * FROM cpu</code>（无过滤条件）</td>
+              <td>所有分区</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>管理分区</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># List partitions</span>
+curl http://localhost:7000/partitions/mydb/default/cpu
+
+<span class="token-comment"># Delete a specific partition</span>
+curl -X DELETE http://localhost:7000/partitions/mydb/default/cpu/2024-01-15
+
+<span class="token-comment"># Delete old partitions (retention)</span>
+curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"older_than_days": 30}'</code></pre>
+        </div>
+      </div>
+
+      <h2 id="file-naming">文件命名约定</h2>
+
+      <p>Parquet 文件遵循编码元数据的命名约定：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>L{level}_{timestamp}_{uuid}.parquet
+
+<span class="token-comment"># Examples:</span>
+L0_1705312345_a1b2c3d4.parquet    <span class="token-comment"># Level 0, recent write</span>
+L1_1705398745_e5f6g7h8.parquet    <span class="token-comment"># Level 1, compacted</span>
+L2_1705485145_i9j0k1l2.parquet    <span class="token-comment"># Level 2, more compacted</span></code></pre>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>组成部分</th>
+              <th>描述</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>L{level}</code></td>
+              <td>压缩级别（L0-L5）</td>
+            </tr>
+            <tr>
+              <td><code>{timestamp}</code></td>
+              <td>文件创建时的 Unix 时间戳</td>
+            </tr>
+            <tr>
+              <td><code>{uuid}</code></td>
+              <td>防止冲突的唯一标识符</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="compression">压缩</h2>
+
+      <p>
+        Parquet 支持多种压缩编码。MynaDB 默认使用 Snappy，
+        在速度和压缩比之间取得了良好平衡。
+      </p>
+
+      <h3>压缩编码</h3>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>编码</th>
+              <th>压缩比</th>
+              <th>速度</th>
+              <th>适用场景</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Snappy</td>
+              <td>良好</td>
+              <td>快速</td>
+              <td>默认，均衡</td>
+            </tr>
+            <tr>
+              <td>ZSTD</td>
+              <td>更好</td>
+              <td>中等</td>
+              <td>冷数据存储</td>
+            </tr>
+            <tr>
+              <td>LZ4</td>
+              <td>较低</td>
+              <td>最快</td>
+              <td>实时查询</td>
+            </tr>
+            <tr>
+              <td>GZIP</td>
+              <td>最佳</td>
+              <td>较慢</td>
+              <td>归档</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>压缩效果</h3>
+
+      <p>时序数据由于以下原因具有很好的压缩效果：</p>
+
+      <ul>
+        <li><strong>重复的 Tags</strong> - 相同的 host/region 值</li>
+        <li><strong>相似的值</strong> - 指标变化是渐进的</li>
+        <li><strong>列式布局</strong> - 相似数据聚集在一起</li>
+        <li><strong>字典编码</strong> - 字符串去重</li>
+      </ul>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#128200; 典型压缩效果</div>
+        <p>
+          时序数据使用 Snappy 通常可实现 5-10 倍压缩，
+          使用 ZSTD 可实现 10-20 倍压缩。100GB 的原始数据集可能压缩到 10GB 或更少。
+        </p>
+      </div>
+
+      <h2 id="optimization">存储优化</h2>
+
+      <h3>最佳实践</h3>
+
+      <ol>
+        <li>
+          <strong>使用 SSD 存储</strong> - 查询中随机读取很常见
+        </li>
+        <li>
+          <strong>启用压缩合并</strong> - 减少文件数量并提升查询性能
+        </li>
+        <li>
+          <strong>设置保留策略</strong> - 防止无限制增长
+        </li>
+        <li>
+          <strong>监控磁盘使用</strong> - 根据数据采集速率规划容量
+        </li>
+      </ol>
+
+      <h3>估算存储空间</h3>
+
+      <p>近似存储计算：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Formula (approximate)</span>
+Storage = (points_per_second) × (bytes_per_point) × (seconds) × (1/compression_ratio)
+
+<span class="token-comment"># Example: 10,000 points/sec, 50 bytes/point, 30 days, 10x compression</span>
+Storage = 10,000 × 50 × (30 × 86400) / 10
+        = 10,000 × 50 × 2,592,000 / 10
+        = 129.6 GB</code></pre>
+        </div>
+      </div>
+
+      <h3>磁盘空间管理</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Check disk usage</span>
+du -sh /data/stats/*
+
+<span class="token-comment"># Check by database</span>
+du -sh /data/stats/mydb/*
+
+<span class="token-comment"># Check by table</span>
+du -sh /data/stats/mydb/default/cpu/*
+
+<span class="token-comment"># Force compaction to reduce file count</span>
+curl -X POST http://localhost:7000/compact/mydb
+
+<span class="token-comment"># Apply retention to free space</span>
+curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"older_than_days": 7}'</code></pre>
+        </div>
+      </div>
+
+      <h2>备份与恢复</h2>
+
+      <p>由于数据以标准 Parquet 文件存储，备份非常简单：</p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Backup entire database</span>
+tar -czf mydb_backup.tar.gz /data/stats/mydb/
+
+<span class="token-comment"># Backup specific table</span>
+tar -czf cpu_backup.tar.gz /data/stats/mydb/default/cpu/
+
+<span class="token-comment"># Restore</span>
+tar -xzf mydb_backup.tar.gz -C /data/stats/</code></pre>
+        </div>
+      </div>
+
+      <h2>后续步骤</h2>
+
+      <div class="cards-grid">
+        <a href="compaction.html" class="card">
+          <div class="card-icon">&#128218;</div>
+          <h3>压缩合并</h3>
+          <p>了解 LSM 风格的压缩合并。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="retention.html" class="card">
+          <div class="card-icon">&#128197;</div>
+          <h3>数据保留</h3>
+          <p>配置数据保留策略。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+
+        <a href="configuration.html" class="card">
+          <div class="card-icon">&#9881;</div>
+          <h3>配置</h3>
+          <p>存储配置选项。</p>
+          <span class="card-link">阅读更多 <span>&#8594;</span></span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>

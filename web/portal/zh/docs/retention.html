@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MynaDB 数据保留策略 - 自动数据过期与分区管理">
+  <title>数据保留策略 - MynaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../css/style.css">
+  <link rel="icon" type="image/svg+xml" href="../../images/favicon.svg">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <a href="../index.html" class="navbar-brand">
+        <img src="../../images/logo-icon.svg" alt="MynaDB" class="logo-img">
+        MynaDB
+      </a>
+      <ul class="navbar-nav">
+        <li><a href="index.html">文档</a></li>
+        <li><a href="quickstart.html">快速开始</a></li>
+        <li><a href="architecture.html">架构</a></li>
+        <li><a href="api.html">API 参考</a></li>
+        <li><a href="examples.html">示例</a></li>
+      </ul>
+      <div class="navbar-actions">
+        <div class="lang-switcher">
+          <a href="/docs/retention.html" class="lang-link">English</a>
+        </div>
+        <a href="https://github.com/mynadb/mynadb" class="btn btn-secondary" target="_blank">
+          <span class="btn-icon">&#9733;</span> GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="sidebar-section">
+        <h4>快速入门</h4>
+        <ul class="sidebar-nav">
+          <li><a href="index.html">简介</a></li>
+          <li><a href="quickstart.html">快速开始</a></li>
+          <li><a href="installation.html">安装</a></li>
+          <li><a href="configuration.html">配置</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>核心概念</h4>
+        <ul class="sidebar-nav">
+          <li><a href="architecture.html">架构</a></li>
+          <li><a href="data-model.html">数据模型</a></li>
+          <li><a href="storage.html">存储</a></li>
+          <li><a href="caching.html">缓存</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>数据接入与协议</h4>
+        <ul class="sidebar-nav">
+          <li><a href="line-protocol.html">Line Protocol</a></li>
+          <li><a href="otlp.html">OpenTelemetry (OTLP) <span class="badge-new">新</span></a></li>
+          <li><a href="flight-api.html">Arrow Flight API</a></li>
+          <li><a href="mysql-protocol.html">MySQL 协议</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>查询与分析</h4>
+        <ul class="sidebar-nav">
+          <li><a href="sql-queries.html">SQL 查询</a></li>
+          <li><a href="continuous-aggregates.html">持续聚合 <span class="badge-new">新</span></a></li>
+          <li><a href="streaming.html">流式查询 <span class="badge-new">新</span></a></li>
+          <li><a href="forecasting.html">预测分析 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>集成</h4>
+        <ul class="sidebar-nav">
+          <li><a href="grafana.html">Grafana <span class="badge-new">新</span></a></li>
+          <li><a href="iceberg.html">Apache Iceberg <span class="badge-new">新</span></a></li>
+          <li><a href="object-store.html">对象存储</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>运维</h4>
+        <ul class="sidebar-nav">
+          <li><a href="compaction.html">压缩合并</a></li>
+          <li><a href="retention.html" class="active">数据保留</a></li>
+          <li><a href="monitoring.html">监控 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-console.html">管理控制台 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-guide.html">管理指南 <span class="badge-new">新</span></a></li>
+          <li><a href="admin-operations.html">集群运维 <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>安全</h4>
+        <ul class="sidebar-nav">
+          <li><a href="security.html">认证与 RBAC <span class="badge-new">新</span></a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>部署</h4>
+        <ul class="sidebar-nav">
+          <li><a href="high-availability.html">高可用</a></li>
+          <li><a href="cluster.html">企业版集群</a></li>
+          <li><a href="cluster-getting-started.html">集群快速入门</a></li>
+          <li><a href="cluster-architecture.html">集群架构</a></li>
+          <li><a href="cluster-scaling.html">集群扩缩容</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <h4>资源</h4>
+        <ul class="sidebar-nav">
+          <li><a href="guides.html">指南</a></li>
+          <li><a href="examples.html">示例</a></li>
+          <li><a href="testing.html">测试</a></li>
+          <li><a href="troubleshooting.html">故障排除</a></li>
+          <li><a href="faq.html">常见问题</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1>数据保留策略</h1>
+
+      <p>
+        MynaDB 通过删除旧的按日期分区的数据来自动管理磁盘空间。
+        您可以配置保留策略，在指定天数后自动过期数据，也可以通过 API 手动触发数据保留。
+      </p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128197; 基于日期的分区</div>
+        <p>
+          数据保留基于日期分区（<code>date=YYYY-MM-DD/</code>）工作。数据按天存储在分区中，可以高效地一次性删除整天的数据。
+        </p>
+      </div>
+
+      <h2 id="configuration">配置</h2>
+
+      <p>
+        在 <code>config.toml</code> 中配置自动数据保留：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">toml</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code>[retention]
+<span class="token-comment"># Enable automatic background retention</span>
+enabled = true
+
+<span class="token-comment"># Delete partitions older than N days</span>
+default_days = 7
+
+<span class="token-comment"># How often to check for expired data (seconds)</span>
+interval_secs = 3600
+
+<span class="token-comment"># Optional: Databases to exclude from retention</span>
+exclude_databases = ["_system", "archive"]
+
+<span class="token-comment"># Optional: Specific tables to exclude (catalog.schema.table)</span>
+exclude_tables = ["mydb.default.important_metrics"]</code></pre>
+        </div>
+      </div>
+
+      <h3>配置选项</h3>
+
+      <table class="docs-table">
+        <thead>
+          <tr>
+            <th>选项</th>
+            <th>类型</th>
+            <th>默认值</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>enabled</code></td>
+            <td>bool</td>
+            <td><code>false</code></td>
+            <td>启用/禁用自动数据保留</td>
+          </tr>
+          <tr>
+            <td><code>default_days</code></td>
+            <td>u32</td>
+            <td><code>7</code></td>
+            <td>删除超过 N 天的数据</td>
+          </tr>
+          <tr>
+            <td><code>interval_secs</code></td>
+            <td>u64</td>
+            <td><code>3600</code></td>
+            <td>后台检查间隔（秒）</td>
+          </tr>
+          <tr>
+            <td><code>exclude_databases</code></td>
+            <td>array</td>
+            <td><code>[]</code></td>
+            <td>在数据保留期间跳过的数据库</td>
+          </tr>
+          <tr>
+            <td><code>exclude_tables</code></td>
+            <td>array</td>
+            <td><code>[]</code></td>
+            <td>要跳过的特定表（完全限定名）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2 id="how-it-works">工作原理</h2>
+
+      <p>
+        数据保留管理器作为后台任务运行，执行以下步骤：
+      </p>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">&#128269;</div>
+          <h4>1. 扫描存储</h4>
+          <p>扫描数据目录中的所有 catalog、schema 和表</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128197;</div>
+          <h4>2. 发现分区</h4>
+          <p>在每个表中发现日期分区（<code>date=YYYY-MM-DD/</code>）</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128344;</div>
+          <h4>3. 检查年龄</h4>
+          <p>将分区日期与 <code>default_days</code> 阈值进行比较</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128465;</div>
+          <h4>4. 删除旧数据</h4>
+          <p>移除已过期数据的整个分区目录</p>
+        </div>
+      </div>
+
+      <h3>存储结构</h3>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">text</span>
+        </div>
+        <div class="code-content">
+          <pre><code>data/
+└── mydb/                           # Catalog (database)
+    └── default/                    # Schema
+        └── cpu/                    # Table
+            ├── date=2024-01-01/    # Partition (7+ days old - DELETE)
+            │   └── L0_xxx.parquet
+            ├── date=2024-01-05/    # Partition (3 days old - KEEP)
+            │   └── L0_xxx.parquet
+            └── date=2024-01-08/    # Partition (today - KEEP)
+                └── L0_xxx.parquet</code></pre>
+        </div>
+      </div>
+
+      <h2 id="api">数据保留 API</h2>
+
+      <p>
+        使用 REST API 对特定表执行手动数据保留操作。
+      </p>
+
+      <h3>按时间删除</h3>
+
+      <p>删除超过指定天数的分区：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Delete partitions older than 30 days</span>
+curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"older_than_days": 30}'</code></pre>
+        </div>
+      </div>
+
+      <h4>响应</h4>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "status": "ok",
+  "table": "mydb.default.cpu",
+  "partitions_deleted": 5,
+  "bytes_freed": 1048576000,
+  "cutoff_date": "2023-12-08"
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>按日期删除</h3>
+
+      <p>删除特定日期之前的分区：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Delete partitions before January 1, 2024</span>
+curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" \
+  -d '{"before_date": "2024-01-01"}'</code></pre>
+        </div>
+      </div>
+
+      <h3>列出分区</h3>
+
+      <p>在执行数据保留之前查看现有分区：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># List all partitions for a table</span>
+curl http://localhost:7000/partitions/mydb/default/cpu</code></pre>
+        </div>
+      </div>
+
+      <h4>响应</h4>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>{
+  "catalog": "mydb",
+  "schema": "default",
+  "table": "cpu",
+  "partitions": [
+    {
+      "date": "2024-01-01",
+      "files": 3,
+      "size_bytes": 10485760
+    },
+    {
+      "date": "2024-01-05",
+      "files": 2,
+      "size_bytes": 8388608
+    },
+    {
+      "date": "2024-01-08",
+      "files": 1,
+      "size_bytes": 2097152
+    }
+  ]
+}</code></pre>
+        </div>
+      </div>
+
+      <h3>删除特定分区</h3>
+
+      <p>按日期删除单个分区：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Delete specific date partition</span>
+curl -X DELETE http://localhost:7000/partitions/mydb/default/cpu/2024-01-01</code></pre>
+        </div>
+      </div>
+
+      <h2 id="examples">配置示例</h2>
+
+      <h3>短期指标（1 周）</h3>
+
+      <p>适用于只需要近期数据的高频指标：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[retention]
+enabled = true
+default_days = 7
+interval_secs = 3600  <span class="token-comment"># Check hourly</span></code></pre>
+        </div>
+      </div>
+
+      <h3>中期分析（30 天）</h3>
+
+      <p>适用于仪表板和趋势分析：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[retention]
+enabled = true
+default_days = 30
+interval_secs = 86400  <span class="token-comment"># Check daily</span></code></pre>
+        </div>
+      </div>
+
+      <h3>长期归档（1 年）</h3>
+
+      <p>适用于合规和历史分析：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code>[retention]
+enabled = true
+default_days = 365
+interval_secs = 86400  <span class="token-comment"># Check daily</span>
+exclude_databases = ["archive"]  <span class="token-comment"># Keep archive forever</span></code></pre>
+        </div>
+      </div>
+
+      <h3>多层保留策略</h3>
+
+      <p>
+        如需为不同表设置不同的保留期限，可以通过 cron 定时任务使用 API 设定自定义保留策略：
+      </p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+          <button class="copy-btn" onclick="copyCode(this)">&#128203; 复制</button>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment">#!/bin/bash</span>
+<span class="token-comment"># retention_cron.sh - Run daily via cron</span>
+
+<span class="token-comment"># High-frequency metrics: 7 days</span>
+curl -X POST http://localhost:7000/retention/mydb/default/cpu \
+  -H "Content-Type: application/json" -d '{"older_than_days": 7}'
+
+curl -X POST http://localhost:7000/retention/mydb/default/memory \
+  -H "Content-Type: application/json" -d '{"older_than_days": 7}'
+
+<span class="token-comment"># Business metrics: 90 days</span>
+curl -X POST http://localhost:7000/retention/mydb/default/orders \
+  -H "Content-Type: application/json" -d '{"older_than_days": 90}'
+
+<span class="token-comment"># Audit logs: 1 year</span>
+curl -X POST http://localhost:7000/retention/mydb/default/audit \
+  -H "Content-Type: application/json" -d '{"older_than_days": 365}'</code></pre>
+        </div>
+      </div>
+
+      <h2 id="monitoring">监控数据保留</h2>
+
+      <h3>日志输出</h3>
+
+      <p>
+        数据保留管理器会记录其活动日志。启用 info 级别日志以进行监控：
+      </p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code>[logging]
+level = "info"
+
+<span class="token-comment"># Log output:</span>
+<span class="token-comment"># INFO retention: Starting retention scan</span>
+<span class="token-comment"># INFO retention: Scanning catalog=mydb</span>
+<span class="token-comment"># INFO retention: Deleted 3 partitions from mydb.default.cpu, freed 15.5 MB</span>
+<span class="token-comment"># INFO retention: Retention scan complete: 5 partitions deleted, 42.3 MB freed</span></code></pre>
+        </div>
+      </div>
+
+      <h3>磁盘用量监控</h3>
+
+      <p>在执行数据保留前后监控磁盘用量：</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">bash</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Check data directory size</span>
+du -sh /data0/stats/data/
+
+<span class="token-comment"># Check size per database</span>
+du -sh /data0/stats/data/*/
+
+<span class="token-comment"># Check size per table</span>
+du -sh /data0/stats/data/mydb/default/*/</code></pre>
+        </div>
+      </div>
+
+      <h2 id="best-practices">最佳实践</h2>
+
+      <div class="callout callout-success">
+        <div class="callout-title">&#9989; 建议</div>
+        <ul>
+          <li>启用自动数据保留</li>
+          <li>合理设置 <code>interval_secs</code>（短期保留用每小时，长期保留用每天）</li>
+          <li>监控磁盘用量，根据需要调整 <code>default_days</code></li>
+          <li>对需要更长保留期的表使用排除机制</li>
+          <li>先在非生产数据上测试数据保留策略</li>
+        </ul>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; 注意</div>
+        <ul>
+          <li><code>interval_secs</code> 设置过低会导致不必要的磁盘 I/O</li>
+          <li>不要忘记排除关键的历史数据表</li>
+          <li>避免在查询高峰期执行手动数据保留</li>
+          <li>不要删除仍在写入的分区（当天日期）</li>
+        </ul>
+      </div>
+
+      <h3>容量规划</h3>
+
+      <p>
+        根据保留策略计算预期存储量：
+      </p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Example calculation:</span>
+<span class="token-comment"># Daily data volume: 10 GB</span>
+<span class="token-comment"># Retention: 7 days</span>
+<span class="token-comment"># Expected storage: 10 GB x 7 = 70 GB</span>
+<span class="token-comment"># Add 20% buffer: 84 GB recommended</span></code></pre>
+        </div>
+      </div>
+
+      <h2 id="troubleshooting">故障排除</h2>
+
+      <h3>数据保留未运行</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Check if retention is enabled in config</span>
+grep -A 5 '\[retention\]' config.toml
+
+<span class="token-comment"># Should show:</span>
+<span class="token-comment"># [retention]</span>
+<span class="token-comment"># enabled = true</span></code></pre>
+        </div>
+      </div>
+
+      <h3>数据未被删除</h3>
+
+      <ul>
+        <li>检查该表是否在 <code>exclude_tables</code> 中</li>
+        <li>确认分区日期是否超过了 <code>default_days</code></li>
+        <li>确保分区遵循 <code>date=YYYY-MM-DD/</code> 格式</li>
+      </ul>
+
+      <h3>权限错误</h3>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Check file permissions</span>
+ls -la /data0/stats/data/mydb/default/cpu/
+
+<span class="token-comment"># Ensure mynadb user can delete</span>
+chown -R statsservice:statsservice /data0/stats/data/</code></pre>
+        </div>
+      </div>
+
+      <h3>磁盘空间未释放</h3>
+
+      <p>
+        如果删除后磁盘空间未释放，可能是文件仍被打开：
+      </p>
+
+      <div class="code-block">
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Check for deleted but open files</span>
+lsof +D /data0/stats/data/ | grep deleted
+
+<span class="token-comment"># Restart service to release file handles</span>
+systemctl restart mynadb</code></pre>
+        </div>
+      </div>
+
+      <h2 id="ha-considerations">高可用注意事项</h2>
+
+      <p>
+        在主从高可用模式下运行时，数据保留有特殊注意事项：
+      </p>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">&#9888; 高可用数据保留规则</div>
+        <ul>
+          <li><strong>仅主节点：</strong> 数据保留应仅在主节点上运行</li>
+          <li><strong>从节点跟随：</strong> 从节点通过 WAL 复制接收数据保留操作</li>
+          <li><strong>配置一致：</strong> 所有节点使用相同的数据保留配置</li>
+          <li><strong>故障转移后：</strong> 验证数据保留在新主节点上正常运行</li>
+        </ul>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">toml</span>
+        </div>
+        <div class="code-content">
+          <pre><code><span class="token-comment"># Master config</span>
+[ha]
+enabled = true
+role = "master"
+
+[retention]
+enabled = true      <span class="token-comment"># Retention runs on master</span>
+default_days = 7
+
+<span class="token-comment"># Slave config</span>
+[ha]
+enabled = true
+role = "slave"
+
+[retention]
+enabled = false     <span class="token-comment"># Disable on slave - replicated from master</span></code></pre>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">&#128712; 相关指南</div>
+        <p>
+          <a href="compaction.html">压缩合并</a> - 了解压缩如何影响存储<br>
+          <a href="high-availability.html">高可用</a> - 高可用设置和配置<br>
+          <a href="configuration.html">配置</a> - 完整配置参考
+        </p>
+      </div>
+    </main>
+  </div>
+  <script src="../../js/main.js"></script>
+</body>
+</html>
