@@ -40,7 +40,21 @@ const API = {
                 return [];
             }
 
-            return JSON.parse(text);
+            const parsed = JSON.parse(text);
+
+            // MynaDB's query endpoint wraps rows in { success, data, rows, error }.
+            // Unwrap to the row array. A bare array (older/standalone builds) is
+            // returned as-is for backward compatibility.
+            if (Array.isArray(parsed)) {
+                return parsed;
+            }
+            if (parsed && typeof parsed === 'object') {
+                if (parsed.success === false) {
+                    throw new Error(parsed.error || 'Query failed');
+                }
+                return Array.isArray(parsed.data) ? parsed.data : [];
+            }
+            return [];
         } catch (error) {
             console.error('Query error:', error);
             throw error;

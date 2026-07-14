@@ -339,6 +339,17 @@ impl QueryCoordinator {
         for raw_col in &raw_group_cols {
             let trimmed = raw_col.trim().trim_matches('"');
 
+            // InfluxQL `GROUP BY time(interval)`: the data-node GroupByTimeTransformer
+            // buckets time into a column aliased `time` (via `time_bucket(...) as time`).
+            // Resolve the `time(...)` pseudo-function to that output column instead of
+            // treating the literal "time(1m)" as a column name (which does not exist).
+            if Self::is_influxql_time_expr(trimmed) {
+                if let Some(time_col) = schema_names.iter().find(|s| s.eq_ignore_ascii_case("time")) {
+                    resolved.push(time_col.clone());
+                    continue;
+                }
+            }
+
             // Direct match: GROUP BY column name exists in schema
             if schema_names.iter().any(|s| s.eq_ignore_ascii_case(trimmed)) {
                 resolved.push(
@@ -362,6 +373,19 @@ impl QueryCoordinator {
         }
 
         resolved
+    }
+
+    /// Returns true if `expr` is an InfluxQL `time(interval)` bucketing pseudo-function
+    /// (e.g. `time(1m)`, `TIME (5m, 30s)`) rather than a plain `time` column reference.
+    ///
+    /// Used so distributed re-aggregation maps `GROUP BY time(...)` to the `time`
+    /// bucket column that each data node produces via GroupByTimeTransformer.
+    fn is_influxql_time_expr(expr: &str) -> bool {
+        let lower = expr.trim().to_lowercase();
+        match lower.strip_prefix("time") {
+            Some(rest) => rest.trim_start().starts_with('('),
+            None => false,
+        }
     }
 
     /// Extract SELECT expression → alias mapping.
@@ -435,5 +459,26 @@ impl QueryCoordinator {
             return Self::split_select_items(group_clause);
         }
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn influxql_time_expr_detection() {
+        // InfluxQL time() bucketing pseudo-function → true
+        assert!(QueryCoordinator::is_influxql_time_expr("time(1m)"));
+        assert!(QueryCoordinator::is_influxql_time_expr("TIME(5m)"));
+        assert!(QueryCoordinator::is_influxql_time_expr("time (30s)"));
+        assert!(QueryCoordinator::is_influxql_time_expr("time(5m, 30s)"));
+        assert!(QueryCoordinator::is_influxql_time_expr("  time(1h)  "));
+
+        // Plain time column reference or unrelated columns → false
+        assert!(!QueryCoordinator::is_influxql_time_expr("time"));
+        assert!(!QueryCoordinator::is_influxql_time_expr("host"));
+        assert!(!QueryCoordinator::is_influxql_time_expr("timestamp"));
+        assert!(!QueryCoordinator::is_influxql_time_expr("time_bucket(time, 60000000000, 0)"));
     }
 }
