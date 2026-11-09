@@ -1,0 +1,41 @@
+# Local evaluation only. Run from the repository root.
+[server]
+http_host = "127.0.0.1"
+http_port = 7000
+flight_host = "127.0.0.1"
+flight_port = 7001
+mysql_host = "127.0.0.1"
+mysql_port = 7002
+mysql_enabled = false
+
+[storage]
+backend = "local"
+data_dir = "./data/quickstart"
+
+[schema]
+strategy = "service_as_schema"
+tag_keys = ["service"]
+default_name = "default"
+prefix_numeric = true
+
+[cache]
+flush_interval_secs = 60
+max_size_mb = 256
+
+[wal]
+# This demonstration verifies explicit flush, not crash recovery.
+enabled = false
+
+[query_cache]
+enabled = false
+
+[retention]
+enabled = false
+
+[auth]
+enabled = false
+
+[logging]
+level = "info"
+log_dir = "./logs/quickstart"
+file_prefix = "quickstart"

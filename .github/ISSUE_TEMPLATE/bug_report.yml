@@ -1,0 +1,37 @@
+name: Bug report
+description: Report a reproducible MynaDB problem
+title: "bug: "
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit and operating system
+      placeholder: "Commit hash, rustc --version, OS and architecture"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps and sample input
+      description: Include exact commands, SQL, or a small line protocol sample.
+    validations:
+      required: true
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Configuration
+      description: Remove passwords, tokens, private endpoints, and personal data. Include WAL settings.
+      render: toml
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result and logs
+      description: Include the HTTP status and response, or relevant redacted server logs.
+    validations:
+      required: true

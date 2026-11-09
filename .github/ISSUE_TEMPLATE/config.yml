@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Architecture and design discussions
+    url: https://github.com/panbooks/mynadb/discussions
+    about: Discuss ideas and ask open-ended questions.

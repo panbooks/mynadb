@@ -21,6 +21,10 @@ A time-series database for collecting, storing, and querying telemetry.</p>
 
 MynaDB is a time-series database written in Rust for collecting, storing, and querying machine and application telemetry. It accepts InfluxDB line protocol and other telemetry formats, stores data in Apache Parquet, and uses Apache DataFusion to execute SQL queries.
 
+**Project status:** MynaDB is under development. Implemented features are not a
+guarantee of complete protocol compatibility or production readiness. Read the
+[capability and validation matrix](docs/project-status.md) before evaluation.
+
 ## Features
 
 - HTTP ingestion using InfluxDB line protocol, Prometheus remote write, and OpenTelemetry protocols.
@@ -298,6 +302,20 @@ These tests spawn a local server and need available local ports. See [tests](tes
 
 ## Development and troubleshooting
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and focused checks.
+For a loopback-only evaluation configuration and an automated check of health,
+write, query, explicit flush, restart, and cleanup:
+
+```bash
+./target/debug/mynadb -c examples/quickstart.toml standalone
+# Or, with no server running, use an isolated temporary test instance:
+python3 scripts/validation/quickstart_smoke.py --binary target/debug/mynadb
+```
+
+The automated check disables WAL and verifies explicitly flushed Parquet data;
+it does not test crash recovery. The [project status](docs/project-status.md)
+document records the scope of the promotion readiness review.
+
 ```bash
 cargo test --locked             # Run the Rust test suite
 cargo run --bin mynadb -- --help  # Show command-line options
@@ -330,3 +348,9 @@ mynadb/
 ```
 
 The main technologies include Tokio and Axum for asynchronous services, Apache Arrow and Parquet for columnar data, DataFusion for SQL, and OpenRaft for cluster metadata. See [Cargo.toml](Cargo.toml) for the complete dependency list.
+
+## License status
+
+The main project's license and code ownership are pending maintainer confirmation
+in the readiness review. The portal's Apache-2.0 license and Grafana plugin
+metadata do not, by themselves, establish the license for this whole repository.
