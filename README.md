@@ -1,397 +1,315 @@
-# Stats - Time Series Database
+# MynaDB
 
-A simple time series database built from scratch in Rust that:
-1. Receives data via HTTP in InfluxDB line protocol format
-2. Parses the line protocol
-3. **Buffers data in memory (Arrow format)**
-4. **Flushes to disk every 30 seconds** in Parquet format
+MynaDB is a time-series database written in Rust for collecting, storing, and querying machine and application telemetry. It accepts InfluxDB line protocol and other telemetry formats, stores data in Apache Parquet, and uses Apache DataFusion to execute SQL queries.
+
+**[Official documentation](https://panbooks.github.io/mynadb-portal/zh/docs/index.html)** · [Configuration guide](docs/guides/guide-configuration.md) · [Architecture](docs/architecture/architecture-overview.md) · [Grafana plugin](grafana-mynadb-datasource/README.md)
+
+## Features
+
+- HTTP ingestion using InfluxDB line protocol, Prometheus remote write, and OpenTelemetry protocols.
+- SQL queries through HTTP, Apache Arrow Flight, and a MySQL-compatible interface; an InfluxQL-compatible HTTP endpoint is also available.
+- Arrow-based in-memory buffering and Parquet storage on a local filesystem or supported S3-compatible object storage.
+- Write-ahead logging and recovery, background flushing, compaction, retention, and query caching.
+- Standalone operation or a cluster with separate metadata, router, data, and admin nodes. Metadata nodes use Raft.
+- Authentication and authorization, TLS configuration, metrics, a cluster admin console, and a Grafana data-source plugin.
+
+See the documentation for configuration and feature details; availability and behavior depend on the chosen deployment and settings.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────┐
-│              HTTP Requests (Write)               │
-└────────────────────┬────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────┐
-│          Line Protocol Parser                    │
-└────────────────────┬────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────┐
-│    In-Memory Cache (Arrow format)                │
-│    - Auto-flush every 30 seconds                 │
-└────────────────────┬────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────┐
-│         Parquet Files (Columnar Storage)         │
-└────────────────────┬────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────┐
-│    DataFusion Query Engine (SQL)                 │
-│    - Read Parquet files                          │
-│    - Execute SQL queries                         │
-│    - Return JSON results                         │
-└─────────────────────────────────────────────────┘
+In standalone mode, the services run in one process. A typical write and query follows this path:
+
+```text
+Clients (HTTP, Prometheus, OTLP)                 SQL clients (HTTP, Flight, MySQL)
+              |                                                |
+              v                                                v
+      Parse and route writes                            DataFusion query engine
+              |                                                |
+       WAL, if enabled                                         |
+              |                                                |
+       In-memory cache <---------------------------------------+
+              |
+       Background or manual flush
+              v
+       Parquet files in local or object storage <---------------+
+              |
+       Compaction and retention jobs
 ```
 
-### Components
+Writes are grouped by database, schema, and table in memory. The cache batches writes before flushing them to columnar Parquet files; this reduces the number of small files compared with writing a file for each request. Queries can read buffered as well as persisted data. A configurable write-ahead log (WAL) supports recovery; its durability depends on the WAL and synchronization settings. Background compaction consolidates files, and retention can remove data according to configured policies.
 
-1. **HTTP Server** - Built with Axum, handles write and query requests
-2. **Line Protocol Parser** - Parses InfluxDB line protocol format
-3. **In-Memory Cache** - Buffers data in Arrow format with automatic flushing
-4. **Parquet Writer** - Stores data in columnar Parquet format using Arrow
-5. **DataFusion Query Engine** - SQL query engine for reading and analyzing data
+In cluster mode, **routers** accept and route requests, **data nodes** store and query data, and **metadata nodes** coordinate cluster metadata using Raft. An **admin node** provides cluster management. See the [architecture overview](docs/architecture/architecture-overview.md) and [cluster architecture](docs/architecture/architecture-cluster-v2.md).
 
-### Key Improvement: Caching Layer
+## Install from source
 
-Instead of writing a new Parquet file for every request, data is:
-- ✅ Stored in memory using Arrow format
-- ✅ Automatically flushed to disk every **30 seconds**
-- ✅ Grouped by database and measurement
-- ✅ Reduces number of small files significantly
+### Prerequisites
 
-This means:
-- **Before**: 100 requests = 100 Parquet files
-- **After**: 100 requests over 30 seconds = 1 Parquet file per measurement
+- Git and a recent stable Rust toolchain with Cargo ([install Rust](https://rustup.rs/)).
+- A C/C++ build toolchain, `pkg-config`, OpenSSL development headers, and the Protocol Buffers compiler (`protoc`). On Debian or Ubuntu, for example:
 
-## Line Protocol Format
+  ```bash
+  sudo apt-get update
+  sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler
+  ```
 
-```
-measurement[,tag=value...] field=value[,field=value...] [timestamp]
-```
+- `curl` for the examples below. The first build downloads dependencies and can take several minutes and substantial disk space.
 
-### Examples
+Clone and build the project:
 
 ```bash
-# Simple metric
+git clone https://github.com/panbooks/mynadb.git
+cd mynadb
+cargo build --locked
+```
+
+The executable is `target/debug/mynadb`. For an optimized build, use `cargo build --release --locked` and substitute `target/release/mynadb` in the commands below.
+
+## Quick start
+
+From the repository root, start a standalone instance with the local development configuration:
+
+```bash
+./target/debug/mynadb -c dev/configs/standalone/local.toml standalone
+```
+
+Leave this terminal running and open another terminal. The configuration uses local directories `dev/data/standalone` and `dev/logs/standalone`, relative to the working directory. It listens on HTTP port `7000`, Arrow Flight port `7001`, and MySQL port `7002`.
+
+Check that the server is ready:
+
+```bash
+curl http://127.0.0.1:7000/health
+```
+
+Write a point, then query it:
+
+```bash
+curl -i -X POST http://127.0.0.1:7000/write/demo \
+  --data-binary 'cpu,host=server01 usage=23.5'
+
+curl -X POST http://127.0.0.1:7000/flush
+
+curl -X POST http://127.0.0.1:7000/query/demo \
+  --data-binary 'SELECT * FROM cpu'
+```
+
+A successful write returns HTTP `204 No Content`; the flush persists the buffered point, and the query returns JSON containing it. With this configuration, a measurement without a `service` tag maps to the `default` schema. The database name is supplied in the URL. A timestamp omitted from line protocol is assigned at ingestion.
+
+Stop the server with `Ctrl+C`, or from the repository root in another terminal:
+
+```bash
+./target/debug/mynadb -c dev/configs/standalone/local.toml stop
+```
+
+The local example disables authentication, TLS, retention, and the write-ahead log and binds to all interfaces. It is intended for local experimentation; cached data can be lost on a crash. Restrict network access and configure authentication, TLS, durability, retention, and storage before using a deployment for real workloads.
+
+## InfluxDB line protocol
+
+A line represents a point. The general format is:
+
+```text
+measurement[,tag_key=tag_value...] field_key=field_value[,field_key=field_value...] [timestamp]
+```
+
+The measurement identifies the table; tags are string-valued dimensions such as host or region; fields contain the values being recorded. Separate the measurement and tags from fields with a space, and separate an optional timestamp from the fields with another space. Timestamps are Unix time in nanoseconds; when omitted, the current time is used.
+
+| Field type | Example | Meaning |
+| --- | --- | --- |
+| Float | `usage=23.5` | Floating-point value; an unsuffixed number is parsed as a float |
+| Integer | `cores=8i` | Signed integer with an `i` suffix |
+| Boolean | `active=true` | Boolean; `true`, `false`, `t`, and `f` are supported |
+| String | `status="online"` | Quoted text |
+
+```text
 cpu usage=23.5
-
-# With tags
 cpu,host=server01,region=us-west usage=23.5,temp=45i
-
-# With timestamp (nanoseconds)
 cpu,host=server01 usage=23.5 1672531200000000000
-
-# Multiple fields
 weather,location=paris temperature=22.5,humidity=60i,conditions="sunny"
-
-# Different data types
 sensor,device=temp01 value=98.6,count=42i,active=true,status="online"
 ```
 
-### Field Types
-
-- **Float**: `23.5`, `98.6`
-- **Integer**: `42i`, `100i` (note the 'i' suffix)
-- **String**: `"value"` (quoted)
-- **Boolean**: `true`, `false`, `t`, `f`
-
-## Setup & Run
+Send multiple points in one request by placing each point on a separate line. For example:
 
 ```bash
-# Build
-cargo build
-
-# Run
-cargo run
-```
-
-Server starts on `http://0.0.0.0:7000`
-
-## API Endpoints
-
-### Write Data
-
-```
-POST /write/:db
-```
-
-Write time series data to a database. Data is buffered in memory and flushed to disk every 30 seconds.
-
-**Example:**
-
-```bash
-curl -X POST http://localhost:7000/write/mydb \
-  -d 'cpu,host=server01,region=us-west usage=23.5,temp=45i'
-```
-
-### Query Data (SQL)
-
-```
-GET /query/:db?sql=<query>
-POST /query/:db (SQL in body)
-```
-
-Query data using SQL powered by DataFusion.
-
-**Important**: Table names are automatically prefixed with the database name. You can use either:
-- Short form: `SELECT * FROM cpu` (recommended)
-- Full form: `SELECT * FROM mydb_cpu` (also works)
-
-**Examples:**
-
-```bash
-# Simple query (short form - recommended)
-curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM cpu LIMIT 10'
-
-# Full form also works
-curl 'http://localhost:7000/query/mydb?sql=SELECT * FROM mydb_cpu LIMIT 10'
-
-# Aggregation
-curl 'http://localhost:7000/query/mydb?sql=SELECT host, AVG(usage) FROM cpu GROUP BY host'
-
-# Complex query (POST)
-curl -X POST http://localhost:7000/query/mydb \
-  -d "SELECT * FROM cpu WHERE usage > 50 ORDER BY timestamp DESC"
-
-# Join multiple measurements
-curl -X POST http://localhost:7000/query/mydb \
-  -d "SELECT c.*, m.used FROM cpu c JOIN memory m ON c.host = m.host"
-```
-
-### List Tables
-
-```
-GET /tables/:db
-```
-
-List all available tables (measurements) in a database.
-
-```bash
-curl http://localhost:7000/tables/mydb
-```
-
-### Get Schema
-
-```
-GET /schema/:db/:table
-```
-
-Get the schema for a specific table.
-
-```bash
-curl http://localhost:7000/schema/mydb/cpu
-```
-
-### Cache Statistics
-
-```
-GET /stats
-```
-
-Get current cache statistics (points in memory, number of measurements).
-
-```bash
-curl http://localhost:7000/stats
-```
-
-### Manual Flush
-
-```
-POST /flush
-```
-
-Manually trigger a flush of cached data to disk (in addition to automatic 30-second flushes).
-
-```bash
-curl -X POST http://localhost:7000/flush
-```
-
-### Compaction
-
-```
-POST /compact/:db
-POST /compact/:db/:measurement
-```
-
-Compact (merge) multiple small Parquet files into larger files to improve query performance and reduce file count.
-
-**Compact entire database:**
-```bash
-curl -X POST http://localhost:7000/compact/mydb
-```
-
-**Compact specific measurement:**
-```bash
-curl -X POST http://localhost:7000/compact/mydb/cpu
-```
-
-See [COMPACTION.md](./COMPACTION.md) for detailed documentation.
-
-### Health Check
-
-```
-GET /health
-```
-
-```bash
-curl http://localhost:7000/health
-```
-
-## Data Storage
-
-Data is stored in `./data/` directory:
-
-```
-./data/
-└── mydb/                    # Database name
-    ├── cpu_1703251234567.parquet
-    ├── memory_1703251234890.parquet
-    └── disk_1703251235123.parquet
-```
-
-Each measurement is stored in separate Parquet files with timestamps in the filename.
-
-## Schema
-
-Parquet files have the following schema:
-
-```
-timestamp      (Timestamp nanosecond)  - When the data was recorded
-measurement    (String)                - Measurement name
-<tag_columns>  (String, nullable)      - One column per tag
-<field_columns>(Float64/Int64/String)  - One column per field
-```
-
-**Example schema for `cpu` measurement:**
-
-```
-timestamp: Timestamp(Nanosecond, None)
-measurement: Utf8
-host: Utf8
-region: Utf8
-usage: Float64
-temp: Int64
-```
-
-## Testing
-
-### Test Line Protocol Parser
-
-```bash
-# Simple write
-curl -X POST http://localhost:7000/write/testdb \
-  -d 'cpu usage=50.0'
-
-# With tags
-curl -X POST http://localhost:7000/write/testdb \
-  -d 'cpu,host=server01,dc=us-east usage=75.5,cores=8i'
-
-# Multiple measurements
-curl -X POST http://localhost:7000/write/testdb -d '
+curl -i -X POST http://127.0.0.1:7000/write/demo --data-binary '
 cpu,host=server01 usage=50.0,temp=45i
 memory,host=server01 used=16.5,total=32.0
 network,host=server01,interface=eth0 rx_bytes=1024000i,tx_bytes=2048000i
 '
-
-# Different data types
-curl -X POST http://localhost:7000/write/testdb -d '
-sensor,device=temp01 temperature=72.5,humidity=55i,active=true,status="normal"
-'
 ```
 
-### Verify Parquet Files
+### Database, schema, and table mapping
 
-You can use `parquet-tools` or Python to read the files:
+The write URL selects the database (also called a catalog). In the quick-start configuration, `service_as_schema` maps the first matching configured service tag to the schema and the measurement to the table. Without such a tag, the schema is `default`: `cpu,host=server01 usage=23.5` written to `demo` maps to `demo.default.cpu`. For example, `cpu,service=production usage=23.5` maps to `demo.production.cpu`. Numeric service values can be prefixed with `service_` to form SQL-friendly names. The alternative `service_as_table` strategy uses the service value as the table name. Configure the strategy and tag keys in `[schema]`.
 
-**Python example:**
+## Query examples
+
+SQL requests use the database in the URL as the query context. The examples below use the data written to `demo` above:
+
+```bash
+# Retrieve recent CPU readings
+curl -X POST http://127.0.0.1:7000/query/demo \
+  --data-binary 'SELECT * FROM cpu ORDER BY time DESC LIMIT 10'
+
+# Aggregate by host
+curl -X POST http://127.0.0.1:7000/query/demo \
+  --data-binary 'SELECT host, AVG(usage) AS avg_usage FROM cpu GROUP BY host'
+
+# Inspect available tables and the CPU schema
+curl http://127.0.0.1:7000/tables/demo
+curl http://127.0.0.1:7000/schema/demo/default/cpu
+```
+
+For a GET request, let `curl` encode the SQL query parameter:
+
+```bash
+curl --get http://127.0.0.1:7000/query/demo \
+  --data-urlencode 'sql=SELECT * FROM cpu LIMIT 10'
+```
+
+DataFusion also supports SQL operations such as filtering, joins, and window functions. Use `schema.table` or `database.schema.table` when the table is outside the default schema. See the [query examples](docs/guides/guide-correct-query-examples.md).
+
+## Configuration
+
+MynaDB loads `config.toml` from the current directory by default; select a file with `-c` or `--config`. The checked-in root configuration uses `/data0/mynadb/data` and `/data0/mynadb/logs`, so make those paths writable or change them before running with that file. If a configuration file cannot be loaded, the application falls back to built-in defaults; check the startup logs to confirm the intended settings.
+
+The local example flushes its write cache every 60 seconds. To request a flush manually:
+
+```bash
+curl -X POST http://127.0.0.1:7000/flush
+```
+
+Relevant TOML sections include `[server]`, `[storage]`, `[schema]`, `[cache]`, `[wal]`, `[compaction]`, `[retention]`, `[auth]`, `[tls]`, and `[logging]`. See [config.toml](config.toml), [the local example](dev/configs/standalone/local.toml), and the [configuration guide](docs/guides/guide-configuration.md).
+
+## HTTP API examples
+
+| Operation | Endpoint |
+| --- | --- |
+| Health check | `GET /health` |
+| Write line protocol | `POST /write/:db` or `POST /write?db=:db` |
+| Run SQL | `GET /query/:db?sql=...` or `POST /query/:db` with SQL as the body |
+| List databases, schemas, and tables | `GET /databases`, `GET /schemas/:db`, `GET /tables/:db` |
+| Inspect a table schema | `GET /schema/:db/:schema/:table` |
+| Flush buffered data | `POST /flush` |
+| Prometheus remote write / read | `POST /api/v1/write/:db`, `POST /api/v1/read/:db` |
+| OpenTelemetry HTTP ingestion | `POST /v1/metrics`, `POST /v1/logs`, `POST /v1/traces` |
+| Server metrics | `GET /metrics` |
+
+For example, inspect the quick-start table with `curl http://127.0.0.1:7000/schema/demo/default/cpu`. Line protocol supports tags and float, integer (`42i`), boolean, and quoted string fields; timestamps are in nanoseconds by default. The schema mapping is configurable, including mapping a service tag to a schema.
+
+## Storage and maintenance
+
+The standalone local configuration stores runtime data under `dev/data/standalone`. Its layout includes:
+
+```text
+dev/data/standalone/
+├── store/    # Parquet data, organized by catalog, schema, table, and date
+├── wal/      # Write-ahead log files when enabled
+├── meta/     # Metadata and job definitions
+├── cache/    # Local cache used with object storage
+├── system/   # System data
+└── run/      # Process ID files
+```
+
+The schema is inferred from the points: tags become string columns, and fields become columns of their respective types. Use the schema endpoint to inspect the actual table rather than assuming all measurements have the same columns.
+
+Useful maintenance requests include:
+
+```bash
+curl http://127.0.0.1:7000/stats
+curl -X POST http://127.0.0.1:7000/flush
+curl -X POST http://127.0.0.1:7000/compact/demo
+curl -X POST http://127.0.0.1:7000/compact/demo/default/cpu
+```
+
+Flush writes buffered points to storage; compaction merges eligible files to reduce file count and improve read efficiency. Both may also run in the background based on configuration. See the [compaction guide](docs/guides/guide-compaction-quickstart.md) and [WAL recovery documentation](docs/features/features-wal-flush-recovery.md).
+
+To inspect a flushed local Parquet file, first run the flush request above, then locate a file with `find dev/data/standalone/store -name '*.parquet'`. With Python and PyArrow installed, replace the path below with the file found:
 
 ```python
 import pyarrow.parquet as pq
 
-table = pq.read_table('./data/testdb/cpu_1703251234567.parquet')
+table = pq.read_table("path/to/file.parquet")
+print(table.schema)
 print(table.to_pandas())
 ```
 
-**Rust example:**
+## Local cluster
 
-```rust
-use parquet::file::reader::FileReader;
-use parquet::file::serialized_reader::SerializedFileReader;
-use std::fs::File;
+The development cluster starts three metadata nodes, one router, two data nodes, and an admin process. It requires [goreman](https://github.com/mattn/goreman), in addition to the build prerequisites:
 
-let file = File::open("./data/testdb/cpu_1703251234567.parquet")?;
-let reader = SerializedFileReader::new(file)?;
-// Read and display data
+```bash
+cargo build --locked
+./dev/start-cluster.sh
 ```
 
-## Example Output
+The router exposes the HTTP API at `http://127.0.0.1:7000`. The admin service listens at `http://127.0.0.1:18080/admin`; build the UI first with `cd admin-ui && npm install && npm run build` if needed. Press `Ctrl+C` to stop the processes. See [dev/README.md](dev/README.md), the [cluster guide](docs/guides/guide-cluster-v2.md), and [development configurations](dev/configs/cluster) for details. The startup script reuses an existing debug binary, so rebuild after changing source code.
 
-When you write data, you'll see:
+## Testing
 
+### Manual smoke test
+
+Start the standalone server as described above, then send a point containing several field types and verify it through SQL:
+
+```bash
+curl -i -X POST http://127.0.0.1:7000/write/testdb \
+  --data-binary 'sensor,device=temp01 temperature=72.5,humidity=55i,active=true,status="normal"'
+
+curl -X POST http://127.0.0.1:7000/query/testdb \
+  --data-binary 'SELECT * FROM sensor'
+
+curl -X POST http://127.0.0.1:7000/flush
+curl -X POST http://127.0.0.1:7000/query/testdb \
+  --data-binary 'SELECT * FROM sensor'
 ```
-=== Write Request ===
-Database: mydb
-Raw data:
-cpu,host=server01,region=us-west usage=23.5,temp=45i
-Parsed 1 points
-Writing 1 points for measurement 'cpu'
-✅ Written to: ./data/mydb/cpu_1703251234567.parquet
-==================
+
+The write should return HTTP 204 and both queries should return the point. The second query checks the read path after a flush. Repeating the write adds another point, so use a fresh database name if you need an isolated run. Check the schema and Parquet files using the commands in the preceding sections.
+
+### Automated tests
+
+```bash
+cargo test --locked
 ```
 
-## Project Structure
+The repository includes unit tests and integration suites covering API endpoints, queries, data integrity, authentication, concurrency, schema strategies, and retention. Some integration tests are marked ignored and launch their own server with temporary storage; they are not run by the default command. For example, run the API endpoint suite explicitly with:
 
+```bash
+cargo build --locked
+cargo test --locked --test api_endpoints -- --ignored --test-threads=1
 ```
-stats/
-├── Cargo.toml              # Dependencies
+
+These tests spawn a local server and need available local ports. See [tests](tests) for individual suites and their requirements.
+
+## Development and troubleshooting
+
+```bash
+cargo test --locked             # Run the Rust test suite
+cargo run --bin mynadb -- --help  # Show command-line options
+```
+
+If startup fails, check that ports 7000–7002 are free and the configured data and log paths are writable. If the build cannot find `protoc` or OpenSSL, install the prerequisites above and retry. Inspect the server output and the configured log directory for errors. For object storage, configure its endpoint, credentials, and bucket before starting.
+
+## Project structure
+
+```text
+mynadb/
 ├── src/
-│   ├── main.rs             # HTTP server and routing
-│   ├── line_protocol.rs    # Line protocol parser
-│   └── parquet_writer.rs   # Parquet/Arrow writer
-└── data/                   # Data storage (created at runtime)
+│   ├── main.rs          # CLI entry point and node selection
+│   ├── node/            # Standalone and cluster node startup
+│   ├── services/        # HTTP, Flight, MySQL, Prometheus, and OTLP services
+│   ├── storage/         # Line protocol, cache, WAL, and Parquet storage
+│   ├── query/           # DataFusion query execution
+│   ├── meta/            # Cluster metadata and Raft
+│   ├── router/          # Request routing and distributed queries
+│   ├── data/            # Data node services
+│   ├── auth/            # Authentication and authorization
+│   └── jobs/            # Background maintenance
+├── admin-ui/            # Cluster management frontend
+├── grafana-mynadb-datasource/  # Grafana integration
+├── dev/                 # Development configurations and scripts
+├── docs/                # Architecture, feature, and operations guides
+├── tests/               # Integration and correctness tests
+├── Cargo.toml           # Rust dependencies and build targets
+└── config.toml          # Example default configuration
 ```
 
-## Dependencies
-
-- **tokio** - Async runtime
-- **axum** - Web framework
-- **arrow** - Columnar data format
-- **parquet** - Parquet file format
-- **datafusion** - SQL query engine
-- **chrono** - Date/time handling
-- **serde** - Serialization
-
-## Features
-
-✅ HTTP API for data ingestion  
-✅ InfluxDB line protocol parsing  
-✅ Support for tags and multiple fields  
-✅ Multiple data types (float, integer, string, boolean)  
-✅ Automatic timestamp generation  
-✅ **In-memory caching with Arrow format**  
-✅ **Automatic background flushing every 30 seconds**  
-✅ **Manual flush endpoint for immediate writes**  
-✅ Columnar storage in Parquet format  
-✅ Organized by database and measurement  
-✅ Schema inference from data  
-✅ Cache statistics endpoint  
-✅ **SQL query engine powered by Apache DataFusion**  
-✅ **Complex queries: aggregations, joins, window functions**  
-✅ **Table discovery and schema inspection**  
-✅ **JSON query results**  
-✅ **Compaction to merge small files and improve performance**  
-✅ **Concurrent operation safety with locking mechanism**
-
-## Next Steps
-
-Potential enhancements:
-- [x] Query API to read data back
-- [x] DataFusion SQL query engine
-- [x] In-memory caching with auto-flush
-- [x] Compaction to reduce small file problem
-- [ ] Data compression and compaction optimization
-- [ ] WAL (Write-Ahead Log) for durability
-- [ ] Indexing for faster queries
-- [ ] Retention policies
-- [ ] Authentication and authorization
-- [ ] Clustering and replication
-- [ ] Background automatic compaction
-
-## License
-
-This is a demo project for learning purposes.
+The main technologies include Tokio and Axum for asynchronous services, Apache Arrow and Parquet for columnar data, DataFusion for SQL, and OpenRaft for cluster metadata. See [Cargo.toml](Cargo.toml) for the complete dependency list.
