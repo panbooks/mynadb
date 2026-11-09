@@ -1,8 +1,25 @@
-# MynaDB
+<p align="center">
+  <a href="https://panbooks.github.io/mynadb-portal/zh/docs/index.html">
+    <img src="web/portal/images/logo-icon.svg" alt="MynaDB logo" width="120">
+  </a>
+</p>
+
+<h1 align="center">MynaDB</h1>
+
+<p align="center"><strong>The Voice of Your Machines</strong><br>
+A time-series database for collecting, storing, and querying telemetry.</p>
+
+<p align="center">
+  <a href="#quick-start"><strong>Quick Start</strong></a> &nbsp;·&nbsp;
+  <a href="https://panbooks.github.io/mynadb-portal/zh/docs/index.html"><strong>Documentation</strong></a> &nbsp;·&nbsp;
+  <a href="#architecture"><strong>Architecture</strong></a> &nbsp;·&nbsp;
+  <a href="#http-api-examples"><strong>API</strong></a> &nbsp;·&nbsp;
+  <a href="grafana-mynadb-datasource/README.md"><strong>Grafana</strong></a>
+</p>
+
+---
 
 MynaDB is a time-series database written in Rust for collecting, storing, and querying machine and application telemetry. It accepts InfluxDB line protocol and other telemetry formats, stores data in Apache Parquet, and uses Apache DataFusion to execute SQL queries.
-
-**[Official documentation](https://panbooks.github.io/mynadb-portal/zh/docs/index.html)** · [Configuration guide](docs/guides/guide-configuration.md) · [Architecture](docs/architecture/architecture-overview.md) · [Grafana plugin](grafana-mynadb-datasource/README.md)
 
 ## Features
 
