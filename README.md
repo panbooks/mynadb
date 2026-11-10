@@ -10,11 +10,11 @@
 A time-series database for collecting, storing, and querying telemetry.</p>
 
 <p align="center">
-  <a href="#quick-start"><strong>Quick Start</strong></a> &nbsp;·&nbsp;
-  <a href="https://panbooks.github.io/mynadb-portal/zh/docs/index.html"><strong>Documentation</strong></a> &nbsp;·&nbsp;
-  <a href="#architecture"><strong>Architecture</strong></a> &nbsp;·&nbsp;
-  <a href="#http-api-examples"><strong>API</strong></a> &nbsp;·&nbsp;
-  <a href="grafana-mynadb-datasource/README.md"><strong>Grafana</strong></a>
+  <a href="https://panbooks.github.io/mynadb-portal/docs/quickstart.html"><strong>Quick Start</strong></a> &nbsp;·&nbsp;
+  <a href="https://panbooks.github.io/mynadb-portal/docs/index.html"><strong>Documentation</strong></a> &nbsp;·&nbsp;
+  <a href="https://panbooks.github.io/mynadb-portal/docs/architecture.html"><strong>Architecture</strong></a> &nbsp;·&nbsp;
+  <a href="https://panbooks.github.io/mynadb-portal/docs/api.html"><strong>API</strong></a> &nbsp;·&nbsp;
+  <a href="https://panbooks.github.io/mynadb-portal/docs/grafana.html"><strong>Grafana</strong></a>
 </p>
 
 ---
